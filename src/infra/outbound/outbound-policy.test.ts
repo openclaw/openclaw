@@ -107,7 +107,6 @@ describe("outbound policy helpers", () => {
   it("enforces the agent's cross-context policy", () => {
     expectCrossContextPolicyResult(/target="C999" while bound to "C123"/, {
       cfg: {
-        channels: { workspace: { botToken: "workspace-test", appToken: "workspace-app-test" } },
         agents: {
           entries: {
             sandbox: {
