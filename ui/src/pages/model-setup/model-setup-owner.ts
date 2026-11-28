@@ -7,6 +7,7 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { subscribeModelCatalogChanges } from "../../lib/model-catalog-store.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import {
@@ -648,6 +649,13 @@ export function createModelSetup(
     const stopGateway = context.gateway.subscribe(synchronizeCurrentGateway);
     // Receipt-clear events retire restored wizard work before another activation can start.
     const stopFirstRun = firstRun.subscribe(notify);
+    // Models on the same page (catalog sign-in, keys) can configure a model; rescan so
+    // first run offers its verification and onboarding handoff without a reload.
+    const stopCatalog = subscribeModelCatalogChanges(context.gateway, () => {
+      if (!state.detectionRequest && !actionsDisabled()) {
+        void detect();
+      }
+    });
     synchronizeCurrentGateway();
     return () => {
       disposed = true;
@@ -655,6 +663,7 @@ export function createModelSetup(
       connected = false;
       stopGateway();
       stopFirstRun();
+      stopCatalog();
       firstRun.dispose();
       retireWizardMutation();
       iconLoader.reset();

@@ -90,6 +90,32 @@ suite.define(() => {
     },
   );
 
+  it("offers the first-run handoff after a model is configured elsewhere on Models", async () => {
+    await withPage(async ({ page }) => {
+      const gateway = await installSetupGateway(page, {
+        featureMethods: [rpc.detect, "openclaw.setup.verify"],
+        methodResponses: { [rpc.detect]: makeDetection() },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/model-providers?firstRun=1`);
+      await page.locator("[data-models-catalog]").waitFor();
+      await expect.poll(() => gateway.getRequests(rpc.detect).then((r) => r.length)).toBe(1);
+      expect(await page.getByRole("button", { name: "Check model" }).count()).toBe(0);
+
+      // A catalog sign-in on the same page selects the agent's model.
+      await gateway.setMethodResponse(
+        rpc.detect,
+        makeDetection({ configuredModel: "openai/gpt-5", setupComplete: true }),
+      );
+      await gateway.emitGatewayEvent("chat.metadata.changed", {
+        agentId: "main",
+        modelCatalogChanged: true,
+        authChanged: true,
+      });
+      await page.getByRole("button", { name: "Check model" }).waitFor();
+      expect(await gateway.getRequests(rpc.detect)).toHaveLength(2);
+    });
+  });
+
   it("shows a failed configured LM Studio connection without implicit preparation", async () => {
     await withPage(
       async ({ page }) => {
