@@ -1,7 +1,8 @@
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
+import { setImmediate as nextTurn, setTimeout as nextTimer } from "node:timers/promises";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { resolveActivePluginInstallRoots } from "./install-root-context.js";
@@ -457,6 +458,41 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     }
     return codec.decode(reply.value);
   }
+  /**
+   * Captures used to run unbounded: a wedged preparation worker (native-load child,
+   * staging copy) idled Doctor's Config-repairs phase forever at zero CPU
+   * (openclaw#178359). Keep the budget generous — package size and filesystem
+   * latency scale it — but finite, with an operator override for slow hosts.
+   */
+  function resolvePluginCaptureTimeoutMs(): number {
+    const raw = Number(process.env.OPENCLAW_PLUGIN_CAPTURE_TIMEOUT_MS);
+    if (Number.isFinite(raw) && raw > 0) {
+      return Math.min(Math.max(raw, 1_000), 60 * 60_000);
+    }
+    return 15 * 60_000;
+  }
+  function captureTimeoutError(error: unknown, captureTimeoutMs: number): Error {
+    return new Error(
+      `Plugin capture did not complete within ${(captureTimeoutMs / 1000).toFixed(1)}s ` +
+        `(capture ${captureId}, root ${params.rootDir}); the preparation worker stayed silent. ` +
+        "Raise OPENCLAW_PLUGIN_CAPTURE_TIMEOUT_MS for slower hosts, then retry.",
+      { cause: error },
+    );
+  }
+  /**
+   * After a capture times out, its slot can stay occupied behind a wedged
+   * command. Settlement gets this much grace before the shared worker is
+   * retired so the broker transport closes and custody unwedges instead of
+   * idling the caller forever (openclaw#178359).
+   */
+  const CAPTURE_SETTLEMENT_GRACE_MS = 30_000;
+  const retireStuckPreparationWorker = () => {
+    if (!owner.closing) {
+      void shared?.pool
+        ?.close(new Error("Plugin preparation worker was stuck in a timed-out capture"))
+        .catch(() => {});
+    }
+  };
   async function request(command: GenerationWorkerInput, sourceCapture = false): Promise<unknown> {
     if (closing) {
       throw new Error("Plugin preparation worker has closed");
@@ -465,6 +501,7 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     const started = performance.now();
     pending++;
     let task: ReturnType<typeof pool.startTask> | undefined;
+    let settlementBounded = false;
     try {
       if (command.operation === "capture" && command.sourceSnapshot) {
         await preparePluginSourceSnapshotAdmission({
@@ -476,19 +513,31 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
           },
         });
       }
+      const captureBudget = command.operation === "capture" || sourceCapture;
+      const captureTimeoutMs = captureBudget ? resolvePluginCaptureTimeoutMs() : 120_000;
       task = shared.startTask(
         { ...command, nativeLoads: [...pendingNativeLoads] },
         {
           // Capture cost scales with package size and filesystem latency. Its owner
-          // controls retirement; an arbitrary deadline can reject healthy plugins.
-          ...(command.operation === "capture" || sourceCapture ? {} : { timeoutMs: 120_000 }),
+          // controls retirement; the budget stays generous but no longer unbounded.
+          timeoutMs: captureTimeoutMs,
           progressSignal: waitSignal,
           transferList: (value) =>
             value.operation === "capture" && value.callbackPort ? [value.callbackPort] : [],
         },
       );
       pendingNativeLoads.clear();
-      const value = accept(await task.result, metrics);
+      let reply: GenerationWorkerReply;
+      try {
+        reply = await task.result;
+      } catch (error) {
+        if (captureBudget && error instanceof WorkerTaskError && error.code === "timeout") {
+          settlementBounded = true;
+          throw captureTimeoutError(error, captureTimeoutMs);
+        }
+        throw error;
+      }
+      const value = accept(reply, metrics);
       // Async preparation/disposal joins the captured admission owner. Sync lazy
       // imports only queue facts, so they cannot block the host's async writes.
       await settlePluginNativeAdmissionState(admission);
@@ -496,7 +545,25 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     } finally {
       try {
         if (task) {
-          await shared.release(task).result;
+          if (settlementBounded) {
+            // A timed-out capture can leave its slot behind a wedged command.
+            // Give settlement a bounded grace, then retire the shared worker so
+            // the broker transport closes and the pending command rejects.
+            // Settlement failures never mask the original capture timeout.
+            await Promise.race([
+              shared.release(task).result.catch(() => {}),
+              nextTimer(CAPTURE_SETTLEMENT_GRACE_MS).then(() => "settlement-grace" as const),
+            ]).then(
+              (settled) => {
+                if (settled === "settlement-grace") {
+                  retireStuckPreparationWorker();
+                }
+              },
+              () => {},
+            );
+          } else {
+            await shared.release(task).result;
+          }
         }
       } finally {
         if (metrics) {
@@ -520,6 +587,7 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     const started = performance.now();
     pending++;
     let task: ReturnType<typeof pool.startTask> | undefined;
+    let settlementBounded = false;
     const join = <T>(operation: {
       service(): void;
       read():
@@ -545,18 +613,53 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
       }
     };
     try {
+      // Recovery and custody copies share the capture budget; ordinary synchronous
+      // methods stay bounded well below it.
+      const captureTimeoutMs = sourceCapture ? resolvePluginCaptureTimeoutMs() : 30_000;
       task = shared.startTask(
         { ...command, nativeLoads: [...pendingNativeLoads] },
-        // Recovery and custody copies have the same owner-controlled lifetime as
-        // initial capture. Keep ordinary synchronous methods bounded.
-        { progressSignal: waitSignal, ...(sourceCapture ? {} : { timeoutMs: 30_000 }) },
+        { progressSignal: waitSignal, timeoutMs: captureTimeoutMs },
       );
       pendingNativeLoads.clear();
-      return accept(join(task), metrics);
+      let reply: GenerationWorkerReply;
+      try {
+        reply = join(task);
+      } catch (error) {
+        if (sourceCapture && error instanceof WorkerTaskError && error.code === "timeout") {
+          settlementBounded = true;
+          throw captureTimeoutError(error, captureTimeoutMs);
+        }
+        throw error;
+      }
+      return accept(reply, metrics);
     } finally {
       try {
         if (task) {
-          join(shared.release(task));
+          if (settlementBounded) {
+            // Mirror the async path: settle within the grace, then retire the
+            // stuck worker in the background. Nothing thrown here may mask the
+            // original capture timeout error.
+            const graceDeadline = Date.now() + CAPTURE_SETTLEMENT_GRACE_MS;
+            try {
+              for (;;) {
+                const observed = Atomics.load(waitSignal, 0);
+                shared.release(task).service();
+                shared.service();
+                if (
+                  shared.release(task).read().status !== "pending" ||
+                  Date.now() >= graceDeadline
+                ) {
+                  break;
+                }
+                Atomics.wait(waitSignal, 0, observed, 2);
+              }
+            } catch {
+              // Settlement failures must not mask the capture timeout error.
+            }
+            retireStuckPreparationWorker();
+          } else {
+            join(shared.release(task));
+          }
         }
       } finally {
         if (metrics) {

@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #178359: bounded, stage-naming capture deadline for silent preparation workers.
+41
