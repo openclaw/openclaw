@@ -12,7 +12,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { runGatesBash } from "./pr-prepare.test-support.js";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
-import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
+import {
+  copyPrWrapperSources,
+  delegatingGitFixture,
+  linkPrWrapperDependencies,
+} from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const itPosix = process.platform === "win32" ? it.skip : it;
@@ -64,6 +68,9 @@ describe("scripts/pr prepare mode preflight", () => {
       linkPrWrapperDependencies(root);
       const bin = join(root, "bin");
       mkdirSync(bin);
+      writeFileSync(join(bin, "rg"), "#!/bin/sh\necho 'Unexpected rg call' >&2\nexit 99\n", {
+        mode: 0o755,
+      });
       const env = {
         HOME: root,
         TMPDIR: root,
@@ -105,6 +112,7 @@ describe("scripts/pr prepare mode preflight", () => {
       const evidence = join(evidenceRoot, "gates.env");
       writeFileSync(evidence, "previous exact-head proof\n");
       const originalArtifacts = readdirSync(evidenceRoot);
+      const gitGuard = delegatingGitFixture(root, env);
       const ghCalls = join(root, "gh-calls");
       writeFileSync(
         join(bin, "gh"),
@@ -113,6 +121,9 @@ describe("scripts/pr prepare mode preflight", () => {
       chmodSync(join(bin, "gh"), 0o755);
       const expectUntouched = () => {
         expect(existsSync(ghCalls)).toBe(false);
+        const gitCalls = readFileSync(gitGuard.calls, "utf8");
+        expect(gitCalls).toContain("--version");
+        expect(gitCalls).not.toContain("update-ref --no-deref refs/openclaw/pr-operation-locks/");
         expect(readFileSync(evidence, "utf8")).toBe("previous exact-head proof\n");
         expect(readdirSync(evidenceRoot)).toEqual(originalArtifacts);
         expect(git("for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks")).toBe(
@@ -127,11 +138,31 @@ describe("scripts/pr prepare mode preflight", () => {
         ["prepare-push", "123", "--resume-crabbox-run", "99", "extra"],
         ["prepare-push", "123", "--run-id", "run_fake"],
         ["ci-dispatch", "123", "--backend", "crabbox", "--pending-gates"],
+        ["ci-dispatch", "123", "--ci-shape"],
+        ["ci-dispatch", "123", "--ci-shape", ""],
+        ["ci-dispatch", "123", "--ci-shape", "release"],
+        ["ci-dispatch", "123", "--ci-shape", "main", "--ci-shape", "main"],
+        ["ci-dispatch", "123", "--test-runtime-policy"],
+        ["ci-dispatch", "123", "--test-runtime-policy", ""],
+        ["ci-dispatch", "123", "--test-runtime-policy", "dual"],
+        [
+          "ci-dispatch",
+          "123",
+          "--test-runtime-policy",
+          "node",
+          "--test-runtime-policy",
+          "dual-all",
+        ],
+        ["ci-dispatch", "123", "--ci-shape=main"],
+        ["ci-dispatch", "123", "--unknown", "main"],
+        ["ci-dispatch", "123", "--backend", "crabbox", "--ci-shape", "main"],
+        ["ci-dispatch", "123", "--test-runtime-policy", "dual-all", "--backend", "crabbox"],
+        ["ci-dispatch", "123", "--backend", "crabbox", "--backend", "crabbox"],
       ]) {
         const result = spawnSync(join(root, "scripts/pr"), args, {
           cwd: root,
           encoding: "utf8",
-          env: { ...env, PR_TEST_GH_CALLS: ghCalls },
+          env: { ...gitGuard.env, PR_TEST_GH_CALLS: ghCalls },
         });
         expect(result.status, result.stdout + result.stderr).toBe(2);
         expectUntouched();
@@ -155,7 +186,7 @@ describe("scripts/pr prepare mode preflight", () => {
             cwd: root,
             encoding: "utf8",
             env: {
-              ...env,
+              ...gitGuard.env,
               OPENCLAW_PR_GATES_REMOTE: scenario.mode,
               OPENCLAW_TESTBOX: scenario.hosted,
               PR_TEST_GH_CALLS: ghCalls,
@@ -166,6 +197,88 @@ describe("scripts/pr prepare mode preflight", () => {
           expectUntouched();
         }
       }
+      const dispatched = join(root, "dispatched");
+      const runUrl = "https://github.com/openclaw/openclaw/actions/runs/99";
+      writeFileSync(
+        join(bin, "gh"),
+        `#!/bin/sh
+printf '%s\\n' "$*" >> "$PR_TEST_GH_CALLS"
+case "$1 $2" in
+  "auth token") printf 'fixture-token\\n' ;;
+  "browse ") printf 'https://github.com/fixture/repo\\n' ;;
+  "api --hostname")
+    printf '%s\\n' '${JSON.stringify({
+      base: { sha: "b".repeat(40), repo: { id: 1 } },
+      head: { sha: head, ref: "fixture/coverage", repo: { id: 1 } },
+    })}' ;;
+  "api repos/openclaw/openclaw/pulls/123") printf '%s\\n' '${head}' ;;
+  "workflow run") printf '%s\\0' "$@" >> "$PR_TEST_DISPATCHED" ;;
+  "api --method")
+    test "$4" = repos/openclaw/openclaw/actions/workflows/ci.yml/runs || exit 97
+    if [ -e "$PR_TEST_DISPATCHED" ]; then
+      printf '%s\\n' '${JSON.stringify({
+        workflow_runs: [
+          { id: 99, head_branch: "fixture/coverage", head_sha: head, html_url: runUrl },
+        ],
+      })}'
+    else
+      printf '{"workflow_runs":[]}\\n'
+    fi ;;
+  *) exit 98 ;;
+esac
+`,
+      );
+      // Exercise both parsers and the locked public handoff, not just admission:
+      // dropped selectors would otherwise silently dispatch default coverage.
+      const accepted = spawnSync(
+        join(root, "scripts/pr"),
+        ["ci-dispatch", "123", "--test-runtime-policy", "dual-all", "--ci-shape", "main"],
+        {
+          cwd: root,
+          encoding: "utf8",
+          env: {
+            ...gitGuard.env,
+            OPENCLAW_GH_BIN: join(bin, "gh"),
+            PR_TEST_GH_CALLS: ghCalls,
+            PR_TEST_DISPATCHED: dispatched,
+          },
+        },
+      );
+      expect(accepted.status, accepted.stdout + accepted.stderr).toBe(0);
+      expect(accepted.stdout).toContain(`observed_run_url=${runUrl}`);
+      const calls = readFileSync(ghCalls, "utf8").trim().split("\n");
+      const dispatchArgs = readFileSync(dispatched, "utf8").split("\0");
+      expect(dispatchArgs.pop()).toBe("");
+      expect(dispatchArgs).toEqual([
+        "workflow",
+        "run",
+        "ci.yml",
+        "--ref",
+        "fixture/coverage",
+        "-f",
+        `target_ref=${head}`,
+        "-f",
+        "release_gate=true",
+        "-f",
+        "pull_request_number=123",
+        "-f",
+        "runner_backend=hybrid",
+        "-f",
+        "ci_shape=main",
+        "-f",
+        "test_runtime_policy=dual-all",
+      ]);
+      expect(readFileSync(gitGuard.calls, "utf8")).toContain(
+        "update-ref --no-deref refs/openclaw/pr-operation-locks/123 ",
+      );
+      expect(
+        calls.filter((line) => line === "api repos/openclaw/openclaw/pulls/123 --jq .head.sha"),
+      ).toHaveLength(2);
+      expect(readFileSync(evidence, "utf8")).toBe("previous exact-head proof\n");
+      expect(readdirSync(evidenceRoot)).toEqual(originalArtifacts);
+      expect(git("for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks")).toBe(
+        "",
+      );
     },
   );
 });

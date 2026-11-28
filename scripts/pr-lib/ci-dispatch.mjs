@@ -306,11 +306,14 @@ function buildCiDispatchArgs(record, backend) {
     "release_gate=true",
     "-f",
     `pull_request_number=${record.pr}`,
-    // Qualification keeps PR coverage instead of ordinary dispatch's release validation.
+    // Keep PR coverage by default; broader coverage requires an explicit selector.
     "-f",
     "runner_backend=hybrid",
     "-f",
-    "ci_shape=default",
+    `ci_shape=${backend.ciShape ?? "default"}`,
+    ...(backend.testRuntimePolicy
+      ? ["-f", `test_runtime_policy=${backend.testRuntimePolicy}`]
+      : []),
   ];
 }
 
@@ -527,10 +530,7 @@ async function dispatchCiForPr(
   return undefined;
 }
 
-function parseBackendArgs(argv) {
-  if (argv.length === 0) {
-    return { name: "ci" };
-  }
+function parseDispatchArgs(argv) {
   if (argv.length === 2 && argv[0] === "--backend" && argv[1] === "crabbox") {
     return { name: "crabbox" };
   }
@@ -544,7 +544,29 @@ function parseBackendArgs(argv) {
       return { name: "crabbox", pendingGates: true, resumeRunId: positiveInteger(argv[4]) };
     }
   }
-  throw new Error("Expected --backend crabbox, with native preparation options only.");
+  const backend = { name: "ci" };
+  for (let index = 0; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    if (
+      flag === "--ci-shape" &&
+      backend.ciShape === undefined &&
+      ["default", "main"].includes(value)
+    ) {
+      backend.ciShape = value;
+    } else if (
+      flag === "--test-runtime-policy" &&
+      backend.testRuntimePolicy === undefined &&
+      ["node", "bun-all", "dual-all"].includes(value)
+    ) {
+      backend.testRuntimePolicy = value;
+    } else {
+      throw new Error(
+        "Expected unique --ci-shape default|main and --test-runtime-policy node|bun-all|dual-all, or --backend crabbox with native preparation options only.",
+      );
+    }
+  }
+  return backend;
 }
 
 function warnOnLocalHeadDrift(record) {
@@ -571,7 +593,7 @@ async function main(argv = process.argv.slice(2)) {
   }
   if (argv.length < 5 || !["true", "false"].includes(argv[4])) {
     console.error(
-      "Usage: ci-dispatch.mjs <PR> <headRefName> <headRefOid> <baseRefOid> <isCrossRepository> [--backend crabbox]",
+      "Usage: ci-dispatch.mjs <PR> <headRefName> <headRefOid> <baseRefOid> <isCrossRepository> [--ci-shape default|main] [--test-runtime-policy node|bun-all|dual-all] | --backend crabbox",
     );
     process.exitCode = 2;
     return;
@@ -583,7 +605,7 @@ async function main(argv = process.argv.slice(2)) {
     headRefOid: argv[2],
     isCrossRepository: argv[4] === "true",
   };
-  const backend = parseBackendArgs(argv.slice(5));
+  const backend = parseDispatchArgs(argv.slice(5));
   requirePrRecord(record);
   if (backend.resumeRunId === undefined) {
     warnOnLocalHeadDrift(record);

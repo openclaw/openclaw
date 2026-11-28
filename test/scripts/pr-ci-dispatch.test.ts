@@ -37,6 +37,7 @@ type RunOptions = {
   finalRun?: Record<string, unknown>;
   proofBase?: string;
   dispatchFails?: boolean;
+  args?: readonly string[];
 };
 
 function createFiles() {
@@ -63,7 +64,7 @@ case "$1 $2" in
     ;;
   "workflow run")
     test "\${GH_TOKEN-}" = "forwarded-test-token"
-    : > "$OPENCLAW_TEST_GH_DISPATCHED"
+    printf '%s\\0' "$@" >> "$OPENCLAW_TEST_GH_DISPATCHED"
     if [ "\${OPENCLAW_TEST_DISPATCH_FAIL:-}" = true ]; then exit 1; fi
     ;;
   "api --method")
@@ -184,6 +185,7 @@ function runDispatch(fakeGh: ReturnType<typeof createFiles>, options: RunOptions
       ...(crabbox ? ["--backend", "crabbox"] : []),
       ...(options.pending ? ["--pending-gates"] : []),
       ...(options.resume ? ["--resume-crabbox-run", options.resume] : []),
+      ...(options.args ?? []),
     ],
     { cwd: fakeGh.tempDir, encoding: "utf8", env },
   );
@@ -251,6 +253,11 @@ function createFakeGh(
     },
     receipt,
     callsText: () => readFileSync(files.calls, "utf8"),
+    dispatchArgs() {
+      const args = readFileSync(files.dispatched, "utf8").split("\0");
+      expect(args.pop()).toBe("");
+      return args;
+    },
   };
 }
 
@@ -262,9 +269,85 @@ describePosix("scripts/pr ci-dispatch", () => {
     const calls = fakeGh.callsText();
     expect(calls).toContain("gh\tapi repos/openclaw/openclaw/pulls/12345 --jq .head.sha");
     expect(calls).not.toContain("pr view");
-    expect(calls.split("\n").filter((line) => line.includes("\tworkflow run "))).toEqual([
-      `real-gh\tworkflow run ci.yml --ref contributor/fix-hosted-gates -f target_ref=${headSha} -f release_gate=true -f pull_request_number=12345 -f runner_backend=hybrid -f ci_shape=default`,
+    expect(fakeGh.dispatchArgs()).toEqual([
+      "workflow",
+      "run",
+      "ci.yml",
+      "--ref",
+      "contributor/fix-hosted-gates",
+      "-f",
+      `target_ref=${headSha}`,
+      "-f",
+      "release_gate=true",
+      "-f",
+      "pull_request_number=12345",
+      "-f",
+      "runner_backend=hybrid",
+      "-f",
+      "ci_shape=default",
     ]);
+  });
+
+  it.each([
+    [["--ci-shape", "main"], "main", undefined],
+    [["--ci-shape", "default"], "default", undefined],
+    [["--test-runtime-policy", "node"], "default", "node"],
+    [["--test-runtime-policy", "bun-all"], "default", "bun-all"],
+    [["--test-runtime-policy", "dual-all"], "default", "dual-all"],
+    [["--ci-shape", "main", "--test-runtime-policy", "dual-all"], "main", "dual-all"],
+    [["--test-runtime-policy", "node", "--ci-shape", "main"], "main", "node"],
+  ] satisfies [string[], string, string | undefined][])(
+    "dispatches the requested coverage once: %j",
+    (args, shape, runtime) => {
+      const fakeGh = createFakeGh();
+      const result = fakeGh.ok({ args });
+      expect(result.stdout).toContain(`observed_run_url=${runUrl}`);
+      const calls = fakeGh.callsText();
+      expect(fakeGh.dispatchArgs()).toEqual([
+        "workflow",
+        "run",
+        "ci.yml",
+        "--ref",
+        "contributor/fix-hosted-gates",
+        "-f",
+        `target_ref=${headSha}`,
+        "-f",
+        "release_gate=true",
+        "-f",
+        "pull_request_number=12345",
+        "-f",
+        "runner_backend=hybrid",
+        "-f",
+        `ci_shape=${shape}`,
+        ...(runtime ? ["-f", `test_runtime_policy=${runtime}`] : []),
+      ]);
+      expect(calls.match(/pulls\/12345 --jq \.head\.sha/gu)).toHaveLength(2);
+    },
+  );
+
+  it.each([
+    ["--ci-shape"],
+    ["--ci-shape", ""],
+    ["--ci-shape", "release"],
+    ["--ci-shape", "main", "--ci-shape", "main"],
+    ["--test-runtime-policy"],
+    ["--test-runtime-policy", ""],
+    ["--test-runtime-policy", "dual"],
+    ["--test-runtime-policy", "node", "--test-runtime-policy", "dual-all"],
+    ["--ci-shape=main"],
+    ["--unknown", "main"],
+    ["--backend", "crabbox", "--ci-shape", "main"],
+    ["--test-runtime-policy", "dual-all", "--backend", "crabbox"],
+    ["--backend", "crabbox", "--pending-gates", "--test-runtime-policy", "node"],
+  ])("rejects invalid coverage before GitHub: %j", (...args) => {
+    const fakeGh = createFakeGh();
+    if (args.includes("--pending-gates")) {
+      writePending(fakeGh);
+    }
+    const result = fakeGh.refuse({ args });
+    expect(result.stderr).toContain("Expected unique --ci-shape");
+    expect(existsSync(fakeGh.calls)).toBe(false);
+    expect(existsSync(fakeGh.dispatched)).toBe(false);
   });
 
   it("finds the publisher-owned Crabbox proof on a later check-run page", () => {
@@ -338,6 +421,10 @@ describePosix("scripts/pr ci-dispatch", () => {
   it.each([
     [{ backend: "crabbox", wrongCheck: true }, /without the exact-head GitHub Actions check/u],
     [{ mode: "head-change" }, /head changed/u],
+    [
+      { mode: "head-change", args: ["--ci-shape", "main", "--test-runtime-policy", "dual-all"] },
+      /head changed/u,
+    ],
   ] as const)("rejects dispatch observation drift: %j", (options, error) => {
     const result = createFakeGh().refuse(options);
     expect(`${result.stdout}\n${result.stderr}`).toMatch(error);

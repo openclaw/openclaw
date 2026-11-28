@@ -1727,7 +1727,8 @@ Usage:
     Resume observes the selected protected publisher only; never pushes or dispatches.
   scripts/pr prepare-sync-head <PR>
   scripts/pr prepare-run <PR>
-  scripts/pr ci-dispatch <PR> [--backend crabbox]
+  scripts/pr ci-dispatch <PR> [--ci-shape default|main] [--test-runtime-policy node|bun-all|dual-all]
+  scripts/pr ci-dispatch <PR> --backend crabbox
   scripts/pr merge-verify <PR>
   scripts/pr merge-run <PR> [--retain-resources] [--auto-merge] [--body-file <path>] [--admin-evidence <path> --confirmed-operator-admin [--current-workflow]]
     OPENCLAW_PR_MERGE_METHOD=merge|rebase preserves the PR commit series.
@@ -2026,7 +2027,30 @@ main() {
       [ "$#" -eq 1 ] || { usage; exit 2; }
       ;;
     ci-dispatch)
-      [ "$#" -eq 1 ] || { [ "$#" -eq 3 ] && [ "$2" = --backend ] && [ "$3" = crabbox ]; } || { usage; exit 2; }
+      [ "$#" -ge 1 ] || { usage; exit 2; }
+      local ci_dispatch_args=("$@") ci_shape="" ci_runtime="" ci_backend=""
+      shift
+      while [ "$#" -gt 0 ]; do
+        [ "$#" -ge 2 ] || { usage; exit 2; }
+        case "$1" in
+          --ci-shape)
+            [ -z "$ci_shape" ] && { [ "$2" = default ] || [ "$2" = main ]; } || { usage; exit 2; }
+            ci_shape="$2"
+            ;;
+          --test-runtime-policy)
+            [ -z "$ci_runtime" ] && { [ "$2" = node ] || [ "$2" = bun-all ] || [ "$2" = dual-all ]; } || { usage; exit 2; }
+            ci_runtime="$2"
+            ;;
+          --backend)
+            [ -z "$ci_backend" ] && [ "$2" = crabbox ] || { usage; exit 2; }
+            ci_backend="$2"
+            ;;
+          *) usage; exit 2 ;;
+        esac
+        shift 2
+      done
+      [ -z "$ci_backend" ] || [ -z "$ci_shape$ci_runtime" ] || { usage; exit 2; }
+      set -- "${ci_dispatch_args[@]}"
       ;;
     review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-sync-head | prepare-run | merge-verify)
       [ "$#" -ge 1 ] || { usage; exit 2; }

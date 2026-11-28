@@ -232,6 +232,26 @@ in that suite does not replace the required PR check GitHub selects. If the
 original required check remains failed or cancelled, recover that run; do not
 bypass it or dispatch another full suite hoping to replace its status.
 
+This dispatcher requires an open PR from `openclaw/openclaw` targeting `main` and
+an actor with write, maintain, or admin permission. Fork PRs are not eligible.
+Push first: the PR head, selected branch revision, and workflow revision must
+match. Request specific coverage through the same locked dispatcher:
+
+```bash
+scripts/pr ci-dispatch <pr-number> --ci-shape main --test-runtime-policy dual-all
+```
+
+`--ci-shape default|main` selects PR-shaped or main-push planning using the PR's
+change range. Main-shaped planning is not a superset: it can omit jobs selected
+by the default shape, such as `check-docs`. Inspect the emitted plan for every job
+required by the proof.
+`--test-runtime-policy node|bun-all|dual-all` selects the workflow's test runtime
+policy; `dual-all` runs eligible test lanes under both Node and Bun. With no
+options, dispatch keeps PR-shaped coverage and leaves the runtime policy to the
+workflow default. These options cannot combine with `--backend crabbox`.
+Dispatch once, then inspect the returned run's exact checkout and job selection;
+acceptance alone is not proof and does not replace required PR checks.
+
 ## PR context and evidence
 
 External contributor PRs run a PR context and evidence gate from
