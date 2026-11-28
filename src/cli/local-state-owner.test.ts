@@ -1,20 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState } from "../config/config.js";
+import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { runWithLocalStateOwner } from "./local-state-owner.js";
-
-const processRole = vi.hoisted(() => ({ current: undefined as "gateway" | undefined }));
-vi.mock("../infra/database-engine/admission-scope.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/database-engine/admission-scope.js")>()),
-  // The real role is a process-wide singleton; a test must not install it for later files.
-  getDatabaseProcessRole: () => processRole.current,
-}));
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
@@ -92,34 +86,36 @@ it("keeps the command's databases open until detached work it admitted settles",
   await expect(owner).resolves.toBe("returned");
 });
 
-describe("in a process that hosts a Gateway", () => {
-  afterEach(() => {
-    processRole.current = undefined;
-  });
-  // A Gateway request waits on a config write lock the command holds (models.authLogout vs a
-  // registered `config set`). Waiting for it would deadlock; release the lock when the owner
-  // starts waiting so a regression fails fast instead of timing out.
-  it.each(["before", "after"] as const)(
-    "does not wait for Gateway work admitted %s the command starts",
-    async (order) => {
-      processRole.current = "gateway";
-      const root = roots.make("openclaw-local-host-work-");
-      const configPath = path.join(root, "openclaw.json");
-      await fs.writeFile(configPath, "{}");
-      vi.stubEnv("OPENCLAW_STATE_DIR", root);
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-      const configLock = createDeferredCore();
-      const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => {
-        configLock.resolve();
-        return true;
-      });
-      let request: Promise<void> | undefined;
-      const admitRequest = () => {
-        request = runWithGatewayDetachedWorkAdmission(
-          () => configLock.promise,
-          "test:gateway-request",
-        );
-      };
+// A Gateway request waits on a config write lock the command holds (models.authLogout vs a
+// registered `config set`). A process that holds Gateway custody runs the command as the hosted
+// owner, which never waits; a regression would deadlock, so the lock is released when the owner
+// starts waiting and the test fails fast instead of timing out.
+it.each(["before", "after"] as const)(
+  "never waits for Gateway work admitted %s a hosted command starts",
+  async (order) => {
+    const root = roots.make("openclaw-local-host-work-");
+    const configPath = path.join(root, "openclaw.json");
+    await fs.writeFile(configPath, "{}");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    const custody = await acquireGatewayLock({
+      env: process.env,
+      allowInTests: true,
+      timeoutMs: 0,
+    });
+    const configLock = createDeferredCore();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => {
+      configLock.resolve();
+      return true;
+    });
+    let request: Promise<void> | undefined;
+    const admitRequest = () => {
+      request = runWithGatewayDetachedWorkAdmission(
+        () => configLock.promise,
+        "test:gateway-request",
+      );
+    };
+    try {
       if (order === "before") {
         admitRequest();
       }
@@ -137,8 +133,10 @@ describe("in a process that hosts a Gateway", () => {
         }),
       ).resolves.toBe("returned");
       expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("Waiting for"));
+    } finally {
       configLock.resolve();
       await request;
-    },
-  );
-});
+      await custody?.release();
+    }
+  },
+);

@@ -10,7 +10,6 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { GatewayRequestFunction } from "../gateway/call.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
-import { getDatabaseProcessRole } from "../infra/database-engine/admission-scope.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { DatabasePortRecoveryIntent } from "../infra/database-port-recovery.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -60,13 +59,9 @@ class LocalStateOwnerError extends Error {
 /**
  * Detached work a one-shot command admitted (subagent completion, announcements) writes through
  * the command's databases; every owner that closes them lets that work finish unless the user
- * interrupts. A process that hosts a Gateway never waits: the Gateway owns its root work's
- * lifetime, and its requests may be blocked on a lock this command holds.
+ * interrupts.
  */
 export async function waitForLocalBackgroundWork(signal: AbortSignal | undefined): Promise<void> {
-  if (getDatabaseProcessRole() === "gateway") {
-    return;
-  }
   await waitForGatewayRootWorkIdle({
     signal,
     onWaiting: (count) =>
