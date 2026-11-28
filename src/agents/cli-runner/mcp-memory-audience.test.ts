@@ -48,7 +48,6 @@ function admittedTurn() {
   fakeSessionOwner.rows.set(sessionKey, entry);
   return {
     sessionKey,
-    entry,
     run: {
       config: {},
       sessionId: entry.sessionId,
