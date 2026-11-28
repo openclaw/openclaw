@@ -196,3 +196,19 @@ is available.
 
 Topic-group session routing is covered under
 [Group session scope and topic threads](/channels/feishu/advanced-configuration#group-session-scope-and-topic-threads).
+
+## Ask-user questions
+
+Feishu DMs and allowlisted groups render `ask_user` choice questions as card
+buttons. Each option, plus the free-text "Other" control, submits through the
+same card-callback channel that powers approval cards; the answer resolves the
+waiting agent turn in place.
+
+- One to three questions, single-select and multi-select prompts are supported.
+- The question times out after five minutes like on other channels; a click on an
+  expired card reports that the question was already answered.
+- If the Gateway cannot resolve the option order for a prompt (for example a stale
+  or replayed card), the control degrades to plain text instead of a dead button.
+
+Plain-text questions remain the fallback whenever a choice card cannot be
+rendered, for example in document-comment replies.

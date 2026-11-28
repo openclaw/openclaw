@@ -12,6 +12,10 @@ import {
   type MessagePresentationBlock,
   type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  resolveAskUserQuestionOptionIndices,
+  type AskUserQuestionOptionIndices,
+} from "openclaw/plugin-sdk/reply-payload";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { markdownToIRWithMeta } from "openclaw/plugin-sdk/text-chunking";
 import type { OutboundIdentity, ReplyPayload } from "../runtime-api.js";
@@ -29,6 +33,11 @@ import {
   sanitizeNativeFeishuCard,
   type FeishuNativeCard,
 } from "./native-card.js";
+import {
+  buildFeishuQuestionButtonEnvelope,
+  resolveFeishuQuestionCardBinding,
+  type FeishuQuestionCardBinding,
+} from "./question-callback.js";
 
 type NormalizedMessagePresentation = NonNullable<ReturnType<typeof normalizeMessagePresentation>>;
 type FeishuPresentationTextFormat = "plain" | "markdown";
@@ -212,7 +221,24 @@ export function renderFeishuPresentationFallbackText(
   });
 }
 
-function buildFeishuPayloadButton(button: MessagePresentationButton): Record<string, unknown> {
+function buildFeishuPayloadButton(
+  button: MessagePresentationButton,
+  questionOptionIndices?: AskUserQuestionOptionIndices,
+  questionBinding?: FeishuQuestionCardBinding,
+): Record<string, unknown> {
+  const questionEnvelope = buildFeishuQuestionButtonEnvelope({
+    button,
+    questionOptionIndices,
+    binding: questionBinding,
+  });
+  if (questionEnvelope && button.disabled !== true) {
+    return {
+      tag: "button",
+      text: { tag: "plain_text", content: button.label },
+      type: resolveFeishuButtonType(button.style),
+      behaviors: [{ type: "callback", value: questionEnvelope }],
+    };
+  }
   const url = resolveSafeFeishuButtonUrl(resolveFeishuButtonUrl(button));
   const value = resolveFeishuCommandButtonValue(button);
   if (button.disabled || (!url && !value)) {
@@ -243,12 +269,16 @@ function buildFeishuPayloadButton(button: MessagePresentationButton): Record<str
 
 function buildFeishuCardElementsForBlock(
   block: MessagePresentationBlock,
+  questionOptionIndices?: AskUserQuestionOptionIndices,
+  questionBinding?: FeishuQuestionCardBinding,
 ): Record<string, unknown>[] {
   if (block.type === "divider") {
     return [{ tag: "hr" }];
   }
   if (block.type === "buttons") {
-    return block.buttons.map(buildFeishuPayloadButton);
+    return block.buttons.map((button) =>
+      buildFeishuPayloadButton(button, questionOptionIndices, questionBinding),
+    );
   }
   let text: string;
   switch (block.type) {
@@ -290,6 +320,8 @@ function resolvePresentationHeaderTemplate(tone: NormalizedMessagePresentation["
 function buildFeishuPresentationCardElements(params: {
   presentation: NormalizedMessagePresentation;
   fallbackText?: string;
+  questionOptionIndices?: AskUserQuestionOptionIndices;
+  questionBinding?: FeishuQuestionCardBinding;
 }): Record<string, unknown>[] {
   const elements: Record<string, unknown>[] = [];
   const fallbackText = params.fallbackText?.trim();
@@ -300,7 +332,13 @@ function buildFeishuPresentationCardElements(params: {
     });
   }
   for (const block of params.presentation.blocks) {
-    elements.push(...buildFeishuCardElementsForBlock(block));
+    elements.push(
+      ...buildFeishuCardElementsForBlock(
+        block,
+        params.questionOptionIndices,
+        params.questionBinding,
+      ),
+    );
   }
   if (elements.length > 0) {
     return elements;
@@ -311,6 +349,8 @@ function buildFeishuPresentationCardElements(params: {
 export function buildFeishuPresentationCard(params: {
   presentation: NormalizedMessagePresentation;
   fallbackText?: string;
+  questionOptionIndices?: AskUserQuestionOptionIndices;
+  questionBinding?: FeishuQuestionCardBinding;
 }): FeishuNativeCard {
   return {
     schema: "2.0",
@@ -390,6 +430,7 @@ export function buildFeishuPayloadCard(params: {
   text?: string;
   identity?: OutboundIdentity;
   mentions?: MentionTarget[];
+  questionBinding?: FeishuQuestionCardBinding;
 }): FeishuNativeCard | undefined {
   const nativeCard = readNativeFeishuCard(params.payload);
   const rawText = params.text ?? params.payload.text;
@@ -406,6 +447,8 @@ export function buildFeishuPayloadCard(params: {
       fallbackText: textCard
         ? undefined
         : resolveLegacyInteractiveTextFallback({ text: rawText, interactive }),
+      questionOptionIndices: resolveAskUserQuestionOptionIndices(params.payload),
+      questionBinding: params.questionBinding,
     });
   }
   if (!card) {
@@ -456,6 +499,7 @@ export function renderFeishuPresentationPayload({
     text: payload.text,
     identity: ctx.identity,
     mentions: ctx.mentions,
+    questionBinding: resolveFeishuQuestionCardBinding(ctx.to),
   });
   const isComment = Boolean(parseFeishuCommentTarget(ctx.to));
   // Native limits may clip labels. A whole-card or comment fallback must retain

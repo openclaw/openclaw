@@ -103,3 +103,81 @@ describe("feishuCardWithinTableLimit", () => {
     expect(feishuCardWithinTableLimit(card)).toBe(false);
   });
 });
+
+const QUESTION_ID = "ask_0123456789abcdef0123456789abcdef";
+
+describe("Feishu ask_user question buttons", () => {
+  it("renders a question button as a callback carrying the option index", () => {
+    const presentation = normalizeMessagePresentation({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Yes",
+              action: { type: "question", questionId: QUESTION_ID, optionValue: "Yes" },
+            },
+            {
+              label: "No",
+              action: { type: "question", questionId: QUESTION_ID, optionValue: "No" },
+            },
+          ],
+        },
+      ],
+    });
+    if (!presentation) {
+      throw new Error("expected valid presentation");
+    }
+    const questionOptionIndices = new Map([
+      [
+        QUESTION_ID,
+        new Map([
+          ["yes", 0],
+          ["no", 1],
+        ]),
+      ],
+    ]);
+    const elements = buildFeishuPresentationCard({ presentation, questionOptionIndices }).body
+      .elements as Array<Record<string, unknown>>;
+    expect(elements[0]).toMatchObject({
+      tag: "button",
+      behaviors: [
+        {
+          type: "callback",
+          value: {
+            oc: "ocf1",
+            k: "button",
+            a: "feishu.question.answer",
+            m: { questionId: QUESTION_ID, optionIndex: 0 },
+          },
+        },
+      ],
+    });
+    expect(elements[1]).toMatchObject({
+      tag: "button",
+      behaviors: [{ type: "callback", value: { m: { questionId: QUESTION_ID, optionIndex: 1 } } }],
+    });
+  });
+
+  it("falls back to text when the Gateway option order is unavailable", () => {
+    const presentation = normalizeMessagePresentation({
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [
+            {
+              label: "Yes",
+              action: { type: "question", questionId: QUESTION_ID, optionValue: "Yes" },
+            },
+          ],
+        },
+      ],
+    });
+    if (!presentation) {
+      throw new Error("expected valid presentation");
+    }
+    expect(buildFeishuPresentationCard({ presentation }).body.elements).toEqual([
+      { tag: "markdown", content: "- Yes" },
+    ]);
+  });
+});

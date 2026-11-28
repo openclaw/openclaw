@@ -145,6 +145,7 @@ it.each([{ capabilities: undefined }, { capabilities: ["inlineButtons"] }])(
     });
     expect(prompt).not.toContain("feishu.capabilities.inlineButtons");
     expect(prompt).not.toContain('"action":{"type":"callback"');
-    expect(prompt).toContain("ask questions in plain text");
+    expect(prompt).toContain("ask_user");
+    expect(prompt).toContain("falls back to plain text");
   },
 );
