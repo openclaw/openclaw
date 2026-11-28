@@ -58,6 +58,17 @@ type ExaContentsArgs = {
   summary?: ExaSummaryContentsOption;
 };
 
+// Clamp to the target month's last day so Mar 31 or Feb 29 never rolls forward.
+function subtractUtcMonths(date: Date, months: number): void {
+  const currentDay = date.getUTCDate();
+  date.setUTCDate(1);
+  date.setUTCMonth(date.getUTCMonth() - months);
+  const lastDayOfTargetMonth = new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 0),
+  ).getUTCDate();
+  date.setUTCDate(Math.min(currentDay, lastDayOfTargetMonth));
+}
+
 function invalidBaseUrlPayload() {
   return {
     error: "invalid_base_url",
@@ -272,16 +283,8 @@ export async function executeExaWebSearchProviderTool(
       now.setUTCDate(now.getUTCDate() - 1);
     } else if (freshness === "week") {
       now.setUTCDate(now.getUTCDate() - 7);
-    } else if (freshness === "month") {
-      const currentDay = now.getUTCDate();
-      now.setUTCDate(1);
-      now.setUTCMonth(now.getUTCMonth() - 1);
-      const lastDayOfTargetMonth = new Date(
-        Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 0),
-      ).getUTCDate();
-      now.setUTCDate(Math.min(currentDay, lastDayOfTargetMonth));
     } else {
-      now.setUTCFullYear(now.getUTCFullYear() - 1);
+      subtractUtcMonths(now, freshness === "month" ? 1 : 12);
     }
     body.startPublishedDate = now.toISOString();
   }
