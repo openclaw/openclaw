@@ -244,6 +244,8 @@ struct NativeUsageAnalytics: View {
                                 }
                                 Image(systemName: "chevron.right").imageScale(.small).foregroundStyle(.tertiary)
                             }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
                         }.buttonStyle(.plain).accessibilityIdentifier("Usage.Agent." + name)
                     }
                 }
