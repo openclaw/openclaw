@@ -7,7 +7,6 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
-import { runWithSessionMcpToolCallAuthority } from "../agents/agent-bundle-mcp-request-context.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
@@ -75,6 +74,7 @@ import {
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
+import { runDirectToolCall } from "./tools-invoke-caller.js";
 import { resolveToolsWithInvocationMcp } from "./tools-invoke-mcp.js";
 import { isToolUploadRequest } from "./tools-invoke-upload.js";
 import {
@@ -605,11 +605,8 @@ async function invokeGatewayToolWithSignal(
         assertInvocationCurrent();
         assertCapturedInputCommitAllowed();
         createGatewayToolPolicyAssertion(tool, params.cfg)(hookResult.params);
-        // MCP requests recheck caller authority at server I/O, after reconnection or catalog waits.
-        return await runWithSessionMcpToolCallAuthority(
-          getPluginToolMeta(tool)?.mcp ? assertInvocationCurrent : undefined,
-          () => tool.execute?.(toolCallId, hookResult.params, params.signal),
-        );
+        const call = { agentId: agentId ?? selectedAgentId, sessionKey, toolCallId, tool, tools };
+        return await runDirectToolCall(params, call, hookResult.params, assertInvocationCurrent);
       },
     );
     const executedAction = asOptionalRecord(hookResult.params)?.action;
