@@ -697,7 +697,8 @@ async function consultRealtimeVoiceAgentInternal(
         params.logger.warn(
           "[talk] agent consult produced no answer: agent returned no speakable text",
         );
-        return { text: params.fallbackText ?? "I need a moment to verify that before answering." };
+        // The run is over, so the default must not promise a later answer.
+        return { text: params.fallbackText ?? "I couldn't find an answer to that." };
       }
       return { text };
     });
