@@ -61,7 +61,7 @@ export function parseJsonc(raw: string): JsoncAst & { oversizedInputBytes?: numb
     })
   ) {
     try {
-      root = nodeToJsoncValue(tree, lineForOffset, 0);
+      root = nodeToJsoncValue(tree, lineForOffset, 0, parseSource);
     } catch {
       // Depth-limited values remain unaddressable; raw bytes are retained.
     }
@@ -74,6 +74,7 @@ function nodeToJsoncValue(
   node: JsoncParserNode,
   lineForOffset: LineForOffset,
   depth: number,
+  source: string,
 ): JsoncValue {
   if (depth > MAX_PARSE_DEPTH) {
     throw new Error(`structural depth exceeded MAX_PARSE_DEPTH (${MAX_PARSE_DEPTH})`);
@@ -97,7 +98,7 @@ function nodeToJsoncValue(
             {
               key: String(keyNode.value),
               line: lineForOffset(keyNode.offset),
-              value: nodeToJsoncValue(valueNode, lineForOffset, depth + 1),
+              value: nodeToJsoncValue(valueNode, lineForOffset, depth + 1, source),
             },
           ];
         }),
@@ -107,13 +108,24 @@ function nodeToJsoncValue(
         kind: "array",
         line,
         items: (node.children ?? []).map((child) =>
-          nodeToJsoncValue(child, lineForOffset, depth + 1),
+          nodeToJsoncValue(child, lineForOffset, depth + 1, source),
         ),
       };
     case "string":
       return { kind: "string", value: String(node.value), line };
-    case "number":
-      return { kind: "number", value: Number(node.value), line };
+    case "number": {
+      const literal = source.slice(node.offset, node.offset + node.length);
+      const unsafeLiteral = unsafeIntegerLiteral(literal);
+      // Only plain integers outside the exactly-representable range keep their
+      // source text; every other spelling stays on the String(value) path
+      // consumers have always compared and printed (`1e3` reads as "1000").
+      return {
+        kind: "number",
+        value: Number(literal),
+        ...(unsafeLiteral === undefined ? {} : { raw: unsafeLiteral }),
+        line,
+      };
+    }
     case "boolean":
       return { kind: "boolean", value: Boolean(node.value), line };
     case "null":
@@ -121,6 +133,18 @@ function nodeToJsoncValue(
     default:
       return { kind: "null", line };
   }
+}
+
+/**
+ * Doubles hold every integer up to 2^53 exactly, so a plain integer literal
+ * beyond that range can round to a neighbour's value. Only those literals need
+ * their exact text: `9007199254740993` must not read as `...992`.
+ */
+function unsafeIntegerLiteral(literal: string): string | undefined {
+  if (!/^-?[0-9]+$/.test(literal)) {
+    return undefined;
+  }
+  return Number.isSafeInteger(Number(literal)) ? undefined : literal;
 }
 
 function createLineForOffset(raw: string): LineForOffset {

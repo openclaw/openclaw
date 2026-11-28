@@ -724,7 +724,12 @@ function jsoncChildFieldText(
   if (v.kind === "string") {
     return v.value;
   }
-  if (v.kind === "number" || v.kind === "boolean") {
+  if (v.kind === "number") {
+    // Unsafe plain integers keep their source text; everything else compares by
+    // its normalized String(value) reading, so `1e3` still matches `[id=1000]`.
+    return v.raw ?? String(v.value);
+  }
+  if (v.kind === "boolean") {
     return String(v.value);
   }
   return v.kind === "null" ? nullText : null;

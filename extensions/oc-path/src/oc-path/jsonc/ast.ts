@@ -18,7 +18,13 @@ export type JsoncValue =
   | { readonly kind: "object"; readonly entries: readonly JsoncEntry[]; readonly line?: number }
   | { readonly kind: "array"; readonly items: readonly JsoncValue[]; readonly line?: number }
   | { readonly kind: "string"; readonly value: string; readonly line?: number }
-  | { readonly kind: "number"; readonly value: number; readonly line?: number }
+  | {
+      readonly kind: "number";
+      readonly value: number;
+      /** Exact source text, only for plain integers outside the safe range (> 2^53 - 1). */
+      readonly raw?: string;
+      readonly line?: number;
+    }
   | { readonly kind: "boolean"; readonly value: boolean; readonly line?: number }
   | { readonly kind: "null"; readonly line?: number };
 
