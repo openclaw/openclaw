@@ -1,8 +1,10 @@
 import { createMemo, For, Show } from "solid-js";
 import { nativeSetupCapability } from "../../app/native-setup.ts";
-import { Icon } from "../../components/solid/icon.tsx";
+import { Icon, type IconName } from "../../components/solid/icon.tsx";
 import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
+import { isLoopbackHostname } from "../../lib/gateway-locality.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
@@ -10,6 +12,22 @@ import type { CustodianSetupActions } from "./custodian-actions.ts";
 import type { CustodianAutoSetup } from "./custodian-auto-setup.ts";
 import type { CustodianSessionStore } from "./custodian-session-store.ts";
 import "../../styles/custodian-setup-card.css";
+
+function ErrorDetails(props: { text: string }) {
+  return (
+    <details class="stack">
+      <summary>{t("custodian.autoSetup.showDetails")}</summary>
+      <pre>{props.text}</pre>
+      <button
+        class="btn btn--ghost btn--sm"
+        type="button"
+        onClick={() => void copyToClipboard(props.text)}
+      >
+        {t("custodian.autoSetup.copyError")}
+      </button>
+    </details>
+  );
+}
 
 function SignInWizard(props: { setup: () => CustodianAutoSetup; actions: CustodianSetupActions }) {
   const state = () => props.setup().wizard.state;
@@ -28,14 +46,17 @@ function SignInWizard(props: { setup: () => CustodianAutoSetup; actions: Custodi
       </Show>
       <Show when={error()}>
         {(message) => (
-          <p class="custodian-setup__error" role="alert">
-            {message()}
-          </p>
+          <div class="callout warn stack" role="alert">
+            <Show when={state().phase === "error"} fallback={message()}>
+              <strong>{t("custodian.autoSetup.signInFailedTitle")}</strong>
+              <ErrorDetails text={message()} />
+            </Show>
+          </div>
         )}
       </Show>
       <Show when={step()}>
         {(current) => (
-          <div class="custodian-setup__wizard">
+          <div class="stack">
             <Show when={current().step.title}>
               {(title) => <h3>{formatUiExternalText(title())}</h3>}
             </Show>
@@ -97,15 +118,27 @@ export function CustodianSetupCard(props: {
       current.wizard.state.phase === "step"
     );
   };
-  const gatewayLabel = () => {
-    const gateway = native()?.currentGateway;
-    if (gateway) {
-      return gateway.name;
-    }
+  const gatewayHost = () => {
     try {
       return new URL(context.gateway.connection.gatewayUrl).hostname;
     } catch {
-      return t("custodian.autoSetup.thisGateway");
+      return "";
+    }
+  };
+  const local = () => {
+    const kind = native()?.currentGateway?.kind;
+    return kind ? kind === "local" : isLoopbackHostname(gatewayHost());
+  };
+  // A loopback address means nothing to the user; a remote host name does.
+  const gatewayLabel = () =>
+    native()?.currentGateway?.name || (local() ? undefined : gatewayHost());
+  // The other place is another Gateway: the shell's Gateways window, or this page's connection.
+  const changeGateway = () => {
+    const openGateways = native()?.openGateways;
+    if (openGateways) {
+      openGateways();
+    } else {
+      context.navigate("connection");
     }
   };
   const title = () => {
@@ -113,13 +146,8 @@ export function CustodianSetupCard(props: {
     if (props.actions.verifying || current.pending) {
       return t("custodian.autoSetup.connecting");
     }
-    const selected = current.result?.selected;
-    if (selected) {
-      return t("custodian.autoSetup.using", {
-        label: selected.label,
-        modelRef: selected.modelRef,
-        gateway: gatewayLabel(),
-      });
+    if (current.ready) {
+      return t("custodian.autoSetup.doneTitle");
     }
     return t(
       current.result?.status === "needs-sign-in"
@@ -127,134 +155,198 @@ export function CustodianSetupCard(props: {
         : "custodian.autoSetup.unavailableTitle",
     );
   };
+  const summary = () => {
+    const selected = result()?.selected;
+    if (!selected) {
+      return undefined;
+    }
+    const { label, modelRef } = selected;
+    const gateway = gatewayLabel();
+    return local() || !gateway
+      ? t("custodian.autoSetup.usingHere", { label, modelRef })
+      : t("custodian.autoSetup.using", { label, modelRef, gateway });
+  };
+  const failedAttempts = () =>
+    !setup().pending && !setup().ready
+      ? result()
+          ?.attempts.map(({ label, error }) => `${label}: ${error}`)
+          .join("\n")
+      : undefined;
+  function Welcome() {
+    return (
+      <div class="stack custodian-setup__page">
+        <h2>{t("custodian.autoSetup.welcomeTitle")}</h2>
+        <p class="muted">{t("custodian.autoSetup.welcomeSubtitle")}</p>
+        <p class="muted">{t("custodian.autoSetup.welcomeBody")}</p>
+        <div class="callout stack">
+          <For
+            each={
+              [
+                ["wandSparkles", "featureAskTitle", "featureAskBody"],
+                ["messageSquare", "featureChatTitle", "featureChatBody"],
+                ["hand", "featureControlTitle", "featureControlBody"],
+              ] as const satisfies readonly (readonly [IconName, string, string])[]
+            }
+          >
+            {(feature) => (
+              <div class="row">
+                <Icon name={feature[0]} />
+                <div class="option-card__choice-copy">
+                  <strong>{t(`custodian.autoSetup.${feature[1]}`)}</strong>
+                  <span class="option-card__description">
+                    {t(`custodian.autoSetup.${feature[2]}`)}
+                  </span>
+                </div>
+              </div>
+            )}
+          </For>
+        </div>
+        <p class="muted row">
+          <Icon name="info" />
+          <span>{t("custodian.autoSetup.safety")}</span>
+        </p>
+        <footer class="filters custodian-setup__heading">
+          <div class="filters">
+            <button class="btn btn--ghost" type="button" onClick={changeGateway}>
+              {t("custodian.autoSetup.differentGateway")}
+            </button>
+            <Show when={native()?.reviewPermissions}>
+              {(review) => (
+                <button class="btn btn--ghost" type="button" onClick={() => review()()}>
+                  {t("custodian.autoSetup.reviewPermissions")}
+                </button>
+              )}
+            </Show>
+          </div>
+          <button class="btn primary" type="button" onClick={() => setup().setStep("ai")}>
+            {t("common.next")}
+          </button>
+        </footer>
+      </div>
+    );
+  }
   return (
     <openclaw-custodian-setup-card>
-      <Show when={setup().supported && !setup().dismissed}>
+      <Show when={setup().supported && !setup().dismissed && setup().step !== null}>
         <section class="custodian-setup" aria-label={t("custodian.autoSetup.title")}>
-          <div class="custodian-setup__heading">
-            <h2>{title()}</h2>
-            <button
-              class="custodian__nudge-dismiss"
-              type="button"
-              aria-label={t("common.dismiss")}
-              onClick={() => setup().dismiss()}
-            >
-              <Icon name="x" />
-            </button>
-          </div>
-          <Show when={props.actions.verifying || setup().pending}>
-            <p class="custodian-setup__progress" role="status">
-              <span class="btn__spinner" aria-hidden="true" />
-              {t("custodian.autoSetup.verifying")}
-            </p>
-          </Show>
-          <Show when={!setup().pending && result()?.selected?.shared}>
-            <p>{t("custodian.autoSetup.sharedCodexLogin")}</p>
-            <Show when={result()?.separateSignIn}>
+          <Show when={setup().step === "ai"} fallback={<Welcome />}>
+            <div class="row custodian-setup__heading">
+              <h2>{title()}</h2>
               <button
-                class="btn"
+                class="custodian__nudge-dismiss"
                 type="button"
-                disabled={busy()}
-                onClick={() => props.actions.signIn()}
+                aria-label={t("common.dismiss")}
+                onClick={() => setup().dismiss()}
               >
-                {t("custodian.autoSetup.separateLogin")}
+                <Icon name="x" />
               </button>
-            </Show>
-          </Show>
-          <Show when={!setup().pending && !setup().ready && result()?.signIn}>
-            <Show when={!busy()}>
-              <button class="btn primary" type="button" onClick={() => props.actions.signIn()}>
-                {t("custodian.autoSetup.signIn")}
-              </button>
-            </Show>
-          </Show>
-          <Show when={!setup().pending && !setup().ready}>
-            <Show when={result()?.attempts.length}>
-              <ul class="custodian-setup__attempts">
-                <For each={result()?.attempts}>
-                  {(attempt) => (
-                    <li>
-                      <strong>{attempt.label}:</strong> {attempt.error}
-                    </li>
-                  )}
-                </For>
-              </ul>
-            </Show>
-          </Show>
-          <Show when={!setup().pending && result()?.status === "unavailable"}>
-            <p>{t("custodian.autoSetup.unavailableBody")}</p>
-            <Show
-              when={native()?.openAiSetup}
-              fallback={
-                <p>
-                  {t("custodian.autoSetup.commandHint")} <code>openclaw onboard</code>
-                </p>
-              }
-            >
-              <button class="btn" type="button" onClick={() => native()?.openAiSetup?.()}>
-                {t("custodian.autoSetup.nativeSetup")}
-              </button>
-            </Show>
-          </Show>
-          <Show when={result()?.alternatives.length}>
-            <div class="custodian-setup__alternatives">
-              <h3>{t("custodian.autoSetup.alternatives")}</h3>
-              <div class="custodian-setup__actions">
-                <For each={result()?.alternatives}>
-                  {(candidate) => (
-                    <button
-                      class="btn"
-                      type="button"
-                      title={candidate.detail}
-                      disabled={busy()}
-                      onClick={() => props.actions.activate(candidate)}
-                    >
-                      {candidate.label}
-                    </button>
-                  )}
-                </For>
-              </div>
             </div>
-          </Show>
-          <SignInWizard setup={setup} actions={props.actions} />
-          <Show when={setup().error}>
-            {(error) => (
-              <div class="custodian-setup__error" role="alert">
-                <p>{error()}</p>
+            <Show when={summary()}>{(value) => <p class="muted">{value()}</p>}</Show>
+            <Show when={props.actions.verifying || setup().pending}>
+              <p class="row custodian-setup__progress" role="status">
+                <span class="btn__spinner" aria-hidden="true" />
+                {t("custodian.autoSetup.verifying")}
+              </p>
+            </Show>
+            <Show when={!setup().pending && result()?.selected?.shared}>
+              <p>{t("custodian.autoSetup.sharedCodexLogin")}</p>
+              <Show when={result()?.separateSignIn}>
                 <button
                   class="btn"
                   type="button"
                   disabled={busy()}
-                  onClick={() => props.actions.retry()}
+                  onClick={() => props.actions.signIn()}
                 >
-                  {t("common.retry")}
+                  {t("custodian.autoSetup.separateLogin")}
                 </button>
+              </Show>
+            </Show>
+            <Show when={!setup().pending && !setup().ready && result()?.signIn}>
+              <Show when={!busy()}>
+                <button class="btn primary" type="button" onClick={() => props.actions.signIn()}>
+                  {t("custodian.autoSetup.signIn")}
+                </button>
+              </Show>
+            </Show>
+            <Show when={failedAttempts()}>{(details) => <ErrorDetails text={details()} />}</Show>
+            <Show when={!setup().pending && result()?.status === "unavailable"}>
+              <p>{t("custodian.autoSetup.unavailableBody")}</p>
+              <Show
+                when={native()?.openAiSetup}
+                fallback={
+                  <p>
+                    {t("custodian.autoSetup.commandHint")} <code>openclaw onboard</code>
+                  </p>
+                }
+              >
+                <button class="btn" type="button" onClick={() => native()?.openAiSetup?.()}>
+                  {t("custodian.autoSetup.nativeSetup")}
+                </button>
+              </Show>
+            </Show>
+            <Show when={result()?.alternatives.length}>
+              <div class="stack custodian-setup__alternatives">
+                <h3>{t("custodian.autoSetup.alternatives")}</h3>
+                <div class="filters">
+                  <For each={result()?.alternatives}>
+                    {(candidate) => (
+                      <button
+                        class="btn"
+                        type="button"
+                        title={candidate.detail}
+                        disabled={busy()}
+                        onClick={() => props.actions.activate(candidate)}
+                      >
+                        {candidate.label}
+                      </button>
+                    )}
+                  </For>
+                </div>
               </div>
-            )}
+            </Show>
+            <SignInWizard setup={setup} actions={props.actions} />
+            <Show when={setup().error}>
+              {(error) => (
+                <div class="callout warn stack" role="alert">
+                  <strong>{t("custodian.autoSetup.failedTitle")}</strong>
+                  <ErrorDetails text={error()} />
+                  <button
+                    class="btn"
+                    type="button"
+                    disabled={busy()}
+                    onClick={() => props.actions.retry()}
+                  >
+                    {t("common.retry")}
+                  </button>
+                </div>
+              )}
+            </Show>
+            <Show when={native()?.openGateways || native()?.reviewPermissions}>
+              <div class="filters">
+                <Show when={native()?.openGateways}>
+                  <button
+                    class="btn btn--ghost"
+                    type="button"
+                    onClick={() => native()?.openGateways?.()}
+                  >
+                    {t("custodian.autoSetup.differentGateway")}
+                  </button>
+                </Show>
+                <Show when={native()?.reviewPermissions}>
+                  <button
+                    class="btn btn--ghost"
+                    type="button"
+                    onClick={() => native()?.reviewPermissions?.()}
+                  >
+                    {t("custodian.autoSetup.reviewPermissions")}
+                  </button>
+                </Show>
+              </div>
+            </Show>
+            <Show when={!setup().ready}>
+              <p class="muted">{t("custodian.autoSetup.safety")}</p>
+            </Show>
           </Show>
-          <Show when={native()?.openGateways || native()?.reviewPermissions}>
-            <div class="custodian-setup__actions custodian-setup__native-actions">
-              <Show when={native()?.openGateways}>
-                <button
-                  class="btn btn--ghost"
-                  type="button"
-                  onClick={() => native()?.openGateways?.()}
-                >
-                  {t("custodian.autoSetup.differentGateway")}
-                </button>
-              </Show>
-              <Show when={native()?.reviewPermissions}>
-                <button
-                  class="btn btn--ghost"
-                  type="button"
-                  onClick={() => native()?.reviewPermissions?.()}
-                >
-                  {t("custodian.autoSetup.reviewPermissions")}
-                </button>
-              </Show>
-            </div>
-          </Show>
-          <p class="custodian-setup__safety">{t("custodian.autoSetup.safety")}</p>
         </section>
       </Show>
     </openclaw-custodian-setup-card>
