@@ -35,8 +35,8 @@ import {
   keptChannelEdits,
   rebaseChannelConfigEdits,
 } from "./channel-config-draft.ts";
-import { linkedChannel } from "./channel-link.ts";
 import { createChannelConfigNavigation } from "./channel-config-navigation.ts";
+import { linkedChannel } from "./channel-link.ts";
 import { createChannelPluginPresentation } from "./plugin-presentation-loader.ts";
 import { ChannelsView, resolveChannelLabel, resolveChannelOrder } from "./view.tsx";
 import type { ChannelPairingPrompt, ChannelSaveFeedback, ChannelsProps } from "./view.types.ts";

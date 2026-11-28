@@ -255,7 +255,9 @@ function DiaryPager(props: {
           value={String(props.selectedPage)}
           options={props.entries.map((entry, index) => ({
             value: String(index),
-            label: entry.date ? formatDiaryDate(entry.date) : String(props.entries.length - index),
+            label: entry.date
+              ? formatCompactDateTime(entry.date, "if-different")
+              : String(props.entries.length - index),
           }))}
           onChange={(event) => props.onSelect(Number(event.currentTarget.value))}
         />
@@ -276,23 +278,6 @@ function DiaryPager(props: {
       </Show>
     </div>
   );
-}
-
-/** The select's room is small on a phone, and a diary date reads fine shortened. */
-function formatDiaryDate(date: string): string {
-  const parsed = parseDateStringTimestampMs(date);
-  if (parsed === undefined) {
-    return date;
-  }
-  const entry = new Date(parsed);
-  return entry.toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    // Most entries are recent; the year only earns its width when it differs.
-    ...(entry.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" as const }),
-    hour: "numeric",
-    minute: "2-digit",
-  });
 }
 
 function DreamDiaryContent(props: {

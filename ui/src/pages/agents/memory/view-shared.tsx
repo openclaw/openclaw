@@ -25,12 +25,20 @@ export function DreamingRead(props: {
   );
 }
 
-export function formatCompactDateTime(value: string): string {
+export function formatCompactDateTime(
+  value: string,
+  year: "omit" | "if-different" = "omit",
+): string {
   const parsed = parseDateStringTimestampMs(value);
   if (parsed === undefined) {
     return value;
   }
-  return new Date(parsed).toLocaleString([], {
+  const date = new Date(parsed);
+  return date.toLocaleString([], {
+    year:
+      year === "if-different" && date.getFullYear() !== new Date().getFullYear()
+        ? "numeric"
+        : undefined,
     month: "short",
     day: "numeric",
     hour: "numeric",
