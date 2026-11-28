@@ -354,7 +354,7 @@ it.each([
   ["configured key", undefined],
   [
     "unadopted stored account",
-    "Automation has no recorded inference account. Runtime openclaw would run openai/gpt-4.1 with stored account openai:platform. Record the account with openclaw automations edit <jobId> --model openai/gpt-4.1@openai:platform. For eligible host-managed accounts, openclaw doctor --fix can record it without pinning the model.",
+    "Automation has no recorded inference account. Runtime openclaw would run openai/gpt-4.1 with stored account openai:platform. Record the account with openclaw automations edit legacy-account --model openai/gpt-4.1@openai:platform. For eligible host-managed accounts, openclaw doctor --fix can record it without pinning the model.",
   ],
   ["replacement", undefined],
   ["revocation", undefined],

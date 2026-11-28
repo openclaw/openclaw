@@ -281,6 +281,12 @@ export function ProjectPickerContent(props: ProjectChipProps) {
         )
       : accepted;
   });
+  const checkoutSuffixes = createMemo(() =>
+    disambiguate(localProjects(), (p) => JSON.stringify([p.displayName, p.repositoryIdentity]), [
+      (p) => p.repoRoot,
+      (p) => p.id,
+    ]),
+  );
   const projectSearchRead = createMemo(() => props.params.place.browser.projectSearchRead);
   const projectSearchResult = createMemo(() => {
     const read = projectSearchRead();
@@ -559,7 +565,12 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                     </Show>
                   }
                 >
-                  {(project) => {
+                  {(project, index) => {
+                    const subtitle = () => {
+                      const identity = project().repositoryIdentity;
+                      const suffix = checkoutSuffixes()[index()];
+                      return identity && suffix ? `${identity} · ${suffix}` : (identity ?? suffix);
+                    };
                     const icon = (
                       <ProjectRowIcon context={props.params.context} projectId={project().id} />
                     );
@@ -569,9 +580,9 @@ export function ProjectPickerContent(props: ProjectChipProps) {
                           value: `project:${project().id}`,
                           label: project().displayName,
                           icon,
-                          sub: project().repositoryIdentity,
+                          sub: subtitle(),
                           checked: props.params.place.browser.projectId === project().id,
-                          title: project().repositoryIdentity ?? project().repoRoot,
+                          title: subtitle() ?? project().repoRoot,
                           onSelect: () => props.params.place.selectProjectId(project().id),
                         }}
                         submitting={props.params.submitting}

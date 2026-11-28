@@ -1,5 +1,6 @@
 // Every provider this agent can connect, as rows on the page: no picker dialog in between.
 import { createMemo, createSignal, Show } from "solid-js";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { CatalogDiscoverySearch } from "../../components/solid/catalog-discovery.tsx";
 import {
   SettingsEmpty,
@@ -27,7 +28,7 @@ function waysIn(provider: LoginProvider, connected: boolean): string {
       ),
     );
   }
-  if (provider.apiKeyProvider) {
+  if (provider.apiKeyProviders.length) {
     ways.add(t("modelProviders.status.apiKey"));
   }
   return [...ways].join(" · ");
@@ -63,9 +64,13 @@ export function ProviderCatalog(props: {
   const shown = createMemo(() =>
     needle()
       ? props.providers.filter((provider) =>
-          [provider.id, provider.label, ...provider.choices.map((choice) => choice.label)].some(
-            (text) => text.toLocaleLowerCase().normalize("NFC").includes(needle()),
-          ),
+          [
+            provider.id,
+            provider.label,
+            // A combined card still answers to each member provider.
+            ...provider.authProviders.flatMap((id) => [id, providerDisplayLabel(id)]),
+            ...provider.choices.map((choice) => choice.label),
+          ].some((text) => text.toLocaleLowerCase().normalize("NFC").includes(needle())),
         )
       : showAll()
         ? props.providers

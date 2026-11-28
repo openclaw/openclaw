@@ -34,7 +34,8 @@ export async function prepareCronInferenceDiagnosticSession(params: {
 }) {
   const { cfg, agentId, job, signal } = params;
   signal?.throwIfAborted();
-  const targetKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
+  const targetKey =
+    job.sessionTarget === "main" ? "main" : resolveCronSessionTargetSessionKey(job.sessionTarget);
   const sessionKey = resolveCronAgentSessionKey({
     cfg,
     agentId,
@@ -73,7 +74,7 @@ export async function inspectCronInferenceAccount(params: {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir: string;
-  job: Pick<CronStoredJob, "id" | "name">;
+  job: Pick<CronStoredJob, "id" | "name" | "payload">;
   provider: string;
   model: string;
   configuredProfileId?: string;
@@ -167,6 +168,12 @@ export async function inspectCronInferenceAccount(params: {
     return { cliExecution: true };
   }
   const modelRef = `${provider}/${model}`;
+  if (job.payload.kind === "systemEvent") {
+    return {
+      cliExecution: true,
+      warning: `Automation ${job.name || job.id} (${job.id}): ${execution.executionProvider} selects stored account ${selected.profileId} for ${modelRef}. Doctor cannot adopt a CLI account automatically. To keep this system event, select a model with an eligible host-managed account in the owning agent’s main session, then run openclaw doctor --fix. This changes the model used by other turns in that session too.`,
+    };
+  }
   const edit = `openclaw automations edit ${quoteCliArg(job.id)} --model`;
   const native =
     execution.executionProvider === "claude-cli"

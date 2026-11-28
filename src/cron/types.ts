@@ -479,6 +479,8 @@ export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource
   ownerTransferPending?: true;
   /** Captured inference owner; private and independent of scheduled tool authority. */
   inferenceBinding?: import("./inference-binding.js").CronInferenceBinding;
+  /** New main-session events follow the chat; an absent source leaves legacy account repair in charge. */
+  systemEventAccount?: "session";
   /** Creation-bound destination for isolated results when no external route exists. */
   sourceConversation?: {
     sessionKey: string;

@@ -64,6 +64,7 @@ internal object AndroidScreenshotFixture {
 
   fun createRequester(
     branchesEnabled: Boolean = this.branchesEnabled,
+    sessionListOverride: () -> String? = { null },
     onEvent: (String, String) -> Unit = { _, _ -> },
   ): (String, String?) -> String {
     val fixtureNowMs = System.currentTimeMillis()
@@ -233,7 +234,7 @@ internal object AndroidScreenshotFixture {
         }
 
         "sessions.list" -> {
-          if (branchesEnabled) branchSessionList(paramsJson, activeLeaf.get()) else sessionList(paramsJson, fixtureNowMs)
+          sessionListOverride() ?: if (branchesEnabled) branchSessionList(paramsJson, activeLeaf.get()) else sessionList(paramsJson, fixtureNowMs)
         }
 
         "sessions.branches.list" -> {

@@ -39,7 +39,16 @@ describe("searxng web search provider", () => {
   });
 
   it("maps generic tool arguments into SearXNG search params", async () => {
-    const args = { query: "openclaw docs", count: 4, categories: "general,news", language: "en" };
+    const args = {
+      query: "openclaw docs",
+      count: 4,
+      categories: "general,news",
+      language: "en",
+      country: "DE",
+      freshness: "week",
+      date_after: "2026-01-01",
+      date_before: "2026-02-01",
+    };
     await createTool().execute(args);
     expect(runSearxngSearch).toHaveBeenCalledWith({ config: {}, ...args });
   });

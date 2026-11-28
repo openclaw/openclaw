@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { wakeUpdateRunWatcher } from "../gateway/update-run-watcher.js";
 import { deadDriverFixture } from "../infra/update-run-fixture.test-support.js";
 import { persistInterruptedUpdateObservationAsync } from "../infra/update-run-interruption-worker.js";
 import { acknowledgeAbandonedUpdateRun } from "../infra/update-run-ledger.js";
@@ -25,6 +26,10 @@ import { legacyTrialReceipt } from "./legacy-trial-record.js";
 import { captureLegacyTrial, prepareLegacyTrialRun } from "./legacy-trial.js";
 import { resolvePrefix } from "./store.js";
 
+vi.mock("../gateway/update-run-watcher.js", async (original) => ({
+  ...(await original<typeof import("../gateway/update-run-watcher.js")>()),
+  wakeUpdateRunWatcher: vi.fn(),
+}));
 vi.mock("../version.js", async (original) => ({
   ...(await original<typeof import("../version.js")>()),
   resolveRuntimeServiceBuildId: () => "legacy-candidate-build",
@@ -131,6 +136,7 @@ it.each(["running", "abandoned", "nested-slot", "complete-oldest-in-long-history
     const recover = await observeLegacyTrialReadiness(f.trial.buildId, f.root);
     await expect(fs.stat(f.file)).rejects.toMatchObject({ code: "ENOENT" });
     await recover!();
+    expect(wakeUpdateRunWatcher).toHaveBeenCalledWith(f.runId);
     const run = await getUpdateRunAsync(f.runId);
     if (historyFailure) {
       expect(await getUpdateRunAsync(historyFailure.runId)).toEqual(historyFailure);

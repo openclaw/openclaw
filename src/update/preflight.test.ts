@@ -52,6 +52,7 @@ it.each<{
   caller?: number;
   code?: string;
   outside?: boolean;
+  home?: "root" | "prefix" | "missing";
   unknown?: boolean;
   symlinks?: boolean;
   missing?: boolean;
@@ -79,6 +80,9 @@ it.each<{
     advice: "uid 2000",
   },
   { label: "root-owned system prefix", owner: 0, outside: true, advice: "sudo" },
+  { label: "root home", owner: 0, home: "root", advice: "sudo" },
+  { label: "prefix equals home", owner: 0, home: "prefix", advice: "sudo" },
+  { label: "missing home", owner: 0, home: "missing", advice: "sudo" },
   { label: "already-owned prefix", owner: 1000, advice: "permissions" },
   { label: "root caller", owner: 0, caller: 0, outside: true, advice: "permissions" },
   { label: "root caller with another owner", owner: 2000, caller: 0, advice: "generic" },
@@ -95,6 +99,13 @@ it.each<{
     const resolved = await fs.realpath(directory);
     let prefix = test.missing ? path.join(directory, "missing") : directory;
     let homedir = home;
+    if (test.home === "root") {
+      homedir = path.parse(home).root;
+    } else if (test.home === "prefix") {
+      homedir = directory;
+    } else if (test.home === "missing") {
+      homedir = path.join(home, "missing");
+    }
     if (test.symlinks) {
       homedir = path.join(state.root, "home-link");
       prefix = path.join(state.root, "prefix-link");

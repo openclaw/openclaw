@@ -97,10 +97,6 @@ export function applyUpdateRunStep(
       "warning:recovery-artifact-cleanup",
       "diagnostic:recovery-artifact-cleanup",
       "plugins",
-      "post-activation doctor inspections",
-      "warning:post-activation doctor inspections",
-      "diagnostic:post-activation doctor inspections",
-      "finalize:doctor-lint:post-activation doctor inspections",
     ].some((name) => step.step === name || step.step.startsWith(`${name}:`))
   ) {
     upsertStep(record, step);

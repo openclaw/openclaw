@@ -18,7 +18,7 @@ describe("normalizeMessageActionInput", () => {
   type Input = Parameters<typeof normalizeMessageActionInput>[0];
   const makeInput = (
     action: Input["action"],
-    args: Input["args"] = {},
+    args: Input["args"],
     extra: Partial<Input> = {},
   ): Input => ({ action, args, ...extra });
   const context = (currentChannelId: string, currentChannelProvider: string) => ({
