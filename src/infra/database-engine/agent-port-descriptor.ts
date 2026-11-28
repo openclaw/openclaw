@@ -431,8 +431,7 @@ export async function loadAgentPortDescriptor(
         db,
         "agent port source",
         getOpenClawAgentMigrationSchema(version),
-        version < 23 ? "legacy" : "current",
-        true,
+        { version, legacyParticipants: version < 23, allowStartupIndexRepair: true },
       );
       const hasRetiredUsagePartitions = executeSqliteQueryTakeFirstSync(
         db,

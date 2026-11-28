@@ -433,6 +433,7 @@ export function captureOpenClawMigrationWitness(
           database,
           "migration witness",
           getOpenClawAgentMigrationSchema(schemaVersion),
+          { version: schemaVersion },
         );
       } else {
         if (schemaVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
