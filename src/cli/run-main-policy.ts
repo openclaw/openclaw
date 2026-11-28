@@ -47,7 +47,7 @@ export async function loadCliStartupDotEnv(
   invocation: ReturnType<typeof resolveCliArgvInvocation>,
   loadGlobalEnv: boolean,
 ): Promise<void> {
-  if (isRemoteAgentDispatchInvocation(invocation.argv, invocation.primary)) {
+  if (invocation.primary === "agent" && !invocation.argv.includes("--local")) {
     const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
     await loadGatewayDispatchCliDotEnv();
   } else {
@@ -103,10 +103,6 @@ export function isGatewayRunFastPathArgv(argv: string[]): boolean {
   }
 
   return sawGateway;
-}
-
-export function isRemoteAgentDispatchInvocation(argv: string[], primary: string | null): boolean {
-  return primary === "agent" && !argv.includes("--local");
 }
 
 export function isAgentExecInvocation(commandPath: string[]): boolean {
