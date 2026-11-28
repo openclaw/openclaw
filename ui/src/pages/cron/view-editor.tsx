@@ -4,6 +4,7 @@ import "../../components/agent-select-registration.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { listSelectableAgents, normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { createCronSessionTargetLabel } from "../../lib/cron/session-target-label.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { CronScratchEditor } from "./scratch-editor.tsx";
@@ -104,6 +105,7 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
   const { payloadLocked, isAgentTurn, supportsAnnounce, selectedDeliveryMode } =
     payloadFacts(props);
   const { blockingFields, blockedByValidation } = createSubmitState(props);
+  const targetLabel = createCronSessionTargetLabel();
   const sessionTarget = () => props.form.sessionTarget;
   const knownSessionTarget = () => sessionTarget() === "main" || sessionTarget() === "isolated";
   const formDisabled = () => props.busy || !props.canManage;
@@ -147,7 +149,7 @@ export function Editor(props: EditorProps & { phoneLayout: boolean }) {
                 { value: "isolated", label: t("cron.form.isolatedSession") },
                 ...(knownSessionTarget()
                   ? []
-                  : [{ value: sessionTarget(), label: sessionTarget() }]),
+                  : [{ value: sessionTarget(), label: targetLabel(sessionTarget()) }]),
               ]}
             />
           </fieldset>
