@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { HealthSummary } from "../../commands/health.js";
+import { isReadOnlyGatewayCliCall } from "../../gateway/cli-read-policy.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type { DiagnosticStabilitySnapshot } from "../../logging/diagnostic-stability.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -49,16 +50,10 @@ function gatewayCallOpts(cmd: Command): Command {
   );
 }
 
-async function callGatewayReadOnlyCli(
-  method: string,
-  opts: GatewayRpcOpts,
-  params?: unknown,
-  signal?: AbortSignal,
-) {
+async function callGatewayReadOnlyCli(method: string, opts: GatewayRpcOpts, params?: unknown) {
   return await callGatewayFromCliWithTransport(method, opts, params, {
     defaultTimeoutMs: DEFAULT_GATEWAY_RPC_TIMEOUT_MS,
     sharedStateMode: "read-only",
-    signal,
   });
 }
 
@@ -71,7 +66,7 @@ async function callGatewayReadOnlyCliUnlessAborted(
   const signal = getAsyncWorkSignal();
   let result: unknown;
   try {
-    result = await callGatewayReadOnlyCli(method, opts, params, signal);
+    result = await callGatewayReadOnlyCli(method, opts, params);
   } catch (error) {
     if (!signal?.aborted) {
       throw error;
@@ -281,7 +276,17 @@ export function registerGatewayCli(program: Command) {
               : opts;
           const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(callOpts, command);
           const params = parseGatewayCallParams(String(opts.params ?? "{}"));
-          const result = await callGatewayReadOnlyCli(method, rpcOpts, params);
+          // Established read-only methods cancel their read on Ctrl+C and do not
+          // print a reply that lands after it. Generic calls can execute writes,
+          // so their settlement receipt is preserved during cleanup.
+          const abortable = isReadOnlyGatewayCliCall(method, params);
+          const reply = abortable
+            ? await callGatewayReadOnlyCliUnlessAborted(method, rpcOpts, params)
+            : { result: await callGatewayReadOnlyCli(method, rpcOpts, params) };
+          if (!reply) {
+            return;
+          }
+          const result = reply.result;
           if (rpcOpts.json) {
             defaultRuntime.writeJson(result);
             return;
@@ -376,7 +381,7 @@ export function registerGatewayCli(program: Command) {
           const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
           let result: unknown;
           try {
-            result = await callGatewayReadOnlyCli("health", rpcOpts, undefined, signal);
+            result = await callGatewayReadOnlyCli("health", rpcOpts);
           } catch (error) {
             if (signal?.aborted) {
               return;

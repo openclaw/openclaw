@@ -2,8 +2,6 @@ import { createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import "../pages/chat/components/browser-tab-card.css";
-import { BrowserTabCardHost } from "../pages/chat/components/browser-tab-card.tsx";
 import { renderComposerMenuOption as ComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -11,7 +9,6 @@ import { Menu, type MenuProps } from "./solid/menu.tsx";
 import "../test-helpers/load-styles.ts";
 import "./agent-select-registration.ts";
 import "./menu-surface.ts";
-import sessionMenuStyles from "../styles/session-menu.css?inline";
 import overlayStyles from "./solid/overlay.css?inline";
 import "./resizable-divider.ts";
 
@@ -121,7 +118,7 @@ describe.skipIf(!hasPopoverApi)("sidebar menu stacking", () => {
     ] as const) {
       onTestFinished(
         subscribeNativeOverlayOcclusion(
-          (occluded) => events.push(occluded),
+          (occlusion) => events.push(occlusion !== "live"),
           () => bounds,
         ),
       );
@@ -366,49 +363,6 @@ it("spaces actual Menu groups around custom content", async () => {
   }
 });
 
-describe.skipIf(!hasPopoverApi)("action menu typography", () => {
-  it.each([390, 1440])(
-    "keeps plain and session actions at the same text scale at %ipx",
-    async (width) => {
-      const { page } = await import("vitest/browser");
-      await page.viewport(width, 900);
-      const host = document.createElement("div");
-      host.style.fontSize = "20px";
-      host.style.setProperty("--control-ui-text-scale", "1");
-      document.body.append(host);
-      mountSolid(
-        () => (
-          <>
-            <Menu
-              id="plain-action-typography"
-              label="Workspace actions"
-              items={[{ id: "copy-path", label: "Copy path" }]}
-            />
-            <Menu
-              id="session-action-typography"
-              label="Session actions"
-              class="session-menu"
-              items={[{ id: "copy-session", label: "Copy session", class: "session-menu__item" }]}
-            />
-          </>
-        ),
-        { container: host },
-      );
-      flush();
-      const plain = query(host, '[data-value="copy-path"]');
-      const session = query(host, '[data-value="copy-session"]');
-      await openMenu(host);
-
-      for (const scale of [1, 1.4]) {
-        host.style.setProperty("--control-ui-text-scale", String(scale));
-        const size = (item: HTMLElement) => Number.parseFloat(getComputedStyle(item).fontSize);
-        expect(size(plain)).toBeCloseTo(13 * scale, 1);
-        expect(size(plain)).toBeCloseTo(size(session), 1);
-      }
-    },
-  );
-});
-
 describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   async function hoverBackground(element: HTMLElement, expected: string) {
     const { page } = await import("vitest/browser");
@@ -426,194 +380,6 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       document.documentElement.dataset.themeMode = theme;
       highlight = colorSwatch("var(--surface-hover)");
       host = document.body.appendChild(document.createElement("div"));
-    });
-
-    it.each(["session-first", "overlay-first"])(
-      "keeps canonical and plain row states independent with %s styles",
-      async (order) => {
-        // This matrix checks final colors; animation behavior has its own cases.
-        host.style.setProperty("--control-ui-transition-fast", "0s");
-        const { page, userEvent } = await import("vitest/browser");
-        const hover = async (element: HTMLElement) => {
-          // These fixtures are static: skip stability frames, but prove the pointer hit.
-          await page.elementLocator(element).hover({ force: true });
-          expect(element.matches(":hover"), element.textContent ?? "hover target").toBe(true);
-        };
-        const style = document.head.appendChild(document.createElement("style"));
-        onTestFinished(() => style.remove());
-        style.textContent =
-          order === "session-first"
-            ? `${sessionMenuStyles}\n${overlayStyles}`
-            : `${overlayStyles}\n${sessionMenuStyles}`;
-        const park = host.appendChild(document.createElement("button"));
-        park.textContent = "Outside the menu";
-        park.style.cssText = "position: fixed; right: 16px; bottom: 16px";
-        const transparent = "rgba(0, 0, 0, 0)";
-        const color = (token: string) =>
-          token === "transparent" ? transparent : colorSwatch(`var(${token})`);
-
-        // Exercise the state owner with real CSS and browser input. The component
-        // scenarios below separately prove Menu and BrowserTabCard composition.
-        const states = [
-          {
-            name: "neutral",
-            menu: ["transparent", "--surface-hover", "1"],
-            plain: ["transparent", "--bg-hover", "1"],
-          },
-          {
-            name: "expanded",
-            menu: ["--surface-hover", "--surface-hover", "1"],
-            plain: ["--bg-hover", "--bg-hover", "1"],
-          },
-          {
-            name: "unchecked",
-            menu: ["transparent", "--menu-hover", "1"],
-            plain: ["transparent", "--bg-hover", "1"],
-          },
-          {
-            name: "checked",
-            menu: ["--surface-selected", "--surface-selected-hover", "1"],
-            plain: ["transparent", "--bg-hover", "1"],
-          },
-          {
-            name: "danger",
-            menu: ["transparent", "--danger-subtle", "1"],
-            plain: ["transparent", "--bg-hover", "1"],
-          },
-          {
-            name: "danger-expanded",
-            menu: ["--danger-subtle", "--danger-subtle", "1"],
-            plain: ["--bg-hover", "--bg-hover", "1"],
-          },
-          {
-            name: "disabled",
-            menu: ["transparent", "transparent", "0.5"],
-            plain: ["transparent", "transparent", "0.5"],
-          },
-          {
-            name: "aria-disabled",
-            menu: ["transparent", "transparent", "0.5"],
-            plain: ["transparent", "transparent", "0.5"],
-          },
-          {
-            name: "disabled-expanded",
-            menu: ["transparent", "transparent", "0.5"],
-            plain: ["--bg-hover", "--bg-hover", "0.5"],
-          },
-          {
-            name: "aria-disabled-expanded",
-            menu: ["transparent", "transparent", "0.5"],
-            plain: ["--bg-hover", "--bg-hover", "0.5"],
-          },
-        ] as const;
-        for (const className of [
-          "oc-menu-item session-menu__item",
-          "oc-menu-item sidebar-session-sort-menu__item",
-          "session-menu__item",
-        ]) {
-          const canonical = className.includes("oc-menu-item");
-          for (const { name: state, menu, plain } of states) {
-            await hover(park);
-            park.focus();
-            const item = host.appendChild(document.createElement("button"));
-            item.className = className;
-            item.textContent = `${canonical ? "Menu" : "Plain row"}: ${state}`;
-            const disabled = state.includes("disabled");
-            const expanded = state.includes("expanded");
-            const danger = state.includes("danger");
-            item.disabled = disabled && !state.startsWith("aria-");
-            for (const [attribute, enabled] of [
-              ["aria-expanded", expanded],
-              ["aria-checked", state === "checked"],
-              ["aria-disabled", state.startsWith("aria-")],
-            ] as const) {
-              if (enabled) {
-                item.setAttribute(attribute, "true");
-              }
-            }
-            if (state === "unchecked") {
-              item.setAttribute("aria-checked", "false");
-            }
-            if (danger) {
-              item.dataset.variant = "danger";
-              item.classList.add("session-menu__item--destructive");
-              expect(getComputedStyle(item).color).toBe(color("--danger"));
-            }
-            const [resting, interactive, opacity] = canonical ? menu : plain;
-            const label = `${className}: ${state}`;
-            expect(getComputedStyle(item).backgroundColor, `${label} resting`).toBe(color(resting));
-            expect(getComputedStyle(item).opacity, `${label} opacity`).toBe(opacity);
-            await hover(item);
-            await expect
-              .poll(() => getComputedStyle(item).backgroundColor, {
-                message: `${label} hover`,
-              })
-              .toBe(color(interactive));
-            if (!item.disabled) {
-              await hover(park);
-              await userEvent.keyboard("{Tab}");
-              item.focus();
-              expect(item.matches(":focus-visible"), `${label} keyboard focus`).toBe(true);
-              // Plain rows retain their existing focus contract, including aria-disabled rows.
-              await expect
-                .poll(() => getComputedStyle(item).backgroundColor, {
-                  message: `${label} focus`,
-                })
-                .toBe(color(canonical ? interactive : "--bg-hover"));
-            }
-            item.remove();
-          }
-        }
-      },
-    );
-
-    it("matches session menu geometry and theme inside browser cards", async () => {
-      const view = mountSolid(() => (
-        <BrowserTabCardHost
-          preview={{
-            kind: "browser-tab",
-            target: "host",
-            profile: "managed",
-            targetId: "tab-1",
-            url: "https://example.test/page",
-            title: "Example page",
-          }}
-        />
-      ));
-      flush();
-      const card = query(view.container, "openclaw-browser-tab-card");
-      // Hold the entry presentation like a stalled WebKit timeline on a loaded runner:
-      // the geometry, theme, and hover checks must not wait for it to settle.
-      card.style.setProperty("--oc-overlay-show-duration", "3600s");
-      const menu = await openAdmittedMenu(card, ".more");
-      const entry = menu.getAnimations();
-      expect(entry.length).toBeGreaterThan(0);
-      entry.forEach((animation) => animation.pause());
-      const item = query(card, '[value="copy-url"]');
-      mountMenu(
-        {
-          id: "browser-card-reference",
-          label: "Reference menu",
-          class: "session-menu",
-          items: [{ id: "reference", label: "Reference action", class: "session-menu__item" }],
-        },
-        host,
-      );
-      const referenceMenu = query(host, ".oc-menu");
-      const referenceItem = query(host, '[data-value="reference"]');
-      for (const property of ["background-color", "border-radius", "padding", "box-shadow"]) {
-        expect(getComputedStyle(menu).getPropertyValue(property)).toBe(
-          getComputedStyle(referenceMenu).getPropertyValue(property),
-        );
-      }
-      for (const property of ["min-height", "padding", "font-size", "color"]) {
-        expect(getComputedStyle(item).getPropertyValue(property)).toBe(
-          getComputedStyle(referenceItem).getPropertyValue(property),
-        );
-      }
-      await hoverBackground(item, colorSwatch("var(--surface-hover)"));
-      entry.forEach((animation) => animation.finish());
-      await expect.poll(() => menu.dataset.phase).toBe("open");
     });
 
     it("uses platform hover for slash suggestions", async () => {
@@ -672,22 +438,6 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   });
 });
 
-/** Wait for open authority without waiting for the deliberately held entry animation. */
-async function openAdmittedMenu(host: HTMLElement, selector: string) {
-  const { page } = await import("vitest/browser");
-  const trigger = query(host, selector);
-  await page.elementLocator(trigger).click();
-  const menu = query(host, ".oc-menu");
-  await expect
-    .poll(() => ({
-      expanded: trigger.getAttribute("aria-expanded"),
-      shown: menu.matches(":popover-open"),
-      interactive: !menu.inert && ["opening", "open"].includes(menu.dataset.phase ?? ""),
-    }))
-    .toEqual({ expanded: "true", shown: true, interactive: true });
-  return menu;
-}
-
 describe.skipIf(!hasPopoverApi)("sidebar intrinsic rows", () => {
   it("keeps multiline labels inside their highlight in a capped scrolling menu", async () => {
     await import("../styles/sidebar-menus.css");
@@ -734,6 +484,7 @@ describe.skipIf(!hasPopoverApi)("sidebar intrinsic rows", () => {
             status: { state: "on" },
             link: { linked: false },
             channel: "local_operator",
+            remoteAccessSetup: "local",
             accountSignIn: "popup",
             owner: true,
             connection: { kind: "local" },

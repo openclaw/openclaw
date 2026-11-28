@@ -210,8 +210,7 @@ it.skipIf(!connection).each(scenarios)("settles $name", async (scenario) => {
         release(publisherGate, 2);
         release(readerGate, 0);
         await Promise.allSettled([published, read]);
-        publisherRelay.finish();
-        readerRelay.finish();
+        await Promise.all([publisherRelay.finish(), readerRelay.finish()]);
         publisher.anchor.close();
         reader.anchor.close();
       }

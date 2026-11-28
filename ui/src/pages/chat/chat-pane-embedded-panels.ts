@@ -6,6 +6,7 @@ import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.t
 import { registerFilePreviewEnglish } from "../../i18n/locales/en-file-preview.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { ControlUiRegistration } from "../../plugins/control-ui-capability.ts";
+import { prepareChatBrowserPanel } from "./chat-browser-panel-load.ts";
 import type { SidebarPanelDefinitionParams, SidebarPanelData } from "./chat-pane-embedded-types.ts";
 import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { getSessionWorkspace } from "./components/chat-session-workspace-state.ts";
@@ -99,12 +100,18 @@ export function sidebarPanelDefinitions(
   return [
     definePanel("conversation", "messageSquare", false),
     definePanel("subagents", "bot"),
-    definePanel("processes", "terminal"),
+    definePanel("processes", "listTree"),
     definePanel("context", "layers"),
     definePanel("detail", "diff", Boolean(data?.detailContent)),
     definePanel("terminal", "terminal", Boolean(state?.terminalAvailable)),
     {
       ...definePanel("browser", "globe", Boolean(state?.browserPanelAvailable)),
+      prepare:
+        data &&
+        state?.browserPanelAvailable &&
+        !layoutPanels.some((panel) => panel.slot === "browser")
+          ? () => prepareChatBrowserPanel(data)
+          : undefined,
       unavailableReason: state?.browserPanelUnavailableReason
         ? t(`chat.sidePanel.browserUnavailableReason.${state.browserPanelUnavailableReason}`)
         : undefined,

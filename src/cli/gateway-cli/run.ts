@@ -5,15 +5,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { rethrowStartupConfigFailure } from "../../commands/doctor-startup-migration-refusal.js";
 import type {
-  ConfigFileSnapshot,
-  ConfigSnapshotReadOptions,
   GatewayBindMode,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../../config/config.js";
 import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import {
-  createConfigReadError,
-  isConfigReadFailure,
   isDoctorRecoverableInvalidConfigError,
   isInvalidConfigError,
 } from "../../config/io.invalid-config.js";
@@ -21,7 +17,6 @@ import { normalizeStateDirEnv, resolveGatewayPort } from "../../config/paths.js"
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
-import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
 import {
   defaultGatewayBindMode,
   isContainerEnvironment,
@@ -78,6 +73,10 @@ import {
   INVALID_TAILSCALE,
   INVALID_WS_LOG,
 } from "./run-flag-checks.js";
+import {
+  createConfiguredGatewayHealthProbe,
+  isGatewayHealthzResponse,
+} from "./run-health-probe.js";
 import { runGatewayLoop } from "./run-loop.js";
 import {
   extractGatewayMiskeys,
@@ -86,6 +85,7 @@ import {
   toOptionString,
 } from "./run-option-values.js";
 import type { GatewayRunOpts } from "./run-options.js";
+import { readGatewayStartupConfig } from "./run-startup-config.js";
 import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
 import {
   handleGatewayLockFailure,
@@ -99,7 +99,6 @@ import { createGatewayCliStartupTrace } from "./startup-trace.js";
 const gatewayLog = createSubsystemLogger("gateway");
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
-const SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS = 1000;
 
 type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">;
 
@@ -109,29 +108,6 @@ type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | 
  * restart storm that can render low-resource hosts unresponsive.
  */
 const EXIT_CONFIG_ERROR = 78;
-
-async function readGatewayStartupConfig(
-  startupTrace: ReturnType<typeof createGatewayCliStartupTrace>,
-  readOptions: Pick<ConfigSnapshotReadOptions, "lowerPrecedenceEnv"> = {},
-): Promise<{
-  cfg: OpenClawConfig;
-  snapshot: ConfigFileSnapshot;
-  startupConfigSnapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult;
-}> {
-  const { readConfigFileSnapshotWithPluginMetadata } = await import("../../config/config.js");
-  const snapshotRead = await startupTrace.measure("cli.config-snapshot", () =>
-    readConfigFileSnapshotWithPluginMetadata({ isolateEnv: true, observe: false, ...readOptions }),
-  );
-  const { snapshot } = snapshotRead;
-  if (!snapshot.valid && isConfigReadFailure(snapshot)) {
-    throw createConfigReadError(snapshot);
-  }
-  return {
-    cfg: snapshot.config,
-    snapshot,
-    startupConfigSnapshotRead: snapshotRead,
-  };
-}
 
 type GatewayRunShellEnvFallbackPlan =
   | { enabled: false }
@@ -229,30 +205,6 @@ class SupervisedGatewayLockError extends GatewayLockError {
 
 function resolveGatewayLockErrorExitCode(err: unknown): number {
   return err instanceof SupervisedGatewayLockError ? err.exitCode : 1;
-}
-
-function isGatewayHealthzResponse(statusCode: number | undefined, body: string): boolean {
-  if (statusCode !== 200) {
-    return false;
-  }
-  try {
-    const payload = JSON.parse(body) as { ok?: unknown; status?: unknown };
-    return payload.ok === true && payload.status === "live";
-  } catch {
-    return false;
-  }
-}
-
-function createConfiguredGatewayHealthProbe(cfg: OpenClawConfig) {
-  const probe = createConfiguredGatewayLocalProbe(cfg);
-  return async (params: { host: string; port: number }): Promise<boolean> => {
-    const result = await probe.requestHttp({
-      ...params,
-      pathname: "/healthz",
-      timeoutMs: SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS,
-    });
-    return isGatewayHealthzResponse(result?.statusCode, result?.body ?? "");
-  };
 }
 
 async function runGatewayLoopWithSupervisedLockRecovery(params: {
@@ -492,7 +444,11 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
     defaultRuntime.exit(1);
     return;
   }
-  const port = portOverride ?? resolveGatewayPort(cfg);
+  const launchPortEnv = {
+    OPENCLAW_GATEWAY_PORT: process.env.OPENCLAW_GATEWAY_PORT,
+    OPENCLAW_PROFILE: process.env.OPENCLAW_PROFILE,
+  };
+  let port = portOverride ?? resolveGatewayPort(cfg, launchPortEnv);
   if (!Number.isFinite(port) || port <= 0 || port > 65_535) {
     defaultRuntime.error(formatInvalidConfigPort("gateway.port"));
     defaultRuntime.exit(EXIT_CONFIG_ERROR);
@@ -809,9 +765,19 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
   const startLoop = async (lifecycleLockDeadlineMs?: number) => {
     const code = await runGatewayLoop({
       ownsProcessLifecycle: true,
-      lockPort: port,
+      get lockPort() {
+        return port;
+      },
+      resolveRestartPort: async () => {
+        const next = await readGatewayStartupConfig(startupTrace, { lowerPrecedenceEnv });
+        startupConfigSnapshotReadForNextStart = next.startupConfigSnapshotRead;
+        // Bootstrap exports the serving port; only launch-time env may override config.
+        port = portOverride ?? resolveGatewayPort(next.cfg, launchPortEnv);
+        return port;
+      },
       lifecycleLockDeadlineMs,
       healthHost,
+      healthConfig: cfg,
       beginBoot,
       completeBoot,
       onRestartStartupFailure: recoverStartupFailure,
@@ -884,11 +850,6 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
 
 /** Run foreground Gateway startup with one consent-gated invalid-config repair attempt. */
 export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunRuntimeHooks = {}) {
-  if (opts.taskSupervisor) {
-    const { runWindowsGatewayTaskSupervisor } = await import("./task-supervisor.js");
-    await runWindowsGatewayTaskSupervisor();
-    return;
-  }
   try {
     await runGatewayCommandOnce(opts, hooks);
   } catch (error) {

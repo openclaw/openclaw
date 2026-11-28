@@ -74,6 +74,18 @@ function mountDetails(overrides: Partial<ChatDetailsProps> = {}) {
   };
 }
 
+it("keeps a compact loading row only until the first session facts settle", () => {
+  const view = mountDetails({ sessionFactsReady: false });
+  expect(view.container.querySelector(".chat-details-desktop-loading")).not.toBeNull();
+  view.update({ sessionFactsReady: true });
+  expect(view.container.querySelector(".chat-details-desktop-loading")).toBeNull();
+  view.update({
+    sessionFactsReady: false,
+    cachedDetails: { locale: "en", environment: { worktree: false } },
+  });
+  expect(view.container.querySelector(".chat-details-desktop-loading")).toBeNull();
+});
+
 it("keeps unknown and empty desktop Outputs and Progress quiet during slow reads", async () => {
   const view = mountDetails();
   expect(view.group("outputs")).toBeNull();
@@ -438,14 +450,10 @@ it("accepts one replacement-client page while its physical session row is restor
 });
 
 it("resets reveals on physical identity changes without reapplying a pending reveal", async () => {
-  const first = automationPage("Scheduled check", 50);
-  first.total = 51;
-  first.hasMore = true;
-  first.nextOffset = 50;
-  const appended = createDeferred<CronJobsListResult<CronCompactJob>>();
-  const request = createGatewayRequestMock()
-    .mockResolvedValueOnce(first)
-    .mockReturnValueOnce(appended.promise);
+  const first = automationPage("Scheduled check", 51);
+  first.limit = 200;
+  first.jobs[50]!.name = "ZZZ Appended automation";
+  const request = createGatewayRequestMock().mockResolvedValue(first);
   const view = mountDetails({ pullRequestsGateway: automationGateway(request).gateway });
   await advance();
   const group = () => view.group("automations")!;
@@ -473,34 +481,28 @@ it("resets reveals on physical identity changes without reapplying a pending rev
   button.focus();
   button.click();
   flush();
-  expect(request).toHaveBeenCalledTimes(2);
-  expect(request.mock.calls[1]?.[1]).toMatchObject({ limit: 50, offset: 50 });
+  expect(request).toHaveBeenCalledOnce();
+  // The complete canonical inventory owns the next page; presentation still settles async.
   view.update({ selectedSession: undefined });
   view.update({ selectedSession: view.initial.selectedSession });
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledOnce();
   // The pending read retains its current frame; the reset lands with that read.
   expect(count()).toBe(50);
 
-  appended.resolve({
-    ...automationPage("Appended automation"),
-    snapshotRevision: first.snapshotRevision,
-    offset: 50,
-    total: 51,
-  });
   await advance();
   expect(count()).toBe(10);
   expect(group().textContent).not.toContain("Appended automation");
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledOnce();
 
   for (const expected of [20, 30, 40, 50, 51]) {
     more().click();
     flush();
     expect(count()).toBe(expected);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledOnce();
   }
   expect(group().textContent).toContain("Appended automation");
   view.update({ selectedSession: { ...view.initial.selectedSession!, sessionId: "arrival-2" } });
   await advance();
   expect(count()).toBe(10);
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(request).toHaveBeenCalledOnce();
 });

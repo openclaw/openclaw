@@ -27,7 +27,8 @@ import {
   modelTransportRoutesMatch,
   resolveCatalogOwnedModelCompat,
 } from "../model-compat-catalog.js";
-import { modelKey, normalizeStaticProviderModelId } from "../model-ref-shared.js";
+import { modelKey } from "../model-ref-shared.js";
+import { normalizeStaticProviderModelId } from "../model-selection-normalize.js";
 import {
   resolveBuiltInModelSuppressionFromManifest,
   shouldUnconditionallySuppress,

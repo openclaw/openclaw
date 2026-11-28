@@ -20,6 +20,7 @@ import { parseArgs } from "node:util";
 import { getHeapStatistics } from "node:v8";
 import { isMainThread, Worker } from "node:worker_threads";
 import { readSessionPhysicalDiskUsage } from "../../src/config/sessions/disk-budget-files.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 async function main() {
   const { values } = parseArgs({
@@ -132,12 +133,7 @@ async function main() {
   globalThis.gc();
   const retainedAfter = process.memoryUsage();
   const inspector = new Session();
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 16384,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 16384);
   for (let index = 0; index < iterations; index++) {
     await scan();
   }

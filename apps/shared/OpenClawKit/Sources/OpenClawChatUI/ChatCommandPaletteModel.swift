@@ -9,7 +9,7 @@ enum ChatCommandPaletteAction: String, CaseIterable {
         case .newThread: String(localized: "New Thread")
         case .threads: String(localized: "Threads…")
         case .find: String(localized: "Find in Conversation")
-        case .export: String(localized: "Export Transcript…")
+        case .export: String(localized: "Export Chat…")
         }
     }
 

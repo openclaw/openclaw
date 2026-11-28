@@ -559,7 +559,7 @@ extension OpenClawChatViewModel {
             // canceled (or canonical history completed) this mapping. Never
             // leave its stale bubble looking like an ordinary sent message;
             // canonical history can re-add a genuinely delivered row.
-            self.replaceMessages(self.messages.filter { $0.id != messageID })
+            self.removeCanceledOutboxMessage(messageID)
         }
     }
 
@@ -666,7 +666,11 @@ extension OpenClawChatViewModel {
         let capturedAttachmentIDs = Set(draftAttachments.map(\.id))
         self.attachments.removeAll { capturedAttachmentIDs.contains($0.id) }
         self.errorText = nil
+        #if os(iOS)
+        self.inlineVideos.remember(draftAttachments, messageKey: Self.outboxUserIdempotencyKey(command.id))
+        #endif
         self.presentOutboxCommands([command])
+        self.localSendRevision &+= 1
         // Health can recover between the send-gate check and the enqueue;
         // flushing here closes that gap instead of waiting for the next event.
         if self.healthOK {
@@ -948,7 +952,8 @@ extension OpenClawChatViewModel {
     /// exactly on the unhealthy -> healthy transition.
     func applyTransportHealth(_ ok: Bool, refreshSessionsOnReconnect: Bool = true) {
         let wasHealthy = self.healthOK
-        self.healthOK = ok
+        // Every poll lands here; an equal write would still notify the views that read health.
+        if ok != wasHealthy { self.healthOK = ok }
         if !ok {
             // A later page comes from another connection.
             if wasHealthy { self.outboxRestoreEvidence.connectionHistoryFloor = self.lastIssuedHistoryRequestID }
@@ -1479,6 +1484,12 @@ extension OpenClawChatViewModel {
         self.outboxFailuresByMessageID.removeValue(forKey: messageID)
     }
 
+    func removeCanceledOutboxMessage(_ messageID: UUID) {
+        // A retained reader prefix must not restore an authoritatively canceled row.
+        self.readerHistoryDeletionRevision &+= 1
+        self.replaceMessages(self.messages.filter { $0.id != messageID })
+    }
+
     func handleOutboxChange(_ change: OpenClawChatOutboxChange) {
         // Invalidates every command snapshot that started loading before the
         // store mutation, including snapshots owned by another view model.
@@ -1491,7 +1502,7 @@ extension OpenClawChatViewModel {
             guard !self.cancelingOutboxCommandIDs.contains(commandID) else { return }
             guard let messageID = self.outboxMessageIDsByCommandID[commandID] else { return }
             self.clearOutboxState(forCommandID: commandID)
-            self.replaceMessages(self.messages.filter { $0.id != messageID })
+            self.removeCanceledOutboxMessage(messageID)
         case let .confirmed(_, commandID):
             // Canonical history owns the message row; only its outbox badge
             // and command mapping disappear.

@@ -85,7 +85,7 @@ export async function buildCodexHarnessPromptSnapshot(params: {
   promptText?: string;
   nativeCodeModeEnabled?: boolean;
   developerInstructionAdditions?: string;
-  personaInstructions?: string;
+  refreshableInstructions?: string;
 }): Promise<CodexHarnessPromptSnapshot> {
   const developerInstructions = joinPresentSections(
     buildDeveloperInstructions(params.attempt, {
@@ -95,26 +95,27 @@ export async function buildCodexHarnessPromptSnapshot(params: {
     }),
     params.developerInstructionAdditions,
   );
-  return {
+  const threadStartParams = await buildThreadStartParams(params.attempt, {
+    cwd: params.cwd,
+    dynamicTools: params.dynamicTools,
+    appServer: params.appServer,
+    nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+    nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
     developerInstructions,
-    parentLocalInstructions: buildCodexParentLocalInstructions(params.attempt, {
-      personaInstructions: params.personaInstructions,
-    }),
-    threadStartParams: await buildThreadStartParams(params.attempt, {
-      cwd: params.cwd,
-      dynamicTools: params.dynamicTools,
-      appServer: params.appServer,
-      nativeCodeModeEnabled: params.nativeCodeModeEnabled,
-      nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
-      developerInstructions,
-      config: params.config,
-    }),
+    refreshableInstructions: params.refreshableInstructions,
+    config: params.config,
+  });
+  return {
+    developerInstructions: threadStartParams.developerInstructions,
+    parentLocalInstructions: buildCodexParentLocalInstructions(params.attempt),
+    threadStartParams,
     threadResumeParams: await buildThreadResumeParams(params.attempt, {
       threadId: params.threadId,
       appServer: params.appServer,
       nativeCodeModeEnabled: params.nativeCodeModeEnabled,
       nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
       developerInstructions,
+      refreshableInstructions: params.refreshableInstructions,
       config: params.config,
     }),
     turnStartParams: await buildTurnStartParams(params.attempt, {
@@ -173,3 +174,6 @@ export const loadCodexSubscriptionRoutingTestFixture = () =>
 
 export const loadNativeCommandGatewayTestFixture = () =>
   import("./src/app-server/native-command-auth.test-support.js");
+
+export const loadCodexSharedClientShutdownTestFixture = () =>
+  import("./src/app-server/shared-client-shutdown.test-support.js");

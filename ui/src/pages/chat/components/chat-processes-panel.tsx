@@ -139,9 +139,6 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             ]}
             type="button"
             aria-label={t("chat.processesPanel.stop", { name: stopProps.row.name })}
-            title={
-              props.mobile ? undefined : t("chat.processesPanel.stop", { name: stopProps.row.name })
-            }
             disabled={stop.stopping()}
             onClick={() => void stop.stop()}
           >
@@ -401,10 +398,10 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
             </span>
             <strong
               class="chat-processes__detail-name"
-              ref={titleScrollState}
+              ref={props.mobile ? titleScrollState : undefined}
               title={props.mobile ? undefined : selectedRow()?.name}
             >
-              {selectedRow()?.name}
+              <bdi>{selectedRow()?.name}</bdi>
             </strong>
             <Show when={selectedRow()}>
               {(row) => (

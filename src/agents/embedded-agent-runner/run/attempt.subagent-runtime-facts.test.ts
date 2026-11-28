@@ -102,8 +102,9 @@ it("preserves the complete system prompt across child state in code mode", async
   expect(queued.systemPrompt).not.toContain("run-worker");
   expectSubagentCarrier(queued.messages, "status=queued");
   expectSubagentCarrier(running.messages, "status=running");
+  // A request without an earlier subagent snapshot carries the empty form.
   expectSubagentCarrier(
     empty.messages,
-    /^## Temporal Context\nCurrent date: \d{4}-\d{2}-\d{2}\nTime zone: [^\n]+$/,
+    /^## Active Subagents\nnone\n\n## Temporal Context\nCurrent date: \d{4}-\d{2}-\d{2}\nTime zone: [^\n]+$/,
   );
 });

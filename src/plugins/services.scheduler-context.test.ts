@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { AsyncResource } from "node:async_hooks";
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { expect, it } from "vitest";
@@ -38,8 +38,10 @@ import {
   withPluginCache,
 } from "./plugin-cache.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
+import { pluginInvocationContext } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createOwnedInstance } from "./plugin-instance.test-support.js";
+import { PluginInvocationScope } from "./plugin-invocation-scope.js";
 import { createEmptyPluginMetadataSnapshot } from "./plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
@@ -225,6 +227,7 @@ it("owns service callbacks after startup and reload callers finish", async () =>
       apiVersion: 2,
       id: "scheduled-context",
       start({ scheduler: serviceScheduler, config }) {
+        expect(pluginInvocationContext.getStore()).toBeUndefined();
         scopes.push(serviceScheduler);
         configs.push(config);
         resources.push(new AsyncResource("service-start", { requireManualDestroy: true }));
@@ -264,7 +267,15 @@ it("owns service callbacks after startup and reload callers finish", async () =>
                     signal: caller.signal,
                     isWebchatConnect: () => false,
                   },
-                  () => readers.run(run),
+                  () =>
+                    readers.run(() => {
+                      const invocationScope = new PluginInvocationScope(callerRegistry, []);
+                      const inClosedInvocation = invocationScope.run(() =>
+                        AsyncLocalStorage.snapshot(),
+                      );
+                      invocationScope.release();
+                      return inClosedInvocation(run);
+                    }),
                 ),
             ),
           ),

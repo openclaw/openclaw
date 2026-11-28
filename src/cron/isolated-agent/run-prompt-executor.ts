@@ -28,9 +28,9 @@ import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-de
 import { resolveScheduledToolCallerContext } from "../../agents/scheduled-tool-policy.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
-import { resolveAgentLifecycleTerminalMetadata } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
+import { resolveDeferredLifecycleTerminal } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
-import type { CliSessionBinding } from "../../config/sessions.js";
+import { hasCliSessionReuseMetadata } from "../../config/sessions/cli-session-binding.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { registerCronRunExecSource } from "../../infra/cron-run-exec-source.js";
 import {
@@ -44,10 +44,10 @@ import { resolveScheduledRunMemoryReceipt } from "../execution-context-registry.
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { prepareCronRunInference } from "../run-inference.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
-import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { isCommandStyleCronMessage } from "./command-style-prompt.js";
 import {
   assertCronCandidateSandboxPlacement,
+  assertCronCliAccessProgram,
   assertCronRuntimeAuthorityCandidate,
   resolveCliChildAbortSignal,
   resolveCronSandboxPlacement,
@@ -79,10 +79,6 @@ type CronEmbeddedRuntime = typeof import("./run-embedded.runtime.js");
 const cronEmbeddedRuntimeLoader = createLazyImportLoader<CronEmbeddedRuntime>(
   () => import("./run-embedded.runtime.js"),
 );
-
-function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
-  return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
-}
 
 /** Creates the model-fallback executor for one isolated cron prompt run. */
 export function createCronPromptExecutor(
@@ -199,7 +195,7 @@ export function createCronPromptExecutor(
             errorContext: "cron user turn transcript",
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
-    const scheduledExecution = params.occurrence.mint({
+    const scheduledExecution = await params.occurrence.mint({
       cfg: params.cfgWithAgentDefaults,
       agentId: params.agentId,
       runId,
@@ -208,6 +204,7 @@ export function createCronPromptExecutor(
       operatorAuthority: params.operatorAuthority,
     });
     const cronAdmission = prepareCronRunAdmission({
+      storeAdmission: params.preRunSessionPersisted ? params.cronSession : undefined,
       scheduledExecution,
       operatorAuthority: params.operatorAuthority,
       admissionSource: params.admissionSource,
@@ -266,6 +263,7 @@ export function createCronPromptExecutor(
         provider: params.liveSelection.provider,
         model: params.liveSelection.model,
         requestedRouteResolution: "resolved",
+        cyberAccessProgram: params.job.cyberAccessProgram,
         agentDir: params.agentDir,
         userLockedAuthProfileId:
           params.liveSelection.authProfileIdSource === "user"
@@ -314,22 +312,6 @@ export function createCronPromptExecutor(
         const preparedSessionPersisted = canReusePreparedSession;
         canReusePreparedSession = false;
         params.lifecycle.beginAttempt();
-        const notifyExecutionStarted = (info?: { lifecycleGeneration?: string }) =>
-          params.onExecutionStarted?.({
-            ...info,
-            ...(runOptions.isFallbackRetry ? { isFallback: true } : {}),
-            provider: providerOverride,
-            model: modelOverride,
-          });
-        const notifyExecutionPhase = (
-          info: Pick<CronAgentExecutionPhaseUpdate, "phase"> &
-            Partial<Omit<CronAgentExecutionPhaseUpdate, "jobId" | "phase">>,
-        ) =>
-          params.onExecutionPhase?.({
-            ...info,
-            provider: providerOverride,
-            model: modelOverride,
-          });
         attemptMediaTaskIds = getGeneratedMediaTaskIdsForSessionKey(params.runSessionKey);
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
@@ -364,9 +346,7 @@ export function createCronPromptExecutor(
             modelOverride,
             candidateRuntime,
           );
-          if (runtimeCatalog.length > 0) {
-            thinkingCatalog = runtimeCatalog;
-          }
+          thinkingCatalog = runtimeCatalog.length > 0 ? runtimeCatalog : thinkingCatalog;
         }
         // Revalidate the candidate without rewriting the durable thinking preference.
         const { level: candidateThinkLevel } = resolveThinkingSelection({
@@ -475,8 +455,19 @@ export function createCronPromptExecutor(
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
             messageToolFinalByDefault: sourceDelivery.messageTool.finalByDefault,
             scheduledToolPolicy,
-            onExecutionStarted: notifyExecutionStarted,
-            onExecutionPhase: notifyExecutionPhase,
+            onExecutionStarted: (info?: { lifecycleGeneration?: string }) =>
+              params.onExecutionStarted?.({
+                ...info,
+                ...(runOptions.isFallbackRetry ? { isFallback: true } : {}),
+                provider: providerOverride,
+                model: modelOverride,
+              }),
+            onExecutionPhase: (info) =>
+              params.onExecutionPhase?.({
+                ...info,
+                provider: providerOverride,
+                model: modelOverride,
+              }),
             bootstrapContextMode,
             bootstrapContextRunKind: "cron",
             bootstrapPromptWarningSignaturesSeen,
@@ -493,7 +484,12 @@ export function createCronPromptExecutor(
             suppressNextUserMessagePersistence:
               userTurnTranscriptRecorder.hasPersisted() || userTurnTranscriptRecorder.isBlocked(),
           }) satisfies Partial<Parameters<CronEmbeddedRuntime["runCronEmbeddedAgent"]>[0]>;
+        const cyberAccessProgram =
+          runOptions.cyberAccessProgram ??
+          params.job.cyberAccessProgram ??
+          params.cronSession.sessionEntry.cyberAccessProgram;
         if (cliExecution) {
+          assertCronCliAccessProgram(cyberAccessProgram, providerOverride);
           const allowCliAuthProfileForwarding = cliBackendAcceptsAuthProfileForwarding({
             provider: executionProvider,
             config: params.cfgWithAgentDefaults,
@@ -668,8 +664,7 @@ export function createCronPromptExecutor(
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: runOptions.modelFallbacksOverride,
           resolvedModelSelection: runOptions.resolvedModelSelection,
-          cyberAccessProgram:
-            runOptions.cyberAccessProgram ?? params.cronSession.sessionEntry.cyberAccessProgram,
+          cyberAccessProgram,
           authProfileId: runOptions.authProfileId ?? params.liveSelection.authProfileId,
           authProfileIdSource: runOptions.authProfileId
             ? "user"
@@ -715,17 +710,17 @@ export function createCronPromptExecutor(
       .finally(() => {
         cronRunExecSource.dispose();
       });
+    const terminal = resolveDeferredLifecycleTerminal(
+      fallbackResult.result,
+      params.lifecycle.getDeferredError(),
+    );
     const executionError =
-      params.lifecycle.getDeferredError() ??
+      terminal.error ??
       (fallbackResult.result.meta.error || fallbackResult.outcome === "exhausted"
         ? "Agent run failed"
         : undefined);
     if (executionError) {
-      params.lifecycle.capture(
-        "error",
-        executionError,
-        resolveAgentLifecycleTerminalMetadata(fallbackResult.result.meta),
-      );
+      params.lifecycle.capture("error", executionError, terminal.metadata);
     } else {
       params.lifecycle.capture("end", fallbackResult.result);
     }

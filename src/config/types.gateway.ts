@@ -123,14 +123,8 @@ export type GatewayOperatorRoleDefinition = NonNullable<
   GatewayConfigInput["roles"]
 >["definitions"][string];
 
-/** Optional named operator-role policies for Gateway deployments shared by a team. */
-export type GatewayOperatorRolesConfig = Omit<
-  NonNullable<GatewayConfigInput["roles"]>,
-  "default"
-> & {
-  /** Required default for profiles without a valid explicit or GitHub login assignment. */
-  default?: string;
-};
+/** Role definitions for identified people, with an optional fallback role. */
+export type GatewayOperatorRolesConfig = NonNullable<GatewayConfigInput["roles"]>;
 
 export type GatewayConfig = Omit<
   GatewayConfigInput,

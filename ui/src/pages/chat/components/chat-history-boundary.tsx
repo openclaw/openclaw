@@ -10,6 +10,7 @@ export type ChatHistoryBoundaryProps = {
   connected?: boolean;
   error?: string | null;
   onShowEarlier: () => void;
+  onSearchEarlier?: () => Promise<boolean>;
 };
 
 // Keep the original scroll margin: a taller retiring header can require a

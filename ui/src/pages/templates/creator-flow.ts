@@ -13,8 +13,8 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerAgentsHomeEnglish } from "../../i18n/locales/en-agents-home.ts";
 import { registerTemplateCreatorEnglish } from "../../i18n/locales/en-template-creator.ts";
-import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -30,10 +30,14 @@ import {
   type TemplatePackagePreview,
   type TemplateReviewTarget,
 } from "./creator-publication.ts";
+import { TemplateCreatorSignIn } from "./creator-sign-in.ts";
 import { canCreateTemplateDraft } from "./draft-navigation.ts";
+import { readTemplatePackagePreview } from "./template-package-preview.ts";
 
 registerEnglishCatalog(registerAgentsHomeEnglish);
 registerEnglishCatalog(registerTemplateCreatorEnglish);
+
+const PENDING_PUBLICATION_POLL_MS = 30_000;
 
 type Target = {
   agentId: string;
@@ -63,6 +67,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
   private readonly listeners = createChangeListeners();
   private target: Target | null = null;
   private pollTimer: ReturnType<typeof setTimeout> | null = null;
+  private presentationActive = false;
   private generation = 0;
   private reviewRequest = 0;
   private seenRevision: string | null = null;
@@ -106,8 +111,46 @@ export class TemplateCreatorFlow implements TemplateCreator {
   readonly subscribe = this.listeners.subscribe;
 
   private readonly changed = this.listeners.publish;
+  private readonly clawHubSignIn = new TemplateCreatorSignIn(this.changed, () => {
+    const target = this.target;
+    if (!target) {
+      return;
+    }
+    // Re-read this same private draft, not a new chat turn. Revision polling
+    // also covers approval while the agent is still drafting.
+    this.error = null;
+    this.seenRevision = null;
+    this.changed();
+    this.schedulePoll(target, this.generation, 0);
+  });
+
+  get signIn() {
+    return this.clawHubSignIn.state;
+  }
+
+  startClawHubSignIn() {
+    if (this.target) {
+      void this.clawHubSignIn.start(this.target);
+    }
+  }
+
+  cancelClawHubSignIn() {
+    if (this.target) {
+      void this.clawHubSignIn.cancel(this.target);
+    }
+  }
+
+  private canSignIn() {
+    return canCallGatewayMethod(
+      this.context.gateway.snapshot,
+      "templates.drafts.signIn",
+      "operator.admin",
+    );
+  }
 
   retirePresentation() {
+    this.presentationActive = false;
+    this.clawHubSignIn.retire();
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
     }
@@ -145,6 +188,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
   private reset(target: Target | null) {
     this.retirePendingStart();
     this.retirePresentation();
+    this.clawHubSignIn.reset();
     this.generation += 1;
     this.reviewRequest += 1;
     if (this.pollTimer) {
@@ -210,6 +254,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
         throw new Error(t("templatesDraft.sendFailed"));
       }
       this.navigate(target);
+      this.presentationActive = true;
       this.schedulePoll(target, generation);
     } catch (error) {
       if (this.context.gateway.snapshot.client === client && this.generation === generation) {
@@ -240,6 +285,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
     this.busy = null;
     const generation = this.reset(target);
     this.navigate(target);
+    this.presentationActive = true;
     this.schedulePoll(target, generation, 0);
   }
 
@@ -262,14 +308,21 @@ export class TemplateCreatorFlow implements TemplateCreator {
       return;
     }
     if (this.matches({ agentId, draftId, sessionKey })) {
+      if (this.canSignIn()) {
+        this.clawHubSignIn.show(this.target!);
+      }
       this.inlineReview = true;
+      this.presentationActive = true;
       this.changed();
       if (this.busy === "publishing") {
         return;
       }
-      if (this.publication || this.publicationIssue) {
+      if (
+        this.publication?.publicationStatus === "pending" ||
+        this.publicationIssue === "unconfirmed"
+      ) {
         void this.checkPublication();
-      } else {
+      } else if (!this.publication && !this.publicationIssue) {
         this.schedulePoll(this.target!, this.generation, 0);
       }
       return;
@@ -277,12 +330,20 @@ export class TemplateCreatorFlow implements TemplateCreator {
     this.busy = null;
     const target = { agentId, draftId, sessionKey, client };
     const generation = this.reset(target);
+    if (this.canSignIn()) {
+      this.clawHubSignIn.show(target);
+    }
     this.inlineReview = true;
+    this.presentationActive = true;
     this.changed();
     this.schedulePoll(target, generation, 0);
   }
 
   private schedulePoll(target: Target, generation: number, delay = 2500) {
+    // A read or write can settle after the card unmounts. Keep its result, not its timer.
+    if (!this.presentationActive) {
+      return;
+    }
     if (this.pollTimer) {
       clearTimeout(this.pollTimer);
     }
@@ -319,8 +380,11 @@ export class TemplateCreatorFlow implements TemplateCreator {
           this.reviewCurrent = false;
         }
         this.seenRevision = draft.revision;
-        if (hasCompleteScope(draft.content)) {
+        if (!this.signIn && !this.clawHubSignIn.checking && hasCompleteScope(draft.content)) {
           await this.refreshReview(target, generation);
+        } else if (this.review) {
+          // No refresh will notify the card to retire its stale preview.
+          this.changed();
         }
       }
     } catch (error) {
@@ -365,7 +429,15 @@ export class TemplateCreatorFlow implements TemplateCreator {
       this.error = null;
     } catch (error) {
       if (this.current(target, generation) && request === this.reviewRequest) {
-        this.error = formatUiError(error);
+        const details =
+          error instanceof GatewayRequestError ? asOptionalRecord(error.details) : null;
+        if (this.canSignIn() && asOptionalRecord(details?.templateSignIn)?.required === true) {
+          this.clawHubSignIn.require();
+          this.clawHubSignIn.show(target);
+          this.error = null;
+        } else {
+          this.error = formatUiError(error);
+        }
       }
     } finally {
       if (this.current(target, generation) && request === this.reviewRequest) {
@@ -433,7 +505,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
       if (this.current(target, generation)) {
         this.busy = null;
         if (this.publication?.publicationStatus === "pending") {
-          this.schedulePoll(target, generation, 5000);
+          this.schedulePoll(target, generation, PENDING_PUBLICATION_POLL_MS);
         }
         this.changed();
       }
@@ -486,7 +558,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
         this.busy = null;
         this.changed();
         if (this.publication?.publicationStatus === "pending") {
-          this.schedulePoll(target, generation, 5000);
+          this.schedulePoll(target, generation, PENDING_PUBLICATION_POLL_MS);
         }
       }
     }
@@ -510,53 +582,7 @@ export class TemplateCreatorFlow implements TemplateCreator {
     if (!target || !review?.items.includes(item) || !item.requirement) {
       return null;
     }
-    const requirement = item.requirement;
-    if (requirement.source === "bundled") {
-      return {
-        content:
-          item.kind === "skill"
-            ? review.files.find((file) => file.path === `${requirement.path}/SKILL.md`)?.content
-            : undefined,
-      };
-    }
-    const { ref, version } = requirement;
-    let preview: TemplatePackagePreview;
-    if (item.kind === "skill") {
-      const result = await target.client.request<{
-        skill?: { summary?: string | null } | null;
-        card?: { status: "available"; content: string } | { status: "unavailable" };
-      }>("skills.detail", { slug: ref, version });
-      preview = {
-        description: result.skill?.summary,
-        content: result.card?.status === "available" ? result.card.content : undefined,
-      };
-    } else if (item.kind === "plugin") {
-      // Catalog IDs are the Gateway's ch_ + base64url encoding of the validated package ref.
-      const id =
-        "ch_" +
-        bytesToBase64(new TextEncoder().encode(ref))
-          .replaceAll("+", "-")
-          .replaceAll("/", "_")
-          .replace(/[=]+$/u, "");
-      const result = await target.client.request<{
-        plugin: { catalog: { summary?: string } };
-        detail: {
-          origin: string;
-          packageName?: string;
-          selectedRelease?: { version: string } | null;
-          remoteError?: string;
-        };
-      }>("plugins.catalog.get", { id, version });
-      preview =
-        result.detail.origin === "clawhub" &&
-        result.detail.packageName === ref &&
-        result.detail.selectedRelease?.version === version &&
-        !result.detail.remoteError
-          ? { description: result.plugin.catalog.summary }
-          : {};
-    } else {
-      return null;
-    }
+    const preview = await readTemplatePackagePreview(target.client, review.files, item);
     return this.current(target, generation) && this.review === review ? preview : null;
   }
 

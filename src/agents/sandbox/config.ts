@@ -227,6 +227,10 @@ export function resolveSandboxRuntimeSettings(
   };
 }
 
+export function isLocalSandboxWorkspaceBackend(backend: SandboxConfig["backend"]): boolean {
+  return backend === "docker" || backend === "podman";
+}
+
 export function resolveSandboxConfigForAgent(
   cfg?: OpenClawConfig,
   agentId?: string,

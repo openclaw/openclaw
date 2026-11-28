@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { text } from "node:stream/consumers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createOpenAiResponsesModelConfig,
   startOpenAiResponsesModelServer,
@@ -65,7 +65,9 @@ function writeToolCalls(response: ServerResponse): void {
 }
 
 async function withIngressFixture(options: {
-  senderIsOwner: boolean;
+  senderId: string;
+  /** Deprecated plugin claim; the host must ignore it. */
+  senderIsOwner?: boolean;
   toolsAllow: string[];
   cancel?: boolean;
 }) {
@@ -122,6 +124,8 @@ async function withIngressFixture(options: {
         });
         cfg.plugins = { enabled: false };
         cfg.agents = { ...cfg.agents, entries: { main: { workspace: state.workspaceDir } } };
+        // The voice speaker `owner-1` is the configured owner; nobody else is.
+        cfg.commands = { ownerAllowFrom: ["discord:owner-1"] };
         cfg.tools = {
           allow: ["sessions", "write", "read"],
           codeMode: { enabled: false },
@@ -140,6 +144,7 @@ async function withIngressFixture(options: {
                 sessionKey,
                 message: "Update this session label and write the requested workspace file.",
                 messageChannel: "discord",
+                runContext: { senderId: options.senderId },
                 senderIsOwner: options.senderIsOwner,
                 toolsAllow: options.toolsAllow,
                 abortSignal: controller.signal,
@@ -193,20 +198,36 @@ async function withIngressFixture(options: {
 
 describe("host runtime ingress agent effects", () => {
   it.each([
-    { name: "owner", senderIsOwner: true, toolsAllow: ["sessions", "write"], canPatch: true },
-    { name: "guest", senderIsOwner: false, toolsAllow: ["sessions", "write"], canPatch: false },
-    { name: "restricted owner", senderIsOwner: true, toolsAllow: ["write"], canPatch: false },
+    { name: "owner", senderId: "owner-1", toolsAllow: ["sessions", "write"], canPatch: true },
+    { name: "guest", senderId: "guest-1", toolsAllow: ["sessions", "write"], canPatch: false },
+    {
+      name: "guest claiming owner",
+      senderId: "guest-1",
+      senderIsOwner: true,
+      toolsAllow: ["sessions", "write"],
+      canPatch: false,
+    },
+    { name: "restricted owner", senderId: "owner-1", toolsAllow: ["write"], canPatch: false },
   ])("enforces $name authority in the real tool loop", { timeout: 90_000 }, async (scenario) => {
-    expect(await withIngressFixture(scenario)).toMatchObject({
-      storedLabel: scenario.canPatch ? label : undefined,
-      file: fileContent,
-    });
+    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    try {
+      expect(await withIngressFixture(scenario)).toMatchObject({
+        storedLabel: scenario.canPatch ? label : undefined,
+        file: fileContent,
+      });
+      const claimWarnings = warning.mock.calls.filter(([message]) =>
+        String(message).includes("runCommandFromIngress({ senderIsOwner })"),
+      );
+      expect(claimWarnings).toHaveLength(scenario.senderIsOwner ? 1 : 0);
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   it("cancels tool I/O and discards late provider calls", { timeout: 90_000 }, async () => {
     expect(
       await withIngressFixture({
-        senderIsOwner: true,
+        senderId: "owner-1",
         toolsAllow: ["sessions", "write"],
         cancel: true,
       }),

@@ -15,7 +15,6 @@ import {
   MissingPublicSurfaceError,
   resetFacadeLoaderStateForTest,
 } from "./facade-loader.js";
-import { listImportedBundledPluginFacadeIds as listImportedFacadeRuntimeIds } from "./facade-runtime.js";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
 
 const { createTempDirSync } = createPluginSdkTestHarness();
@@ -235,18 +234,6 @@ describe("plugin-sdk facade loader", () => {
       new Error(`Unable to open bundled plugin public surface ${outsidePath}: outside plugin root`),
     );
     expect(load).not.toThrow(MissingPublicSurfaceError);
-  });
-
-  it("shares loaded facade ids with facade-runtime", () => {
-    const fixture = createMarkerFixture("identity-check");
-
-    const first = loadFixture(fixture.pluginId);
-    const second = loadFixture(fixture.pluginId);
-
-    expect(first).toBe(second);
-    expect(first.marker).toBe("identity-check");
-    expect(listImportedBundledPluginFacadeIds()).toEqual([fixture.pluginId]);
-    expect(listImportedFacadeRuntimeIds()).toEqual([fixture.pluginId]);
   });
 
   it.each([

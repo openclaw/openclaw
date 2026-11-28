@@ -133,6 +133,57 @@ class ChatComposerDraftTest {
   }
 
   @Test
+  fun identicalTextRefreshesRecencyBeforeEvictionAndCheckpointing() {
+    val snapshots = mutableListOf<List<String>>()
+    val store = ChatComposerTextDraftStore(onSnapshotChanged = snapshots::add)
+    val owners = (0..CHAT_COMPOSER_MAX_DRAFT_OWNERS).map { ChatComposerOwner("gateway", "main", "session-$it") }
+    owners.dropLast(1).forEachIndexed { index, owner -> store[owner] = "draft-$index" }
+
+    store[owners.first()] = "draft-0"
+
+    val refreshedOrder = (1 until CHAT_COMPOSER_MAX_DRAFT_OWNERS).toList() + 0
+    assertEquals(
+      refreshedOrder.flatMap { listOf("draft", "1", "gateway", "main", "session-$it", "1", "", "draft-$it") },
+      snapshots.last(),
+    )
+    assertEquals(CHAT_COMPOSER_MAX_DRAFT_OWNERS + 1, snapshots.size)
+
+    val newest = owners.lastIndex
+    store[owners.last()] = "draft-$newest"
+
+    assertEquals("", store[owners[1]])
+    assertEquals("draft-0", store[owners.first()])
+    val retainedOrder = (2 until CHAT_COMPOSER_MAX_DRAFT_OWNERS).toList() + listOf(0, newest)
+    assertEquals(
+      retainedOrder.flatMap { listOf("draft", "1", "gateway", "main", "session-$it", "1", "", "draft-$it") },
+      snapshots.last(),
+    )
+    assertEquals(CHAT_COMPOSER_MAX_DRAFT_OWNERS + 2, snapshots.size)
+  }
+
+  @Test
+  fun rejectedAdmissionRestoresBeyondCapacityWithoutEvictingOtherDrafts() {
+    val snapshots = mutableListOf<List<String>>()
+    val store = ChatComposerTextDraftStore(onSnapshotChanged = snapshots::add)
+    val owners = (0..CHAT_COMPOSER_MAX_DRAFT_OWNERS).map { ChatComposerOwner("gateway", "main", "session-$it") }
+    store[owners.first()] = "draft-0"
+    assertTrue(store.beginAdmission("command", owners.first(), "draft-0"))
+    assertEquals(listOf("pending-send", "1", "gateway", "main", "session-0", "1", "command", "draft-0"), snapshots.last())
+    owners.drop(1).forEachIndexed { index, owner -> store[owner] = "draft-${index + 1}" }
+    val priorSnapshots = snapshots.size
+
+    store.resolveAdmission("command", admitted = false)
+
+    owners.forEachIndexed { index, owner -> assertEquals("draft-$index", store[owner]) }
+    val restoredOrder = (1..CHAT_COMPOSER_MAX_DRAFT_OWNERS).toList() + 0
+    assertEquals(
+      restoredOrder.flatMap { listOf("draft", "1", "gateway", "main", "session-$it", "1", "", "draft-$it") },
+      snapshots.last(),
+    )
+    assertEquals(priorSnapshots + 1, snapshots.size)
+  }
+
+  @Test
   fun processRecreationHidesPendingDraftUntilOutboxReconciliation() {
     var saved = arrayListOf<String>()
     val owner = ChatComposerOwner(gatewayStableId = "gateway-a", agentId = "main", sessionKey = "agent:main:device")

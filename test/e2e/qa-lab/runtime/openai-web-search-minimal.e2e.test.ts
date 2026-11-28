@@ -5,7 +5,7 @@ import { testing } from "../../../../scripts/e2e/lib/openai-web-search-minimal/c
 // Keep scenario defaults independent so changing the client cannot rewrite its expected inputs.
 const GATEWAY_SCHEMA_ERROR = "provider rejected the request schema or tool payload";
 const GATEWAY_SCHEMA_GUIDANCE =
-  "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.";
+  "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the OpenClaw app.";
 const GATEWAY_SCHEMA_DETAIL = String.raw`LLM request rejected: The following tools cannot be used with reasoning\.effort \'minimal\'\: web\_search\.`;
 const SUCCESS_MARKER = "OPENCLAW_SCHEMA_E2E_OK";
 

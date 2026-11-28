@@ -43,7 +43,7 @@ export function createAgentRunEventHandler(params: {
     params.messageToolDeliveryState.completed &&
     params.turn.opts?.allowProgressCallbacksWhenSourceDeliverySuppressed !== true;
 
-  let modelWaitActive = false;
+  let modelWaitPhase: "waiting_for_model" | "retrying" | undefined;
   const currentMessageId =
     params.turn.sessionCtx.MessageSidFull ?? params.turn.sessionCtx.MessageSid;
   const deliverCompactionNoticePayload = async (noticePayload: ReplyPayload, label: string) => {
@@ -67,18 +67,25 @@ export function createAgentRunEventHandler(params: {
       params.notifyAgentRunStart(evt.transcriptStart);
     }
     if (evt.stream === "run_status" && !shouldSuppressProgressAfterMessageToolDelivery()) {
-      const waiting = evt.data.phase === "waiting_for_model";
-      if (waiting || (modelWaitActive && evt.data.phase === "starting_model")) {
-        modelWaitActive = waiting;
+      const { phase, reason } = evt.data;
+      const waiting = phase === "waiting_for_model";
+      const retrying = phase === "retrying" && reason === "codex_retry";
+      if (
+        waiting ||
+        (retrying && modelWaitPhase !== phase) ||
+        (modelWaitPhase && phase === "starting_model")
+      ) {
+        modelWaitPhase = waiting || retrying ? phase : undefined;
         await params.turn.opts?.onItemEvent?.({
           itemId: "model-wait",
           kind: "model-wait",
           suppressDurableProgress: true,
-          phase: waiting ? "update" : "end",
-          ...(waiting
+          phase: modelWaitPhase ? "update" : "end",
+          ...(modelWaitPhase
             ? {
-                progressText:
-                  evt.data.reason === "slot"
+                progressText: retrying
+                  ? "Still working. Retrying…"
+                  : reason === "slot"
                     ? "Waiting for a free model slot"
                     : "Waiting for the local model to respond",
               }

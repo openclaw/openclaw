@@ -13,7 +13,10 @@ import {
   requireCompactionStorePath,
 } from "./agent-command.compaction.test-support.js";
 import * as attemptCallbacks from "./command/attempt-callbacks.js";
+import type * as AttemptExecution from "./command/attempt-execution.js";
 import type { RunEmbeddedAgentInternalParams } from "./embedded-agent-runner/run/internal-params.js";
+import { FailoverError } from "./failover-error.js";
+import { throwFallbackFailureSummary } from "./model-fallback-attempt.js";
 
 const runEmbeddedAgent = vi.hoisted(() => vi.fn());
 // mock-isolation: Keep provider execution outside the real command admission and settlement fixture.
@@ -150,5 +153,98 @@ it.each(["recovered", "preparation-failure", "later-failure"] as const)(
           : "recovery persistence failed",
     );
     expect(terminals[0].data).not.toHaveProperty("errorObservation");
+  },
+);
+
+// A multi-day limit on one model, and on every fallback: the agent route's session
+// notice must keep the provider's reset, as chat.send does.
+it.each(["single model", "all fallbacks"] as const)(
+  "publishes the provider reset as the failure notice when %s are rate-limited",
+  async (shape) => {
+    runEmbeddedAgent.mockReset();
+    const { runAgentAttempt } = await vi.importActual<typeof AttemptExecution>(
+      "./command/attempt-execution.js",
+    );
+    state.runAgentAttemptMock.mockImplementation(runAgentAttempt);
+    assert.isDefined(state.cfg?.agents?.defaults);
+    state.cfg.agents.defaults.model = { primary: "openai/gpt-5.5" };
+    // Not the host's zone: the notice must use the configured user time zone.
+    state.cfg.agents.defaults.userTimezone = "Pacific/Honolulu";
+    const runId = `rate-limit-${shape.replace(" ", "-")}`;
+    const resetAt = Date.now() + 6 * 24 * 60 * 60 * 1000 - 60_000;
+    // Later turns get this local refusal from the shared gate (src/llm/provider-rate-limit.ts).
+    const limited = new FailoverError(
+      `429 Shared model rate limit. Retry-After: ${(resetAt - Date.now()) / 1000} seconds exceeds maxRetryDelayMs=60000.`,
+      {
+        reason: "rate_limit",
+        status: 429,
+        code: "rate_limit_exceeded",
+        provider: "openai",
+        model: "gpt-5.5",
+        rateLimitResetAt: resetAt,
+      },
+    );
+    runEmbeddedAgent.mockImplementationOnce(async () => {
+      if (shape === "single model") {
+        throw limited;
+      }
+      const weekly = "429 You've hit your weekly limit · resets Dec 3 at 4:30am (UTC)";
+      throwFallbackFailureSummary({
+        attempts: [
+          {
+            provider: "openai",
+            model: "gpt-5.5",
+            error: limited.message,
+            reason: "rate_limit",
+            status: 429,
+            rateLimitResetAt: resetAt,
+          },
+          {
+            provider: "anthropic",
+            model: "claude-opus-5-5",
+            error: weekly,
+            reason: "rate_limit",
+            status: 429,
+          },
+        ],
+        candidates: [
+          { provider: "openai", model: "gpt-5.5" },
+          { provider: "anthropic", model: "claude-opus-5-5" },
+        ],
+        lastError: new FailoverError(weekly, {
+          reason: "rate_limit",
+          status: 429,
+          provider: "anthropic",
+          model: "claude-opus-5-5",
+        }),
+        label: "models",
+        formatAttempt: (attempt) =>
+          `${attempt.provider}/${attempt.model}: ${attempt.error} (${attempt.reason})`,
+      });
+    });
+
+    await expect(
+      agentCommandFromGatewayIngress(
+        {
+          sessionKey: "agent:main:rate-limited",
+          runId,
+          message: "Hi.",
+          deliver: false,
+          allowModelOverride: false,
+        },
+        ...GATEWAY_INGRESS_ARGS,
+      ),
+    ).rejects.toBeInstanceOf(FailoverError);
+    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+    const terminals = state.emitAgentEventMock.mock.calls
+      .map(([event]) => event)
+      .filter(
+        (event) =>
+          event.runId === runId && event.stream === "lifecycle" && event.data.phase === "error",
+      );
+    expect(terminals).toHaveLength(1);
+    expect(terminals[0].data.errorNotice).toMatch(
+      /^⚠️ openai\/gpt-5\.5 is rate-limited\. The provider says to retry in 6 days \([^)]*HST\)/,
+    );
   },
 );

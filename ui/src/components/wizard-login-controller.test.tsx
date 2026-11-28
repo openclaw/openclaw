@@ -79,6 +79,7 @@ it("retains the draft and controls through a failed cancellation and a held retr
   try {
     await controller.runner.start("provider", "models.authLogin");
     flush();
+    await waitForFast(() => expect(container.querySelector("input")).not.toBeNull());
     const input = expectDefined(container.querySelector("input"), "credential input");
     input.value = "retained draft";
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -157,7 +158,7 @@ it("retires an active sign-in when its owner is removed without publishing durin
     clickButton("Sign in");
     const signal = await nextRequested.promise;
     flush();
-    expect(container.textContent).toContain("Waiting for credentials");
+    await waitForFast(() => expect(container.textContent).toContain("Waiting for credentials"));
     expect(() => view.unmount()).not.toThrow();
     expect(signal.aborted).toBe(true);
     await cancelled.promise;

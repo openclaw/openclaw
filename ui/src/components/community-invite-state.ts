@@ -1,11 +1,34 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import { getSafeLocalStorage } from "../local-storage.ts";
+import { getSafeLocalStorage, getSafeSessionStorage } from "../local-storage.ts";
 
 // Keep existing browser-origin dismissals across invitation design changes.
 export const COMMUNITY_INVITE_KEY = "openclaw:control-ui:community-invite:v2";
 
 // A failed save must still dismiss across sidebar remounts in this page.
 let unpersistedDismissal = false;
+
+const COMMUNITY_INVITE_VISIT_KEY = "openclaw:control-ui:community-invite:visit";
+
+export function enterCommunityInviteVisit(firstUse: boolean): boolean {
+  const preferences = getSafeLocalStorage();
+  const visit = getSafeSessionStorage();
+  if (!preferences || !visit) {
+    return false;
+  }
+  try {
+    const returning = preferences.getItem(COMMUNITY_INVITE_VISIT_KEY) === "1";
+    const protectedVisit =
+      firstUse || !returning || visit.getItem(COMMUNITY_INVITE_VISIT_KEY) === "1";
+    // Keep the first visit quiet through reloads; a new tab/window has its own visit.
+    visit.setItem(COMMUNITY_INVITE_VISIT_KEY, protectedVisit ? "1" : "0");
+    if (!returning) {
+      preferences.setItem(COMMUNITY_INVITE_VISIT_KEY, "1");
+    }
+    return !protectedVisit;
+  } catch {
+    return false;
+  }
+}
 
 export function isCommunityInviteEligible(): boolean {
   if (unpersistedDismissal) {

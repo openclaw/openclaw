@@ -1,4 +1,5 @@
 import type { FailoverReason } from "../agents/failover/signal.js";
+import { operatorRefusalText } from "../gateway/operator-refusal.js";
 import type { CronFailureNotificationDetail, CronTriggerFailureCode } from "./types.js";
 
 const GENERIC_FAILURE_DETAIL = "Check automation history for details.";
@@ -16,11 +17,11 @@ const AGENT_STALL_RECOVERY_GUIDANCE: Record<string, string[]> = {
   ],
   stalled_agent_run: [
     "The agent run made no recoverable progress.",
-    "Review the run transcript for a loop or ambiguous instruction, then rerun with a narrower task if needed.",
+    "Review the chat for this run for a loop or ambiguous instruction, then rerun with a narrower task if needed.",
   ],
   semantic_stall: [
     "The agent made no semantic progress before the stall deadline.",
-    "Review the run transcript and simplify the task, then rerun.",
+    "Review the chat for this run and simplify the task, then rerun.",
   ],
   execution_deadline: [
     "The run exceeded its execution deadline.",
@@ -74,6 +75,15 @@ export function cronFailureDetailLines(
   }
   if (!failureNotificationDetail) {
     return [GENERIC_FAILURE_DETAIL];
+  }
+  if (failureNotificationDetail.kind === "inference-account-unrecorded") {
+    // The refusal names the stored account; keep it in automation history, not in chat.
+    return [operatorRefusalText("automation-account-unrecorded", "run this automation")];
+  }
+  if (failureNotificationDetail.kind === "invalid-target") {
+    return [
+      "Cause: invalid automation target. Update agentId or sessionTarget before re-enabling.",
+    ];
   }
   if (failureNotificationDetail.kind === "command-exit") {
     return [`Cause: command exited with code ${failureNotificationDetail.exitCode}`];

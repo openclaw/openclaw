@@ -213,8 +213,8 @@ private fun NodesDevicesPanel(
       NodesSection(title = nativeString("Paired Devices"), items = summary.pairedDevices) { device ->
         val (statusText, status) =
           when {
-            device.tokens.isEmpty() -> nativeString("Paired") to ClawStatus.Neutral
-            device.tokens.any { !it.revoked } -> nativeString("Active") to ClawStatus.Success
+            device.tokenCount == 0 -> nativeString("Paired") to ClawStatus.Neutral
+            device.activeTokenCount > 0 -> nativeString("Active") to ClawStatus.Success
             else -> nativeString("Needs Token") to ClawStatus.Warning
           }
         DeviceWithActionsRow(
@@ -540,8 +540,8 @@ private fun pairedDeviceSubtitle(device: GatewayPairedDeviceSummary): String {
   val tokens =
     nativeString(
       "\${device.tokens.count { !it.revoked }}/\${device.tokens.size} active tokens",
-      device.tokens.count { !it.revoked },
-      device.tokens.size,
+      device.activeTokenCount,
+      device.tokenCount,
     )
   return listOfNotNull(roles, scopes, tokens, device.remoteIp).joinToString(" · ")
 }

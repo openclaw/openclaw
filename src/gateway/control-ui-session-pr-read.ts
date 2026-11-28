@@ -20,6 +20,11 @@ import { captureOwnGitHubPullRequestReader } from "./github-publication-inspect-
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 import {
+  isNamedOperatorRoleEnforcementEnabled,
+  operatorRoleSubject,
+} from "./operator-role-enforcement.js";
+import {
+  resolveOperatorRolePolicy,
   authorizeCurrentOperatorRoleScopes,
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
@@ -297,6 +302,7 @@ export function createControlUiSessionPrRead(params: {
         sharing: object | undefined;
         configRevision: ReturnType<typeof getRuntimeConfigSnapshotMetadata>;
         profileVersion: number;
+        member: boolean;
         profile: GatewayClient["preparedSessionProfile"];
         assertAgentAdmitted: () => void;
       }
@@ -338,6 +344,7 @@ export function createControlUiSessionPrRead(params: {
       const sharing = projection.sharingRevision;
       const configRevision = getRuntimeConfigSnapshotMetadata();
       const profileVersion = readUserProfileVersion();
+      const member = operatorRoleSubject(client.preparedSessionProfile).openclawIdMember;
       if (
         capture &&
         sharing &&
@@ -345,9 +352,13 @@ export function createControlUiSessionPrRead(params: {
         capture.cfg === cfg &&
         capture.configRevision === configRevision &&
         capture.profileVersion === profileVersion &&
+        capture.member === member &&
         capture.profile === client.preparedSessionProfile &&
         !client.internal?.operatorRunAuthority &&
-        (!cfg.gateway?.roles ||
+        (!(
+          isNamedOperatorRoleEnforcementEnabled(cfg) ||
+          resolveOperatorRolePolicy(client, cfg) !== undefined
+        ) ||
           actorKind === "system" ||
           (actorProfile && client.preparedSessionProfile?.aliases.has(actorProfile)))
       ) {
@@ -400,6 +411,7 @@ export function createControlUiSessionPrRead(params: {
         sharing,
         configRevision,
         profileVersion,
+        member,
         profile: client.preparedSessionProfile,
         assertAgentAdmitted: captureAgentDatabaseAdmission(requested.agentId),
       };

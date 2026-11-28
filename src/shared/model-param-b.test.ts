@@ -1,28 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { inferParamBFromIdOrName, isSmallModel } from "./model-param-b.js";
+import { inferParamBFromIdOrName } from "./model-param-b.js";
 
 describe("shared/model-param-b", () => {
-  it.each([
-    [{ id: "qwen2.5-coder:1.5b-instruct" }, true],
-    [{ id: "qwen3:4b" }, true],
-    [{ id: "model", name: "Dense 32B" }, true],
-    [{ id: "model", parameterCount: 32_000_000_000 }, true],
-    [{ id: "qwen:32b", parameterCount: 32_800_000_000 }, true],
-    [{ id: "model", parameterCount: 33_999_999_999 }, true],
-    [{ id: "model", parameterCount: 34_000_000_000 }, false],
-    [{ id: "model-4b", parameterCount: 70_000_000_000 }, false],
-    [{ id: "model-70b", parameterCount: 4_000_000_000 }, true],
-    [{ id: "llama4-maverick-17b-128e" }, false],
-    [{ id: "llama4-maverick-17b-128e", name: "Llama 4 Maverick 400B" }, false],
-    [{ id: "custom-a3b" }, false],
-    [{ id: "custom", name: "A3B" }, false],
-    [{ id: "qwen3-30b-a3b" }, true],
-    [{ id: "qwen3-235b-a22b" }, false],
-    [{ id: "model", name: "Unknown size" }, false],
-  ] as const)("classifies total model size for %j", (model, expected) => {
-    expect(isSmallModel(model)).toBe(expected);
-  });
-
   it("extracts the largest valid b-sized parameter token", () => {
     expect(inferParamBFromIdOrName("llama-8b mixtral-22b")).toBe(22);
     expect(inferParamBFromIdOrName("Qwen 0.5B Instruct")).toBe(0.5);

@@ -21,7 +21,7 @@ import {
   resolvePluginRuntimeArtifactPreference,
 } from "./plugin-runtime-artifact-selection.js";
 import { isPluginSourceEntry } from "./plugin-source-file.js";
-import { getPluginRegistryForContext } from "./runtime.js";
+import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
 import { getPluginRuntimeLoadContextState } from "./runtime/load-context-state.js";
 
 const MAX_RUNTIME_ARTIFACT_DEPTH = 64;

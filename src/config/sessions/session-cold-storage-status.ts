@@ -26,9 +26,14 @@ export async function getSessionColdStorageStatus(config: OpenClawConfig) {
                 env,
               }),
           )
-          .map(({ database, target }) =>
-            Object.assign({}, database, { env, storePath: target.storePath }),
-          ),
+          .map(({ database, target, readIdentity, readCustody }) => ({
+            agentId: database.agentId,
+            path: database.path,
+            env,
+            storePath: target.storePath,
+            readIdentity,
+            readCustody,
+          })),
       );
       return withSessionHistoryWorkerDatabases(stores, async (owners) => {
         const results = await Promise.allSettled(

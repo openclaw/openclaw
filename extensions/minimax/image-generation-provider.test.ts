@@ -61,6 +61,10 @@ describe("minimax image-generation provider", () => {
       { base_resp: { status_code: 1000, status_msg: "rpc timeout: timeout=1m0s" } },
       "MiniMax image generation API error (1000): rpc timeout: timeout=1m0s",
     ],
+    [
+      { data: [{ error: { code: "1027", message: "output image failed content safety check" } }] },
+      "MiniMax image generation returned no images: 1027: output image failed content safety check",
+    ],
   ] as const)("rejects invalid image response %j", async (payload, message) => {
     await expect(generateImage({}, payload)).rejects.toThrow(message);
   });
@@ -110,4 +114,47 @@ describe("minimax image-generation provider", () => {
       expect.objectContaining({ method: "POST" }),
     );
   });
+
+  it.each([
+    [
+      "generate",
+      "/v1/images/generations",
+      { aspectRatio: "16:9", resolution: "2K" as const },
+      { aspect_ratio: "16:9", area: "2K" },
+    ],
+    [
+      "edit",
+      "/v1/images/edits",
+      {
+        inputImages: [{ buffer: Buffer.from("ref"), mimeType: "image/png" }],
+      },
+      {
+        images: [{ image_url: `data:image/png;base64,${Buffer.from("ref").toString("base64")}` }],
+      },
+    ],
+  ])(
+    "routes MiniMax-H3-Image %s requests to the Images API",
+    async (_mode, path, overrides, extra) => {
+      const postJsonResponse = vi.spyOn(providerHttp, "postJsonResponse");
+      const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0]);
+      const result = await generateImage(
+        { model: "MiniMax-H3-Image", ...overrides },
+        { data: [{ b64_json: jpeg.toString("base64") }, { error: { code: "1027" } }] },
+      );
+      expect(result.images).toEqual([
+        { buffer: jpeg, mimeType: "image/jpeg", fileName: "image-1.jpg" },
+      ]);
+      expect(postJsonResponse).toHaveBeenCalledOnce();
+      expect(postJsonResponse.mock.calls[0]?.[0]).toMatchObject({
+        url: `https://api.minimax.io${path}`,
+        body: {
+          model: "MiniMax-H3-Image",
+          prompt: "draw a cat",
+          response_format: "b64_json",
+          n: 1,
+          ...extra,
+        },
+      });
+    },
+  );
 });

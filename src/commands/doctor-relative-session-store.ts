@@ -291,14 +291,6 @@ export async function repairRelativeSessionStores(params: {
           }
         }
         if (!fs.existsSync(source.path)) {
-          authority.assertCurrent();
-          for (const pathname of new Set([source.path, ...aliases])) {
-            unregisterOpenClawAgentDatabase({
-              agentId: source.databaseAgentId,
-              path: pathname,
-              env: params.env,
-            });
-          }
           continue;
         }
         const sourceSnapshot = readStoreSnapshot(source, params.env, true);

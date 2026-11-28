@@ -41,7 +41,7 @@ export const handleUpdateCommand: CommandHandler = defineGatewayControlCommand(
       const summary = summarizeUpdateRunResponse(response);
       // The Gateway sends the acknowledgement before handing off its process;
       // its durable notice owner also delivers completion and failure reports.
-      if (summary.ackDelivered || summary.ackQueued) {
+      if (summary.noticeInApp || summary.ackDelivered || summary.ackQueued) {
         // This turn sends nothing itself, but the requester must not be told to retry a
         // running update because its reply tracking saw an empty turn.
         const runState = resolveReplyOperationRunState(params.opts);
@@ -83,7 +83,7 @@ export const handleUpdateCommand: CommandHandler = defineGatewayControlCommand(
     } catch (err) {
       logVerbose(`Update request failed: ${formatErrorMessage(err)}`);
       return commandReply(
-        "⚠️ Couldn't confirm the update. Open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
+        "⚠️ Couldn't confirm the update. Open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
       );
     }
   },

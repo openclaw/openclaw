@@ -8,10 +8,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
+import { getActiveRemoteModelCatalog } from "../model-catalog/remote-overlay.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isProviderCatalogSourceAllowed } from "../plugins/provider-config-owner.js";
+import { prepareProviderModelPolicySurfaces } from "../plugins/provider-model-routes.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { createLazyPromise } from "../shared/lazy-promise.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
@@ -21,7 +23,7 @@ import { assignProviderModelOrder, compareModelCatalogEntries } from "./model-ca
 import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
-import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
+import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-selection-normalize.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import type { AuthStorageData } from "./sessions/index.js";
@@ -44,7 +46,8 @@ export type BuildPreparedModelCatalogParams = {
 
 type ManifestModelCatalogCacheEntry = {
   snapshot: PluginMetadataSnapshot;
-  rows: ModelCatalogEntry[];
+  /** A long-lived registration config must not retain a superseded publication or its rows. */
+  rowsBySource: WeakMap<object, ModelCatalogEntry[]>;
 };
 let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
 const loadModelSuppression = createLazyPromise(() => import("./model-suppression.js"));
@@ -79,17 +82,43 @@ function mergeCatalogEntries(
     catalogRoutes?: ModelCatalogRouteVariantCollector;
     routeVariantIndex?: Map<string, number>;
     preserveBaseCompat?: boolean;
+    matchSupplementalRoutes?: boolean;
   },
 ): void {
   const identityKeyOf = createModelCatalogIdentityKeyResolver();
   const keyOf = options?.routeVariantIndex
     ? (entry: ModelCatalogEntry) => catalogRouteVariantKey(entry, identityKeyOf(entry))
     : identityKeyOf;
-  const indexByKey =
-    options?.routeVariantIndex ?? new Map(models.map((entry, index) => [keyOf(entry), index]));
+  const indexByKey = options?.routeVariantIndex ?? new Map<string, number>();
+  let earlierRoutes: Map<string, number> | undefined;
+  if (!options?.routeVariantIndex) {
+    for (const [index, model] of models.entries()) {
+      const key = keyOf(model);
+      const previous = options?.matchSupplementalRoutes ? indexByKey.get(key) : undefined;
+      if (previous !== undefined) {
+        // Only duplicate logical slots need an exact-route index. Earlier slots can
+        // only receive matching supplements; new routes always retarget the last slot.
+        const earlier = models.at(previous);
+        if (earlier) {
+          earlierRoutes ??= new Map();
+          earlierRoutes.set(catalogRouteVariantKey(earlier, key), previous);
+        }
+      }
+      indexByKey.set(key, index);
+    }
+  }
   for (const entry of entries) {
     const key = keyOf(entry);
-    const existingIndex = indexByKey.get(key);
+    let existingIndex = indexByKey.get(key);
+    if (earlierRoutes && entry.api && entry.baseUrl && existingIndex !== undefined) {
+      const route = catalogRouteVariantKey(entry, key);
+      const earlier = earlierRoutes.get(route);
+      const last = models.at(existingIndex);
+      // A preceding supplement may already have retargeted the last logical slot.
+      if (earlier !== undefined && last && catalogRouteVariantKey(last, key) !== route) {
+        existingIndex = earlier;
+      }
+    }
     if (existingIndex === undefined) {
       models.push(entry);
       indexByKey.set(key, models.length - 1);
@@ -125,21 +154,9 @@ function createModelCatalogSnapshot(
   routeVariants: ModelCatalogRouteVariantCollector,
   providerOutcomes?: ModelCatalogSnapshot["providerOutcomes"],
 ): ModelCatalogSnapshot {
-  return {
-    entries: sortModelCatalogEntries(applyReadyCatalogModelOrder(entries, providerOutcomes)),
-    routeVariants: sortModelCatalogEntries(
-      applyReadyCatalogModelOrder(routeVariants.entries, providerOutcomes),
-    ),
-  };
-}
-
-function applyReadyCatalogModelOrder(
-  entries: ModelCatalogEntry[],
-  outcomes?: ModelCatalogSnapshot["providerOutcomes"],
-): ModelCatalogEntry[] {
   const keyOf = createModelCatalogIdentityKeyResolver();
   const orders = new Map<string, Map<string, number>>();
-  for (const outcome of outcomes ?? []) {
+  for (const outcome of providerOutcomes ?? []) {
     if (outcome.status !== "ready" || !outcome.modelOrder?.length) {
       continue;
     }
@@ -153,10 +170,8 @@ function applyReadyCatalogModelOrder(
     }
     orders.set(provider, order);
   }
-  if (orders.size === 0) {
-    return entries;
-  }
-  return entries.map((entry) => {
+  // Both projections use the same ready publication, but each owns its ranked row objects.
+  const rankEntry = (entry: ModelCatalogEntry): ModelCatalogEntry => {
     const order = orders.get(normalizeProviderId(entry.provider));
     if (!order) {
       return entry;
@@ -167,7 +182,10 @@ function applyReadyCatalogModelOrder(
       providerOrder:
         rank ?? (entry.providerOrder === undefined ? undefined : order.size + entry.providerOrder),
     };
-  });
+  };
+  const sortRows = (rows: ModelCatalogEntry[]) =>
+    sortModelCatalogEntries(orders.size === 0 ? rows : rows.map(rankEntry));
+  return { entries: sortRows(entries), routeVariants: sortRows(routeVariants.entries) };
 }
 
 export function loadManifestModelCatalog(params: {
@@ -224,9 +242,12 @@ function loadManifestModelCatalogRows(
   if (config.models?.mode === "replace") {
     return [];
   }
+  // The metadata snapshot keys manifest-only rows when there is no hosted publication.
+  const source = getActiveRemoteModelCatalog(config) ?? snapshot;
   const cached = manifestModelCatalogCache.get(config);
-  if (cached?.snapshot === snapshot) {
-    return cached.rows;
+  const cachedRows = cached?.snapshot === snapshot ? cached.rowsBySource.get(source) : undefined;
+  if (cachedRows) {
+    return cachedRows;
   }
   const plugins = resolveEligibleManifestCatalogPlugins(snapshot, config);
   const plan =
@@ -256,7 +277,7 @@ function loadManifestModelCatalogRows(
     }
     return entry;
   });
-  manifestModelCatalogCache.set(config, { snapshot, rows });
+  manifestModelCatalogCache.set(config, { snapshot, rowsBySource: new WeakMap([[source, rows]]) });
   return rows;
 }
 
@@ -295,6 +316,7 @@ export async function buildPreparedModelCatalogSnapshot(
     params.providerOutcomes?.map((outcome) => normalizeProvider(outcome.provider)),
   );
   const { buildShouldSuppressBuiltInModelCore } = await loadModelSuppression();
+  await prepareProviderModelPolicySurfaces();
   logStage("catalog-deps-ready");
   const entries = params.models;
   const manifestPlan = planEffectiveModelCatalogRows({
@@ -367,7 +389,8 @@ export async function buildPreparedModelCatalogSnapshot(
     ),
   ]);
   // Runtime declarations describe possible models, not account entitlement.
-  // Only live registry or refreshed rows may publish those provider models.
+  // Only live registry or refreshed rows may publish those provider models; the registry
+  // already carries their catalog details (readGeneratedPluginModelCatalogProviders).
   const manifestKeyOf = createModelCatalogIdentityKeyResolver();
   const discoveredKeys = new Set(models.map(manifestKeyOf));
   const discoveredByRoute = new Map(
@@ -483,7 +506,7 @@ export async function buildPreparedModelCatalogSnapshot(
       mergeCatalogEntries(routeVariants.entries, orderedSupplemental, {
         routeVariantIndex: routeVariants.indexByKey,
       });
-      mergeCatalogEntries(models, orderedSupplemental);
+      mergeCatalogEntries(models, orderedSupplemental, { matchSupplementalRoutes: true });
     }
   }
   logStage("plugin-models-merged", `entries=${models.length}`);

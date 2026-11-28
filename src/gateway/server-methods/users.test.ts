@@ -96,7 +96,10 @@ async function runUsersHandler(
   return respond;
 }
 
-function expectFailure(respond: ReturnType<typeof vi.fn>, error = { code: "UNAVAILABLE" }) {
+function expectFailure(
+  respond: ReturnType<typeof vi.fn>,
+  error: { code: string; message?: string } = { code: "UNAVAILABLE" },
+) {
   expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, expect.objectContaining(error));
 }
 
@@ -184,7 +187,9 @@ const profileBinding = {
 const avatarParams = { profileId: profile.id, mime: "image/png", avatarBase64: "AQ==" };
 const nameParams = { profileId: profile.id, displayName: "Ada" };
 const roleConfig = {
-  getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }),
+  getRuntimeConfig: () => ({
+    gateway: { roles: { default: "guest", definitions: { guest: {} } } },
+  }),
 };
 const effects = [
   prepareUserProfileGitHubAttribution,
@@ -228,7 +233,7 @@ const malformedRequests = [
   ["users.setRole", { profileId: "profile-1", role: null }],
   ["users.setAvatar", avatarParams],
 ] as const;
-type InvalidRequest = [string, object, (string | RegExp)?, boolean?, boolean?];
+type InvalidRequest = [string, object, (string | RegExp)?, boolean?];
 const malformed = malformedRequests.map<InvalidRequest>(([method, params]) => [
   method,
   { ...params, unexpected: true },
@@ -240,16 +245,9 @@ it.each<InvalidRequest>([
   ["users.setRole", { profileId: profile.id, role: "   " }],
   ["users.linkEmail", { email: "   ", targetProfileId: profile.id }, "email must not be empty"],
   ["users.setAvatar", { ...avatarParams, avatarBase64: "not base64" }],
-  [
-    "users.setRole",
-    { profileId: profile.id, role: "maintainer" },
-    /gateway\.roles\.definitions/,
-    false,
-    true,
-  ],
 ])(
   "rejects invalid %s params before state effects: %j",
-  async (method, params, message, schema, readsConfig) => {
+  async (method, params, message, schema) => {
     const original = structuredClone(params);
     const unreadableState = new Proxy(
       {},
@@ -276,9 +274,7 @@ it.each<InvalidRequest>([
       [false, undefined, schema ? error : expect.objectContaining(error)],
     ]);
     expect(params).toEqual(original);
-    if (!readsConfig) {
-      expect(getRuntimeConfig).not.toHaveBeenCalled();
-    }
+    expect(getRuntimeConfig).not.toHaveBeenCalled();
     expectUntouched(...effects);
   },
 );
@@ -492,10 +488,14 @@ it.each(["guest", null])("sets role %s and invalidates policy before responding"
   );
   expect(respond).toHaveBeenCalledWith(true, { profile: assignedProfile });
   expect(validateUsersSetRoleResult(respond.mock.calls[0]?.[1])).toBe(true);
-  expect(setUserProfileRole).toHaveBeenCalledWith(profile.id, role, {
-    assertCurrent: expect.any(Function),
-    onCommitted: expect.any(Function),
-  });
+  expect(setUserProfileRole).toHaveBeenCalledWith(
+    profile.id,
+    role,
+    expect.objectContaining({
+      assertCurrent: expect.any(Function),
+      onCommitted: expect.any(Function),
+    }),
+  );
   for (const publish of [invalidateOperatorRolePolicy, ...(role ? [disconnect] : [])]) {
     // A role assignment is role-only: linked owner devices keep their certificate authority.
     expect(publish).toHaveBeenCalledWith(profile.id, { roleOnly: true });
@@ -683,4 +683,37 @@ it.each(
     expectFailure(respond);
     expectUntouched(refresh);
   }
+});
+
+it("rejects an unknown role after target preparation without changing state", async () => {
+  const respond = await runUsersHandler(
+    "users.setRole",
+    { profileId: profile.id, role: "maintainer" },
+    adminClient,
+    roleConfig,
+  );
+  expectFailure(respond, {
+    code: "INVALID_REQUEST",
+    message:
+      'unknown operator role "maintainer"; define it under gateway.roles.definitions before assigning it',
+  });
+  expect(prepareUserProfileRoleAuthority).toHaveBeenCalledWith(profile.id);
+  expectUntouched(...effects.filter((effect) => effect !== prepareUserProfileRoleAuthority));
+});
+
+it("saves a profile role assignment before a default turns roles on", async () => {
+  // Inert until gateway.roles.default exists, so administrators can be chosen first.
+  prepareUserProfileRoleAuthority.mockResolvedValue({
+    profileId: profile.id,
+    isCurrent: () => true,
+  });
+  setUserProfileRole.mockReturnValue({ ...profile, role: "guest" });
+  const respond = await runUsersHandler(
+    "users.setRole",
+    { profileId: profile.id, role: "guest" },
+    adminClient,
+    { getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }) },
+  );
+  expect(respond).toHaveBeenCalledExactlyOnceWith(true, { profile: { ...profile, role: "guest" } });
+  expect(setUserProfileRole).toHaveBeenCalledOnce();
 });

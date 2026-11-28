@@ -336,7 +336,7 @@ suite.define(() => {
           await expect.poll(() => embedded.isVisible()).toBe(false);
           await selectChat(destination);
           await terminalCanvas(embedded).waitFor();
-          await page.locator(".sidebar-rail .sidebar-new-session").click();
+          await page.locator(".sidebar-session-toolbar .sidebar-new-session").click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
           await expect.poll(() => bottom.locator(".tp").count()).toBe(0);
         },

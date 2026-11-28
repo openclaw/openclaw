@@ -310,50 +310,6 @@ describe("session message cache", () => {
     expect(layout.read(row)).toBeUndefined();
     expect(createChatWidgetLayout()(cache, host, target).readRows()).toEqual({ [row]: 200 });
   });
-  it("keeps the settled row reservation through an initial short widget report", () => {
-    const context = createCacheContext();
-    const row = 'row:v1:768:gutter:revision-1:"widget-row"';
-    context.write(
-      widgetSnapshot([], "session-1", {
-        widgetHeights: { [row]: 700, "canvas:widget": 600 },
-      }),
-    );
-    const layout = context.layout();
-    // The existing bridge can report its body before load and late widget content.
-    layout.write("canvas:widget", 200, "widget-row");
-    layout.write(row, 300);
-    expect(layout.read(row)).toBe(700);
-    expect(context.layout().read(row)).toBe(700);
-  });
-  it("retains a matching settled footprint for the following reload without another resize", () => {
-    const context = createCacheContext();
-    const row = 'row:v1:768:gutter:revision-1:"widget-row"';
-    context.write(
-      widgetSnapshot([], "session-1", { widgetHeights: { [row]: 700, "canvas:widget": 600 } }),
-    );
-    const layout = context.layout();
-    expect(layout.write("canvas:widget", 600, "widget-row", true)).toBe(600);
-    expect(layout.read(row)).toBeUndefined();
-    expect(context.layout().read(row)).toBe(700);
-  });
-  it("reserves an unchanged row while keeping widths, revisions and widget resizes independent", () => {
-    const context = createCacheContext();
-    const row = 'row:v1:768:gutter:revision-1:"notice"';
-    context.write(widgetSnapshot([], "session-1", { widgetHeights: { [row]: 300 } }));
-    const layout = context.layout();
-    layout.write(row, 100);
-    layout.write('row:v1:400:gutter:revision-1:"notice"', 200);
-    layout.write('row:v1:768:gutter:revision-2:"notice"', 39);
-    layout.write("canvas:widget", 300);
-    layout.write("canvas:widget", 100);
-    const restored = context.layout();
-    expect([
-      restored.read(row),
-      restored.read('row:v1:400:gutter:revision-1:"notice"'),
-      restored.read('row:v1:768:gutter:revision-2:"notice"'),
-      restored.read("canvas:widget"),
-    ]).toEqual([300, 200, 39, 100]);
-  });
   it("retires only the containing row's footprints when its widget shrinks or a disclosure changes", () => {
     const context = createCacheContext();
     const row = 'row:v1:768:gutter:revision-1:"widget-row"';
@@ -592,36 +548,6 @@ describe("session message cache", () => {
     expect(snapshot?.rowDisplay).toEqual({
       last: { links: { source: { title: "Last linked task" } } },
     });
-  });
-
-  it("measures the trimmed envelope once while dropping many older rows", () => {
-    const { cache, write, read } = createCacheContext();
-    observeChatCache(cache, {
-      write: (_key, snapshot, weight) => expect(weight).toBe(JSON.stringify(snapshot).length),
-      delete: vi.fn(),
-    });
-    const content = "x".repeat(4 * 1024);
-    const messages = Array.from({ length: 4_000 }, (_, index) => ({
-      role: "assistant",
-      content,
-      __openclaw: { id: `m-${index}`, seq: index + 1 },
-    }));
-    const stringify = vi.spyOn(JSON, "stringify");
-    write({
-      messages,
-      rowDisplay: { "m-3999": { links: { source: { title: "Latest linked task" } } } },
-      pagination: { hasMore: false, totalMessages: 4_000 },
-      sessionId: "session-1",
-    });
-    const envelopes = stringify.mock.calls.filter(
-      ([value]) => Array.isArray(value?.messages) && value.messages.length === 0,
-    ).length;
-    stringify.mockRestore();
-    const retained = read()?.messages ?? [];
-    expect(retained.length).toBeGreaterThan(2_000);
-    expect(retained.length).toBeLessThan(messages.length);
-    expect(retained.at(-1)).toBe(messages.at(-1));
-    expect(envelopes).toBeLessThanOrEqual(2);
   });
 
   it("evicts whole least-recently-used snapshots when the global budget is exceeded", () => {

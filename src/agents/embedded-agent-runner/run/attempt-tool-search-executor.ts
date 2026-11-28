@@ -3,8 +3,12 @@ import {
   copyInternalToolResultState,
   getInternalToolExecutionPreparer,
 } from "../../../../packages/agent-core/src/internal-hooks.js";
+import { shellCallResultKey } from "../../../config/sessions/transcript-shell-receipt.js";
 import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
-import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
+import {
+  createNestedToolActivity,
+  isNestedToolActivityResultOmitted,
+} from "../../../sessions/nested-tool-activity.js";
 import { notifyToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
@@ -63,7 +67,7 @@ export function createSubscribedToolSearchExecutor(params: {
       subscription.runToolLifecycle({
         toolName: toolParams.toolName,
         toolUsageId:
-          toolParams.source === "openclaw" &&
+          (toolParams.source === "openclaw" || toolParams.source === "mcp") &&
           !isCodeModeControlTool(toolParams.tool) &&
           !isToolUsageWrapper(toolParams.toolName)
             ? toolParams.toolId
@@ -76,22 +80,26 @@ export function createSubscribedToolSearchExecutor(params: {
           "hideFromChannelProgress" in toolParams.tool &&
           toolParams.tool.hideFromChannelProgress === true,
         onTerminal: async (terminal) => {
+          const nested = createNestedToolActivity({
+            runId: attempt.runId,
+            scopeId: activityScope,
+            afterEntryId,
+            startOrder,
+            parentToolCallId: toolParams.parentToolCallId,
+            toolCallId: toolParams.toolCallId,
+            toolName: toolParams.toolName,
+            input: terminal.executedArguments,
+            result: terminal.readSanitizedResult(),
+            isError: terminal.isError,
+            startedAt,
+            timestamp: Date.now(),
+          });
+          const receipt = !isNestedToolActivityResultOmitted(nested)
+            ? shellCallResultKey(terminal.result, attempt.runId, toolParams.toolCallId)
+            : undefined;
           const message = {
-            ...createNestedToolActivity({
-              runId: attempt.runId,
-              scopeId: activityScope,
-              afterEntryId,
-              startOrder,
-              parentToolCallId: toolParams.parentToolCallId,
-              toolCallId: toolParams.toolCallId,
-              toolName: toolParams.toolName,
-              input: terminal.executedArguments,
-              result: terminal.readSanitizedResult(),
-              isError: terminal.isError,
-              startedAt,
-              timestamp: Date.now(),
-            }),
-            idempotencyKey: `${activityScope}:${toolParams.toolCallId}`,
+            ...nested,
+            idempotencyKey: receipt ?? `${activityScope}:${toolParams.toolCallId}`,
           };
           const accepted = await runWithOwnedSessionTranscriptWrite(
             { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },

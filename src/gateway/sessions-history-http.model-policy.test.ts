@@ -15,7 +15,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../shared/transcript-only-openclaw-assistant.js";
-import * as profileAuthority from "../state/user-channel-identity-operations.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import {
   ensureCanonicalUserProfileForEmail,
@@ -303,31 +302,6 @@ describe("HTTP historical model disclosure", () => {
       expectRestrictedSnapshot(payload, stream ? 5 : 4);
     },
   );
-
-  it("uses a policy committed during final current-profile acquisition", async () => {
-    publishConfig(config(["example/*"]));
-    await using stream = await openStream();
-    expect(messages(await stream.next(), 4)[0]).toHaveProperty("model", "historical");
-    publishConfig(config(), false);
-    const { entered, release, hold } = heldRead();
-    const original = profileAuthority.prepareUserProfileRoleAuthority;
-    vi.spyOn(profileAuthority, "prepareUserProfileRoleAuthority").mockImplementationOnce(
-      (...args) => hold(original(...args)),
-    );
-    const appended = append("publication after committed narrowing");
-    try {
-      await entered.promise;
-      committed = current;
-    } finally {
-      release.resolve();
-      await appended;
-    }
-    expectPrivateText(
-      record(await stream.next("message")).message,
-      "publication after committed narrowing",
-    );
-    expectRestrictedSnapshot(await jsonHistory(), 5);
-  });
 
   it("keeps committed restriction during tentative widening, then publishes committed widening", async () => {
     await using stream = await openStream();

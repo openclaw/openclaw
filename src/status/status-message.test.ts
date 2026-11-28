@@ -128,6 +128,25 @@ describe("buildStatusMessageParts presentation", () => {
     expect(JSON.stringify(parts)).not.toMatch(/secret|private|user:/);
   });
 
+  it("adds the cache-key note without revealing an endpoint the privacy guard hides", () => {
+    const endpointRow = (selectedEndpoint: string) =>
+      statusRows(
+        buildStatusMessageParts({
+          modelRefs: statusModelRefs({ provider: "openai", model: "selected-model" }),
+          agent: { model: "openai/selected-model" },
+          selectedEndpoint,
+          selectedCacheKey: "not sent",
+        }),
+      ).get("🌐 Endpoint");
+    expect(endpointRow("https://relay.example/private/route?token=private")).toBe(
+      "https://relay.example/[path hidden] · cache key: not sent",
+    );
+    // A suppressed endpoint stays "unknown"; the fixed note reveals nothing about it.
+    const hidden = endpointRow("file:///private/relay");
+    expect(hidden).toBe("unknown · cache key: not sent");
+    expect(hidden).not.toContain("private");
+  });
+
   it("does not infer endpoints from a model or credential label without route facts", () => {
     const parts = buildStatusMessageParts({
       modelRefs: statusModelRefs({ provider: "openai", model: "selected-model" }),
@@ -463,3 +482,18 @@ describe("buildStatusMessage context window", () => {
     expect(text).not.toContain("pinned session");
   });
 });
+
+it.each([undefined, "standard", "daybreak_blue", "daybreak_red"] as const)(
+  "shows saved Access %s in text and structured status",
+  (cyberAccessProgram) => {
+    const args = { ...haiku, sessionEntry: session(0, { cyberAccessProgram }) };
+    const parts = buildStatusMessageParts(args);
+    expect(statusRows(parts).get("🔐 Access")).toBe(cyberAccessProgram);
+    const text = buildStatusMessage(args);
+    if (cyberAccessProgram) {
+      expect(text).toContain(`Access: ${cyberAccessProgram}`);
+    } else {
+      expect(text).not.toContain("Access:");
+    }
+  },
+);

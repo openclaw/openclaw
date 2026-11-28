@@ -4,10 +4,16 @@ import type { AgentHarnessV2 } from "./types.js";
 /** Shared descriptor facts; invocation and built-in identity stay with the factory. */
 export const BUILTIN_AGENT_HARNESS_METADATA: Pick<
   AgentHarnessV2,
-  "id" | "label" | "contextEngineHostCapabilities" | "supports" | "deliveryDefaults"
+  | "id"
+  | "label"
+  | "contextEngineHostCapabilities"
+  | "supports"
+  | "deliveryDefaults"
+  | "promptProjection"
 > = {
   id: "openclaw",
   label: "OpenClaw embedded agent",
   contextEngineHostCapabilities: OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
+  promptProjection: "captures",
   supports: () => ({ supported: true, priority: 0 }),
 };

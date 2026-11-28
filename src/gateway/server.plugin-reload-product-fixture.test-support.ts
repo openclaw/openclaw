@@ -106,9 +106,6 @@ export async function definePluginReloadProductTest(
     );
     assert.equal(path.resolve(databasePath), databasePath);
     assert.equal(fsSync.realpathSync(path.dirname(databasePath)), path.dirname(databasePath));
-    // The prebound child owns its state files; select its fixture before scenarios allocate them.
-    const root = path.dirname(path.dirname(databasePath));
-    Object.assign(process.env, { TMPDIR: root, TMP: root, TEMP: root });
     const { resolveSecureTempRoot } = createRequire(import.meta.url)(
       "@openclaw/fs-safe/secure-temp-root",
     ) as typeof import("@openclaw/fs-safe/secure-temp-root");
@@ -149,9 +146,20 @@ export async function definePluginReloadProductTest(
       const guard = writePrivateUpdateHandoffChildGuard(binding.databasePath, handoff);
       const home = path.join(root, "home");
       fsSync.mkdirSync(home, { mode: 0o700 });
+      const noProxy = [
+        process.env.no_proxy ?? process.env.NO_PROXY,
+        "127.0.0.1",
+        "localhost",
+        "::1",
+      ]
+        .filter(Boolean)
+        .join(",");
       const env = withRuntimePreload(
         guard({
           ...process.env,
+          // Only owned loopback fixtures bypass inherited proxies; external routing stays intact.
+          NO_PROXY: noProxy,
+          no_proxy: noProxy,
           HOME: home,
           USERPROFILE: home,
           TMPDIR: root,

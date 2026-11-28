@@ -1,10 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import {
   buildCommandPayloadArgvCandidates,
   detectCarriedShellBuiltinArgv,
   detectCommandCarrierArgv,
   detectInlineEvalArgv,
   detectInlineEvalInSegments,
+  detectOpaqueInterpreterProgram,
   detectShellWrapperThroughCarrierArgv,
 } from "./risks.js";
 
@@ -160,5 +161,50 @@ describe("command-analysis risks", () => {
       },
     ]);
     expect(hit?.normalizedExecutable).toBe("python3");
+  });
+});
+
+describe("opaque interpreter programs", () => {
+  const segment = (raw: string, argv: readonly string[] = raw.split(" ")) => ({
+    raw,
+    argv: [...argv],
+    resolution: null,
+  });
+  const opaque = (
+    command: string,
+    raws: ReadonlyArray<string | readonly [string, readonly string[]]>,
+  ) =>
+    detectOpaqueInterpreterProgram(
+      command,
+      raws.map((raw) => (typeof raw === "string" ? segment(raw) : segment(raw[0], raw[1]))),
+    ).opaque;
+
+  it("returns a fact with no refusal member", () => {
+    expectTypeOf(detectOpaqueInterpreterProgram).returns.toEqualTypeOf<{ opaque: boolean }>();
+  });
+
+  it.each([
+    ["cd /tmp && python3 a.py", ["cd /tmp", "python3 a.py"]],
+    ["cat a.py | python3", ["cat a.py", "python3"]],
+    ["echo start && node main.js", ["echo start", "node main.js"]],
+    ['bash -c "node a.js"', ["node a.js"]],
+    [
+      `env bash -ceu "python3 a.py"`,
+      [[`env bash -ceu "python3 a.py"`, ["env", "bash", "-ceu", "python3 a.py"]]],
+    ],
+  ] as const)("marks %s opaque", (command, raws) => {
+    expect(opaque(command, raws)).toBe(true);
+  });
+
+  it.each([
+    ["python3 a.py", ["python3 a.py"]],
+    ["sudo python3.12 a.py", ["sudo python3.12 a.py"]],
+    ["cd /tmp && python3 -c print(1)", ["cd /tmp", "python3 -c print(1)"]],
+    ["cd /tmp && python3 -m pytest", ["cd /tmp", "python3 -m pytest"]],
+    ["node --version && ls", ["node --version", "ls"]],
+    ["cd /tmp && node -e 1", ["cd /tmp", "node -e 1"]],
+    ["cd /tmp && ruby a.rb", ["cd /tmp", "ruby a.rb"]],
+  ] as const)("keeps %s visible", (command, raws) => {
+    expect(opaque(command, raws)).toBe(false);
   });
 });

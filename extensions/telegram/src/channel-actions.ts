@@ -163,6 +163,11 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           asVideoNote: optionalBoolean(
             "Send one video attachment as a round Telegram video note. Captions are delivered separately.",
           ),
+          effectId: Type.Optional(
+            Type.String({ description: "Numeric Telegram message effect id; private chats only." }),
+          ),
+          effect: Type.Optional(Type.String({ description: "Alias for effectId." })),
+          quoteText: Type.Optional(Type.String({ description: "Telegram reply quote text." })),
           location: Type.Optional(
             Type.Object(
               {
@@ -286,6 +291,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         ...(ctx.mediaAccess !== undefined ? { mediaAccess: ctx.mediaAccess } : {}),
         mediaLocalRoots: ctx.mediaLocalRoots,
         mediaReadFile: ctx.mediaReadFile,
+        agentId: ctx.agentId ?? undefined,
         sessionKey: ctx.sessionKey,
         inboundEventKind: ctx.inboundEventKind,
         gatewayClientScopes: ctx.gatewayClientScopes,

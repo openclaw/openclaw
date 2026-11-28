@@ -2,15 +2,20 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.worker.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import {
+  setOpenClawIdMemberAccountLookup,
+  setOpenClawIdTunnelPrincipalLookup,
+} from "./openclaw-id/tunnel-principal.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
@@ -51,7 +56,6 @@ vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtime.cfg }));
 vi.mock("./auth.js", () => ({ authorizeHttpGatewayConnect: runtime.authorize }));
 // mock-isolation: Keep execution inert while exercising HTTP and WebSocket authorization.
 vi.mock("../agents/openclaw-tools.js", () => ({ createOpenClawToolsAsync: runtime.createTools }));
-vi.mock("../agents/agent-tools.js", () => ({ resolveToolLoopDetectionConfig: () => ({}) }));
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: runtime.beforeHook,
 }));
@@ -113,7 +117,6 @@ describe.each(["HTTP", "WebSocket"] as const)(
       incognito?: boolean;
       admin?: boolean;
       system?: boolean;
-      revokeMember?: boolean;
       expectedError?: string;
     };
     const sandboxCase = (sessionKey?: string, options: RoleCase = {}): RoleCase => ({
@@ -128,7 +131,7 @@ describe.each(["HTTP", "WebSocket"] as const)(
     const cases: Record<string, RoleCase> = {
       "denies out-of-role session creation": {
         sessionKey: "agent:blocked:missing",
-        expectedError: 'cannot create sessions for agent "blocked"',
+        expectedError: 'did not start a session with agent "blocked"',
       },
       "plugin provenance": missingSandbox("agent:main:missing", "plugin_doctor"),
       "main-alias provenance": missingSandbox("main"),
@@ -141,12 +144,6 @@ describe.each(["HTTP", "WebSocket"] as const)(
       },
       "memory-session admin": { ...memoryCase, admin: true },
       "sessionless system call": sandboxCase("agent:blocked:missing", { system: true }),
-      "denies membership revoked during the hook": {
-        sessionKey: "agent:main:member-session",
-        stored: true,
-        revokeMember: true,
-        expectedError: "session is read-only",
-      },
     };
 
     it.each(Object.entries(cases))("%s", async (_label, testCase) => {
@@ -182,24 +179,15 @@ describe.each(["HTTP", "WebSocket"] as const)(
         }
         if (testCase.stored) {
           const sessionKey = expectDefined(testCase.sessionKey, "stored fixture session key");
-          const id = testCase.revokeMember ? "another-creator" : profile.id;
           const entry: InternalSessionEntry = {
             sessionId: "standalone-guest-session",
             updatedAt: 1,
-            visibility: testCase.revokeMember ? "read-only" : "shared",
-            createdActor: { type: "human", source: "profile", id },
+            visibility: "shared",
+            createdActor: { type: "human", source: "profile", id: profile.id },
             sandbox: "required",
             ...(testCase.incognito ? { incognito: true } : {}),
           };
           await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
-          if (testCase.revokeMember) {
-            const scope = { agentId: "main", sessionKey };
-            await addSessionMember(scope, { identityId: profile.id, addedBy: "another-creator" });
-            runtime.beforeHook.mockImplementationOnce(async ({ params }) => {
-              await removeSessionMember(scope, profile.id);
-              return { blocked: false, params };
-            });
-          }
         }
         const input = {
           name: testCase.toolName ?? "session_status",
@@ -256,7 +244,7 @@ describe.each(["HTTP", "WebSocket"] as const)(
             expect(response).toMatchObject({ ok: true, payload: expectedOutcome });
           }
         }
-        const deniedBeforeHook = Boolean(testCase.expectedError && !testCase.revokeMember);
+        const deniedBeforeHook = Boolean(testCase.expectedError);
         expect(runtime.beforeHook).toHaveBeenCalledTimes(deniedBeforeHook ? 0 : 1);
         expect(runtime.execute).toHaveBeenCalledTimes(testCase.expectedError ? 0 : 1);
         if (!testCase.expectedError && transport === "WebSocket") {
@@ -328,5 +316,70 @@ it.each([false, true])(
       const body = await response.text();
       expect(body.includes("private tool result")).toBe(expectedStatus === 200);
     });
+  },
+);
+
+it.each([false, true])(
+  "refuses sandbox-required profile standalone tools without a default role (stored=%s)",
+  async (stored) => {
+    await withToolsInvokeTestState(
+      { label: "member-standalone-sandbox", prepareProfileCatalog: true },
+      async () => {
+        const profile = ensureProfileForEmail("member-admin-sandbox@example.test");
+        setUserProfileRole(profile.id, "isolated");
+        const principal = {
+          kind: "member" as const,
+          peerKey: "iroh:required-admin",
+          accountId: "required-admin",
+          role: "display-only",
+        };
+        linkOpenClawIdUserProfile(
+          { profileId: profile.id, accountId: principal.accountId, email: null },
+          {},
+        );
+        setOpenClawIdMemberAccountLookup((accountId) => accountId === principal.accountId);
+        runtime.cfg = {
+          gateway: {
+            openclawId: { enabled: true },
+            roles: {
+              definitions: {
+                isolated: {
+                  sessions: { others: "view" },
+                  agents: "*",
+                  scopes: ["operator.admin"],
+                  sandbox: "required",
+                },
+              },
+            },
+          },
+        };
+        setRuntimeConfigSnapshot(runtime.cfg);
+        setOpenClawIdTunnelPrincipalLookup(() => principal);
+        try {
+          const sessionKey = "agent:main:host-tool-target";
+          if (stored) {
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey },
+              { sessionId: "host-target", updatedAt: 1 },
+            );
+          }
+          const result = await invokeGatewayTool({
+            cfg: runtime.cfg,
+            input: { name: "session_status", sessionKey },
+            openclawIdPrincipal: principal,
+            operatorRoleActor: { kind: "operator", profileId: profile.id },
+            operatorScopes: ["operator.admin"],
+            senderIsOwner: true,
+            toolCallIdPrefix: "http",
+          });
+          expect(result).toMatchObject({ ok: false, status: 403 });
+          expect(JSON.stringify(result)).toContain("requires a sandboxed session");
+          expect(runtime.execute).not.toHaveBeenCalled();
+        } finally {
+          setOpenClawIdTunnelPrincipalLookup(undefined);
+          setOpenClawIdMemberAccountLookup(undefined);
+        }
+      },
+    );
   },
 );

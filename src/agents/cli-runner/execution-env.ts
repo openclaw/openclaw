@@ -58,6 +58,7 @@ export function resolveCliChildEnv(
     nativeAuthOnly?: true;
   } = {},
   overrides?: Record<string, string>,
+  defaults?: Record<string, string>,
 ): {
   env: Record<string, string>;
   selectedClaudeClearEnv: Set<string> | undefined;
@@ -74,7 +75,10 @@ export function resolveCliChildEnv(
     Object.entries(backend.env ?? {}).filter(([key]) => !selectedClaudeClearEnv?.has(key)),
   );
   const backendEnv = { ...configuredBackendEnv, ...preparedBackendEnv };
-  const env = sanitizeHostExecEnv({ baseEnv: process.env, blockPathOverrides: true });
+  const env = sanitizeHostExecEnv({
+    baseEnv: { ...process.env, ...defaults },
+    blockPathOverrides: true,
+  });
   const preservedEnv = parseCliBackendPreserveEnv(process.env[CLI_BACKEND_PRESERVE_ENV]);
   for (const key of clearEnv) {
     if (!preservedEnv.has(key) || selectedClaudeClearEnv?.has(key)) {

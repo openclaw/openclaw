@@ -7,9 +7,9 @@ import {
   resolvePinnedDaemonRuntimePath,
 } from "../../daemon/runtime-paths.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
+import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
-import { updateResult, updateStep } from "./update-command-maintenance-fixtures.test-support.js";
 import { resolveTargetNodeRuntime } from "./update-command-node-runtime-resolution.js";
 import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import {
@@ -255,17 +255,18 @@ describe("package runtime compatibility guidance", () => {
         throw new Error("Expected runtime refusal");
       }
       expect(runtime.failureFacts?.[0]?.message).toContain(`Required: openclaw@${version}`);
-      const report = await prepareUpdateFailureReport({
-        attemptId: "runtime-refusal",
-        result: updateResult({
-          status: "error",
+      const report = await prepareUpdateFailureReport(
+        createUpdateRunRecordFixture("runtime-refusal", {
+          reason: "node-runtime-preflight-failed",
           steps: [
-            updateStep("node-runtime-preflight", {
+            {
+              step: "node-runtime-preflight",
+              status: "failed",
               failureFacts: runtime.failureFacts,
-            }),
+            },
           ],
         }),
-      });
+      );
       expect(report.body).not.toContain("private-customer");
       expect(report.body).toContain(`Target package: openclaw@${publicVersion}`);
       expect(report.body).toContain(
@@ -333,6 +334,31 @@ describe("package runtime compatibility guidance", () => {
       });
     },
   );
+
+  it("keeps the service-definition step when an early refusal cannot refresh the service", async () => {
+    mockUnsupportedNode();
+    const result = await preflight({
+      engineOnly: true,
+      nodeRunner: "/usr/bin/node",
+      service: {
+        ...refreshableService,
+        serviceNodeRunner: "/usr/bin/node",
+        serviceUpdateVerdict: {
+          kind: "owned",
+          root: "/fixture",
+          fingerprint: "fixture",
+          refreshDefinition: false,
+        },
+      },
+    });
+    if (result.ok) {
+      throw new Error("Expected runtime refusal");
+    }
+    // The terminal shows only the block before the blank line; the owner step must be in it.
+    expect(result.error.split("\n\n")[0]).toContain(
+      "have its deployment owner select Node 24.22.1 in the service definition",
+    );
+  });
 
   it("preserves recorded selectors and wrapper ownership", async () => {
     mockUnsupportedNode();

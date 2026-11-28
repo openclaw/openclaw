@@ -1,7 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { expect, inject, it } from "vitest";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.ts";
 import { createOpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -12,12 +12,15 @@ import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const artifacts = createControlUiE2eArtifactDir("browser-pair-code-real-gateway");
-const uiRoot = path.join(artifacts, "control-ui");
 let gatewayInstance: Awaited<ReturnType<typeof createOpenClawTestInstance>> | undefined;
 const suite = createControlUiE2eSuite({
   name: "browser code pairing against a real Gateway",
   startServer: async () => {
-    await buildProductionControlUiE2e(uiRoot, "browser-pair-code-proof");
+    const prebuiltAssets = inject("controlUiE2ePrebuiltAssets");
+    const uiRoot = prebuiltAssets?.root ?? path.join(artifacts, "control-ui");
+    if (!prebuiltAssets) {
+      await buildProductionControlUiE2e(uiRoot, "browser-pair-code-proof");
+    }
     const instance = await createOpenClawTestInstance({
       name: "browser-pair-code",
       config: { gateway: { controlUi: { enabled: true, root: uiRoot } }, cron: { enabled: false } },
@@ -57,11 +60,9 @@ async function openPairing(page: Page, url: string) {
 
 async function requestCode(page: Page) {
   await page.getByRole("button", { name: "Get a code", exact: true }).click();
-  const identity = page.locator(".login-gate__browser-pair-code");
-  await expect.poll(() => identity.textContent()).toContain("Browser ID");
-  const code = (await page.locator(".login-gate__command").textContent())?.match(
-    /openclaw pair ([A-Z0-9-]+)/,
-  )?.[1];
+  const command = page.locator(".login-gate__command");
+  await expect.poll(() => command.textContent()).toContain("openclaw pair");
+  const code = (await command.textContent())?.match(/openclaw pair ([A-Z0-9-]+)/)?.[1];
   expect(code).toBeTruthy();
   if (!code) {
     throw new Error("Pairing card did not render its approval command");
@@ -101,17 +102,13 @@ suite.define(() => {
           await expect
             .poll(() => page.locator(".login-gate__body").textContent(), { timeout: 20_000 })
             .toContain("Connection interrupted. Retrying with the same code");
-          expect(await page.locator(".login-gate__browser-pair-code").textContent()).toContain(
-            withdrawnCode,
-          );
+          expect(await page.locator(".login-gate__command").textContent()).toContain(withdrawnCode);
           await capture(page, "after-mobile-reconnecting");
           await page.getByRole("button", { name: "Cancel", exact: true }).click();
           await expect
             .poll(() => page.locator(".login-gate__body").textContent())
             .toContain("Could not confirm cancellation");
-          expect(await page.locator(".login-gate__browser-pair-code").textContent()).toContain(
-            withdrawnCode,
-          );
+          expect(await page.locator(".login-gate__command").textContent()).toContain(withdrawnCode);
           await capture(page, "after-mobile-cancel-offline");
           await context.setOffline(false);
           await page.getByRole("button", { name: "Retry cancellation", exact: true }).click();

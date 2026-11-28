@@ -1,4 +1,4 @@
-import type { TranscriptSourceLocator } from "./provider-types.js";
+import type { TranscriptSourceLocator } from "./types.js";
 
 /** Strip invitation credentials from meeting locators before persistence/provider handoff. */
 export function sanitizeTranscriptSourceLocator(

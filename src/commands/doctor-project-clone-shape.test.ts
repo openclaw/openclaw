@@ -27,8 +27,12 @@ import {
   selectStoredProjectRegistry,
 } from "../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { collectProjectCloneShapeHealthFindings } from "./doctor-project-clone-shape.js";
+import {
+  checkProjectCloneShapePending,
+  collectProjectCloneShapeHealthFindings,
+} from "./doctor-project-clone-shape.js";
 
 const execFileAsync = promisify(execFile);
 const checkId = "core/doctor/project-clone-shape";
@@ -106,8 +110,10 @@ describe("doctor project clone shape", () => {
             )
           ).findings;
         const findings = await detect();
+        const pending = () => checkProjectCloneShapePending(cfg, { repair: true });
         if (shape === "full" || shape === "partial") {
           expect(findings).toEqual([]);
+          await expect(pending()).resolves.toBe("none");
           return;
         }
         expect(findings).toHaveLength(1);
@@ -120,9 +126,13 @@ describe("doctor project clone shape", () => {
         expect(finding.message).toContain("Stored project");
         if (shape === "missing") {
           expect(finding.message).toContain("skipped");
+          // An unreadable clone cannot be ruled out, so Doctor counts it as undecidable.
+          await expect(pending()).rejects.toThrow();
           return;
         }
         expect(finding.message).not.toContain("repack");
+        await expect(pending()).resolves.toBe("work");
+        await expect(checkProjectCloneShapePending(cfg, { repair: false })).resolves.toBe("none");
         expect(await fs.readFile(path.join(clone, ".git", "config"), "utf8")).toBe(configBefore);
         expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("true");
 
@@ -141,10 +151,14 @@ describe("doctor project clone shape", () => {
           return;
         }
         if (shape === "shallow") {
-          await withProjectCheckoutLifecycle(clone, {}, async () => {
-            expect((await repair())[0]?.message).toContain("busy; skipped");
-            expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("true");
-          });
+          await withProjectCheckoutLifecycle(
+            clone,
+            { context: captureOpenClawStateWorkerContext() },
+            async () => {
+              expect((await repair())[0]?.message).toContain("busy; skipped");
+              expect(await git(clone, "rev-parse", "--is-shallow-repository")).toBe("true");
+            },
+          );
           const foreignLock = path.join(clone, ".git", "shallow.lock");
           await fs.writeFile(foreignLock, "another fetch");
           expect((await repair())[0]?.message).toContain("unshallow failed");
@@ -180,6 +194,7 @@ describe("doctor project clone shape", () => {
         expect(await git(clone, "config", "remote.origin.partialclonefilter")).toBe("blob:none");
         expect(await git(clone, "config", "remote.origin.promisor")).toBe("true");
         expect(await detect()).toEqual([]);
+        await expect(pending()).resolves.toBe("none");
         expect(await repair()).toEqual([]);
         expect(await git(ignored, "rev-parse", "--is-shallow-repository")).toBe("true");
         expect(await git(ignored, "config", "remote.origin.partialclonefilter")).toBe("blob:none");

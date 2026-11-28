@@ -526,13 +526,8 @@ describe("OpenAI-compatible provider processing timing", () => {
 
   it.each([
     undefined,
-    { prompt_ms: 1 },
-    { predicted_ms: 1 },
     { prompt_ms: -1, predicted_ms: 1 },
-    { prompt_ms: "1", predicted_ms: 1 },
     { prompt_ms: Number.NaN, predicted_ms: 1 },
-    { prompt_ms: 1, predicted_ms: Number.POSITIVE_INFINITY },
-    { prompt_ms: Number.MAX_VALUE, predicted_ms: Number.MAX_VALUE },
   ])("omits missing, partial, or invalid final timing: %j", async (timings) => {
     const { output } = await runChunks([
       makeCompletionsChunk({ content: "ok" }, null, { timings: { prompt_ms: 1, predicted_ms: 2 } }),

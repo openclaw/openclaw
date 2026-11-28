@@ -23,6 +23,10 @@ import type {
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import { SystemAgentChatEngine, type SystemAgentChatEngineOptions } from "./chat-engine.js";
 import {
+  SYSTEM_AGENT_ERROR_HISTORY_TEXT,
+  systemAgentErrorPasteOffset,
+} from "./error-explanation.js";
+import {
   SystemAgentInferenceUnavailableError,
   isSystemAgentInferenceUnavailableError,
 } from "./inference-error.js";
@@ -31,7 +35,10 @@ import { buildOnboardingWelcome } from "./onboarding-welcome.js";
 import { loadOverviewForOperation } from "./operations-execution-helpers.js";
 import { executeSystemAgentOperation, type SystemAgentOperation } from "./operations.js";
 import { formatSystemAgentStartupMessage } from "./overview.js";
-import { resolveSystemAgentVerifiedInferenceState } from "./verified-inference.js";
+import {
+  resolveSystemAgentVerifiedInferenceState,
+  type SystemAgentVerifiedInferenceBinding,
+} from "./verified-inference.js";
 
 type RunTui = typeof import("../tui/tui.js").runTui;
 
@@ -43,10 +50,8 @@ async function loadHostedSetupForTui() {
   return { createClackPrompter, hostedSetup };
 }
 
-export type SystemAgentTuiOptions = Pick<
-  SystemAgentChatEngineOptions,
-  "yes" | "deps" | "verifiedInference"
-> & {
+export type SystemAgentTuiOptions = Pick<SystemAgentChatEngineOptions, "yes" | "deps"> & {
+  readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
   runTui?: RunTui;
   /** "onboarding" swaps the greeting for the first-run setup proposal. */
   welcomeVariant?: "onboarding";
@@ -132,7 +137,14 @@ class SystemAgentTuiBackend implements TuiBackend {
   async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
     const runId = opts.runId ?? randomUUID();
     const text = opts.message.trim();
-    this.appendMessage(message("user", opts.message));
+    this.appendMessage(
+      message(
+        "user",
+        systemAgentErrorPasteOffset(text) === undefined
+          ? opts.message
+          : SYSTEM_AGENT_ERROR_HISTORY_TEXT,
+      ),
+    );
     // Keep the backend queue ahead of the engine queue so a failed inference
     // turn can retire the session before an already-submitted host command runs.
     const response = this.responseQueue.then(() => this.respond(runId, opts.sessionKey, text));

@@ -7,7 +7,6 @@ import {
   type SessionEntryRenderSink,
 } from "../../../packages/memory-host-sdk/src/host/session-entry-render.js";
 import { LruCache } from "../../infra/lru-cache.js";
-import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import { prepareAssistantTranscriptText } from "../../shared/chat-message-content.js";
@@ -96,10 +95,8 @@ async function streamSessionMemoryEntries(
                 database,
                 group.map(({ resolved }) => resolved.sessionId),
               ),
-              // SQLite reads larger transcripts after the batch transaction, one at a time.
-              deferAboveBytes: isPostgresSqlConnection(database.db)
-                ? Number.POSITIVE_INFINITY
-                : MAX_SNAPSHOT_BYTES,
+              // Larger transcripts are read after the batch transaction, one at a time.
+              deferAboveBytes: MAX_SNAPSHOT_BYTES,
             }),
             toDatabaseOptions(group[0]!.resolved),
           )
@@ -145,8 +142,8 @@ async function streamSessionMemoryEntries(
         };
       });
       // Transcripts the retained-snapshot cache admits (at most MAX_SNAPSHOT_BYTES) are read
-      // inside the batch transaction; on SQLite, larger ones, which the cache never retains,
-      // are streamed in slices after it.
+      // inside the batch transaction; larger ones, which the cache never retains, are streamed
+      // in slices after it.
       const exported = withOpenClawAgentDatabaseReadOnly(
         (database) =>
           runSqliteReadSnapshotSync(
@@ -194,6 +191,12 @@ async function streamSessionMemoryEntry(
   send: (delivery: Delivery) => Promise<void>,
 ): Promise<Extract<SessionEntriesWorkerUpdate, { value: unknown }>["value"]> {
   let delivered = false;
+  const reset = async () => {
+    if (delivered) {
+      delivered = false;
+      await send({ index, reset: true, resetMessages: true });
+    }
+  };
   const sink: SessionEntryRenderSink = {
     prefixLineCount: request.prefixLineCount,
     pageMessages: request.messages,
@@ -201,7 +204,8 @@ async function streamSessionMemoryEntry(
       request.pages || request.messages
         ? async (page) => {
             const lines = request.pages && page.lines.length > 0;
-            delivered ||= lines;
+            // Message-only pages must also be discarded when this snapshot changes.
+            delivered = true;
             await send({
               index,
               page: lines
@@ -219,7 +223,7 @@ async function streamSessionMemoryEntry(
         : undefined,
     reset: async () => {
       if (delivered) {
-        delivered = false;
+        // Late classification discards rendered text, not the original observations.
         await send({ index, reset: true });
       }
     },
@@ -253,7 +257,7 @@ async function streamSessionMemoryEntry(
       };
     } catch (error) {
       if (error instanceof SessionTranscriptColdError) {
-        await sink.reset?.();
+        await reset();
         return { cold: true };
       }
       if (
@@ -262,7 +266,7 @@ async function streamSessionMemoryEntry(
       ) {
         throw error;
       }
-      await sink.reset?.();
+      await reset();
     }
   }
 }

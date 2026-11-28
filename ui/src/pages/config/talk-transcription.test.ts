@@ -21,6 +21,7 @@ it("reports the chosen speech-to-text provider as not ready and links to Models"
     catalogRequest: (_index, catalog) => ({
       ...catalog,
       transcription: {
+        source: "media-understanding",
         ready: true,
         activeProvider: "openai",
         providers: [
@@ -58,12 +59,13 @@ it("reports the chosen speech-to-text provider as not ready and links to Models"
   expect(navigate).toHaveBeenCalledWith("model-providers", { search: "?provider=openrouter" });
 });
 
-it("keeps Talk speech-to-text status on the active route when the preferred model is not ready", async () => {
+it("names the provider Talk falls back to when the preferred model is not ready", async () => {
   const { page } = createTalkMutationHarness({
     navigate: vi.fn(),
     catalogRequest: (_index, catalog) => ({
       ...catalog,
       transcription: {
+        source: "media-understanding",
         ready: true,
         activeProvider: "openai",
         providers: [
@@ -93,15 +95,154 @@ it("keeps Talk speech-to-text status on the active route when the preferred mode
     [...page.querySelectorAll<HTMLElement>("section.settings-section")]
       .find((section) => section.textContent?.includes(t("talkPage.transcription.title")))
       ?.querySelector<HTMLElement>(".settings-row");
+  // Talk runs on the OpenAI fallback, not on the OpenRouter model the picker shows.
   await waitForSolid(() =>
     expect(statusRow()?.textContent).toContain(
-      t("talkPage.status.activeProvider", { provider: "openai" }),
+      t("talkPage.transcription.talkUsesFallback", { provider: "OpenAI" }),
     ),
   );
+  expect(statusRow()?.textContent).not.toContain(t("talkPage.transcription.talkUsesVoiceNotes"));
   expect(statusRow()?.textContent).toContain(t("talkPage.status.ready"));
   expect(page.textContent).toContain(
     t("talkPage.transcription.providerNotReadyDescription", { provider: "OpenRouter" }),
   );
+});
+
+it("says Talk uses the voice notes model when that model is the one in use", async () => {
+  const { page } = createTalkMutationHarness({
+    navigate: vi.fn(),
+    catalogRequest: (_index, catalog) => ({
+      ...catalog,
+      transcription: {
+        source: "media-understanding",
+        ready: true,
+        activeProvider: "openai",
+        providers: [{ id: "openai", label: "OpenAI", configured: true }],
+      },
+    }),
+  });
+  page.configObject = {
+    ...page.configObject,
+    tools: {
+      media: {
+        models: [{ provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] }],
+        audio: { preferredModel: "openai/gpt-4o-transcribe" },
+      },
+    },
+  };
+  await waitForSolid(() =>
+    expect(page.textContent).toContain(t("talkPage.transcription.talkUsesVoiceNotes")),
+  );
+});
+
+it("shows the Talk catalog without waiting for Models", async () => {
+  const { page } = createTalkMutationHarness({
+    navigate: vi.fn(),
+    // Models never answers in this run.
+    modelAuthStatus: new Promise(() => {}),
+    catalogRequest: (_index, catalog) => ({
+      ...catalog,
+      transcription: {
+        source: "streaming",
+        ready: true,
+        activeProvider: "openai",
+        providers: [],
+        mediaProviders: [],
+      },
+    }),
+  });
+  await waitForSolid(() =>
+    expect(page.textContent).toContain(
+      t("talkPage.transcription.talkVoiceCall", { provider: "OpenAI" }),
+    ),
+  );
+});
+
+it.each([
+  { mediaReady: false, warns: true },
+  { mediaReady: true, warns: false },
+])(
+  "checks the picked model against voice-note readiness when Talk streams (media ready: $mediaReady)",
+  async ({ mediaReady, warns }) => {
+    const { page } = createTalkMutationHarness({
+      navigate: vi.fn(),
+      catalogRequest: (_index, catalog) => ({
+        ...catalog,
+        transcription: {
+          source: "streaming",
+          ready: true,
+          activeProvider: "openai",
+          // The streaming Deepgram entry's readiness is the opposite of the
+          // voice-note one, so only a check against mediaProviders passes.
+          providers: [
+            { id: "openai", label: "OpenAI", configured: true },
+            { id: "deepgram", label: "Deepgram Streaming", configured: !mediaReady },
+          ],
+          mediaProviders: [{ id: "deepgram", label: "deepgram", configured: mediaReady }],
+        },
+      }),
+    });
+    page.configObject = {
+      ...page.configObject,
+      tools: {
+        media: {
+          models: [{ provider: "deepgram", model: "nova-3", capabilities: ["audio"] }],
+          audio: { preferredModel: "deepgram/nova-3" },
+        },
+      },
+    };
+    await waitForSolid(() =>
+      expect(page.textContent).toContain(
+        t("talkPage.transcription.talkVoiceCall", { provider: "OpenAI" }),
+      ),
+    );
+    // The Voice notes row carries the picker, its readiness and the key hint.
+    const modelRow = [...page.querySelectorAll<HTMLElement>(".settings-row")].find((row) =>
+      row.textContent?.startsWith(t("talkPage.transcription.voiceNotesTitle")),
+    );
+    expect(modelRow?.textContent).toContain(
+      t(warns ? "talkPage.transcription.providerNotReady" : "talkPage.status.ready"),
+    );
+    expect(
+      modelRow?.textContent?.includes(
+        t("talkPage.transcription.providerNotReadyDescription", { provider: "Deepgram" }),
+      ),
+    ).toBe(warns);
+    expect(
+      [...(modelRow?.querySelectorAll("button") ?? [])].some(
+        (button) => button.textContent === t("talkPage.transcription.openModels"),
+      ),
+    ).toBe(warns);
+    expect(page.textContent).not.toContain("Preferred model");
+  },
+);
+
+it("does not check the picked model against providers of an unreported path", async () => {
+  const { page } = createTalkMutationHarness({
+    navigate: vi.fn(),
+    catalogRequest: (_index, catalog) => ({
+      ...catalog,
+      // No `source`: the catalog does not say these providers serve voice notes.
+      transcription: {
+        ready: true,
+        activeProvider: "openai",
+        providers: [{ id: "deepgram", label: "Deepgram Streaming", configured: false }],
+      },
+    }),
+  });
+  page.configObject = {
+    ...page.configObject,
+    tools: {
+      media: {
+        models: [{ provider: "deepgram", model: "nova-3", capabilities: ["audio"] }],
+        audio: { preferredModel: "deepgram/nova-3" },
+      },
+    },
+  };
+  await waitForSolid(() =>
+    expect(page.textContent).toContain(t("talkPage.transcription.voiceNotesDescription")),
+  );
+  expect(page.textContent).not.toContain(t("talkPage.transcription.providerNotReady"));
 });
 
 it("does not call an unavailable speech-to-text provider a missing key", async () => {
@@ -110,6 +251,7 @@ it("does not call an unavailable speech-to-text provider a missing key", async (
     catalogRequest: (_index, catalog) => ({
       ...catalog,
       transcription: {
+        source: "media-understanding",
         ready: false,
         providers: [{ id: "anthropic", label: "Anthropic", configured: false }],
       },
@@ -165,7 +307,7 @@ it("does not report a ready provider-less transcription route as unconfigured", 
   const { page } = createTalkMutationHarness({
     catalogRequest: (_index, catalog) => ({
       ...catalog,
-      transcription: { ready: true, providers: [] },
+      transcription: { source: "media-understanding", ready: true, providers: [] },
     }),
   });
   page.configObject = {
@@ -188,6 +330,130 @@ it("does not report a ready provider-less transcription route as unconfigured", 
       .find((section) => section.textContent?.includes(t("talkPage.transcription.title")))
       ?.querySelector<HTMLElement>(".settings-row");
   await waitForSolid(() => expect(statusRow()?.textContent).toContain(t("talkPage.status.ready")));
-  expect(statusRow()?.textContent).not.toContain(t("talkPage.transcription.noProvider"));
-  expect(statusRow()?.textContent).toContain(t("talkPage.transcription.readyWithoutProvider"));
+  expect(statusRow()?.textContent).toContain(t("talkPage.transcription.talkUsesVoiceNotes"));
 });
+
+it.each([
+  { source: "streaming", activeProvider: "openai", button: "talkPage.transcription.change" },
+  { source: "streaming-auto", activeProvider: "deepgram", button: "talkPage.transcription.change" },
+  { source: "streaming-auto", activeProvider: undefined, button: "talkPage.transcription.setUp" },
+] as const)(
+  "sends the Talk row to Voice Call settings, where every streaming key is read ($source, $activeProvider)",
+  async ({ source, activeProvider, button }) => {
+    const navigate = vi.fn();
+    const { page } = createTalkMutationHarness({
+      navigate,
+      catalogRequest: (_index, catalog) => ({
+        ...catalog,
+        transcription: {
+          source,
+          ready: activeProvider !== undefined,
+          ...(activeProvider ? { activeProvider } : {}),
+          providers: [],
+          mediaProviders: [],
+        },
+      }),
+    });
+    const talkRow = () =>
+      [...page.querySelectorAll<HTMLElement>(".settings-row")].find((row) =>
+        row.textContent?.startsWith(t("talkPage.transcription.talkTitle")),
+      );
+    const buttons = await waitForSolid(() => {
+      const found = [...(talkRow()?.querySelectorAll("button") ?? [])];
+      expect(found.map((candidate) => candidate.textContent)).toEqual([t(button)]);
+      return found;
+    });
+    buttons[0]!.click();
+    // A Models key cannot enable Deepgram streaming, so the row never links there.
+    expect(navigate).toHaveBeenCalledWith("plugin-settings", {
+      pathname: "/settings/plugins/voice-call",
+      search: "",
+      hash: "#configuration",
+    });
+  },
+);
+
+it("sends the Talk row to AI Agents settings when the voice model chose its provider", async () => {
+  const navigate = vi.fn();
+  const { page } = createTalkMutationHarness({
+    navigate,
+    catalogRequest: (_index, catalog) => ({
+      ...catalog,
+      transcription: {
+        source: "voice-model",
+        ready: true,
+        activeProvider: "openai",
+        providers: [],
+      },
+    }),
+  });
+  const change = await waitForSolid(() => {
+    const found = [...page.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === t("talkPage.transcription.change"),
+    );
+    expect(found).toBeDefined();
+    return found!;
+  });
+  change.click();
+  expect(navigate).toHaveBeenCalledWith("ai-agents", { search: "?section=agents" });
+});
+
+it.each([
+  { provider: "deepgram", model: "nova-3", label: "Deepgram", inModels: false },
+  {
+    provider: "openrouter",
+    model: "openai/whisper-large-v3-turbo",
+    label: "OpenRouter",
+    inModels: true,
+  },
+])(
+  "links a voice-notes key to Models only when Models can add it ($provider)",
+  async ({ provider, model, label, inModels }) => {
+    const { page } = createTalkMutationHarness({
+      navigate: vi.fn(),
+      // Models lists model providers only; media-only Deepgram has no entry.
+      modelAuthStatus: {
+        ts: 1,
+        providers: [],
+        providerCapabilities: [
+          { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
+          { provider: "openrouter", apiKeySupported: true, quickApiKeySetup: true },
+        ],
+      },
+      catalogRequest: (_index, catalog) => ({
+        ...catalog,
+        transcription: {
+          source: "streaming",
+          ready: true,
+          activeProvider: "openai",
+          providers: [],
+          mediaProviders: [{ id: provider, label: provider, configured: false }],
+        },
+      }),
+    });
+    page.configObject = {
+      ...page.configObject,
+      tools: {
+        media: {
+          models: [{ provider, model, capabilities: ["audio"] }],
+          audio: { preferredModel: `${provider}/${model}` },
+        },
+      },
+    };
+    const voiceNotesRow = () =>
+      [...page.querySelectorAll<HTMLElement>(".settings-row")].find((row) =>
+        row.textContent?.startsWith(t("talkPage.transcription.voiceNotesTitle")),
+      );
+    const hint = inModels
+      ? "talkPage.transcription.providerNotReadyDescription"
+      : "talkPage.transcription.providerKeyOutsideModels";
+    await waitForSolid(() =>
+      expect(voiceNotesRow()?.textContent).toContain(t(hint, { provider: label })),
+    );
+    expect(
+      [...(voiceNotesRow()?.querySelectorAll("button") ?? [])].some(
+        (button) => button.textContent === t("talkPage.transcription.openModels"),
+      ),
+    ).toBe(inModels);
+  },
+);

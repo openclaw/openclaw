@@ -239,8 +239,8 @@ fixture.describe("chat file link presentation", () => {
     "leaves the chip on code spans that are not file links in %s",
     (themeMode) => {
       const { fromText, plainCode } = observation(themeMode).presentation;
+      // The fill alone is the chip; neither span is outlined.
       expect(plainCode.backgroundColor).not.toBe(fromText.backgroundColor);
-      expect(plainCode.borderTopWidth).not.toBe("0px");
       expect(fromText).toMatchObject({
         borderTopWidth: "0px",
         backgroundColor: "rgba(0, 0, 0, 0)",
