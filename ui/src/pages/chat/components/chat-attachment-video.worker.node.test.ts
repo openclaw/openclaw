@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { expectDefined } from "@openclaw/normalization-core";
-import type { StreamTargetChunk } from "mediabunny";
+import { BlobSource, type StreamTargetChunk } from "mediabunny";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { VideoCompressionResponse } from "./chat-attachment-video.ts";
 
@@ -91,6 +91,46 @@ async function prepared(attempts: StreamTargetChunk[][]) {
   const result = await compress(attempts);
   return expectDefined(result.type === "ready" ? result.file : undefined, "prepared video");
 }
+
+it.each(["image", "video"] as const)(
+  "accepts only the first %s job, detaching before reentrant work and failure",
+  async (kind) => {
+    const workerScope = new EventTarget();
+    for (const method of ["addEventListener", "removeEventListener"] as const) {
+      vi.stubGlobal(method, workerScope[method].bind(workerScope));
+    }
+    let attempts = 0;
+    const data = {
+      get file() {
+        if (++attempts === 1) {
+          workerScope.dispatchEvent(new MessageEvent("message", { data }));
+        }
+        return new File([], "invalid");
+      },
+      maxBytes: 100_000,
+    };
+    vi.stubGlobal("createImageBitmap", () => Promise.reject(new Error("Invalid image")));
+    const result = Promise.withResolvers<unknown>();
+    const reply = vi.fn(result.resolve);
+    vi.stubGlobal("postMessage", reply);
+    if (kind === "image") {
+      await import("./chat-attachment-image.worker.ts");
+    } else {
+      vi.mocked(BlobSource).mockImplementationOnce(() => {
+        throw new Error("Invalid video");
+      });
+      await import("./chat-attachment-video.worker.ts");
+    }
+    workerScope.dispatchEvent(new MessageEvent("message", { data }));
+    workerScope.dispatchEvent(new MessageEvent("message", { data }));
+    expect(await result.promise).toEqual(
+      kind === "image" ? null : { type: "error", reason: "failed" },
+    );
+    workerScope.dispatchEvent(new MessageEvent("message", { data }));
+    expect(attempts).toBe(1);
+    expect(reply).toHaveBeenCalledOnce();
+  },
+);
 
 it("preserves positional header rewrites without publishing unused capacity", async () => {
   const file = await prepared([[writeChunk([0, 0, 3, 4]), writeChunk([1, 2])]]);
