@@ -32,12 +32,12 @@ export const RTL_LOCALES: readonly Locale[] = ["ar", "fa"];
 // Ordered, serializable policy shared with the standalone public reader. Script
 // subtags take precedence over regions, including Hant before Hans when both occur.
 export const LOCALE_MATCH_RULES: ReadonlyArray<readonly [string, Locale]> = [
-  ["^zh.*-hant(?:-|$)", "zh-TW"],
-  ["^zh.*-hans(?:-|$)", "zh-CN"],
-  ["^zh.*-(?:tw|hk|mo)(?:-|$)", "zh-TW"],
-  ["^zh", "zh-CN"],
+  ["^zh(?=-|$).*-hant(?:-|$)", "zh-TW"],
+  ["^zh(?=-|$).*-hans(?:-|$)", "zh-CN"],
+  ["^zh(?=-|$).*-(?:tw|hk|mo)(?:-|$)", "zh-TW"],
+  ["^zh(?:-|$)", "zh-CN"],
   ...SUPPORTED_LOCALES.filter((locale) => locale !== "en" && !locale.startsWith("zh")).map(
-    (locale): readonly [string, Locale] => ["^" + locale.split("-")[0]!, locale],
+    (locale): readonly [string, Locale] => ["^" + locale.split("-")[0]! + "(?:-|$)", locale],
   ),
 ];
 

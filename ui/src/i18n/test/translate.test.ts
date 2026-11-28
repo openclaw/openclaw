@@ -67,6 +67,14 @@ describe("i18n", () => {
     });
   });
 
+  it("falls back to English for an unsupported language sharing a supported prefix", async () => {
+    const documentElement = stubDocumentLocaleMetadata();
+    vi.stubGlobal("navigator", { language: "kok-IN" });
+    const fresh = await importFreshTranslate();
+    expect(fresh.i18n.getLocale()).toBe("en");
+    expect(documentElement).toEqual({ lang: "en", dir: "ltr" });
+  });
+
   it("clears an explicit locale when returning to the system language", async () => {
     vi.stubGlobal("navigator", { language: "de-DE" } as Navigator);
     await translate.i18n.setLocale("fr");
