@@ -157,36 +157,29 @@ describe("runBtwSideQuestion", () => {
   });
 
   // The built-in runtime's fork prepares nothing here; `runSessionFork` owns its authority.
-  it.each(["codex"] as const)(
-    "rejects withdrawn source access after %s preparation before dispatch",
-    async (harness) => {
-      let current = true;
-      const hook = harness === "codex" ? btw.registerCodexSideQuestionHarness() : undefined;
-      btw.prepareProviderRuntimeAuthMock.mockImplementation(async () => {
-        current = false;
-        return undefined;
-      });
-      if (hook) {
-        btw.resolveModelAsyncMock.mockImplementation(async () => {
-          current = false;
-          return { model: btw.resolveModelWithRegistryMock() };
-        });
+  it("rejects withdrawn source access after codex preparation before dispatch", async () => {
+    let current = true;
+    const hook = btw.registerCodexSideQuestionHarness();
+    btw.prepareProviderRuntimeAuthMock.mockImplementation(async () => {
+      current = false;
+      return undefined;
+    });
+    btw.resolveModelAsyncMock.mockImplementation(async () => {
+      current = false;
+      return { model: btw.resolveModelWithRegistryMock() };
+    });
+    const assertCurrent = vi.fn(() => {
+      if (!current) {
+        throw new Error("conversation access withdrawn");
       }
-      const assertCurrent = vi.fn(() => {
-        if (!current) {
-          throw new Error("conversation access withdrawn");
-        }
-      });
-      const sessionFork = async () => ({ text: "built-in fork" });
-      await expect(btw.runSideQuestion({ sessionFork, assertCurrent })).rejects.toThrow(
-        "conversation access withdrawn",
-      );
-      expect(btw.streamSimpleMock).not.toHaveBeenCalled();
-      if (hook) {
-        expect(hook).not.toHaveBeenCalled();
-      }
-    },
-  );
+    });
+    const sessionFork = async () => ({ text: "built-in fork" });
+    await expect(btw.runSideQuestion({ sessionFork, assertCurrent })).rejects.toThrow(
+      "conversation access withdrawn",
+    );
+    expect(btw.streamSimpleMock).not.toHaveBeenCalled();
+    expect(hook).not.toHaveBeenCalled();
+  });
   it("closes CLI side-question admission when backend cleanup rejects", async () => {
     const { cleanup } = btw.mockCliOutput({ text: "CLI side answer." });
     const cleanupError = new Error("CLI cleanup failed");

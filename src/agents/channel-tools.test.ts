@@ -12,7 +12,7 @@ const EMPTY_PREPARED_MESSAGE_TOOL_CATALOG = {
   getChannel: () => undefined,
 } as const;
 
-function registerPlugin(id: string, overrides: Partial<ChannelPlugin> = {}, aliases?: string[]) {
+function registerPlugin(id: string, overrides: Partial<ChannelPlugin>, aliases?: string[]) {
   const plugin: ChannelPlugin = {
     id,
     meta: { id, label: id, selectionLabel: id, docsPath: `/channels/${id}`, blurb: id, aliases },
@@ -24,7 +24,7 @@ function registerPlugin(id: string, overrides: Partial<ChannelPlugin> = {}, alia
 }
 
 function discover(
-  channel = "test",
+  channel: string,
   preparedMessageToolCatalog?: Parameters<
     typeof listChannelSupportedActionsSteps
   >[0]["preparedMessageToolCatalog"],
