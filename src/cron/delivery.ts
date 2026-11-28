@@ -160,8 +160,10 @@ export async function sendCronAnnouncePayloadStrict(params: {
           transcriptRoute: params.transcriptRoute,
           onTranscriptDiagnostic: params.onTranscriptDiagnostic,
           // Completion rows name the run that produced them; alerts have no run result.
+          // A run's result is its final reply, so recovery may resend its ordinary text once.
           ...(params.completion
             ? {
+                retryAmbiguousFinalText: true as const,
                 transcriptProvenance: {
                   kind: "cron" as const,
                   jobId: params.jobId,
