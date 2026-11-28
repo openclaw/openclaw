@@ -42,10 +42,9 @@ describe("deriveDurableFinalDeliveryRequirementsForBatch", () => {
     expect(
       deriveDurableFinalDeliveryRequirementsForBatch({
         payloads: [
-          { text: "first" },
+          { text: "first", mediaUrl: "https://example.com/a.png" },
           {
             text: "caption",
-            mediaUrl: "https://example.com/a.png",
             presentation: { blocks: [{ type: "text", text: "card" }] },
           },
         ],

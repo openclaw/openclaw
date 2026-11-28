@@ -219,6 +219,7 @@ it.each([
   {
     name: "command owner",
     patch: {
+      event: { authMode: "command" as const },
       command: {
         allowTextCommands: true,
         hasControlCommand: true,

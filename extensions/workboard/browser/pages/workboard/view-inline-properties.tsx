@@ -172,6 +172,7 @@ export function InlinePriority(input: {
           return updateWorkboardCardProperties({
             ...workboardMutationContext(input.workboard),
             card: input.card,
+            previewInline: true,
             patch: {
               priority,
             },
@@ -237,6 +238,7 @@ export function InlineAgent(input: {
             void updateWorkboardCardProperties({
               ...workboardMutationContext(input.workboard),
               card: input.card,
+              previewInline: true,
               patch: {
                 agentId,
               },
@@ -363,11 +365,18 @@ export function InlineText(props: InlineTextProps) {
       const pending = updateWorkboardCardProperties({
         ...workboardMutationContext(owner),
         card: observed,
+        previewInline: field === "labels",
         patch,
       });
-      // Publish the owner's busy state before joining the saving transition.
-      await Promise.resolve();
-      saved = await presentSaving(pending);
+      if (field === "labels") {
+        // Keep the submitted draft for retry, not the popover while saving.
+        popover?.hidePopover();
+        saved = await pending;
+      } else {
+        // Publish the owner's busy state before joining the text editor's saving transition.
+        await Promise.resolve();
+        saved = await presentSaving(pending);
+      }
     } finally {
       disposeSaveFocus?.();
       disposeSaveFocus = undefined;
@@ -385,6 +394,13 @@ export function InlineText(props: InlineTextProps) {
       base =
         getWorkboardState(owner.host).cards.find((card) => card.id === observed.id) ?? observed;
       publish();
+      if (field === "labels" && restoreFocus) {
+        requestAnimationFrame(() => {
+          if (host.isConnected && doc.activeElement === doc.body) {
+            trigger?.focus({ preventScroll: true });
+          }
+        });
+      }
     }
   };
   const openEditor = () => {
@@ -447,7 +463,7 @@ export function InlineText(props: InlineTextProps) {
           : "workboard.fieldLabels",
     );
   const labelsPopoverId = () => `workboard-detail-labels-${props.card.id}`;
-  const triggerDisabled = () => disabled() && !(props.field === "labels" && changed() && !saving());
+  const triggerDisabled = () => disabled() && !(props.field === "labels" && changed() && !busy);
   const TriggerContent = () => (
     <span class="workboard-detail__text-value">
       {props.field === "labels" ? (
