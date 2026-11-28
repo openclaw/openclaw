@@ -23,6 +23,7 @@ import {
   classifyWorkerBootstrapArtifactTransferPath,
   classifyWorkerGatewayPath,
 } from "./gateway-http-route-contracts.js";
+import { parsePwaIconRoute } from "./pwa-icon-contract.js";
 import { resolvePluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import { findRegisteredPluginHttpRoute } from "./server/plugins-http/route-match.js";
 
@@ -76,6 +77,13 @@ export function resolveRemoteControlUiHttpRoute(
         url.searchParams.get("meta") === "1" &&
         url.searchParams.get("allow") === "1")
       ? "assistant-media"
+      : undefined;
+  }
+  const pwaIcon = parsePwaIconRoute(pathname, basePath);
+  if (pwaIcon) {
+    return (pwaIcon.kind === "upload" && (req.method === "POST" || req.method === "DELETE")) ||
+      (pwaIcon.kind === "asset" && read)
+      ? "resource"
       : undefined;
   }
   if (!read) {

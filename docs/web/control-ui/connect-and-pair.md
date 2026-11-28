@@ -179,6 +179,14 @@ Pending exec and plugin approvals also trigger Web Push. Approval delivery is na
 Web Push is independent of the iOS APNS relay path (see [Configuration](/gateway/configuration) for relay-backed push) and the `push.test` method, which targets native mobile pairing.
 </Note>
 
+### Choose the installed app icon
+
+In **Settings → Appearance → Installed app icon**, keep the OpenClaw icon, use a snapshot of the selected agent’s picture, or choose a PNG, JPEG, or WebP. This changes the install artwork, not the browser tab icon or the agent’s profile. Choose it in the browser you plan to install from.
+
+Choosing a picture sends a square copy to your Gateway. Anyone who has its unlisted icon link and can reach the Gateway can view that copy without signing in. Each browser chooses its own icon. Switching back to **Use OpenClaw default** revokes this browser’s icon link; it does not erase copies already downloaded.
+
+Then use **Add to Dock** in macOS Safari, **Add to Home Screen** in iOS Safari, or **Install app** in Chrome on Android. The operating system controls when an existing icon refreshes. If it keeps the old one, remove the installed web app and add it again from the browser where you chose the picture.
+
 ## Tailnet access (recommended)
 
 Keep the Gateway on loopback and let Tailscale Serve proxy it with HTTPS:

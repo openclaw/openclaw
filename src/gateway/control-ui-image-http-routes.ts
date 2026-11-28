@@ -1,6 +1,7 @@
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { parseControlUiUserAvatarPath } from "./control-ui-contract.js";
 import { parseControlUiUserBackgroundPath } from "./control-ui-user-background-route.js";
+import { parsePwaIconRoute } from "./pwa-icon-contract.js";
 
 /** Resource owners stay lazy until their authenticated image route is requested. */
 export const CONTROL_UI_IMAGE_HTTP_ROUTES = [
@@ -48,7 +49,7 @@ export const CONTROL_UI_IMAGE_HTTP_ROUTES = [
   ],
 ] as const;
 
-/** Personal images use their private authenticated owners even without dashboard hosting. */
+/** The final flag marks install artwork, which is served only when dashboard hosting is enabled. */
 export const CONTROL_UI_USER_IMAGE_HTTP_ROUTES = [
   [
     parseControlUiUserBackgroundPath,
@@ -56,6 +57,7 @@ export const CONTROL_UI_USER_IMAGE_HTTP_ROUTES = [
       () => import("./user-background-http.js"),
       "handleUserBackgroundHttpRequest",
     ),
+    false,
   ],
   [
     parseControlUiUserAvatarPath,
@@ -63,5 +65,13 @@ export const CONTROL_UI_USER_IMAGE_HTTP_ROUTES = [
       () => import("./user-profiles-http.js"),
       "handleUserProfileAvatarHttpRequest",
     ),
+    false,
+  ],
+  [
+    (pathname: string, basePath: string) => ({
+      matched: Boolean(parsePwaIconRoute(pathname, basePath)),
+    }),
+    createLazyRuntimeNamedExport(() => import("./pwa-icon-http.js"), "handlePwaIconHttpRequest"),
+    true,
   ],
 ] as const;

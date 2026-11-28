@@ -364,6 +364,15 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: ["configView.appearance.tabIcon.agent", "configView.appearance.tabIcon.lobsterdex"],
     aliases: "favicon browser tab icon agent avatar image",
   },
+  appearanceInstallIcon: {
+    ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.installIcon),
+    labelKey: "configView.appearance.installIcon.title",
+    searchKeys: [
+      "configView.appearance.installIcon.agent",
+      "configView.appearance.installIcon.custom",
+    ],
+    aliases: "pwa home screen launcher desktop shortcut dock",
+  },
   appearanceTextSize: {
     ...appearanceSettingsRouteTarget(APPEARANCE_SETTINGS_TARGET_IDS.textSize),
     labelKey: "configView.appearance.textSize",

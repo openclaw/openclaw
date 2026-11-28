@@ -35,6 +35,7 @@ import {
   SidebarPreferencesSection,
 } from "./view-appearance-preferences.tsx";
 import { TextSection } from "./view-appearance-typography.tsx";
+import { InstalledAppIcon } from "./view-installed-app-icon.tsx";
 import { ConfigReadStatus } from "./view-readiness.tsx";
 import { TabIconRow } from "./view-tab-icon.tsx";
 import type { ConfigProps } from "./view-types.ts";
@@ -584,6 +585,7 @@ export function AppearanceSection(props: ConfigProps) {
         </div>
         <p class="settings-section__desc settings-section__scope">{themeScope()}</p>
       </section>
+      <InstalledAppIcon agentPicture={props.tabIconAgentAvatar} />
       <TextSection {...props} presentedTheme={presentedTheme()} />
       <AppearanceBackground />
       <ChatPreferencesSection {...props} />

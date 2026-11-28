@@ -2121,6 +2121,22 @@ const enSettings = {
       importTheme: "Import theme",
       clear: "Clear {name}",
       loaded: "Loaded",
+      installIcon: {
+        title: "Installed app icon",
+        install:
+          "Choose the icon before installing OpenClaw from this browser. If your home screen or dock still shows the old icon, remove the app and install it again. This does not change the browser tab icon.",
+        picture: "Icon picture",
+        privacy:
+          "Using an agent or custom picture uploads a copy to your Gateway. Your operating system uses an unguessable link to load it. Anyone with that link can view the picture without signing in.",
+        preview: "Current app icon for new installs",
+        default: "Use OpenClaw default",
+        agent: "Use current agent picture",
+        custom: "Upload custom picture…",
+        noPicture: "No picture is available for the selected agent.",
+        saving: "Saving icon…",
+        saved: "Icon saved for new installs.",
+        failed: "Couldn’t save the app icon. Try again.",
+      },
       tabIcon: {
         title: "Browser tab icon",
         default: "Default",

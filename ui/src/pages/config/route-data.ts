@@ -11,6 +11,7 @@ export const APPEARANCE_SETTINGS_TARGET_IDS = {
   accent: "settings-appearance-accent",
   typography: "settings-appearance-typography",
   tabIcon: "settings-appearance-tab-icon",
+  installIcon: "settings-appearance-installed-app-icon",
   textSize: "settings-appearance-text-size",
   sidebar: "settings-appearance-sidebar",
   chat: "settings-appearance-chat",
