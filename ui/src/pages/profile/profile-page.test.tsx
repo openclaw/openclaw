@@ -460,9 +460,15 @@ it.each([
     expect(stage === "preprocessing" ? decode.mock.calls.length : avatarRequests).toBe(1),
   );
 
+  const preview = () =>
+    page.querySelector<HTMLImageElement>('.identity-avatar-control img[src^="data:"]');
+  expect(preview()?.getAttribute("src") ?? null).toBe(
+    stage === "mutation" ? "data:image/png;base64,AQID" : null,
+  );
   harness.emitConnected(false);
   harness.emitConnected(true);
   await waitForFast(() => expect(nameInput()?.disabled).toBe(false));
+  expect(preview()).toBeNull();
   nameInput()!.value = "Current draft";
   nameInput()!.dispatchEvent(new Event("input", { bubbles: true }));
   selectProfileAvatar(page);
@@ -486,6 +492,7 @@ it.each([
   flush();
 
   expect(avatarRequests).toBe(expectedAvatarRequests);
+  expect(preview()?.getAttribute("src")).toBe("data:image/png;base64,AQID");
   expect(nameInput()?.disabled).toBe(true);
   expect(nameInput()?.value).toBe("Current draft");
   expect(page.querySelector('[role="alert"]')).toBeNull();
@@ -496,6 +503,7 @@ it.each([
   currentMutation.resolve({ profile, avatarRevision: "current" });
   await waitForFast(() => expect(nameInput()?.disabled).toBe(false));
   expect(nameInput()?.value).toBe("Current draft");
+  expect(preview()).toBeNull();
   expect(harness.context.gateway.snapshot.selfUser?.avatarUrl).toContain("?v=current");
   expect(rpcCalls(request, "users.self")).toHaveLength(3);
 });

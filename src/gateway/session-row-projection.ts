@@ -143,6 +143,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     rows,
     indexes,
     dirty,
+    publishFacts: revisions.publishFacts,
     put,
     config: () => cfg,
     context: () => metadata.current,
@@ -159,7 +160,6 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       recents.track(row);
     },
   });
-  const { markRelated } = archive;
   function remove(id: string) {
     archive.forget(id);
     transcriptUpdates.remove(id);
@@ -170,7 +170,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       rowFacts.track(row, undefined);
       revisions.invalidate(true);
       invalidateRowMembership(row);
-      markRelated(row);
+      archive.markRelated(row);
       creators.update(row);
       rowIdentities.indexSessionRow(row, indexes, true);
       restoredRuns.update(row.storedEntry);
@@ -178,7 +178,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       revisions.publishFacts(row);
       revisions.publishSelection(row, true);
       // Cold dependents reselect only after the removed parent is absent from the inventory.
-      markRelated(row);
+      archive.markRelated(row);
       if (row.entry && !byKey.has(`id:${row.entry.sessionId}`)) {
         placementFacts.forget(row.entry.sessionId);
       }
@@ -217,7 +217,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       referenced,
       remove,
       put,
-      markRelated,
+      markRelated: archive.markRelated,
       archive,
     });
   }
@@ -499,7 +499,7 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
   const generationMutations = createSessionRowGenerationMutations({
     stores: () => stores,
     matching,
-    markRelated,
+    markRelated: archive.markRelated,
     put,
     remove,
     dirty,

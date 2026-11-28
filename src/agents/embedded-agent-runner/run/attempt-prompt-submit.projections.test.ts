@@ -6,10 +6,7 @@ import { buildOpenAIResponsesParams } from "../../../../packages/ai/src/transpor
 import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
-import {
-  loadTranscriptEventsSync,
-  upsertSessionEntryCore,
-} from "../../../config/sessions/session-accessor.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { createSessionActorFactory } from "../../../config/sessions/session-actor-durable.js";
 import * as messageRewrite from "../../../config/sessions/session-message-rewrite-domain.js";
@@ -656,7 +653,7 @@ describe("durable model prompt projection at provider dispatch", () => {
     },
   );
 
-  it("does not transfer a compacted keyless user's projection to the retained turn", async () => {
+  it("freezes a compacted keyless turn before dispatch without transferring it to the retained turn", async () => {
     await withOpenClawTestState({ label: "compacted-model-prompt-projection" }, async (state) => {
       const target = {
         ...(await prepareTarget(state, "compacted-model-prompt-projection")),
@@ -703,9 +700,14 @@ describe("durable model prompt projection at provider dispatch", () => {
       expect(JSON.stringify(requests[0])).toContain("Earlier turn was summarized.");
       expect(JSON.stringify(requests[0])).not.toContain("enriched compacted turn");
       expect(JSON.stringify(requests[0])).not.toContain("unrelated hook");
-      expect(JSON.stringify(loadTranscriptEventsSync(target))).not.toContain(
-        "modelPromptProjection",
+      // The turn left the request, so it freezes as its own transcript text, never the hook text.
+      expect(readModelPromptProjection(recorder.getPersistedMessage!())).toBe(
+        "original compacted turn",
       );
+      const retainedRow = (await readTranscriptMessages(target)).find(
+        (message) => message.role === "user" && message.content === "retained turn",
+      );
+      expect(readModelPromptProjection(retainedRow)).toBeUndefined();
     });
   });
 
@@ -802,18 +804,15 @@ describe("durable model prompt projection at provider dispatch", () => {
             JSON.stringify(requests[0]).split(RESTART_RECOVERY_INTERRUPTION_NOTE),
           ).toHaveLength(2);
           expect(JSON.stringify(requests[1])).not.toContain(RESTART_RECOVERY_INTERRUPTION_NOTE);
-          expect(readModelPromptProjection(recorder.getPersistedMessage!())).toBe(annotated);
-        } else {
-          expect(JSON.stringify(loadTranscriptEventsSync(target))).not.toContain(
-            "modelPromptProjection",
-          );
         }
+        // The embedded harness freezes the dispatched envelope, so no fallback can re-capture it.
+        expect(readModelPromptProjection(recorder.getPersistedMessage!())).toBe(annotated);
       });
     },
   );
 
-  // A harness that does not capture (or an unchanged inter-session prompt) sent the turn, then
-  // failed; an embedded fallback must not fail the turn trying to freeze its own hook text.
+  // An external harness (its runtime builds the prompt) sent the turn without a projection,
+  // then failed; an embedded fallback keeps the transcript text instead of failing the turn.
   it("sends the transcript text when an earlier candidate dispatched without a projection", async () => {
     await withOpenClawTestState({ label: "dispatched-fallback-projection" }, async (state) => {
       const target = {

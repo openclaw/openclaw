@@ -86,6 +86,23 @@ it.each(["allowed", "denied", "oversized", "oversized-multiline"])(
       expect(guidance).toContain("skills_search");
       expect(guidance).toContain("skills_read");
       expect(guidance).not.toContain("skills.read(");
+      // Name lookup and description search are callable, so the listed catalog is names only.
+      const catalog = renderCodexSkillsInstructions({
+        attempt: params,
+        dynamicTools: bridge.availableSpecs,
+        skillsPrompt: [
+          "<available_skills>",
+          "  <skill>",
+          `    <name>${skill.name}</name>`,
+          `    <description>${skill.description}</description>`,
+          `    <location>${skill.filePath}</location>`,
+          "  </skill>",
+          "</available_skills>",
+        ].join("\n"),
+      });
+      expect(catalog).toContain(`- "${skill.name}"`);
+      expect(catalog).not.toContain(skill.description);
+      expect(catalog).not.toContain(skill.filePath);
     }
     const result = await call("skills_search", { query: "publish release" });
     expect(result.success).toBe(!denied);

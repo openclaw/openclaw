@@ -238,7 +238,7 @@ describe("Chat Completions historical tools", () => {
         },
         undefined,
       );
-      expect(params.tools).toEqual([]);
+      expect(params).not.toHaveProperty("tools");
       expect(params.messages.slice(-2)).toEqual([
         {
           role: "assistant",

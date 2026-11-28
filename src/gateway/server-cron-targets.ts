@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { resolveAgentEntry, tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import type { SessionEventTarget } from "../auto-reply/reply/session-event-contract.js";
 import {
@@ -18,8 +19,11 @@ import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import type { CronServiceDeps } from "../cron/service/state.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
-import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueAutomationSystemEvent } from "../infra/system-events.js";
+import {
+  resolveSystemEventQueueKey,
+  withSystemEventOwner,
+} from "../infra/system-event-ownership.js";
+import { enqueueAutomationSystemEvent, enqueueSystemEvent } from "../infra/system-events.js";
 import {
   normalizeAgentId,
   resolveEventSessionKey,
@@ -223,20 +227,42 @@ export function createGatewayCronTargetResolver(
       throw new Error("Session event has no configured owner");
     }
     const { jobId, ...eventOpts } = opts ?? {};
-    const enqueue = (expectedTarget = eventOpts.expectedTarget) => {
+    // A job notice is fixed runtime text: post it to the conversation directly, so it shows even
+    // when the conversation's own model cannot run. Its turn stays as the agent's hidden repair
+    // input. With no session to post into yet, the turn's visible input carries it.
+    const posting =
+      jobId === undefined
+        ? Promise.resolve(false)
+        : postCronNotice({ text, agentId, sessionKey, deliver: eventOpts.deliver !== false }).catch(
+            (error: unknown) => {
+              log.warn({ jobId, error: String(error) }, "cron: notice was not posted directly");
+              return false;
+            },
+          );
+    const enqueue = async (expectedTarget = eventOpts.expectedTarget) => {
+      const posted = await posting;
       const receipt = enqueueSessionEventForHost(text, {
         ...eventOpts,
         ...(expectedTarget ? { expectedTarget } : {}),
         agentId,
         sessionKey,
-        source: "cron",
+        ...(posted
+          ? // The user already has the notice; only the agent's authored reply follows it.
+            { source: "cron_failure_repair" as const, suppressErrorDelivery: true as const }
+          : { source: "cron" as const }),
       });
       void receipt.settled.then((result) => {
-        if (result.status !== "completed") {
-          log.warn({ result }, "Session event did not complete");
+        if (result.status === "completed") {
+          return;
+        }
+        log.warn({ result }, "Session event did not complete");
+        // The posted notice row is not replayed to the model. A repair turn that failed for good
+        // before it started recorded no input, so the next turn gets the notice as context.
+        if (posted && result.status === "failed" && !result.executionStarted && !result.retryable) {
+          enqueueSystemEvent(text, { sessionKey: resolveSystemEventQueueKey(sessionKey, agentId) });
         }
       });
-      return receipt.accepted;
+      return await receipt.accepted;
     };
     const context = jobId ? resolveGatewayContext?.() : undefined;
     const job = jobId ? context?.cron.getJob(jobId) : undefined;
@@ -247,4 +273,45 @@ export function createGatewayCronTargetResolver(
     return captureCronJobTurnTarget({ job, agentId, sessionKey, context }).then(enqueue);
   };
   return { resolveCronAgent, resolveCronTarget, deferSessionEvent, enqueueSessionEvent };
+}
+
+/**
+ * Posts a fixed cron notice through the session notice writer: one transcript row and a durable
+ * send to the conversation's channel when it has one. Returns false when the conversation has no
+ * current session to post into.
+ */
+async function postCronNotice(params: {
+  text: string;
+  agentId: string;
+  sessionKey: string;
+  deliver: boolean;
+}): Promise<boolean> {
+  // Delivery and transcript runtimes stay lazy, as in the plugin notice runtime.
+  const { captureSessionGeneration, postSessionNotice } =
+    await import("../sessions/session-notice.js");
+  const config = getRuntimeConfig();
+  const generation = await captureSessionGeneration({
+    config,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  if (!generation) {
+    return false;
+  }
+  const posted = await postSessionNotice({
+    config,
+    // Core cron is the producer; no plugin owns or gates this notice.
+    pluginId: "cron",
+    generation,
+    notice: { type: "system-notice", text: params.text, data: {} },
+    // One post per notice occurrence; the notice's turn carries the text to the model.
+    idempotencyKey: `cron-notice:${randomUUID()}`,
+    ...(params.deliver ? { deliver: {} } : {}),
+  });
+  if (posted.status !== "posted") {
+    throw new Error(
+      posted.status === "skipped" ? posted.reason : `${posted.stage}: ${posted.error}`,
+    );
+  }
+  return true;
 }

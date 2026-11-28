@@ -371,7 +371,10 @@ struct ChatWorkingClawView: View {
     var parked = false
     var tint: Color?
 
-    init(seed: String, parked: Bool = false, tint: Color? = nil) {
+    let artworkSize: CGFloat
+
+    init(seed: String, parked: Bool = false, tint: Color? = nil, artworkSize: CGFloat = 18) {
+        self.artworkSize = artworkSize
         self.stance = ChatWorkingClawStance.seeded(seed, salt: ChatWorkingClawSeed.salt)
         self.parked = parked
         self.tint = tint
@@ -420,7 +423,7 @@ struct ChatWorkingClawView: View {
                         .degrees(pose.jawRotation),
                         anchor: UnitPoint(x: 8.6 / 24, y: 11 / 24))
             }
-            .frame(width: 18, height: 18)
+            .frame(width: self.artworkSize, height: self.artworkSize)
             .rotationEffect(.degrees(pose.bodyRotation + pose.zRotation))
             .rotation3DEffect(
                 .degrees(pose.yRotation),
@@ -505,6 +508,7 @@ private func chatWorkingClawTransform(for rect: CGRect) -> CGAffineTransform {
         ty: rect.midY - 12 * scale)
 }
 
+#if !os(iOS)
 struct ChatWorkingStatusText: View {
     @Environment(\.scenePhase) private var scenePhase
 
@@ -515,16 +519,13 @@ struct ChatWorkingStatusText: View {
     var status: String?
 
     var body: some View {
-        Group {
-            if self.scenePhase == .active {
-                TimelineView(.periodic(from: self.startedAt, by: 1)) { context in
-                    self.label(at: context.date)
-                }
-            } else {
-                self.label(at: Date())
+        if self.scenePhase == .active {
+            TimelineView(.periodic(from: self.startedAt, by: 1)) { context in
+                self.label(at: context.date)
             }
+        } else {
+            self.label(at: Date())
         }
-        .foregroundStyle(.secondary)
     }
 
     private func label(at date: Date) -> some View {
@@ -582,3 +583,4 @@ struct ChatTurnRecapRow: View {
         .accessibilityElement(children: .combine)
     }
 }
+#endif

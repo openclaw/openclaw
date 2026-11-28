@@ -15,6 +15,7 @@ import * as localCronService from "../cron/local-service.js";
 import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../cron/store.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { readExecApprovalsSnapshot } from "../infra/exec-approvals.js";
+import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { defaultRuntime } from "../runtime.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
@@ -570,6 +571,71 @@ describe("agents delete command", () => {
       await removeAgent({ json: true });
       expect((await fs.stat(opsWorkspace)).isDirectory()).toBe(true);
       expectSharedWorkspace(opsWorkspace);
+    },
+  );
+
+  it.for(["files gone", "directory remains", "unknown id"] as const)(
+    "retires an unconfigured agent that is still registered (%s)",
+    async (shape, { state }) => {
+      // A retired agent removed from config by hand keeps its registry row (#205927).
+      await state.setup();
+      const agentDir = path.join(state.stateDir, "agents", "retired", "agent");
+      if (shape !== "unknown id") {
+        registerOpenClawAgentDatabase({
+          agentId: "retired",
+          path: path.join(agentDir, "openclaw-agent.sqlite"),
+        });
+      }
+      if (shape === "directory remains") {
+        await fs.mkdir(agentDir, { recursive: true });
+        const confirm = vi.fn(async () => false);
+        wizardMocks.createClackPrompter.mockReturnValue({ confirm });
+        await agentsDeleteCommand({ id: "retired" });
+        // Nothing is removed silently: the prompt names the remaining directory.
+        expect(confirm).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: expect.stringMatching(
+              new RegExp(`still exist and will be moved to Trash:\\n.*${agentDir}`),
+            ),
+          }),
+        );
+        expect(registeredAgentIds()).toContain("retired");
+        expectNoLocalMutation();
+        // Confirming moves the named directory to Trash and removes the registration.
+        confirm.mockResolvedValue(true);
+        await agentsDeleteCommand({ id: "retired" });
+        expect(moveToTrash.mock.calls.map(([target]) => target)).toContain(agentDir);
+        expect(registeredAgentIds()).not.toContain("retired");
+        return;
+      }
+      // Doctor's state migration reports the missing store on every run until it is retired.
+      const skipped = async () =>
+        (await migrateLegacyMediaPersistence({ env: process.env })).warnings.filter((warning) =>
+          warning.startsWith("Skipped missing registered agent database"),
+        );
+      if (shape === "files gone") {
+        for (let run = 0; run < 2; run += 1) {
+          expect(await skipped()).toEqual([
+            expect.stringContaining("run openclaw agents delete retired"),
+          ]);
+        }
+      }
+      await removeAgent({ id: shape === "unknown id" ? "ghost" : "retired", json: true });
+      if (shape === "unknown id") {
+        expectJsonFailure(
+          'Agent "ghost" not found. Run openclaw agents list to see configured agents.',
+        );
+        expectNoLocalMutation();
+        return;
+      }
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(configMocks.replaceConfigFile).not.toHaveBeenCalled();
+      expect(registeredAgentIds()).not.toContain("retired");
+      expect(readAgentDeletionJournal("retired")?.cleanupCompleted).toBe(true);
+      // One cleanup, then silence.
+      for (let run = 0; run < 2; run += 1) {
+        expect(await skipped()).toEqual([]);
+      }
     },
   );
 });

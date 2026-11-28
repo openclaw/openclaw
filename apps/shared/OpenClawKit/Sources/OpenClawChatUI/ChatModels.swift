@@ -152,6 +152,8 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
     public let isError: Bool?
     /// Exec outcome from the block's own `exitCode`/`exit_code`, else its `details` (web `tool-cards.ts:132-141`).
     public internal(set) var exitCode: Int?
+    /// The dispatcher call a nested tool row carries (`openclaw.nested-tool.v1`): both record one invocation.
+    public internal(set) var parentToolCallId: String?
 
     var isToolCall: Bool {
         ["toolcall", "tool_call", "tooluse", "tool_use"].contains(self.type?.lowercased() ?? "") ||
@@ -273,6 +275,8 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case id
         case name
         case arguments
+        case args
+        case input
         case runId
         case toolUseId
         case tool_use_id
@@ -283,6 +287,7 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
         case is_error
         case exitCode
         case exit_code
+        case parentToolCallId
     }
 
     public init(from decoder: Decoder) throws {
@@ -321,6 +326,8 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
             .first { !$0.isEmpty }
         self.name = try container.decodeIfPresent(String.self, forKey: .name)
         self.arguments = try container.decodeIfPresent(AnyCodable.self, forKey: .arguments)
+            ?? container.decodeIfPresent(AnyCodable.self, forKey: .args)
+            ?? container.decodeIfPresent(AnyCodable.self, forKey: .input)
         self.details = try container.decodeIfPresent(AnyCodable.self, forKey: .details)
         self.isError = try container.decodeIfPresent(Bool.self, forKey: .isError) ??
             container.decodeIfPresent(Bool.self, forKey: .is_error)
@@ -328,6 +335,8 @@ public struct OpenClawChatMessageContent: Codable, Hashable, Sendable {
             ?? (try? container.decode(AnyCodable.self, forKey: .exit_code))?.intValue
             ?? Self.exitCode(in: self.details)
         self.preview = try container.decodeIfPresent(OpenClawChatCanvasPreview.self, forKey: .preview)
+        self.parentToolCallId = ChatPayloadDecoding.trimmedNonEmptyString(
+            try? container.decode(String.self, forKey: .parentToolCallId))
 
         self.content = try container.decodeIfPresent(AnyCodable.self, forKey: .content)
     }
@@ -497,6 +506,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         let truncated: Bool?
         let tokensBefore: Double?
         let tokensAfter: Double?
+        var importedFrom: String?
         var senderIdentity: AnyCodable?
         var senderId: String?
         var senderName: String?
@@ -521,7 +531,10 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     var sourceMetadata: OpenClawMetadata?
     var senderLabel: String?
     var senderSession: AnyCodable?
-    public let model: String?
+    public internal(set) var model: String?
+    /// Which provider and served model answered, as the Gateway recorded them (web isRecordedOpenAIModel).
+    var provider: String?
+    var responseModel: String?
 
     // Transient projection fields; deliberately absent from CodingKeys.
     var presentationBlockIndex: Int?
@@ -615,6 +628,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
     enum CodingKeys: String, CodingKey {
         case role
         case model
+        case provider
+        case responseModel
         case senderLabel
         case senderSession
         case phase
@@ -729,6 +744,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
             forKey: .provenance)
 
         self.model = try? container.decode(String.self, forKey: .model)
+        self.provider = try? container.decode(String.self, forKey: .provider)
+        self.responseModel = try? container.decode(String.self, forKey: .responseModel)
         self.senderLabel = try? container.decode(String.self, forKey: .senderLabel)
         self.senderSession = try? container.decode(AnyCodable.self, forKey: .senderSession)
         self.sourceMetadata = decodedOpenClaw
@@ -840,6 +857,8 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.role, forKey: .role)
         try container.encodeIfPresent(self.model, forKey: .model)
+        try container.encodeIfPresent(self.provider, forKey: .provider)
+        try container.encodeIfPresent(self.responseModel, forKey: .responseModel)
         try container.encodeIfPresent(self.senderLabel, forKey: .senderLabel)
         try container.encodeIfPresent(self.senderSession, forKey: .senderSession)
         try container.encodeIfPresent(self.phase, forKey: .phase)
@@ -861,6 +880,7 @@ public struct OpenClawChatMessage: Codable, Hashable, Identifiable, Sendable {
                     truncated: self.isTruncated ? true : nil,
                     tokensBefore: self.historyMarker?.tokensBefore,
                     tokensAfter: self.historyMarker?.tokensAfter,
+                    importedFrom: self.sourceMetadata?.importedFrom,
                     senderIdentity: self.sourceMetadata?.senderIdentity,
                     senderId: self.sourceMetadata?.senderId,
                     senderName: self.sourceMetadata?.senderName,
@@ -913,6 +933,7 @@ extension OpenClawChatMessage.OpenClawMetadata {
         self.truncated = try container.decodeIfPresent(Bool.self, forKey: .truncated)
         self.tokensBefore = try container.decodeIfPresent(Double.self, forKey: .tokensBefore)
         self.tokensAfter = try container.decodeIfPresent(Double.self, forKey: .tokensAfter)
+        self.importedFrom = try? container.decode(String.self, forKey: .importedFrom)
         self.senderIdentity = try container.decodeIfPresent(AnyCodable.self, forKey: .senderIdentity)
         // Optional attribution must not make an otherwise readable history or cache row fail decoding.
         self.senderId = try? container.decode(String.self, forKey: .senderId)
@@ -1293,12 +1314,17 @@ public struct OpenClawChatPendingToolCall: Identifiable, Hashable, Sendable {
         self.toolCallId
     }
 
+    #if os(iOS)
+    /// A projection, never stored in history. Copies updated by tool/item events retain this identity.
+    let presentationID = UUID()
+    #endif
     public let toolCallId: String
     public let name: String
     public let args: AnyCodable?
     public let startedAt: Double?
-    public let isError: Bool?
+    public internal(set) var isError: Bool?
     var diffStat: ChatToolDiffStat?
+    var result: AnyCodable?
     var activity: OpenClawAgentActivityItem?
     var isComplete: Bool = false
     var runID: String?
@@ -1309,7 +1335,7 @@ public struct OpenClawGatewayHealthOK: Codable, Sendable {
 }
 
 public struct OpenClawPendingAttachment: Identifiable {
-    public let id = UUID()
+    public let id: UUID
     public let url: URL?
     public let data: Data
     public let fileName: String
@@ -1317,6 +1343,7 @@ public struct OpenClawPendingAttachment: Identifiable {
     public let type: String
     public let preview: OpenClawPlatformImage?
     public let durationSeconds: Double?
+    var videoPixelSize: CGSize?
 
     public init(
         url: URL?,
@@ -1325,8 +1352,10 @@ public struct OpenClawPendingAttachment: Identifiable {
         mimeType: String,
         type: String = "file",
         preview: OpenClawPlatformImage?,
-        durationSeconds: Double? = nil)
+        durationSeconds: Double? = nil,
+        id: UUID = UUID())
     {
+        self.id = id
         self.url = url
         self.data = data
         self.fileName = fileName
@@ -1334,6 +1363,26 @@ public struct OpenClawPendingAttachment: Identifiable {
         self.type = type
         self.preview = preview
         self.durationSeconds = durationSeconds
+    }
+}
+
+/// A picked item the composer is still reading or processing. Its tile shows a spinner until the staged
+/// attachment, which takes the same id, replaces it in place; a failure stays on the tile until it is
+/// retried or removed.
+public struct OpenClawPreparingAttachment: Identifiable {
+    public let id: UUID
+    public let fileName: String
+    public let mimeType: String
+    public let preview: OpenClawPlatformImage?
+    public let durationSeconds: Double?
+    public internal(set) var failure: String?
+    var failureIsTransient = false
+    var reload: (@MainActor () -> Void)?
+
+    /// Reads the source again after a failure a second read can fix, such as an iCloud download or a file
+    /// that could not be opened. Nil when the source cannot be read again or the failure would repeat.
+    public var retry: (@MainActor () -> Void)? {
+        self.failure != nil && self.failureIsTransient ? self.reload : nil
     }
 }
 
