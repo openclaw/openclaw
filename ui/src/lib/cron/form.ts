@@ -245,7 +245,6 @@ export function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     payloadModel: agentTurn?.model ?? "",
     payloadThinking: agentTurn?.thinking ?? "",
     payloadLightContext: agentTurn?.lightContext === true,
-    payloadIncludeReasoning: agentTurn?.includeReasoning === true,
     deliveryMode: hasCanonicalCronDeliveryMode(job.delivery) ? (job.delivery?.mode ?? "none") : "",
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",

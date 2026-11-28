@@ -58,7 +58,6 @@ function hasAgentTurnOnlyPayloadHint(payload: UnknownRecord): boolean {
     "timeoutSeconds" in payload ||
     typeof payload.lightContext === "boolean" ||
     typeof payload.skipIfScratchEmpty === "boolean" ||
-    typeof payload.includeReasoning === "boolean" ||
     typeof payload.allowUnsafeExternalContent === "boolean"
   );
 }
@@ -167,7 +166,6 @@ export function normalizeCronPayload(payload: UnknownRecord): UnknownRecord {
       delete next.thinking;
       delete next.lightContext;
       delete next.skipIfScratchEmpty;
-      delete next.includeReasoning;
       delete next.allowUnsafeExternalContent;
     }
     if (kind !== "command") {

@@ -179,10 +179,10 @@ job clears the previous explicit recipient and thread. Selecting a new explicit
 recipient replaces owner targeting. Use `--clear-delivery-target` or
 `--clear-direct-policy` to remove the stored policy.
 
-Use `payload.includeReasoning: true` (`--include-reasoning`) on an agent-turn
-job only when reasoning returned by the agent should accompany a meaningful result.
-Reasoning alone does not create a notification; omitting this setting keeps ordinary
-final-output delivery.
+Existing jobs retain any saved `payload.includeReasoning` metadata so their
+revision-bound execution and tool approvals stay valid. The retired flag has no
+effect and is omitted from API reads; new requests cannot set it. Recreating a
+job drops the legacy metadata.
 
 ### Failure notifications
 

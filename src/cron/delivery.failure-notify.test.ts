@@ -97,7 +97,6 @@ describe("sendCronAnnouncePayloadStrict", () => {
         deliveryIntentId: "cron-direct-delivery:v1:cron:job-1:1000:telegram:bot-a:123:42",
       }),
       undefined,
-      undefined,
     );
   });
 
@@ -119,7 +118,6 @@ describe("sendCronAnnouncePayloadStrict", () => {
             },
           ],
         }),
-        undefined,
         undefined,
       );
     },

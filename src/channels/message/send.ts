@@ -368,16 +368,10 @@ export async function sendDurableMessageBatchCore(
   conversationDeliveryTarget?: ConversationDeliveryTarget,
   queueContext?: DeliveryQueueStateContext,
   sessionGeneration?: ChatRef,
-  admittedReasoning?: true,
 ): Promise<DurableMessageBatchSendResult> {
   return await sendMessageBatch(
     params,
-    (delivery) =>
-      deliverOutboundPayloadsInternal(
-        { ...delivery, sessionGeneration },
-        queueContext,
-        admittedReasoning,
-      ),
+    (delivery) => deliverOutboundPayloadsInternal({ ...delivery, sessionGeneration }, queueContext),
     conversationDeliveryTarget,
   );
 }

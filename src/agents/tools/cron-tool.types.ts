@@ -90,8 +90,3 @@ export type CronToolOptions = {
 };
 
 export type GatewayToolCaller = typeof callGatewayTool;
-
-export type ChatMessage = {
-  role?: unknown;
-  content?: unknown;
-};

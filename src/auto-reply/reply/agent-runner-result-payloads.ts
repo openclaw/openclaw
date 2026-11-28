@@ -62,10 +62,7 @@ import {
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { resolveResponseUsageLine } from "./agent-runner-usage-line.js";
-import {
-  resolveAutomationReplyState,
-  retainAutomationReasoningWithFinal,
-} from "./automation-reply-payloads.js";
+import { resolveAutomationReplyState } from "./automation-reply-payloads.js";
 import { attachMcpAppChannelAction, attachMcpConnectChannelAction } from "./mcp-channel-actions.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import {
@@ -576,9 +573,6 @@ export async function prepareReplyAgentPayloads(state: {
       : sourcePayloads
   ).filter(isPayloadLaneEnabled);
   let replyPayloads = await buildFinalPayloads(payloadCandidates);
-  if (context.execution.automation) {
-    replyPayloads = retainAutomationReasoningWithFinal(replyPayloads);
-  }
   if (sourceReplyDelivery !== "delivered" && completion.outcome === "delivered") {
     await opts?.onObservedReplyDelivery?.();
   }

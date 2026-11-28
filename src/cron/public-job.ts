@@ -20,6 +20,9 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
     runtimeAuthorityRecoveryRequired: _runtimeAuthorityRecoveryRequired,
     ...publicJob
   } = job;
+  // Retired reasoning metadata stays in storage so existing approval revisions remain valid.
+  const payload = { ...job.payload };
+  Reflect.deleteProperty(payload, "includeReasoning");
   const state = { ...job.state };
   delete state.pluginCommandRuns;
   delete state.pluginCommandBinding;
@@ -37,6 +40,7 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
   delete state.lastFailureNotificationId;
   return {
     ...publicJob,
+    payload,
     state,
     ...(job.schedule.kind === "stream"
       ? { streamExecutionHost: job.streamSandbox ? ("sandbox" as const) : ("gateway" as const) }

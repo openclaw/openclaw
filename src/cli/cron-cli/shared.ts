@@ -540,8 +540,6 @@ export function coerceCronDeliveryPreviews(value: unknown): Map<string, CronDeli
 function formatCronPolicies(job: CronJob): string {
   const active = job.activeHours;
   const skipEmpty = job.payload?.kind === "agentTurn" ? job.payload.skipIfScratchEmpty : undefined;
-  const includeReasoning =
-    job.payload?.kind === "agentTurn" ? job.payload.includeReasoning : undefined;
   return sanitizeTerminalText(
     [
       active
@@ -551,7 +549,6 @@ function formatCronPolicies(job: CronJob): string {
       job.delivery?.target ? `delivery target=${job.delivery.target}` : undefined,
       job.delivery?.directPolicy ? `direct policy=${job.delivery.directPolicy}` : undefined,
       skipEmpty !== undefined ? `skip if scratch empty=${skipEmpty}` : undefined,
-      includeReasoning !== undefined ? `include reasoning=${includeReasoning}` : undefined,
     ]
       .filter((value) => value !== undefined)
       .join("; "),

@@ -139,8 +139,6 @@ monitoring jobs:
   policy off.
 - `--skip-if-scratch-empty` skips an agent turn with explicitly empty scratch.
   Missing scratch still runs. `--no-skip-if-scratch-empty` turns this off.
-- `--include-reasoning` includes reasoning returned by an agent alongside a meaningful result;
-  `--no-include-reasoning` keeps it out. This does not set the thinking level.
 
 A new window requires both endpoints. An edit can update just one field of an
 existing window. `automations edit --clear-active-hours` removes the window;

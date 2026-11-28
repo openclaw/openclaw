@@ -69,7 +69,6 @@ export type CronFormState = {
   payloadModel: string;
   payloadThinking: string;
   payloadLightContext: boolean;
-  payloadIncludeReasoning: boolean;
   deliveryMode: "" | CronDelivery["mode"];
   deliveryChannel: string;
   deliveryTo: string;

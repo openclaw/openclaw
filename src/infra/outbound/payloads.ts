@@ -128,9 +128,8 @@ export function resolveOutboundPayloadMirrorText(payload: ReplyPayload): string 
 function normalizeRawOutboundPayload(
   payload: ReplyPayload,
   context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
-  admittedReasoning?: true,
 ): ReplyPayload | null {
-  if (!admittedReasoning && shouldSuppressReasoningPayload(payload)) {
+  if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
   const parsed = parseReplyDirectives(stripLeadingInboundMetadata(payload.text ?? ""), {
@@ -228,16 +227,6 @@ export function createOutboundPayloadPlan(
 ): OutboundPayloadPlan[] {
   return buildOutboundPayloadPlan(payloads, (payload) =>
     normalizeRawOutboundPayload(payload, context),
-  );
-}
-
-/** Internal lane handoff: retain admitted reasoning while parsing raw reply controls normally. */
-export function createOutboundPayloadPlanWithAdmittedReasoning(
-  payloads: readonly ReplyPayload[],
-  context: OutboundPayloadPlanContext = {},
-): OutboundPayloadPlan[] {
-  return buildOutboundPayloadPlan(payloads, (payload) =>
-    normalizeRawOutboundPayload(payload, context, true),
   );
 }
 
