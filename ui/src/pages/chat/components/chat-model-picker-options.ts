@@ -192,6 +192,12 @@ export function prepareChatModelPickerPanel(
     } else if (!recommendingProviders.has(provider)) {
       group.more = group.lead.splice(9);
     }
+    // A lone leftover does not deserve its own fold: the extra "All models (1)" click was
+    // the whole cost of collapsing it, so it stays inline.
+    if (group.more.length === 1) {
+      group.lead.push(...group.more);
+      group.more = [];
+    }
   }
   const byModel = new Map(params.modelOptions.map((option) => [option.value, option]));
   const favoriteOptions = (favorites?.keys ?? [])

@@ -565,7 +565,7 @@ start a turn in that session. These out-of-root previews are read-only.
 
 In Chat and New session, the model picker reopens on **Favorites** if that was the last tab you chose and it is still available, even if your current model is not starred. Otherwise, the picker opens on the current model’s provider. Closing the picker clears the search text without resetting which provider lists you expanded.
 
-Provider lists with fewer than ten choices show every option, including models outside the recommendations. Larger lists without recommendations initially show up to nine choices, keeping the current model and **Default** first when available. Choose **All models** to browse the rest, or search the complete catalog directly.
+Provider lists with fewer than ten choices show every option, including models outside the recommendations. Larger lists without recommendations initially show up to nine choices, keeping the current model and **Default** first when available; a single leftover choice joins the visible rows instead of getting its own **All models** row, so an unranked list of exactly ten shows all ten. Choose **All models** to browse the rest, or search the complete catalog directly.
 
 Model search in Chat, New session, and the command palette composer puts available recommended models first when the search text matches equally well. Searching for a specific model still finds it even if it is not recommended.
 

@@ -60,7 +60,7 @@ function accountSection(
 }
 
 it.each(
-  [3, 9, 10].flatMap((count) => [false, true].map((recommended) => ({ count, recommended }))),
+  [3, 9, 10, 11].flatMap((count) => [false, true].map((recommended) => ({ count, recommended }))),
 )(
   "shows short provider lists without disclosure (count=$count, recommended=$recommended)",
   async ({ count, recommended }) => {
@@ -75,8 +75,11 @@ it.each(
       ],
     });
     await waitForMenu(container);
-    expect(Boolean(control(container, "more-toggle"))).toBe(count >= 10);
-    if (count < 10) {
+    // A single folded leftover stays inline: short lists stay flat, a ranked list folds
+    // once it reaches ten models, and an unranked catalog once it shows ten plus a leftover.
+    const disclosureStartsAt = recommended ? 10 : 11;
+    expect(Boolean(control(container, "more-toggle"))).toBe(count >= disclosureStartsAt);
+    if (count < disclosureStartsAt) {
       expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(count);
     }
   },
@@ -92,6 +95,7 @@ it("forgets disclosure for removed providers", async () => {
         option("other", "recommended-" + index, { recommended: true }),
       ),
       option("other", "rest"),
+      option("other", "rest-2"),
     ],
     selectedModelValue: "selected/current",
   });
@@ -175,6 +179,7 @@ it.each([false, true])(
           option("fixture", "recommended-" + index, { recommended: true }),
         ),
         option("fixture", "rest", { disabled: restDisabled }),
+        option("fixture", "rest-2", { disabled: restDisabled }),
         option("other", "model"),
       ],
       selectedModelValue: "fixture/lead",
