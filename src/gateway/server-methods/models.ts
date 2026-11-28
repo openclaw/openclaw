@@ -30,7 +30,6 @@ import { buildModelsListResult } from "./models-list-result.js";
 import { projectModelsProviderPresentation } from "./models-provider-presentation.js";
 import { createPreparedReadHandler } from "./prepared-read.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
 
 // Ordinary reads serve published rows while the catalog owner relists aged provider listings and
@@ -46,17 +45,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
       let publicationScope: ChatMetadataReadParams | undefined;
       try {
         const scoped = Boolean(params.sessionKey || params.authProfileId);
-        const draftAccountSelection =
-          !params.sessionKey && params.authProfileId
-            ? await preparePersonalModelAccountSelection(
-                options,
-                params.authProfileId,
-                SESSION_READ_SCOPE,
-              )
-            : undefined;
-        scope = scoped
-          ? await resolveChatMetadataReadParams(options, params, draftAccountSelection)
-          : undefined;
+        scope = scoped ? await resolveChatMetadataReadParams(options, params) : undefined;
         if (scoped && !scope) {
           return undefined;
         }

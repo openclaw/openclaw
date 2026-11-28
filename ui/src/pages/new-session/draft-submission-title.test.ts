@@ -3,6 +3,7 @@ import type { UserModelAccount } from "../../../../packages/gateway-protocol/src
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import { prepareChatModelAccountChoices } from "../chat/components/chat-model-account-control.tsx";
 import { backgroundCreateOptions } from "./draft-submission-flow.test-support.ts";
 import { createDraftTitleFixture } from "./draft-title.test-support.ts";
 import { controlQueries } from "./model-control-view-queries.test-support.ts";
@@ -118,7 +119,9 @@ function accountTitleFixture(preview?: ReturnType<typeof createDeferred<ModelCat
         .renderProps({ context, agentId: "main", agent: place.selectedAgent(), sending: false })
         .renderAccountSection?.("test/primary");
       expect(section).toBeDefined();
-      section!.viewProps(0).onSelect("automatic", new MouseEvent("click"));
+      section!
+        .viewProps(0, prepareChatModelAccountChoices)
+        .onSelect("automatic", new MouseEvent("click"));
       await vi.advanceTimersByTimeAsync(0);
     },
     chooseAccount: (account: UserModelAccount) =>

@@ -1,12 +1,160 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, createUniqueId, For, Show, useContext } from "solid-js";
+import type {
+  ChatAccountSelection,
+  UserModelAccount,
+} from "../../../../../packages/gateway-protocol/src/index.ts";
+import { CLAUDE_CLI_PROFILE_ID } from "../../../../../src/agents/auth-profiles/profile-ids.ts";
+import { isUserModelAuthProfileId } from "../../../../../src/state/user-model-account-id.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover } from "../../../components/solid/popover.tsx";
+import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
+import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createIntersectionObserver } from "../../../lib/reactive/observers.ts";
-import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
+import type {
+  ChatModelAccountControlParams,
+  ChatModelAccountSection,
+} from "./chat-model-account-control.ts";
 import { ChatModelSearchContext } from "./chat-model-picker-search.ts";
 import type { ModelPickerRowRenderer } from "./chat-model-picker-window.tsx";
+
+export function prepareChatModelAccountChoices(
+  params: ChatModelAccountControlParams,
+  selection: ChatAccountSelection,
+  accounts: UserModelAccount[],
+  authStatus: ChatModelAccountControlParams["modelAuthStatusResult"] = params.modelAuthStatusResult,
+) {
+  const provider = params.model.includes("/")
+    ? normalizeChatModelProviderId(params.model.slice(0, params.model.indexOf("/")))
+    : "";
+  const currentId = selection.kind === "automatic" ? undefined : selection.authProfileId;
+  const profiles =
+    authStatus?.providers
+      .filter(
+        (p) =>
+          canonicalModelAuthProviderId(normalizeChatModelProviderId(p.provider)) ===
+          canonicalModelAuthProviderId(provider),
+      )
+      .flatMap((p) => p.profiles) ?? [];
+  const native =
+    (provider === "anthropic" || provider === "claude-cli") && params.onSelectNative
+      ? authStatus?.providers.find(
+          (p) => p.provider === "claude-cli" && p.nativeAuth && p.status === "ok",
+        )?.nativeAuth
+      : undefined;
+  const nativeLabel = t("chat.modelControls.routes.claudeCli.label");
+  const shared = params.onSelectShared
+    ? profiles.filter(
+        (p) =>
+          !isUserModelAuthProfileId(p.profileId) &&
+          p.profileId !== CLAUDE_CLI_PROFILE_ID &&
+          p.profileId !== currentId &&
+          !accounts.some((a) => a.authProfileId === p.profileId),
+      )
+    : [];
+  const email = (profileId: string | undefined) =>
+    profiles.find((profile) => profile.profileId === profileId)?.email;
+  const selectedProfile = profiles.find((profile) => profile.profileId === currentId);
+  const selectedLabel =
+    selection.kind === "automatic"
+      ? t("chat.modelAccounts.automatic")
+      : native && currentId === CLAUDE_CLI_PROFILE_ID
+        ? nativeLabel
+        : selectedProfile?.displayName || selection.label;
+  const selectedIdentity = [
+    ...new Set([selectedLabel, selectedProfile?.email].filter(Boolean)),
+  ].join(" · ");
+  const description = (account: UserModelAccount | undefined) =>
+    email(account?.authProfileId) ??
+    (account &&
+    accounts.some(
+      (candidate) =>
+        candidate.authProfileId !== account.authProfileId &&
+        candidate.provider === account.provider &&
+        candidate.label === account.label,
+    )
+      ? account.authProfileId
+      : undefined);
+  const currentValue = "current";
+  const options: ReadonlyArray<{
+    value: string;
+    label: string;
+    description?: string;
+    disabled?: boolean;
+  }> = [
+    {
+      value: currentValue,
+      label: selectedLabel,
+      description:
+        (currentId === CLAUDE_CLI_PROFILE_ID ? native?.plan : undefined) ??
+        email(currentId) ??
+        description(accounts.find((account) => account.authProfileId === currentId)),
+    },
+    ...(native && currentId !== CLAUDE_CLI_PROFILE_ID
+      ? [{ value: "native", label: nativeLabel, description: native.plan }]
+      : []),
+    ...shared.map((p) => ({
+      value: `shared:${p.profileId}`,
+      label: p.displayName || p.profileId,
+      description: p.email,
+    })),
+    ...accounts
+      .filter((account) => account.provider === provider && account.authProfileId !== currentId)
+      .map((account) => ({
+        value: `account:${account.authProfileId}`,
+        label: account.label,
+        description: description(account),
+      })),
+    ...(params.onAutomatic
+      ? [{ value: "automatic", label: t("chat.modelAccounts.automatic") }]
+      : []),
+    ...(params.onManage ? [{ value: "manage", label: t("chat.modelAccounts.manage") }] : []),
+  ];
+  const select = (value: string) => {
+    if (value === "manage") {
+      params.onManage?.();
+    } else if (native && value === "native") {
+      const modelId = params.model.slice(params.model.indexOf("/") + 1);
+      void params.onSelectNative?.(`anthropic/${modelId}`);
+    } else if (value.startsWith("shared:")) {
+      const profile = shared.find((p) => p.profileId === value.slice("shared:".length));
+      if (profile) {
+        void params.onSelectShared?.(`${params.model}@${profile.profileId}`);
+      }
+    } else if (value === "automatic") {
+      params.onAutomatic?.();
+    } else {
+      const account = accounts.find(
+        (candidate) =>
+          `account:${candidate.authProfileId}` === value && candidate.provider === provider,
+      );
+      if (account) {
+        void params.onSelect(account);
+      }
+    }
+  };
+  return { selectedIdentity, options, currentValue, select };
+}
+
+export function accountOptionSearchRows(
+  account: ReturnType<ChatModelAccountSection["viewProps"]> | undefined,
+) {
+  return (
+    account?.options.map((entry) => ({
+      key: `account:${entry.value}`,
+      list: "accounts",
+      name: entry.label.toLocaleLowerCase(),
+      keywords: entry.description?.toLocaleLowerCase(),
+      providerLabel: "account",
+      reference: `account:${entry.value}`,
+      selected: entry.value === account.currentValue,
+      hasShortcut: false,
+      disabled: account.disabled || Boolean(entry.disabled),
+      visible: account.open,
+    })) ?? []
+  );
+}
 
 function AccountPageSentinel(props: { onVisible: () => void }) {
   const [sentinel, setSentinel] = createSignal<HTMLSpanElement>();

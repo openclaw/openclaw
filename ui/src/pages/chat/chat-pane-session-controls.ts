@@ -1,3 +1,4 @@
+import { CLAUDE_CLI_PROFILE_ID } from "../../../../src/agents/auth-profiles/profile-ids.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
@@ -284,6 +285,14 @@ export function renderChatPaneComposerControls(params: {
       : (savedComposer ?? undefined);
   const permissionSnapshot = cachedSessionStatePending ? savedComposer : undefined;
   const snapshotReason = snapshot ? t("chat.modelControls.refreshingSettings") : undefined;
+  const selectModel = (
+    model: string,
+    targetSessionKey = sessionKey,
+    agentRuntime?: string | null,
+  ) =>
+    modelAccess.allowed && canPatch({ model, agentRuntime }, targetSessionKey)
+      ? switchChatModel(state, model, targetSessionKey, agentRuntime, agentDefaultModel)
+      : Promise.resolve(false);
   return {
     composerControls: {
       component: ChatPaneModelControl,
@@ -310,10 +319,10 @@ export function renderChatPaneComposerControls(params: {
               state.chatStream !== null ||
               Boolean(state.chatModelSwitchPromises[sessionKey]),
             ownsSelection: () => ownsSelection() && state.chatAccountSelection === accountSelection,
-            onSelect: (account) =>
-              modelAccess.allowed && canPatch({ model: `${accountModel}@${account.authProfileId}` })
-                ? switchChatModel(state, `${accountModel}@${account.authProfileId}`, sessionKey)
-                : Promise.resolve(false),
+            onSelect: (account) => selectModel(`${accountModel}@${account.authProfileId}`),
+            onSelectShared: selectModel,
+            onSelectNative: (value) =>
+              selectModel(`${value}@${CLAUDE_CLI_PROFILE_ID}`, sessionKey, "claude-cli"),
             onManage: onModelAccounts,
           }),
         activeRunId: state.chatRunId,
@@ -400,10 +409,7 @@ export function renderChatPaneComposerControls(params: {
           state.chatModelPickerOpenSessionKey = open ? state.sessionKey : null;
           // The native picker already presents this transition.
         },
-        onModelSelect: (next, targetSessionKey, agentRuntime) =>
-          modelAccess.allowed && canPatch({ model: next, agentRuntime }, targetSessionKey)
-            ? switchChatModel(state, next, targetSessionKey, agentRuntime, agentDefaultModel)
-            : Promise.resolve(false),
+        onModelSelect: selectModel,
         onThinkingSelect: (next, targetSessionKey) =>
           effortAccess.allowed && canPatch({ thinkingLevel: next }, targetSessionKey)
             ? switchChatSetting(state, { kind: "thinkingLevel", value: next }, targetSessionKey)

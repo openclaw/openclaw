@@ -40,7 +40,10 @@ import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
-import { ChatModelAccountSectionView } from "./components/chat-model-account-control.tsx";
+import {
+  ChatModelAccountSectionView,
+  prepareChatModelAccountChoices,
+} from "./components/chat-model-account-control.tsx";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
@@ -51,6 +54,7 @@ describe("chat account selection", () => {
     request: GatewayRequestHandler,
     selection: ChatAccountSelection | null,
     modelAuthStatusResult?: ModelAuthStatusResult,
+    model = "openai/gpt-5.5",
   ) {
     const container = document.body.appendChild(document.createElement("div"));
     onTestFinished(() => container.remove());
@@ -61,6 +65,8 @@ describe("chat account selection", () => {
     });
     const onSelect = vi.fn(async () => true);
     const onManage = vi.fn();
+    const onSelectShared = vi.fn(async () => true);
+    const onSelectNative = vi.fn(async () => true);
     mountSolid(
       () => {
         const section = createMemo(() =>
@@ -70,15 +76,21 @@ describe("chat account selection", () => {
             client: state.client,
             ownsScope: () => current,
             selection: state.chatAccountSelection,
-            model: "openai/gpt-5.5",
+            model,
             disabled: false,
+            onSelectShared,
+            onSelectNative,
             onSelect,
             onManage,
           }),
         );
         return (
           <Show when={section()}>
-            {(activeSection) => <ChatModelAccountSectionView {...activeSection().viewProps(0)} />}
+            {(activeSection) => (
+              <ChatModelAccountSectionView
+                {...activeSection().viewProps(0, prepareChatModelAccountChoices)}
+              />
+            )}
           </Show>
         );
       },
@@ -89,6 +101,8 @@ describe("chat account selection", () => {
       container,
       state,
       onSelect,
+      onSelectShared,
+      onSelectNative,
       onManage,
       retire: () => {
         current = false;
@@ -105,6 +119,37 @@ describe("chat account selection", () => {
       },
     };
   }
+
+  it("selects the canonical Claude model through the native account action", async () => {
+    const request = vi.fn().mockResolvedValue({ accounts: [], links: [] });
+    const view = mountAccountControl(
+      request,
+      { kind: "automatic", label: "Automatic" },
+      {
+        ts: 1,
+        providers: [
+          {
+            provider: "claude-cli",
+            displayName: "Claude CLI",
+            status: "ok",
+            profiles: [],
+            nativeAuth: { kind: "subscription", plan: "Max" },
+          },
+        ],
+      },
+      "claude-cli/sonnet",
+    );
+    view.open();
+    await vi.waitFor(() =>
+      expect(
+        view.container.querySelector('[data-chat-account-option="native"]')?.textContent,
+      ).toContain("Max"),
+    );
+    view.select("native");
+    expect(view.onSelectNative).toHaveBeenCalledExactlyOnceWith("anthropic/sonnet");
+    expect(view.onSelectShared).not.toHaveBeenCalled();
+    expect(view.onSelect).not.toHaveBeenCalled();
+  });
 
   it("keeps the current chat choice separate from a saved default for new chats", async () => {
     const request = vi.fn().mockResolvedValue({

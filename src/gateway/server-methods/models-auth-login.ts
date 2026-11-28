@@ -12,6 +12,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveManifestDeclaredProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
 import {
   formatProviderLoginChoiceRef,
+  isNativeClaudeLoginChoice,
   isProviderCliLoginChoiceStartable,
   isProviderLoginChoiceStartable,
 } from "../../plugins/provider-login-options.js";
@@ -216,12 +217,13 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                 browser?.assertCurrent();
               };
               let result: Awaited<ReturnType<typeof runModelsAuthLoginFlowForGateway>>;
+              const nativeLogin = isNativeClaudeLoginChoice(choice);
               try {
                 result = await runModelsAuthLoginFlowForGateway({
                   provider: choice.providerId,
                   method: choice.methodId,
                   ownerPluginId: choice.pluginId,
-                  credentialOnly: true,
+                  credentialOnly: !nativeLogin,
                   agent: params.agentId,
                   config: context.getRuntimeConfig(),
                   runtime,
@@ -239,7 +241,7 @@ export const modelsAuthLoginHandlers: GatewayRequestHandlers = {
                   refreshAfterLogin: (agentId) =>
                     refreshModelAuthStateAfterMutation(context.getRuntimeConfig, agentId),
                 });
-                if (result.profiles.length === 0) {
+                if (!nativeLogin && result.profiles.length === 0) {
                   throw new Error(`${choice.choiceLabel} did not return a credential profile.`);
                 }
               } finally {

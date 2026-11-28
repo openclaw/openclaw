@@ -6,6 +6,8 @@ import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { registerModelProviderAuthEnglish } from "../../../i18n/locales/en-model-provider-auth.ts";
 import { i18nRevision, t } from "../../../lib/reactive/i18n.ts";
 import {
+  accountOptionSearchRows,
+  prepareChatModelAccountChoices,
   ChatModelAccountOptions,
   ChatModelAccountSectionView,
 } from "./chat-model-account-control.tsx";
@@ -135,6 +137,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
   const accounts = createMemo(() =>
     panel.params.accountSection?.viewProps(
       state().orderedOptions.length + state().targetOptionCount,
+      prepareChatModelAccountChoices,
     ),
   );
   // Search uses these four labels; other lazy English catalogs do not change its rows.
@@ -205,18 +208,7 @@ export function ChatModelPickerPanel(panel: ChatModelPickerPanelProps) {
             disabled: disabled(),
           })),
         ),
-        ...(account?.options.map((entry) => ({
-          key: `account:${entry.value}`,
-          list: "accounts",
-          name: entry.label.toLocaleLowerCase(),
-          keywords: entry.description?.toLocaleLowerCase(),
-          providerLabel: "account",
-          reference: `account:${entry.value}`,
-          selected: entry.value === account.currentValue,
-          hasShortcut: false,
-          disabled: account.disabled || Boolean(entry.disabled),
-          visible: account.open,
-        })) ?? []),
+        ...accountOptionSearchRows(account),
       ],
     };
   });

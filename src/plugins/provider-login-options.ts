@@ -67,8 +67,18 @@ export function matchesProviderLoginMethod(
   );
 }
 
+/** Native Claude sign-in applies the bundled runtime route, not an OpenClaw credential. */
+export function isNativeClaudeLoginChoice(choice: ProviderAuthChoiceMetadata): boolean {
+  return (
+    isEligible(choice) &&
+    choice.pluginId === "anthropic" &&
+    choice.providerId === "anthropic" &&
+    choice.methodId === "cli"
+  );
+}
+
 export function isProviderLoginChoiceStartable(choice: ProviderAuthChoiceMetadata): boolean {
-  return loginKind(choice) !== undefined;
+  return loginKind(choice) !== undefined || isNativeClaudeLoginChoice(choice);
 }
 
 export function hasProviderModelSignIn(

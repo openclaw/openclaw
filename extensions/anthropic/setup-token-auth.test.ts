@@ -28,9 +28,14 @@ it.each([
     const result = await runAnthropicSetupTokenAuth(
       {
         config,
-        opts: { token },
+        opts: occupied ? {} : { token },
         runtime: createRuntimeEnv(),
-        prompter: createTestWizardPrompter(),
+        prompter: createTestWizardPrompter({
+          text: async (step) => {
+            expect(step.sensitive).toBe(true);
+            return token;
+          },
+        }),
         agentDir: "/unused/agent",
         workspaceDir: "/unused/workspace",
         isRemote: false,

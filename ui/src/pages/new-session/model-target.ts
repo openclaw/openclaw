@@ -1,4 +1,5 @@
 import type { ChatAccountSelection } from "@openclaw/gateway-protocol";
+import { CLAUDE_CLI_PROFILE_ID } from "../../../../src/agents/auth-profiles/profile-ids.ts";
 import type {
   CyberAccessProgram,
   FastMode,
@@ -227,10 +228,17 @@ function resolveDraftModelUnavailableReason(
 }
 
 export function isDraftAccountModelAvailable(
-  account: { model: string; provider: string },
+  account: { model: string; provider: string; authProfileId: string },
   catalog: ModelCatalogEntry[],
+  selection: ChatAccountSelection | undefined,
   agentRuntime?: string,
 ): boolean {
+  if (
+    selection?.kind !== (account.authProfileId === CLAUDE_CLI_PROFILE_ID ? "shared" : "personal") ||
+    selection.authProfileId !== account.authProfileId
+  ) {
+    return false;
+  }
   const target = resolveDraftModelTarget(account.model, undefined, catalog, agentRuntime);
   return (
     target?.entry?.available === true &&
