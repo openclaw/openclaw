@@ -10,7 +10,8 @@ enum NativeUsagePreview {
 
     static let plans = #"""
     {"providers":[{"displayName":"Example AI","plan":"Team",
-                   "windows":[{"label":"Weekly","usedPercent":28}]}]}
+                   "windows":[{"label":"Weekly","usedPercent":28}],
+                   "billing":[{"type":"balance","amount":72,"unit":"credits"}]}]}
     """#
 
     static func report(_ query: NativeUsageQuery) throws -> Data {
@@ -35,12 +36,13 @@ enum NativeUsagePreview {
                 "missingCostEntries": 0,
             ]
         }
+        let share = query.agentId == nil ? 3 : query.agentId == "Research" ? 2 : 1
         var daily = [[String: Any]]()
         var total = 0
         var date = first
         while date <= last, daily.count < 366 {
             let day = calendar.ordinality(of: .day, in: .year, for: date) ?? 1
-            let count = (80 + (day * 71) % 320) * (query.agentId == nil ? 3 : 2)
+            let count = (80 + (day * 71) % 320) * share
             var entry = totals(count)
             entry["date"] = formatter.string(from: date)
             daily.append(entry)
@@ -50,14 +52,23 @@ enum NativeUsagePreview {
         }
         let stats = totals(total)
         let firstAgent = total * 2 / 3
+        let agents: [[String: Any]] = if let id = query.agentId {
+            [["agentId": id, "totals": stats]]
+        } else {
+            [
+                ["agentId": "Research", "totals": totals(firstAgent)],
+                ["agentId": "Writing", "totals": totals(total - firstAgent)],
+            ]
+        }
+        let calls = daily.count * 2 * share
         let aggregates: [String: Any] = [
-            "sessionCount": 8, "messages": [
-                "user": daily.count * 2,
-                "assistant": daily.count * 3,
-                "toolCalls": daily.count * 4,
+            "sessionCount": share == 3 ? 8 : share == 2 ? 5 : 3, "messages": [
+                "user": daily.count * share,
+                "assistant": daily.count * 2 * share,
+                "toolCalls": calls,
                 "errors": 0,
             ],
-            "tools": ["tools": [["name": "Search", "count": daily.count * 4]]], "costDaily": daily,
+            "tools": ["tools": [["name": "Search", "count": calls]]], "costDaily": daily,
             "byProvider": [["provider": "Example AI", "totals": stats]], "byChannel": [[
                 "channel": "Chat",
                 "totals": stats,
@@ -66,10 +77,7 @@ enum NativeUsagePreview {
                 ["model": "Atlas", "totals": totals(firstAgent)],
                 ["model": "Orbit", "totals": totals(total - firstAgent)],
             ],
-            "byAgent": [
-                ["agentId": "Research", "totals": totals(firstAgent)],
-                ["agentId": "Writing", "totals": totals(total - firstAgent)],
-            ],
+            "byAgent": agents,
         ]
         return try JSONSerialization.data(withJSONObject: [
             "startDate": query.startDate, "endDate": query.endDate, "totals": stats, "aggregates": aggregates,

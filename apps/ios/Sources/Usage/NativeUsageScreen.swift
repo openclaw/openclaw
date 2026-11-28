@@ -121,7 +121,7 @@ struct NativeUsageScreen: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { self.showDashboard = true } label: {
                         Label { Text("Full report in web app").font(OpenClawType.body) }
-                            icon: { Image(systemName: "rectangle.on.rectangle") }
+                            icon: { Image(systemName: "arrow.up.right.square") }
                     }
                 }
             }
@@ -200,7 +200,8 @@ struct NativeUsageScreen: View {
                 ForEach(Array(plans.providers.enumerated()), id: \.offset) { _, provider in
                     VStack(alignment: .leading, spacing: 8) {
                         Text(verbatim: provider.displayName).font(OpenClawType.headline)
-                        if let plan = provider.plan { Text(verbatim: plan).font(OpenClawType.footnote) }
+                        if let plan = provider
+                            .plan { Text(verbatim: plan).font(OpenClawType.footnote).foregroundStyle(.secondary) }
                         if let summary = provider.summary { Text(verbatim: summary).font(OpenClawType.subhead) }
                         if let error = provider
                             .error
@@ -240,7 +241,7 @@ struct NativeUsageScreen: View {
 
     private func quotaWindow(_ window: NativeUsagePlans.Window) -> some View {
         let left = min(1, max(0, 1 - window.usedPercent / 100))
-        let tone = left <= 0.10 ? OpenClawBrand.danger : left <= 0.25 ? OpenClawBrand.warn : OpenClawBrand.accent
+        let tone = left <= 0.10 ? OpenClawBrand.danger : left <= 0.25 ? OpenClawBrand.warn : Color.primary
         return HStack(spacing: 10) {
             ZStack {
                 Circle().stroke(tone.opacity(0.18), lineWidth: 3)
