@@ -1128,7 +1128,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     }
   });
 
-  it("queues system events for elevated and reasoning mode directives", async () => {
+  it("queues a system event for elevated mode but not for reasoning visibility", async () => {
     const sessionEntry = createSessionEntry();
 
     await runHandleCommand("/elevated on", {
@@ -1145,14 +1145,14 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
       },
     );
 
-    vi.mocked(enqueueSystemEvent).mockClear();
-
-    await runHandleCommand("/reasoning stream", { sessionEntry });
-
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("Reasoning STREAM - emit live <think>.", {
-      sessionKey,
-      contextKey: "mode:reasoning",
-    });
+    // Visibility only changes what OpenClaw shows; asking a native-thinking model to
+    // write out its reasoning gets the session refused as reasoning extraction.
+    for (const level of ["on", "stream", "off"]) {
+      vi.mocked(enqueueSystemEvent).mockClear();
+      await runHandleCommand(`/reasoning ${level}`, { sessionEntry });
+      expect(sessionEntry.reasoningLevel).toBe(level);
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    }
   });
 
   it.each([

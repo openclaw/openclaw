@@ -50,7 +50,6 @@ import {
   formatElevatedEvent,
   formatElevatedUnavailableText,
   formatModelSelectionScopeAck,
-  formatReasoningEvent,
   persistSessionDirectiveSnapshot,
   resolveDirectiveTouchedSessionFields,
   withOptions,
@@ -398,7 +397,6 @@ export async function handleDirectiveOnly(
     );
   }
 
-  const prevReasoningLevel = currentReasoningLevel ?? sessionEntry.reasoningLevel ?? "off";
   const elevatedChanged =
     directives.hasElevatedDirective &&
     directives.elevatedLevel !== undefined &&
@@ -417,10 +415,6 @@ export async function handleDirectiveOnly(
       directives.fastMode !== undefined &&
       directives.fastMode !== currentFastMode) ||
     (directives.clearFastMode && currentFastMode !== fastModeState.mode);
-  const reasoningChanged =
-    directives.hasReasoningDirective &&
-    directives.reasoningLevel !== undefined &&
-    directives.reasoningLevel !== prevReasoningLevel;
   // Validated, authorized directives have already named every field they can mutate.
   if (touchedSessionFields.length > 0) {
     const pinnedProfile =
@@ -555,16 +549,12 @@ export async function handleDirectiveOnly(
       });
     }
   }
-  if (!params.persistenceState) {
-    const eventSessionKey = resolveSystemEventQueueKey(sessionKey, activeAgentId);
-    for (const [changed, mode, format] of [
-      [elevatedChanged, "elevated", () => formatElevatedEvent(sessionEntry.elevatedLevel)],
-      [reasoningChanged, "reasoning", () => formatReasoningEvent(sessionEntry.reasoningLevel)],
-    ] as const) {
-      if (changed) {
-        enqueueSystemEvent(format(), { sessionKey: eventSessionKey, contextKey: `mode:${mode}` });
-      }
-    }
+  // Reasoning visibility only changes what OpenClaw shows, so it queues no model-facing event.
+  if (!params.persistenceState && elevatedChanged) {
+    enqueueSystemEvent(formatElevatedEvent(sessionEntry.elevatedLevel), {
+      sessionKey: resolveSystemEventQueueKey(sessionKey, activeAgentId),
+      contextKey: "mode:elevated",
+    });
   }
   if (params.persistenceState) {
     params.persistenceState.outcome = {
