@@ -89,6 +89,25 @@ struct ChatStatusStripTests {
     }
 
     @Test
+    func `changing the sentence can continue the wait, but clearing the slot ends it`() {
+        let clock = Clock()
+        let strip = self.makeStrip(clock)
+        let pending = self.status("connection", priority: 70, text: "Connecting", delay: .seconds(3))
+        let offline = self.status("connection", priority: 90, text: "Not connected", delay: .seconds(3))
+        strip.post(pending)
+        clock.now += .seconds(2)
+        strip.post(offline, continuingWait: true)
+        clock.now += .milliseconds(999)
+        #expect(strip.current == nil)
+        clock.now += .milliseconds(1)
+        #expect(strip.current == offline)
+
+        strip.clear("connection")
+        strip.post(pending, continuingWait: true)
+        #expect(strip.current == nil)
+    }
+
+    @Test
     func `a timed note leaves by itself, and waits longer for VoiceOver`() {
         let clock = Clock()
         let note = self.status("note", priority: 10, clearing: .after(.seconds(4)))

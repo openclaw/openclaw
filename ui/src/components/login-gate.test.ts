@@ -423,6 +423,28 @@ describe("login gate failure recovery", () => {
     ).toEqual(["openclaw status", "openclaw gateway run", "openclaw dashboard --no-open"]);
   });
 
+  it("keeps the Gateway URL editable when the browser blocks the connection", async () => {
+    const reason = "Browser refused the Gateway WebSocket for security reasons.";
+    const element = await mountFailure(reason, "BROWSER_WEBSOCKET_SECURITY_ERROR");
+    expectText(element, "failure-summary").toContain("wss://");
+    const url = element.querySelector<HTMLInputElement>("#login-gate-url")!;
+    expect(url.closest("details:not([open])")).toBeNull();
+    expectText(element, "failure-raw", true).toBe(reason);
+  });
+
+  it("does not mark a secure Gateway URL invalid when the browser refuses it", async () => {
+    const reason = "Check the Gateway WebSocket URL and browser security policy.";
+    const element = await mountFailure(reason, "BROWSER_WEBSOCKET_SECURITY_ERROR");
+    element.props = { ...element.props, gatewayUrl: "wss://gateway.example" };
+    await element.updateComplete;
+
+    const url = element.querySelector<HTMLInputElement>("#login-gate-url")!;
+    expect(url.value).toBe("wss://gateway.example");
+    expect(url.getAttribute("aria-invalid")).not.toBe("true");
+    expectText(element, "failure-summary").toContain("open Show details");
+    expectText(part(element, "failure-detail"), "failure-raw", true).toBe(reason);
+  });
+
   it("offers only supported recovery for an insecure browser context", async () => {
     const element = await mountFailure(
       "device identity required",

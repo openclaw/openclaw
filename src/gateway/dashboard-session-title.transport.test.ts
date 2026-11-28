@@ -525,6 +525,23 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
     ],
   ] as const;
 
+  it("keeps a saved fallback for native chat clients that do not display derived titles", async () => {
+    await withTitleProvider("", async ({ cfg, storePath }) => {
+      for (const suffix of ["ios-topic", "node-device"]) {
+        const scope = { agentId: "main", sessionKey: `agent:main:${suffix}`, storePath };
+        const sessionId = suffix;
+        await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
+        await maybeGenerateDashboardSessionTitle({
+          ...scope,
+          cfg,
+          sessionId,
+          userMessage: "Plan the release",
+        });
+        expect(loadSessionEntry(scope)?.displayName).toMatch(/^[a-z]+-[a-z]+$/);
+      }
+    });
+  });
+
   it("persists usable titles through the dashboard owner", async () => {
     let raw = "";
     await withTitleProvider(
@@ -548,7 +565,7 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
               userMessage: source,
             }),
             name,
-          ).resolves.toBe(true);
+          ).resolves.toBe(title !== null);
           const persisted = loadSessionEntry(scope);
           const rowRequests = requests.slice(requestStart);
           expect(rowRequests, name).toHaveLength(title === null ? 2 : 1);
@@ -561,10 +578,15 @@ describe("generated titles over the real OpenAI-compatible transport", () => {
           expect(JSON.parse(sourceMessage!.content), name).toEqual({
             conversationLabelSource: source,
           });
-          const expected = title ?? expect.stringMatching(/^[a-z]+-[a-z]+$/);
-          expect(persisted?.displayName, name).toEqual(expected);
-          expect(deriveSessionTitle(persisted), name).toEqual(expected);
-          const branchName = slugifyWorktreeTitle(persisted!.displayName!);
+          // Neither a generated title nor a failed attempt moves the session in recents.
+          expect(persisted?.updatedAt, name).toBe(entry.updatedAt);
+          expect(persisted?.displayName, name).toBe(title ?? undefined);
+          if (title === null) {
+            expect(persisted?.titleFallbackReady, name).toBe(true);
+            continue;
+          }
+          expect(deriveSessionTitle(persisted), name).toBe(title);
+          const branchName = slugifyWorktreeTitle(title);
           expect(branchName, name).toBeDefined();
           expect(validateName(branchName!), name).toBe(branchName);
         }
