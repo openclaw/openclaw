@@ -8,7 +8,7 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { openAgentFallbackChain, requestRaw } from "./model-providers.test-support.ts";
+import { requestRaw } from "./model-providers.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent fallback removal",
@@ -60,7 +60,9 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}settings/agents/mill/overview`);
           const editor = page.locator("openclaw-agents-page");
           await editor.locator(".agent-overview").waitFor();
-          const fallbacks = await openAgentFallbackChain(editor);
+          // v2026.11.11 renders the fallback chain inline in Overview.
+          const fallbacks = editor.locator("openclaw-multi-select.agent-fallbacks");
+          await fallbacks.waitFor();
           const values = () =>
             fallbacks
               .locator(".multi-select__chip")
