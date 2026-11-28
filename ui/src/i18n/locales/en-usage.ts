@@ -128,7 +128,6 @@ const enUsage = {
       channelGroup: "{channel} group",
       channelTopic: "{channel} group · topic {topic}",
       system: "System",
-      empty: "No usage for these dates and filters.",
       more: "Show {count} more identities",
     },
     empty: {
@@ -198,7 +197,6 @@ const enUsage = {
       details: "Session details",
       showTop: "Show top {count}",
       total: "{count} total",
-      avg: "avg",
       all: "All",
       recentShort: "Recent",
       sort: "Sort",

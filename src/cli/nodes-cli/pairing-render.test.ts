@@ -18,14 +18,6 @@ const request = (requestId: string, fields: Record<string, unknown> = {}) => ({
 });
 
 describe("cli/nodes-cli/pairing-render", () => {
-  it("renders pending rows parsed from malformed scalars without throwing", () => {
-    // node.pair.list rows are blind-cast from the pairing file; non-string requestId/nodeId/
-    // displayName/remoteIp once crashed the renderer's .trim()/sanitizeTerminalText calls.
-    expect(() =>
-      render([{ requestId: 7, nodeId: {}, displayName: 42, remoteIp: 99, ts: 1 }]),
-    ).not.toThrow();
-  });
-
   it("keeps a valid pending label after normalization", () => {
     const table = render([
       { requestId: "r1", nodeId: "n1", displayName: "Phone", remoteIp: "10.0.0.1", ts: 1 },

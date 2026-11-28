@@ -11,7 +11,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const root = "agent:main:main";
 const child = (id: string) => `agent:main:subagent:${id}`;
-function makeRun(runId: string, overrides: Partial<SubagentRunRecordOverrides> = {}) {
+function makeRun(runId: string, overrides: Partial<SubagentRunRecordOverrides>) {
   return createSubagentRunRecord({
     runId,
     childSessionKey: child(runId),

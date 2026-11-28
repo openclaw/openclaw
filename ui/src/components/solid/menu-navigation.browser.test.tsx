@@ -395,7 +395,9 @@ describe("Solid menu navigation", () => {
       expect(document.activeElement).toBe(item("Ada Rivera", "people-assign"));
       await keyPhase("{ArrowRight}", "hidden", "people-assign");
       expect(document.activeElement).toBe(trigger("people-assign"));
-      await press("{ArrowDown}", trigger("people-move"));
+      await userEvent.keyboard("{ArrowDown}");
+      await vi.dynamicImportSettled();
+      expect(document.activeElement).toBe(trigger("people-move"));
     },
   );
 
