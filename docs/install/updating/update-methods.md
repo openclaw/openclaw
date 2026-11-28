@@ -222,7 +222,15 @@ outside this runtime transaction. Changed source or unverified child cleanup
 prevents destructive recovery; retained paths are reported for inspection.
 If restart of a verified new runtime fails, that runtime stays in place because
 a new process may already be using it, and previous artifacts remain available
-for operator recovery. Failed automatic invocations also retain their small
+for operator recovery.
+For the stock `openclaw gateway restart` callback (or exactly
+`openclaw gateway start`), exit 2 means the Gateway is still starting. The script
+continues bounded update-readiness verification instead of immediately failing.
+It completes activation only when the managed Gateway runs from this checkout,
+serves its version and build, and reports ready. An unverified result retains the
+previous runtime and fails the update. This also applies when restarting a restored
+runtime. Custom shell callbacks keep their existing contract: every nonzero exit
+is a failure, including exit 2. Failed automatic invocations also retain their small
 scoped pnpm launcher directory; remove the reported directory only after all
 update children have stopped.
 The hosted [installers](/install/installer) also support npm-owned temporary provisioning
