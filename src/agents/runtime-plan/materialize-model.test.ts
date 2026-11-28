@@ -40,7 +40,7 @@ function expectModel<M extends RuntimeRouteModel>(
 
 function apiPlan(
   modelId: string,
-  overrides: Partial<AgentRuntimeAuthPlan> = {},
+  overrides: Partial<AgentRuntimeAuthPlan>,
   baseUrl = platformModel.baseUrl,
 ): AgentRuntimeAuthPlan {
   return {
