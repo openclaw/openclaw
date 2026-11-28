@@ -4,6 +4,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -357,7 +358,7 @@ export function registerCronAddCommand(cron: Command) {
 
             if (
               (resolvedPayload.kind === "agentTurn" || resolvedPayload.kind === "script") &&
-              !agentId
+              !tryResolveCronJobEffectiveAgentId({ agentId, sessionKey })
             ) {
               defaultRuntime.error(
                 theme.warn(
