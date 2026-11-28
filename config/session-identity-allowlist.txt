@@ -644,7 +644,7 @@ src/auto-reply/reply/session-diff-baseline.ts	4
 src/auto-reply/reply/session-entry-persistence.ts	1
 src/auto-reply/reply/session-event-batch.ts	2
 src/auto-reply/reply/session-event-context.ts	1
-src/auto-reply/reply/session-event-handoff.ts	11
+src/auto-reply/reply/session-event-handoff.ts	9
 src/auto-reply/reply/session-event-target.ts	4
 src/auto-reply/reply/session-initialization-admission.ts	1
 src/auto-reply/reply/session-reset-cleanup.ts	8
