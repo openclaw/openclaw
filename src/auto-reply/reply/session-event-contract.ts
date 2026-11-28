@@ -87,7 +87,14 @@ export type SessionEventTarget = {
   generation: string;
   deliveryContext?: DeliveryContext;
   chatType?: SessionEntry["chatType"];
-  settings?: Readonly<Pick<SessionEntry, "permissionMode" | "toolOverrides">> | undefined;
+  settings?:
+    | Readonly<{
+        permissionMode?: SessionEntry["permissionMode"];
+        toolOverrides?: SessionEntry["toolOverrides"];
+        /** Host-captured native conversation identity from the delivery origin. */
+        nativeChannelId?: string;
+      }>
+    | undefined;
   toolsAllow?: string[];
   agentId?: string;
   sessionKey?: string;

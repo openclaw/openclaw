@@ -52,7 +52,10 @@ import {
 import { chatRef } from "../../sessions/chat-ref.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.read.js";
 import {
   prepareCommandOwnerAuthority,
   type PreparedCommandOwnerAuthority,
@@ -214,7 +217,11 @@ export async function captureSessionEventTargetForHost(
     }
     toolsAllow = intersectSessionEventToolsAllow(toolsAllow, options.producerPolicy?.toolsAllow);
     const destinationSettings = entry
-      ? { permissionMode: entry.permissionMode, toolOverrides: entry.toolOverrides }
+      ? {
+          permissionMode: entry.permissionMode,
+          toolOverrides: entry.toolOverrides,
+          nativeChannelId: sessionDeliveryOrigin(entry)?.nativeChannelId,
+        }
       : undefined;
     const callerSettings = callerAgentMatches ? caller?.sessionEventSettings : undefined;
     const producerSettings =

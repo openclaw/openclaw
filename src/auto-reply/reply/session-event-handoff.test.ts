@@ -193,6 +193,38 @@ afterAll(() => {
 });
 
 describe("session event target custody", () => {
+  it("carries the persisted native conversation ID into a completion turn", async ({
+    nativeState: { env },
+  }) => {
+    const nativeChannelId = "123456789012345678";
+    const deliveryContext = { channel: "discord", to: `channel:${nativeChannelId}` };
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    writeSessionEntry(database, sessionKey, {
+      sessionId: "original-session",
+      lifecycleRevision: "original-revision",
+      updatedAt: 1,
+      delivery: normalizeSessionDeliveryState({
+        context: deliveryContext,
+        origin: { provider: "discord", nativeChannelId },
+      }),
+    });
+
+    const target = await captureTarget("main", sessionKey, { env });
+    const ctx = buildSessionEventContext({
+      cfg: {},
+      ...eventScope,
+      text: "Process completed",
+      options: { source: "exec" },
+      occurrenceId: "native-conversation",
+      deliveryContext: target.deliveryContext,
+      target,
+      assertCurrent() {},
+    });
+
+    expect(ctx.ChatId).toBe(nativeChannelId);
+    expect(ctx.OriginatingTo).toBe(deliveryContext.to);
+  });
+
   it("retains scheduled creation restrictions and private skill pins only for absent targets", async ({
     state: _state,
   }) => {

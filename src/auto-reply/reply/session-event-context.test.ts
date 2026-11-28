@@ -5,6 +5,26 @@ import { projectChatDisplayMessages } from "../../gateway/chat-display-projectio
 import { buildGatewayRestartResumeText } from "../../gateway/session-restart-resume-prompt.js";
 import { buildSessionEventContext } from "./session-event-context.js";
 
+it("does not substitute the prefixed route address for the chat id", () => {
+  const ctx = buildSessionEventContext({
+    cfg: {},
+    agentId: "main",
+    sessionKey: "agent:main:cron:proof-job",
+    text: "background completion turn",
+    options: { source: "restart" },
+    occurrenceId: "chatid-occurrence-no-native",
+    deliveryContext: {
+      channel: "discord",
+      to: "channel:123456789012345678",
+      accountId: "acct-1",
+    },
+    target: { sessionId: "existing", generation: "current" },
+    assertCurrent() {},
+  });
+  expect(ctx.ChatId).toBeUndefined();
+  expect(ctx.OriginatingTo).toBe("channel:123456789012345678");
+});
+
 it.each([false, true])(
   "keeps restart input small and hidden from chat (unresolved shell: %s)",
   (unresolvedShell) => {

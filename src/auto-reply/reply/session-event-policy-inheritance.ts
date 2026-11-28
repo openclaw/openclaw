@@ -13,6 +13,8 @@ export function narrowSessionEventSettings(
       current?.permissionMode,
     ),
     toolOverrides: intersectSessionToolOverrides(retained?.toolOverrides, current?.toolOverrides),
+    // Native conversation identity comes from the current destination.
+    nativeChannelId: current?.nativeChannelId,
   };
 }
 
