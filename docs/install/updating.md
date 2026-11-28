@@ -318,7 +318,8 @@ owner, then rerun the update. A stopped Gateway remains updatable.
 `discoverDatabases` is the state transaction inventory. Boot uses that inventory
 to plan pending canonical schema steps and their derived minimum reader floors
 before mutating live databases. A schema-version increase alone does not require
-a preimage: compatible steps run in place without one.
+a preimage: compatible steps run in place without one. Update preflight requires
+1.4 GB free on the installation filesystem, not space for a full copy of state.
 
 Shipped copy-based releases can leave a durable `.upgrade-*/plan.json` after an
 interrupted publication. Boot first settles that existing intent under exclusive

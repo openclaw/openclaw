@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
@@ -931,7 +932,7 @@ describe("update preflight", () => {
     ).toMatchObject({ ok: false, reason: "dirty" });
   });
 
-  it("refuses insufficient installation and state disk space", async () => {
+  it("requires installation space but not a full copy of state databases", async () => {
     const target = await repository();
     const params = {
       kind: "git" as const,
@@ -944,38 +945,53 @@ describe("update preflight", () => {
       await preflight({ ...params, statfs: async () => ({ bavail: 1, bsize: 1 }) }),
     ).toMatchObject({ ok: false, reason: "insufficient-install-space" });
     await fs.mkdir(path.join(params.stateDir, "state"), { recursive: true });
-    await fs.writeFile(path.join(params.stateDir, "state", "openclaw.sqlite"), "database bytes");
+    const database = path.join(params.stateDir, "state", "openclaw.sqlite");
+    await fs.writeFile(database, "");
+    await fs.truncate(database, 3_000_000_000);
     expect(
       await preflight({
         ...params,
-        statfs: async (file) => ({ bavail: file === root ? 2_000_000_000 : 1, bsize: 1 }),
+        statfs: async () => ({ bavail: 2_000_000_000, bsize: 1 }),
       }),
-    ).toMatchObject({ ok: false, reason: "insufficient-state-space" });
+    ).toEqual({ ok: true });
   });
 
-  it("counts state databases past a dangling link a tool left in an agent home", async () => {
+  it.each([
+    ["EACCES", false],
+    ["EPERM", false],
+    ["EACCES", true],
+  ] as const)("reports %s with safe ownership repair (system prefix: %s)", async (code, system) => {
     const target = await repository();
-    const stateDir = path.join(root, "data");
-    const shims = path.join(stateDir, "agents", "main", "agent", "codex-home", "tmp", "arg0");
-    await fs.mkdir(shims, { recursive: true });
-    await fs.symlink(path.join(root, "gone", "apply_patch"), path.join(shims, "apply_patch"));
-    await fs.writeFile(
-      path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
-      "database bytes",
-    );
-    const params = {
-      kind: "git" as const,
-      target: { kind: "git" as const, ...target, version: "2026.11.21" },
-      prefix: root,
-      stateDir,
-      node,
-    };
+    const prefix = path.join(root, "user's install");
+    await fs.mkdir(prefix);
+    vi.spyOn(os, "userInfo").mockReturnValue({
+      ...os.userInfo(),
+      username: "update-user",
+      homedir: system ? path.join(root, "home") : root,
+    });
+    const stat = fs.stat.bind(fs);
+    vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
+      const result = await stat(...args);
+      return args[0] === prefix ? Object.assign(result, { uid: 0 }) : result;
+    });
     expect(
       await preflight({
-        ...params,
-        statfs: async (file) => ({ bavail: file === root ? 2_000_000_000 : 1, bsize: 1 }),
+        kind: "git",
+        target: { kind: "git", ...target, version: "2026.11.21" },
+        prefix,
+        stateDir: root,
+        node,
+        statfs: async () => {
+          throw Object.assign(new Error("permission denied"), { code });
+        },
       }),
-    ).toMatchObject({ ok: false, reason: "insufficient-state-space" });
+    ).toEqual({
+      ok: false,
+      reason: "prefix-not-writable",
+      message: system
+        ? `The installation at '${prefix}' is owned by root. Run: sudo openclaw update`
+        : `Files in '${prefix}' are not writable by update-user. Fix ownership with: sudo chown -R update-user '${prefix.replaceAll("'", `'"'"'`)}'. Then retry the update.`,
+    });
   });
 
   it("prepares an install that runs inside a container", async () => {

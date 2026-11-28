@@ -1,5 +1,6 @@
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { satisfies } from "semver";
 import {
@@ -16,6 +17,7 @@ import { resolveNpmCommand } from "../infra/npm-command.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import { gitCleanCheckArgs } from "../infra/update-runner-git-commands.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { shellEscape } from "../shared/shell-quote.js";
 import {
   parsePackageOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
@@ -23,48 +25,6 @@ import {
 import type { UpdateTarget } from "./target.js";
 
 export type PreflightResult = { ok: true } | { ok: false; reason: string; message: string };
-
-/** Enumerate files without opening a database or admitting a schema migration. */
-async function listStateDatabases(stateDir: string): Promise<string[]> {
-  const files: string[] = [];
-  const visited = new Set<string>();
-  const walk = async (dir: string): Promise<void> => {
-    let real: string;
-    try {
-      real = await fs.realpath(dir);
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        return;
-      }
-      throw error;
-    }
-    if (visited.has(real)) {
-      return;
-    }
-    visited.add(real);
-    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
-      const file = path.join(dir, entry.name);
-      // Tools leave dangling links in agent homes (Codex arg0 shims); they hold no database.
-      const stat = await fs.stat(file).catch((error: unknown) => {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return null;
-        }
-        throw error;
-      });
-      if (!stat) {
-        continue;
-      }
-      if (stat.isDirectory()) {
-        await walk(file);
-      } else if (entry.name.endsWith(".sqlite") || entry.name.endsWith(".db")) {
-        files.push(file);
-      }
-    }
-  };
-  await walk(path.join(stateDir, "state"));
-  await walk(path.join(stateDir, "agents"));
-  return files;
-}
 
 async function existingAncestor(file: string): Promise<string> {
   for (let current = file; ; current = path.dirname(current)) {
@@ -208,33 +168,28 @@ export async function preflight(params: {
       }
     }
     reason = "disk-space-unavailable";
-    const statfs = params.statfs ?? fs.statfs;
-    const available = async (file: string) => {
-      const stat = await statfs(await existingAncestor(file));
-      return BigInt(stat.bavail) * BigInt(stat.bsize);
-    };
-    if ((await available(params.prefix)) < 2n * 700n * 1024n * 1024n) {
-      return refuse(
-        "insufficient-install-space",
-        "The update needs at least 1.4 GB free on the installation filesystem.",
-      );
-    }
-    let stateBytes = 0n;
-    for (const file of await listStateDatabases(params.stateDir)) {
-      for (const suffix of ["", "-wal", "-shm"]) {
-        try {
-          stateBytes += BigInt((await fs.stat(`${file}${suffix}`)).size);
-        } catch (error) {
-          if (!hasErrnoCode(error, "ENOENT")) {
-            throw error;
-          }
-        }
+    try {
+      const stat = await (params.statfs ?? fs.statfs)(ancestor);
+      if (BigInt(stat.bavail) * BigInt(stat.bsize) < 2n * 700n * 1024n * 1024n) {
+        return refuse(
+          "insufficient-install-space",
+          "The update needs at least 1.4 GB free on the installation filesystem.",
+        );
       }
-    }
-    if ((await available(params.stateDir)) < stateBytes) {
+    } catch (error) {
+      if (!hasErrnoCode(error, "EACCES") && !hasErrnoCode(error, "EPERM")) {
+        throw error;
+      }
+      const owner = await fs.stat(ancestor);
+      const user = os.userInfo();
+      const relative = path.relative(user.homedir, await fs.realpath(ancestor));
+      const outsideHome =
+        relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
       return refuse(
-        "insufficient-state-space",
-        "Free space on the state filesystem must cover a copy of the state databases.",
+        "prefix-not-writable",
+        owner.uid === 0 && outsideHome
+          ? `The installation at '${params.prefix}' is owned by root. Run: sudo openclaw update`
+          : `Files in '${params.prefix}' are not writable by ${user.username}. Fix ownership with: sudo chown -R ${user.username} ${shellEscape(params.prefix)}. Then retry the update.`,
       );
     }
     return { ok: true };
