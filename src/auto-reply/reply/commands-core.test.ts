@@ -12,7 +12,7 @@ import type {
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
   runBeforeReset: vi.fn<HookRunner["runBeforeReset"]>(),
-  loadTranscriptEvents: vi.fn(async (): Promise<unknown[]> => []),
+  loadTranscriptEvents: vi.fn<() => Promise<unknown[]>>(),
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => {
@@ -209,7 +209,7 @@ describe("emitResetCommandHooks", () => {
 // Tests command send policy behavior for visible replies and message-tool routing.
 
 const loadCommandHandlersMock = vi.hoisted((): ReturnType<typeof vi.fn<() => CommandHandler[]>> =>
-  vi.fn<() => CommandHandler[]>(() => []),
+  vi.fn<() => CommandHandler[]>(),
 );
 
 vi.mock("./commands-handlers.runtime.js", () => ({
