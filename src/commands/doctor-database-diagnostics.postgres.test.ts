@@ -6,7 +6,11 @@ import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { cliRecoveryEntrypoints } from "../cli/cli-entrypoint.test-support.js";
+import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import type { PortDescriptor } from "../infra/database-engine/port-descriptor.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   createDiagnosticStores,
   diagnosticOutput,
@@ -63,6 +67,71 @@ describe.skipIf(!connection)("Doctor physical PostgreSQL output", () => {
     }
     await client.end();
   });
+
+  it("inspects a configured OpenAI profile after porting shared state and agent storage", async () => {
+    const root = tempDirs.make("doctor-postgres-auth-");
+    for (const relative of [diagnosticPaths.state, diagnosticPaths.agent]) {
+      const file = path.join(root, relative);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.copyFileSync(path.join(sqliteRoot, relative), file);
+    }
+    {
+      using db = openNodeSqliteDatabase(path.join(root, diagnosticPaths.state));
+      const insert = db.prepare("INSERT INTO config_machine_state VALUES (?, ?, 1)");
+      insert.run("auth.sharedStore", JSON.stringify({ location: "state-db" }));
+      insert.run(
+        "authProfiles.store",
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "oauth",
+              provider: "openai",
+              access: "synthetic-access",
+              refresh: "synthetic-refresh",
+              expires: 2e12,
+            },
+          },
+        }),
+      );
+    }
+    await port(root, diagnosticPaths.state, "state");
+    await port(root, diagnosticPaths.agent, "agent");
+    const configPath = path.join(root, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        ...diagnosticConfig(connection),
+        plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
+        auth: { profiles: { "openai:default": { provider: "openai", mode: "oauth" } } },
+      }),
+    );
+    const entry = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli);
+    const checkId = "codex/native-profile-recovery";
+    const report = await runCliProcessChild({
+      nodeArgs: [
+        ...resolveRuntimeWorkerArgv(entry),
+        "doctor",
+        "--lint",
+        "--json",
+        "--only",
+        checkId,
+      ],
+      env: {
+        PATH: process.env.PATH,
+        HOME: root,
+        USERPROFILE: root,
+        OPENCLAW_HOME: root,
+        OPENCLAW_STATE_DIR: root,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_NO_RESPAWN: "1",
+        OPENCLAW_HIDE_BANNER: "1",
+      },
+      timeoutMs: 60_000,
+    });
+    expect(JSON.parse(report.stdout), report.stderr).toMatchObject({ checksRun: 1, findings: [] });
+    expect(report.code, report.stderr).toBe(0);
+  }, 60_000);
 
   it("reports each PostgreSQL family and Matrix namespace while safety stores stay local", async () => {
     const stores = await inspect(postgresRoot, diagnosticConfig(connection));

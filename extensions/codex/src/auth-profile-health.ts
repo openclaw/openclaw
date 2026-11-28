@@ -46,7 +46,9 @@ async function collectFindings(
         source: "codex",
         severity: "warning",
         message: `Could not inspect OpenAI auth profiles for agent "${agentId}": ${error instanceof Error ? error.message : String(error)}`,
-        fixHint: "openclaw doctor --fix",
+        ...(error instanceof Error && "action" in error && error.action === "openclaw doctor --fix"
+          ? { fixHint: error.action }
+          : {}),
       });
     }
   }
