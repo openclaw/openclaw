@@ -90,6 +90,19 @@ it.each([
       "accessor.sqlite-maintenance-store accessor.sqlite-archive-store-kernel accessor.sqlite-transcript-store",
     ),
   ],
+  [
+    "cold preparation and custody",
+    sessions("cold-storage-prepare cold-storage-custody"),
+    [
+      ...sessions("cold-storage-worker accessor.sqlite-mutation-worker.runtime"),
+      ...paths("src/state/", "openclaw-agent-db openclaw-state-db"),
+    ],
+  ],
+  [
+    "canonical validation without cold preparation",
+    sessions("accessor.sqlite-mutation-worker.runtime"),
+    sessions("cold-storage-custody cold-storage-worker store-read-candidates"),
+  ],
 ] as const)("keeps the %s import boundary", (_name, roots, forbidden) => {
   expect(findSourceImportBackedges(roots, forbidden)).toEqual([]);
 });

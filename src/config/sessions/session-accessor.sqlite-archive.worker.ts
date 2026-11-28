@@ -381,7 +381,7 @@ async function runArchiveSessionRequest(
   let response: SqliteArchiveSessionResponse;
   if (request.operation === "cold-prepare") {
     const { prepareSessionColdBatchInWorker } = await import("./session-cold-storage-prepare.js");
-    const { assertSessionColdSourceCurrent } = await import("./session-cold-storage-worker.js");
+    const { assertSessionColdSourceCurrent } = await import("./session-cold-storage-custody.js");
     const scope = new OpenClawAgentDatabaseReadOnlyScope();
     try {
       response = {
