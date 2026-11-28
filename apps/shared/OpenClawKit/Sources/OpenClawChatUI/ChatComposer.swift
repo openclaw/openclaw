@@ -82,7 +82,7 @@ struct OpenClawChatComposerPresentationOwner: Equatable {
 
 @MainActor
 struct OpenClawChatComposer: View {
-    private enum ModelSignInAction {
+    enum ModelSignInAction {
         case open
         case refresh
     }
@@ -142,6 +142,9 @@ struct OpenClawChatComposer: View {
     @State var isFocused = false
     @Environment(\.isEnabled) var interactionEnabled
     @State var showsPermissionsSheet = false
+    /// Text or an attachment tile keeps the composer open when the keyboard goes down; only an empty
+    /// composer closes to one row.
+    @State var hasComposerContent = false
     #else
     @FocusState private var isFocused: Bool
     #endif
@@ -250,7 +253,7 @@ struct OpenClawChatComposer: View {
         .accessibilityIdentifier("chat-model-sign-in")
     }
 
-    private func performModelSignInAction(_ action: ModelSignInAction) {
+    func performModelSignInAction(_ action: ModelSignInAction) {
         guard self.modelSignInAction == nil else { return }
         let owner = self.presentationOwner
         let request = ModelSignInRequest(action: action)
@@ -748,6 +751,7 @@ struct OpenClawChatComposer: View {
             .padding(.vertical, self.isDesktopLayout ? 0 : 2)
         #endif
         .modifier(CleanChatComposerSurface(cornerRadius: cleanCornerRadius, usesSystemGlassEdge: true))
+        .modifier(ChatComposerPanelBridge(composer: self))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-composer-surface")
     }
@@ -755,7 +759,15 @@ struct OpenClawChatComposer: View {
     @ViewBuilder
     private var cleanEditor: some View {
         #if os(iOS)
-        self.cleanPhoneEditor(expanded: self.isFocused)
+        self.cleanPhoneEditor(expanded: self.isFocused || self.hasComposerContent)
+            .background {
+                // Read the draft in its own section so typing does not re-evaluate the whole composer.
+                ChatComposerSection {
+                    Color.clear.onChange(
+                        of: self.viewModel.hasDraftToSend,
+                        initial: true) { self.hasComposerContent = $1 }
+                }
+            }
         #elseif os(macOS)
         if self.isDesktopLayout {
             self.desktopEditor
@@ -1360,7 +1372,7 @@ extension OpenClawChatComposer {
         #if os(macOS)
         self.isDesktopLayout ? CleanChatComposerMetrics.surfaceCornerRadius : 24
         #elseif os(iOS)
-        self.isFocused ? CleanChatComposerMetrics.expandedCornerRadius :
+        self.isFocused || self.hasComposerContent ? CleanChatComposerMetrics.expandedCornerRadius :
             self.cleanControlHeight / 2 + CleanChatComposerMetrics.collapsedControlInset
         #else
         CleanChatComposerMetrics.surfaceCornerRadius

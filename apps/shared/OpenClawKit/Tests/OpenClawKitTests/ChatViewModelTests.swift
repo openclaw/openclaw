@@ -9545,6 +9545,44 @@ struct ChatViewModelTests {
         #expect(vm.modelCatalogMessage == nil)
     }
 
+    @Test @MainActor func `Recent lists the models of other chats, newest first`() async throws {
+        let current = modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai")
+        let other = modelChoice(id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic")
+        let third = modelChoice(id: "gpt-5.5", name: "GPT-5.5", provider: "openai")
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse([
+                sessionEntry(key: "main", updatedAt: 1, model: current.modelID, modelProvider: current.provider),
+                sessionEntry(key: "mac-chat", updatedAt: 3, model: other.modelID, modelProvider: other.provider),
+                sessionEntry(key: "older", updatedAt: 2, model: third.modelID, modelProvider: third.provider),
+            ])],
+            modelResponses: [[current, other, third]])
+        try await loadAndWaitBootstrap(vm: vm)
+
+        // Nothing picked on this device: the chats give Recent; this chat's model leads with the check.
+        let recents = vm.modelPickerCatalog().recents.map(\.selectionID)
+        #expect(recents == [current.selectionID, other.selectionID, third.selectionID])
+        #expect(vm.modelPickerStore.recents.isEmpty)
+    }
+
+    @Test @MainActor func `the picker shows the session's model in Recent without storing it`() async throws {
+        let current = modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai")
+        // A second provider, so the root lists providers rather than one provider's models.
+        let other = modelChoice(id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic")
+        let (_, vm) = await makeViewModel(
+            historyResponses: [historyPayload()],
+            sessionsResponses: [sessionsResponse(
+                sessionEntry(key: "main", updatedAt: 1, model: current.modelID, modelProvider: current.provider))],
+            modelResponses: [[current, other]])
+        try await loadAndWaitBootstrap(vm: vm)
+
+        // Never picked on this device, so nothing is stored; the root still shows it, checked.
+        #expect(vm.modelPickerCatalog().recents.map(\.selectionID) == [current.selectionID])
+        #expect(vm.isCurrentPickerModel(current))
+        #expect(vm.modelPickerRecents.isEmpty)
+        #expect(vm.modelPickerStore.recents.isEmpty)
+    }
+
     @Test @MainActor func `unavailable picker rows cannot change the selected model`() async throws {
         let current = modelChoice(id: "gpt-5.4", name: "GPT-5.4", provider: "openai")
         let unavailable = modelChoice(
@@ -12855,6 +12893,30 @@ struct ChatViewModelTests {
         #expect(await transport.patchedThinkingLevels() == ["medium", "high"])
 
         #expect(await MainActor.run { vm.thinkingLevel } == "high")
+    }
+
+    @Test func `quick effort changes send only the latest after the one in flight`() async throws {
+        let (transport, vm) = await makeViewModel(
+            historyResponses: [historyPayloadWithoutRunState()],
+            setSessionThinkingHook: { level in
+                if level == "medium" {
+                    try await Task.sleep(for: .milliseconds(200))
+                }
+            })
+        try await loadAndWaitBootstrap(vm: vm, sessionId: "sess-main")
+
+        await MainActor.run { vm.selectThinkingLevel("medium") }
+        await transport.waitForState { $0.patchedThinkingLevels.count >= 1 }
+        await MainActor.run {
+            vm.selectThinkingLevel("high")
+            vm.selectThinkingLevel("low")
+        }
+        // The answer for medium arrives while low is waiting; the screen keeps low.
+        #expect(await MainActor.run { vm.thinkingLevel } == "low")
+
+        await vm.waitForPendingSessionSettings(in: "main")
+        #expect(await transport.patchedThinkingLevels() == ["medium", "low"])
+        #expect(await MainActor.run { vm.thinkingLevel } == "low")
     }
 
     @Test func `default settings patch returns accepted thinking state`() async throws {
