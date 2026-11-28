@@ -47,7 +47,7 @@ The iOS brand accent is `#CD3535` in both appearances. Use `OpenClawBrand.accent
 
 ## Liquid Glass rules
 
-Use `openClawGlassButton` for primary actions and navigation-adjacent controls. Use the prominent style for one primary action per region. Wrap nearby controls in `OpenClawGlassControlGroup`. In the chat header, the sidebar button and Chat actions use matching circles of interactive glass. Elsewhere, the sidebar button keeps its hit target without a background.
+Use `openClawGlassButton` for primary actions and navigation-adjacent controls. Use the prominent style for one primary action per region. Wrap nearby controls in `OpenClawGlassControlGroup`. In the chat header, the sidebar button and Chat actions use matching circles of interactive glass. On other screens, the sidebar button keeps its hit target without a background.
 
 Do not place Liquid Glass behind reading content, forms, metrics, or every card in a scroll view. Excess glass weakens hierarchy, increases rendering cost, and competes with the sidebar and navigation chrome.
 
