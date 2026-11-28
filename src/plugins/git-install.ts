@@ -13,7 +13,10 @@ import {
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
 } from "../infra/install-package-dir.js";
-import { withInstallWorkspace } from "../infra/install-source-utils.js";
+import {
+  formatNpmCommandFailureOutput,
+  withInstallWorkspace,
+} from "../infra/install-source-utils.js";
 import { resolveNpmCommand } from "../infra/npm-command.js";
 import {
   createSafeNpmInstallArgs,
@@ -181,7 +184,7 @@ export async function installPluginFromGitSpec(
       if (install.code !== 0) {
         return {
           ok: false,
-          error: `npm install failed: ${install.stderr.trim() || install.stdout.trim()}`,
+          error: `npm install failed: ${formatNpmCommandFailureOutput(install)}`,
         };
       }
     }
