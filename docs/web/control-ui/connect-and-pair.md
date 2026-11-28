@@ -179,6 +179,16 @@ Pending exec and plugin approvals also trigger Web Push. Approval delivery is na
 Web Push is independent of the iOS APNS relay path (see [Configuration](/gateway/configuration) for relay-backed push) and the `push.test` method, which targets native mobile pairing.
 </Note>
 
+### Choose the installed app icon
+
+In **Settings → Appearance → Installed app icon**, keep the OpenClaw icon, use a snapshot of the selected agent’s picture, or choose a PNG, JPEG, or WebP. This changes the install artwork, not the browser tab icon or the agent’s profile. Choose it in the browser you plan to install from.
+
+Choosing a picture sends a square copy to your Gateway. Anyone who has its unlisted icon link and can reach the Gateway can view that copy without signing in. Each signed-in profile chooses its own icon in this browser. Signing out or switching profiles hides your selection without revoking its link. To revoke it, return to the same profile in the same browser and select **Use OpenClaw default**. Replacing the picture or restoring the default revokes the previous install page, manifest, and image links for this profile and browser; it does not erase copies already downloaded.
+
+For a custom or agent picture, select **Open install page**. From **that page**, use **Add to Dock** in macOS Safari, **Share → Add to Home Screen** in iOS Safari, or **Install app** in Chrome. Installing directly from Settings may use the default icon. For the default icon, install directly from the Control UI.
+
+The install page stays under your Gateway’s Control UI mount (for example, `/gateway/pwa-icon/<token>/install` when mounted at `/gateway`). Treat its address like the unlisted image link. The installed app launches the normal Control UI at the mount root, not this page. If your operating system keeps an old icon, remove the installed web app and install it again from the appropriate page.
+
 ## Tailnet access (recommended)
 
 Keep the Gateway on loopback and let Tailscale Serve proxy it with HTTPS:

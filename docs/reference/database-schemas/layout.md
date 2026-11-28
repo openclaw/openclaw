@@ -23,6 +23,20 @@ clients retain their existing application-container roots. Each exact root has
 one credential owner; no timestamp reconciliation joins different roots.
 See [client migration and recovery](/reference/database-schemas/versioning#local-client-credentials).
 
+### Installed Control UI app icons
+
+On the first custom icon upload, the shared-state writer creates `pwa_icon_slots`.
+Each row maps a hashed profile ID and a browser installation key to one opaque
+public token. The table is optional: upgrading does not backfill profiles or
+change the shared-state schema version for this feature.
+
+The normalized PNG files live under `<state-root>/pwa-icons/`. Replacement
+writes the new images before committing their slot; reset removes the row.
+Only tokens in committed slots can serve artwork. On its first icon request
+after restart, the Gateway removes unreferenced PNGs left by an interrupted
+upload, replacement, or reset. A profile can have eight slots, with 128 slots
+across the Gateway; replacing or resetting an existing slot works at either limit.
+
 ### Local daemon service intent
 
 `<state-root>/control/services.sqlite` is a daemon-owned, SQLite-only store on every

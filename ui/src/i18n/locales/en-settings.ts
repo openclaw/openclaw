@@ -2121,6 +2121,34 @@ const enSettings = {
       importTheme: "Import theme",
       clear: "Clear {name}",
       loaded: "Loaded",
+      installIcon: {
+        title: "Installed app icon",
+        install:
+          "After choosing a picture, open the install page and install OpenClaw from that page. This does not change your browser tab icon.",
+        openInstallPage: "Open install page",
+        picture: "Icon picture",
+        privacy:
+          "Using an agent or custom picture uploads a copy to your Gateway. Your operating system uses an unguessable link to load it. Anyone with that link can view the picture without signing in.",
+        preview: "Current app icon for new installs",
+        default: "Use OpenClaw default",
+        agent: "Use current agent picture",
+        custom: "Upload custom picture…",
+        noPicture: "No picture is available for the selected agent.",
+        saving: "Saving icon…",
+        saved: "Icon saved for new installs.",
+        failed: "Couldn’t save the app icon. Try again.",
+        signIn:
+          "Open this Gateway directly and sign in to your profile to change its install icon.",
+        origin: "Open the Control UI at the Gateway’s own address, then try again.",
+        writeAccess:
+          "This connection needs write access. Ask your Gateway administrator to approve it, then reconnect.",
+        chooseImage: "Choose another PNG, JPEG, or WebP image no larger than 10 MB.",
+        device: "Reload this browser and reconnect before changing the icon.",
+        busy: "The Gateway is busy. Wait a moment, then try again.",
+        full: "The Gateway has no free install icon slots. Restore the default in another browser where you set an icon, then try again.",
+        httpFailed:
+          "The Gateway couldn’t change the icon (HTTP {status}). Reconnect and try again.",
+      },
       tabIcon: {
         title: "Browser tab icon",
         default: "Default",

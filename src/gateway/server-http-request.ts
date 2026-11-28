@@ -518,12 +518,14 @@ export function createGatewayHttpRequestHandler(
         },
         "native-assets",
       );
-      for (const [parse, loadHandler] of CONTROL_UI_USER_IMAGE_HTTP_ROUTES) {
+      for (const [parse, loadHandler, requiresUi] of CONTROL_UI_USER_IMAGE_HTTP_ROUTES) {
         addAdmittedStage(
-          parse(scopedRequestPath, controlUiRouteBasePath).matched,
+          (!requiresUi || controlUiEnabled) &&
+            parse(scopedRequestPath, controlUiRouteBasePath).matched,
           async () =>
             (await loadHandler())(req, res, scopedRequestPath, {
               ...routeAuth,
+              root: controlUiRoot,
               basePath: controlUiRouteBasePath,
             }),
           "resource",

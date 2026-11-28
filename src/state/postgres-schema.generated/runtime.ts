@@ -433,6 +433,14 @@ export const statePostgresRuntime = {
         sql: '-- Generated runtime DDL; the owner supplies search_path and the transaction.\n\nCREATE TABLE "worker_environment_session_attachments" (\n  "session_id" text COLLATE "C" NOT NULL,\n  "session_key" text COLLATE "C" NOT NULL,\n  "agent_id" text COLLATE "C" NOT NULL,\n  "session_lifecycle_revision" text COLLATE "C",\n  "environment_id" text COLLATE "C" NOT NULL,\n  "generation" bigint NOT NULL,\n  "created_at_ms" bigint NOT NULL,\n  "last_used_at_ms" bigint NOT NULL,\n  "closed_at_ms" bigint,\n  PRIMARY KEY ("session_id"),\n  CHECK (("generation" >= 1)),\n  UNIQUE ("environment_id")\n);\n\nCREATE INDEX "worker_environment_session_attachments_session_key" ON "worker_environment_session_attachments" (("agent_id") ASC, ("session_key") ASC);\n\nALTER TABLE "worker_environment_session_attachments" ADD FOREIGN KEY ("environment_id") REFERENCES "worker_environments" ("environment_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;\n',
       },
       {
+        id: "pwa_icon_slots",
+        tables: ["pwa_icon_slots"],
+        indexes: [],
+        dependencies: [],
+        activation: "first-use",
+        sql: '-- Generated runtime DDL; the owner supplies search_path and the transaction.\n\nCREATE TABLE "pwa_icon_slots" (\n  "profile_key" text COLLATE "C" NOT NULL,\n  "device_key" text COLLATE "C" NOT NULL,\n  "token" text COLLATE "C" NOT NULL,\n  PRIMARY KEY ("profile_key", "device_key"),\n  CHECK ((char_length("token") = 64)),\n  UNIQUE ("token")\n);\n',
+      },
+      {
         id: "durable_background_processes",
         tables: ["durable_background_processes"],
         indexes: [],
@@ -13169,6 +13177,67 @@ export const statePostgresRuntime = {
       },
       {
         table: "projects",
+        kind: "checks",
+        value: 1,
+      },
+      {
+        table: "pwa_icon_slots",
+        kind: "table",
+        value: null,
+      },
+      {
+        table: "pwa_icon_slots",
+        kind: "column",
+        value: {
+          name: "profile_key",
+          type: "text",
+          nullable: false,
+          identity: false,
+          default: null,
+          position: 1,
+        },
+      },
+      {
+        table: "pwa_icon_slots",
+        kind: "column",
+        value: {
+          name: "device_key",
+          type: "text",
+          nullable: false,
+          identity: false,
+          default: null,
+          position: 2,
+        },
+      },
+      {
+        table: "pwa_icon_slots",
+        kind: "column",
+        value: {
+          name: "token",
+          type: "text",
+          nullable: false,
+          identity: false,
+          default: null,
+          position: 3,
+        },
+      },
+      {
+        table: "pwa_icon_slots",
+        kind: "primaryKey",
+        value: ["profile_key", "device_key"],
+      },
+      {
+        table: "pwa_icon_slots",
+        kind: "unique",
+        value: ["token"],
+      },
+      {
+        table: "pwa_icon_slots",
+        kind: "indexes",
+        value: 2,
+      },
+      {
+        table: "pwa_icon_slots",
         kind: "checks",
         value: 1,
       },
