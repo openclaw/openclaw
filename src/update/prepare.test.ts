@@ -1,7 +1,5 @@
 import { execFile } from "node:child_process";
-import { access as accessCallback, constants } from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it, vi } from "vitest";
@@ -878,7 +876,6 @@ describe("update preflight", () => {
         kind: "git",
         target: { kind: "git", ...target, version: "2026.11.21" },
         prefix: root,
-        stateDir: root,
         node,
       }),
     ).toMatchObject({ ok: false, reason: "node-engine-mismatch" });
@@ -899,7 +896,6 @@ describe("update preflight", () => {
           engines: { node: ">=999" },
         },
         prefix: root,
-        stateDir: root,
         node,
       }),
     ).toMatchObject({ ok: false, reason: "node-engine-mismatch" });
@@ -913,7 +909,6 @@ describe("update preflight", () => {
         kind: "git",
         target: { kind: "git", ...target, version: "2026.11.21" },
         prefix: root,
-        stateDir: root,
         env: { ...process.env, PATH: bin },
       }),
     ).toMatchObject({ ok: false, reason: "missing-tool" });
@@ -927,7 +922,6 @@ describe("update preflight", () => {
         kind: "git",
         target: { kind: "git", ...target, version: "2026.11.21" },
         prefix: root,
-        stateDir: root,
         node,
       }),
     ).toMatchObject({ ok: false, reason: "dirty" });
@@ -939,14 +933,13 @@ describe("update preflight", () => {
       kind: "git" as const,
       target: { kind: "git" as const, ...target, version: "2026.11.21" },
       prefix: root,
-      stateDir: path.join(root, "data"),
       node,
     };
     expect(
       await preflight({ ...params, statfs: async () => ({ bavail: 1, bsize: 1 }) }),
     ).toMatchObject({ ok: false, reason: "insufficient-install-space" });
-    await fs.mkdir(path.join(params.stateDir, "state"), { recursive: true });
-    const database = path.join(params.stateDir, "state", "openclaw.sqlite");
+    await fs.mkdir(path.join(root, "data", "state"), { recursive: true });
+    const database = path.join(root, "data", "state", "openclaw.sqlite");
     await fs.writeFile(database, "");
     await fs.truncate(database, 3_000_000_000);
     expect(
@@ -955,51 +948,6 @@ describe("update preflight", () => {
         statfs: async () => ({ bavail: 2_000_000_000, bsize: 1 }),
       }),
     ).toEqual({ ok: true });
-  });
-
-  it.each([
-    ["EACCES", false, false],
-    ["EPERM", false, false],
-    ["EACCES", true, false],
-    ["EACCES", true, true],
-  ] as const)("reports %s ownership repair (%s, %s)", async (code, system, writeCheck) => {
-    const target = await repository();
-    const prefix = path.join(root, "user's install");
-    await fs.mkdir(prefix);
-    vi.spyOn(os, "userInfo").mockReturnValue({
-      ...os.userInfo(),
-      username: "update-user",
-      homedir: system ? path.join(root, "home") : root,
-    });
-    const stat = await fs.stat(prefix);
-    vi.spyOn(fs, "stat").mockResolvedValue(Object.assign(stat, { uid: 0 }));
-    if (writeCheck) {
-      const access = promisify(accessCallback);
-      vi.spyOn(fs, "access").mockImplementation(async (file, mode) => {
-        if (file === prefix && mode === constants.W_OK) {
-          throw Object.assign(new Error("permission denied"), { code });
-        }
-        return access(file, mode);
-      });
-    }
-    expect(
-      await preflight({
-        kind: "git",
-        target: { kind: "git", ...target, version: "2026.11.21" },
-        prefix,
-        stateDir: root,
-        node,
-        statfs: async () => {
-          throw Object.assign(new Error("permission denied"), { code });
-        },
-      }),
-    ).toEqual({
-      ok: false,
-      reason: "prefix-not-writable",
-      message: system
-        ? `The installation at '${prefix}' is owned by root. Run: sudo openclaw update`
-        : `Files in '${prefix}' are not writable by update-user. Fix ownership with: sudo chown -R update-user '${prefix.replaceAll("'", `'"'"'`)}'. Then retry the update.`,
-    });
   });
 
   it("prepares an install that runs inside a container", async () => {
@@ -1011,7 +959,6 @@ describe("update preflight", () => {
         kind: "git",
         target: { kind: "git", ...target, version: "2026.11.21" },
         prefix: root,
-        stateDir: root,
         node,
         env: { ...process.env, container: "podman" },
         statfs: async () => ({ bavail: 2_000_000_000, bsize: 1 }),
