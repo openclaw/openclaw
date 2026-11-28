@@ -16,6 +16,7 @@ import { createModelContextPairing } from "./session-model-context-pairing.js";
 import {
   collectSessionModelContextRequests,
   collectSessionPendingBackgroundResultRequests,
+  isSessionModelStateEntry,
 } from "./session-model-context-read.js";
 import type { ContextEntry, ModelContextRequest } from "./session-model-context-window.js";
 import {
@@ -172,12 +173,7 @@ function appendRows(snapshot: NavigationSnapshot, rows: ModelContextNavigationRo
     return false;
   }
   for (const [index, entry] of entries.entries()) {
-    if (
-      entry.type === "model_change" ||
-      (entry.type === "message" &&
-        entry.message.role === "assistant" &&
-        !isPendingBackgroundResultMessage(entry.message))
-    ) {
+    if (isSessionModelStateEntry(entry)) {
       snapshot.model = entry;
     }
     if (entry.type === "thinking_level_change") {
@@ -374,13 +370,7 @@ export function readModelContextNavigationPages(params: {
       prefixCount: 0,
       prefixBytes: 0,
       prefixHasUser: false,
-      model: entries.findLast(
-        (entry) =>
-          entry.type === "model_change" ||
-          (entry.type === "message" &&
-            entry.message.role === "assistant" &&
-            !isPendingBackgroundResultMessage(entry.message)),
-      ),
+      model: entries.findLast(isSessionModelStateEntry),
       thinking: entries.findLast((entry) => entry.type === "thinking_level_change"),
       pairing: createModelContextPairing(messages(requests), messages(requests.slice(-maxEvents))),
     };

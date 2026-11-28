@@ -82,6 +82,7 @@ const cases = [
   "missing-facts",
   "stale",
   "prefix-model",
+  "legacy-artifact-model",
   "fence",
   "anchor",
   "no-boundary",
@@ -207,6 +208,15 @@ it.each(cases)("preserves exact model bytes for %s and bounds eligible navigatio
                 data: { afterEntryId: parentId, resultEntryIds: ["pending"] },
               });
             }
+            if (kind === "legacy-artifact-model") {
+              message("legacy-result", {
+                role: "assistant",
+                provider: "openclaw",
+                model: "automation-result",
+                content: [{ type: "text", text: "A completed local task" }],
+                timestamp: 99,
+              });
+            }
             message("latest", { role: "user", content: "Continue", timestamp: 100 });
           },
         },
@@ -238,7 +248,7 @@ it.each(cases)("preserves exact model bytes for %s and bounds eligible navigatio
     const requests: CompactedContextWorkerInput["requests"] = [false, true].map((omit) => ({
       limits: {
         maxBytes: omit ? 24_000 : 100_000,
-        maxEvents: 100,
+        maxEvents: kind === "legacy-artifact-model" ? 2 : 100,
         toolResultOverflow: omit ? "omit" : undefined,
       },
       through: kind === "anchor" ? anchor : undefined,
@@ -260,6 +270,19 @@ it.each(cases)("preserves exact model bytes for %s and bounds eligible navigatio
       }
     });
     expect(actual.map((result) => result.json)).toEqual(expected);
+    if (kind === "legacy-artifact-model") {
+      for (const result of actual) {
+        const decoded = JSON.parse(result.json) as { events: Array<{ type: string }> };
+        expect(decoded.events).toContainEqual(
+          expect.objectContaining({
+            type: "model_change",
+            provider: "openai",
+            modelId: "synthetic",
+          }),
+        );
+      }
+      expect(actual[1]!.navigationRows).toBe(0);
+    }
     if (kind === "prefix-rewrite") {
       expect(actual[0]!.navigationRows).toBeLessThan(20);
       expect(actual[1]!.navigationRows).toBeGreaterThan(200);
