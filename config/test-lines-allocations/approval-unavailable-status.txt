@@ -1,0 +1,2 @@
+# Unavailable approval rendering keeps its primary exit beneath the status, shared identity, and readable phone width.
+21
