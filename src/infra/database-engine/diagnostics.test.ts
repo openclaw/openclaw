@@ -566,4 +566,27 @@ describe("physical store diagnostics", () => {
     expect(unreachable.nextSteps.join(" ")).toContain("service/port");
     expect(JSON.stringify(unreachable)).not.toContain("never-print-this");
   });
+
+  it("gives the initialize advice for an absent store only when its plugin is enabled", async () => {
+    const input = fixture();
+    delete input.path;
+    delete input.descriptor;
+
+    const enabled = await inspectDatabaseStore({
+      ...input,
+      plugin: { id: "workboard", enabled: true },
+    });
+    expect(enabled.nextSteps.join(" ")).toContain("Store is not present");
+
+    const disabled = await inspectDatabaseStore({
+      ...input,
+      plugin: { id: "workboard", enabled: false },
+    });
+    expect(disabled.nextSteps.join(" ")).not.toContain("Store is not present");
+    expect(disabled.issues).toEqual([]);
+
+    // Core families never learn a plugin state; the advice must stay.
+    const core = await inspectDatabaseStore({ ...input, plugin: undefined });
+    expect(core.nextSteps.join(" ")).toContain("Store is not present");
+  });
 });

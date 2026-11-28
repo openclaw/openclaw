@@ -38,6 +38,8 @@ export type DatabaseStoreInspection = Pick<
   schemaVersion?: number | null;
   postgres?: DatabaseEngineInput;
   inspectionError?: "unreadable-root";
+  /** Resolved owning plugin with its activation state, when the family has one. */
+  plugin?: { id: string; enabled: boolean };
 };
 
 function inspectSearchMetadata(result: DatabaseStoreDiagnostic, value: unknown) {
@@ -244,9 +246,14 @@ export async function inspectDatabaseStore(
     }
   }
   if (absent || !input.path) {
-    result.nextSteps.push(
-      "Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
-    );
+    // A store whose owning plugin is disabled is not missing; it is inactive, so
+    // no remediation applies. Only a store whose owner is enabled gets the
+    // initialize advice.
+    if (input.plugin?.enabled !== false) {
+      result.nextSteps.push(
+        "Store is not present. Initialize it through its owning feature, then rerun openclaw doctor.",
+      );
+    }
     return result;
   }
   try {
