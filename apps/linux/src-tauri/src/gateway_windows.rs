@@ -2529,6 +2529,9 @@ fn replace_document(
     let view = window
         .add_child(builder, LogicalPosition::new(0, 0), size)
         .map_err(|_| "Could not open OpenClaw for this Gateway.")?;
+    #[cfg(target_os = "linux")]
+    crate::linux_clipboard_paste::install_webview(&view)
+        .map_err(|_| "Could not prepare Gateway window clipboard paste.")?;
     #[cfg(target_os = "macos")]
     crate::window_chrome_macos::install_webview(&view)
         .map_err(|_| "Could not prepare Gateway window controls.")?;
