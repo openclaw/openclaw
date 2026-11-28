@@ -65,10 +65,15 @@ it("preserves Talk setting precedence and explicit blank-key clearing", () => {
 
 it.each([
   ["synthesize", undefined, "audio-file", "mp3", 44100],
+  ["synthesize", "s2.1-pro", "audio-file", "mp3", 44100],
   ["synthesize", "drama-3", "audio-file", "mp3", 44100],
-  ["streamSynthesize", "drama-3-preview", "voice-note", "opus", 48000],
-  ["synthesizeTelephony", "drama-3-preview", "telephony", "pcm", 8000],
+  ["streamSynthesize", "s3-pro", "voice-note", "opus", 48000],
+  ["synthesizeTelephony", "drama-3", "telephony", "pcm", 8000],
 ] as const)("%s with %s", async (method, model, target, outputFormat, sampleRate) => {
+  if (!model) {
+    expect(provider.defaultModel).toBe("s3-pro");
+  }
+  expect(provider.models).toContain(model ?? "s3-pro");
   const audioBuffer = Buffer.from([1, 2, 3]);
   const text = "[sad] x <whisper>y</whisper>";
   const voiceCompatible = target === "voice-note";
@@ -85,7 +90,7 @@ it.each([
   respond((url, init) => {
     expect(url).toBe("https://api.fish.audio/v1/tts");
     expect(Object.fromEntries(new Headers(init?.headers))).toMatchObject({
-      model: model ?? "s2.1-pro",
+      model: model ?? "s3-pro",
       authorization: "Bearer key",
     });
     expect(init?.body).toBe(
@@ -142,7 +147,7 @@ it("lists all owned pages then one public page with deduplication", async () => 
 });
 
 it.each([
-  ["model", "drama-3-typo", 'invalid Fish Audio model "drama-3-typo"'],
+  ["model", "drama-3-preview", 'invalid Fish Audio model "drama-3-preview"'],
   ["apiKey", "   ", "Fish Audio API key missing"],
 ])("rejects invalid %s before network access", async (key, value, error) => {
   vi.stubEnv("FISH_API_KEY", "   ");
@@ -158,7 +163,8 @@ it.each([
 });
 
 it.each([
-  ["model", "drama-3-preview", { model: "drama-3-preview" }],
+  ["model", "s3-pro", { model: "s3-pro" }],
+  ["model", "drama-3", { model: "drama-3" }],
   ["topp", "1", { topP: 1 }],
   ["speed", "0.5", { speed: 0.5 }],
 ] as const)("accepts %s=%s directives", (key, value, overrides) => {
