@@ -32,7 +32,72 @@ afterEach(() => {
   configureAiTransportHost(originalHost);
   resetDiagnosticEventsForTest();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
+
+it.each([0, 2])("rejects an encoder that applies its finalizer %i times", async (count) => {
+  const options = {};
+  const finalize = vi.fn((payload: unknown) => payload);
+  const onBytes = vi.fn();
+  const state = modelRequestBodyState(options);
+  state.onBytes = onBytes;
+  state.encode = async (payload, finalizer) => {
+    for (let i = 0; i < count; i++) {
+      try {
+        finalizer?.(payload);
+      } catch {
+        // Even an encoder swallowing the second-call error cannot publish bytes.
+      }
+    }
+    return serializeModelRequestBody(payload);
+  };
+  await expect(
+    prepareModelRequestBody(options, finalize)({ input: "synthetic" }),
+  ).rejects.toThrow();
+  expect(finalize).toHaveBeenCalledTimes(count === 0 ? 0 : 1);
+  expect(onBytes).not.toHaveBeenCalled();
+});
+
+it.each([undefined, Object.freeze({ failure: "synthetic-finalizer" })])(
+  "rejects an encoder swallowing finalizer failure %s",
+  async (reason) => {
+    const options = {};
+    const onBytes = vi.fn();
+    const state = modelRequestBodyState(options);
+    state.onBytes = onBytes;
+    state.encode = async (payload, finalizer) => {
+      try {
+        finalizer?.(payload);
+      } catch {
+        // A returned body cannot erase the finalizer's original failure.
+      }
+      return serializeModelRequestBody(payload);
+    };
+    await expect(
+      prepareModelRequestBody(options, () => {
+        // oxlint-disable-next-line typescript/only-throw-error -- Verify raw non-Error failure identity.
+        throw reason;
+      })({}),
+    ).rejects.toBe(reason);
+    expect(onBytes).not.toHaveBeenCalled();
+  },
+);
+
+it.each([undefined, null, false, 0])(
+  "preserves a finalizer's raw rejected reason %s",
+  async (reason) => {
+    const options = {};
+    const onBytes = vi.fn();
+    modelRequestBodyState(options).onBytes = onBytes;
+    await expect(
+      prepareModelRequestBody(options, () => {
+        // oxlint-disable-next-line typescript/only-throw-error -- Verify raw falsey failure identity.
+        throw reason;
+      })({}),
+    ).rejects.toBe(reason);
+    expect(onBytes).not.toHaveBeenCalled();
+  },
+);
 
 it("encodes the final large provider body off-thread and shares its exact bytes with diagnostics and retry admission", async () => {
   const model = makeProviderModelFixture<"openai-completions">({

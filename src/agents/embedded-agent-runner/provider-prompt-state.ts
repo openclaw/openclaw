@@ -329,15 +329,17 @@ export function wrapStreamFnWithProviderPromptState(params: {
       () => !params.transformPayload,
     );
     modelRequestBodyState(observedOptions).hasFinalPolicy = Boolean(params.transformPayload);
-    modelRequestBodyState(observedOptions).encode = async (payload) => {
+    modelRequestBodyState(observedOptions).encode = async (payload, finalizePayload) => {
       const finalPayload = params.transformPayload
         ? await params.transformPayload(payload, model, context, options)
         : payload;
       options?.signal?.throwIfAborted();
+      const wirePayload = finalizePayload ? finalizePayload(finalPayload) : finalPayload;
+      options?.signal?.throwIfAborted();
       const encoded = await recordProviderPrompt({
         state: params.state,
         model,
-        payload: finalPayload,
+        payload: wirePayload,
         signal: options?.signal,
         effectiveContextTokenBudget: params.effectiveContextTokenBudget,
         encode: true,

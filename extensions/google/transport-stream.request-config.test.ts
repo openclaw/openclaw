@@ -1,6 +1,7 @@
 import type { Model } from "openclaw/plugin-sdk/llm";
 import * as transport from "openclaw/plugin-sdk/provider-transport-runtime";
 import { expect, it, vi } from "vitest";
+import type { GoogleTransportOptions } from "./transport-stream-types.js";
 import { buildGoogleGenerativeAiParams } from "./transport-stream.js";
 
 vi.mock("openclaw/plugin-sdk/provider-transport-runtime", async (importOriginal) => ({
@@ -23,7 +24,7 @@ it("extends the owned generation config without copying or sharing it between re
       maxTokens: 8192,
     };
     const context = { messages: [] };
-    const sampling = { temperature: 0.25, topP: 0.4, seed: 7 };
+    const sampling = { temperature: 0.25, topP: 0.4, seed: 7 } satisfies GoogleTransportOptions;
     const first = buildGoogleGenerativeAiParams(model, context, {
       maxTokens: 64,
       ...sampling,

@@ -17,3 +17,4 @@ export {
   stripInvalidGoogleThinkingBudget,
 } from "./api.js";
 export type { GoogleThinkingInputLevel, GoogleThinkingLevel } from "./api.js";
+export type { GoogleContinuationOptions } from "./transport-stream-types.js";

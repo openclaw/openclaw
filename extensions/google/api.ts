@@ -6,6 +6,7 @@ export {
   type GoogleResearchHandle,
   type GoogleResearchSnapshot,
 } from "./research.js";
+export type { GoogleContinuationOptions } from "./transport-stream-types.js";
 export { applyGoogleGeminiModelDefault, GOOGLE_GEMINI_DEFAULT_MODEL } from "./onboard.js";
 export { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
 export {
