@@ -18,7 +18,7 @@ import {
 import { getUpdateRunAsync, listUpdateRunsAsync } from "../infra/update-run-reader.js";
 import { createUpdateRunAsync } from "../infra/update-run-write.async.js";
 import * as updateWrites from "../infra/update-run-write.async.js";
-import * as exec from "../process/exec.js";
+import * as processExec from "../process/exec.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -378,9 +378,11 @@ it.each([
     try {
       openOpenClawStateDatabase({ env: process.env });
       const run = await createUpdateRunAsync({ trigger: "cli" });
-      vi.spyOn(exec, "runCommandWithTimeout").mockResolvedValue(createCommandResult({ code: 1 }));
+      vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue(
+        createCommandResult({ code: 1 }),
+      );
       const query = vi
-        .spyOn(exec, "runCommandBuffered")
+        .spyOn(processExec, "runCommandBuffered")
         .mockResolvedValue(
           pkgQueryResult(
             unavailable ? "" : `${runningRoot}/package.json\n`,
