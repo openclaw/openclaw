@@ -768,6 +768,11 @@ the completed backup image while retaining filesystem inventory and source-chang
 checks. The candidate must contain these changes; backup publication, integrity
 checks, migrations, and rollback rules are unchanged.
 
+Original-state capture saves ordinary files from protected paths as file payloads
+and budgets SQLite inspection for database files. The installed updater must
+contain this change for its initial capture. Standalone Doctor uses the same
+capture behavior from the version that it runs.
+
 Candidate Doctor checks an existing OpenClaw ID role catalog against local
 membership, offers missing preset definitions only with repair consent, and
 preserves existing definitions, the named default, and assignments. Its cron
