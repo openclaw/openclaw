@@ -57,6 +57,7 @@ import {
   gatewayAuthUsesLocalPassword,
   resolveGatewayLocalPassword,
 } from "./setup.finalize-gateway-auth.js";
+import { planGatewayReadiness } from "./setup.finalize-gateway-readiness.js";
 import { resolveWebSearchCredentialSummary } from "./setup.finalize-search.js";
 import { getLocalizedGatewayDaemonRuntimeOptions } from "./setup.service-runtime.js";
 import type { GatewayWizardSettings, WizardFlow } from "./setup.types.js";
@@ -473,14 +474,12 @@ export async function finalizeSetupWizard(
   const probePassword = usesLocalPassword ? resolvedGatewayPassword : undefined;
 
   if (containerWithoutUserSystemd && !opts.skipUi) {
-    sessionGateway = await startSessionGatewayForOnboarding({
-      port: settings.port,
-      prompter,
-    });
+    sessionGateway = await startSessionGatewayForOnboarding({ port: settings.port, prompter });
   }
+  const readinessPlan = planGatewayReadiness(gateway, opts.skipHealth, Boolean(sessionGateway));
 
   try {
-    if (!opts.skipHealth || sessionGateway) {
+    if (readinessPlan.awaitReadiness) {
       const showHealthCheckHelp = () =>
         prompter.note(
           [
@@ -511,7 +510,7 @@ export async function finalizeSetupWizard(
           ? probeGatewayReachable(probeOptions)
           : waitForGatewayReachable({
               ...probeOptions,
-              ...(sessionGateway || (gateway.status === "ready" && gateway.action !== "reused")
+              ...(readinessPlan.startupBudget
                 ? resolveGatewayStartupTiming()
                 : { deadlineMs: 15_000 }),
             });
@@ -606,7 +605,7 @@ export async function finalizeSetupWizard(
     };
     const displayLinks = await resolveAdvertisedControlUiLinks(controlUiLinkOptions);
     const probeLinks = resolveLocalControlUiProbeLinks(controlUiLinkOptions);
-    if ((opts.skipHealth && !sessionGateway) || (!gatewayProbe.ok && gateway.status !== "failed")) {
+    if (readinessPlan.probeOnce || (!gatewayProbe.ok && gateway.status !== "failed")) {
       gatewayProbe = await probeGatewayReachable({
         url: probeLinks.wsUrl,
         token: settings.authMode === "token" ? settings.gatewayToken : undefined,
