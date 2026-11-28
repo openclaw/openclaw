@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { expect, it } from "vitest";
 import { scanMemoryUsageCostRollup } from "./session-cost-usage-rollup-scan.js";
 
-const message = (input: number, fields: Record<string, unknown> = {}) => ({
+const message = (input: number, fields: Record<string, unknown>) => ({
   type: "message",
   timestamp: "2026-10-18T12:00:00.000Z",
   ...fields,
@@ -30,7 +30,7 @@ const scan = (json: string[]) =>
     resolveCosts: async (pairs) => pairs.map(() => undefined),
   });
 
-it("does not retain decoded payloads while refreshing memory usage", async () => {
+it("accounts for every linked turn while refreshing memory usage", async () => {
   // Eight ordinary turns with real id/parent links: every turn is billed (72).
   const count = 8;
   const result = await scan(
@@ -50,8 +50,6 @@ it("does not retain decoded payloads while refreshing memory usage", async () =>
     totalCost: count,
   });
   expect(bucket.tools).toEqual([{ name: "read", count }]);
-  // The 640 MiB / 512 MiB heap scan that proves no decoded payload is retained is
-  // opt-in and never ran in CI; it is kept with this task's proof instead.
 });
 
 it("preserves rewind, side append and parentless navigation with canonical byte anchors", async () => {
