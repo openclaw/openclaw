@@ -39,11 +39,7 @@ import {
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
-import {
-  heldActivitySummaryRefusal,
-  createActivitySummaryAuthority,
-  type ActivitySummaryRefusal,
-} from "./session-activity-summary-authority.js";
+import { createActivitySummaryAuthority } from "./session-activity-summary-authority.js";
 import {
   beginActivitySummaryCompletion,
   type PendingSessionActivitySummaryCompletion,
@@ -94,7 +90,6 @@ type Tracked = ActivitySummaryTarget & {
   windowStart: number;
   calls: number;
   completion?: PendingSessionActivitySummaryCompletion;
-  refusal?: ActivitySummaryRefusal;
 };
 class ActivitySummaryCancelledError extends Error {
   constructor() {
@@ -278,12 +273,11 @@ export function createSessionActivitySummaries(deps: {
     if (state.inFlight) {
       return;
     }
-    state.refusal = heldActivitySummaryRefusal(state.refusal, state.entry);
     if (!queue.includes(state) && !state.retryPending && state.retryAt <= now()) {
       state.retryAt = 0;
       state.failures = 0;
     }
-    if (state.refusal || (state.retryAt > now() && !state.retryPending)) {
+    if (state.retryAt > now() && !state.retryPending) {
       publish(state, "unavailable");
       return;
     }
@@ -363,7 +357,7 @@ export function createSessionActivitySummaries(deps: {
       // fallback runner still picks the allowed model from this run's chain.
       const admission = work ? await recapAuthority.prepare() : {};
       if (admission.refused) {
-        state.refusal = admission.refused;
+        // A refusal is published, never retried; the next activity asks again.
         publish(state, "unavailable");
         return;
       }

@@ -112,11 +112,8 @@ export function createSessionObserverCompletion(params: {
       agentId: state.agentId,
       getEntry: () => entry,
       getConfig: params.getConfig,
-      assertCurrent: () => {
-        if (!params.isCurrent(state)) {
-          throw new Error("session observer state is no longer active");
-        }
-      },
+      // A one-time decision on a read snapshot; the digest's own currency check guards its use.
+      assertCurrent: () => undefined,
     });
     try {
       const prepared = await owner.prepare();
