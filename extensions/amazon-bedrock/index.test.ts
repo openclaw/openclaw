@@ -15,7 +15,7 @@ import {
 import amazonBedrockPlugin from "./index.js";
 
 type InferenceProfileResult =
-  | { models: Array<{ modelArn: string }> }
+  | { models: Array<{ modelArn?: string }> }
   | { stall: (signal: AbortSignal) => void };
 const inferenceProfileGetResults: InferenceProfileResult[] = [];
 const bedrockClientConfigs: Array<Record<string, unknown>> = [];
@@ -501,6 +501,56 @@ describe("amazon-bedrock provider plugin", () => {
     );
     expect(payload.inferenceConfig).toEqual({ maxTokens: 10 });
     expectClientRegion("us-west-2");
+  });
+
+  it("omits topP after resolving an unnamed opaque Claude profile", async () => {
+    inferenceProfileGetResults.push(profileTargets("anthropic.claude-sonnet-4-6-20250514-v1:0"));
+    const payload = await patchProfile(
+      cachePayload("Hello", {
+        inferenceConfig: { temperature: 0.3, topP: 0.4, maxTokens: 10 },
+      }),
+      { modelId: profileArn("claude-top-p-unnamed") },
+    );
+    expect(payload.inferenceConfig).toEqual({ temperature: 0.3, maxTokens: 10 });
+  });
+
+  it("omits topP after resolving an unnamed opaque Grok 4.6 profile", async () => {
+    inferenceProfileGetResults.push(profileTargets("xai.grok-4.6"));
+    const payload = await patchProfile(
+      cachePayload("Hello", { inferenceConfig: { temperature: 0.3, topP: 0.4 } }),
+      { modelId: profileArn("grok-top-p-unnamed") },
+    );
+    expect(payload.inferenceConfig).toEqual({ temperature: 0.3 });
+  });
+
+  it("keeps topP after resolving an unnamed opaque Nova profile", async () => {
+    inferenceProfileGetResults.push(profileTargets("amazon.nova-pro-v1:0"));
+    const payload = await patchProfile(
+      cachePayload("Hello", { inferenceConfig: { temperature: 0.3, topP: 0.4 } }),
+      { modelId: profileArn("nova-top-p-unnamed") },
+    );
+    expect(payload.inferenceConfig).toEqual({ temperature: 0.3, topP: 0.4 });
+  });
+
+  it.each([
+    ["no targets", "empty-targets", []],
+    ["a target without an ARN", "missing-target-arn", [{}]],
+  ])("omits topP when an unnamed opaque profile resolves to %s", async (_label, name, models) => {
+    inferenceProfileGetResults.push({ models });
+    const payload = await patchProfile(
+      cachePayload("Hello", { inferenceConfig: { temperature: 0.3, topP: 0.4 } }),
+      { modelId: profileArn(name) },
+    );
+    expect(payload.inferenceConfig).toEqual({ temperature: 0.3 });
+  });
+
+  it("omits topP when an unnamed opaque profile lookup fails", async () => {
+    sendBedrockCommand.mockRejectedValueOnce(new Error("profile lookup failed"));
+    const payload = await patchProfile(
+      cachePayload("Hello", { inferenceConfig: { temperature: 0.3, topP: 0.4 } }),
+      { modelId: profileArn("failed-top-p-unnamed") },
+    );
+    expect(payload.inferenceConfig).toEqual({ temperature: 0.3 });
   });
 
   it("keeps opaque profile caching disabled when a target is not Claude", async () => {

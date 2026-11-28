@@ -108,6 +108,7 @@ function isBedrockAppInferenceProfile(modelId: string): boolean {
 type BedrockAppProfileTraits = {
   cachePolicy: BedrockPromptCachePolicy | undefined;
   omitTemperature: boolean;
+  omitTopP: boolean;
 };
 
 const appProfileTraitsCache = new Map<string, BedrockAppProfileTraits>();
@@ -138,6 +139,8 @@ async function resolveAppProfileTraits(
     const models = resp.models ?? [];
     const modelArns = models.map((model) => model.modelArn ?? "");
     const cachePolicies = modelArns.map((id) => resolveBedrockPromptCachePolicy({ id }));
+    const isGrok46Target = (arn: string) =>
+      /(?:^|\.)xai\.grok-4\.6$/i.test(arn.split("/").at(-1) ?? "");
     const traits: BedrockAppProfileTraits = {
       cachePolicy:
         cachePolicies.length > 0 &&
@@ -147,6 +150,10 @@ async function resolveAppProfileTraits(
             : "claude"
           : undefined,
       omitTemperature: modelArns.some(isOpus47OrNewerBedrockModelRef),
+      // Unidentified targets keep the pre-topP request rather than risk an unsupported field.
+      omitTopP:
+        modelArns.length === 0 ||
+        modelArns.some((arn) => !arn || isAnthropicBedrockModel(arn) || isGrok46Target(arn)),
     };
     appProfileTraitsCache.set(modelId, traits);
     return traits;
@@ -158,6 +165,7 @@ async function resolveAppProfileTraits(
     return {
       cachePolicy: isAnthropicBedrockModel(modelId) ? "claude-short" : undefined,
       omitTemperature: isOpus47OrNewerBedrockModelRef(modelId),
+      omitTopP: true,
     };
   } finally {
     client?.destroy();
@@ -254,6 +262,13 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       return;
     }
     delete (inferenceConfig as Record<string, unknown>).temperature;
+  }
+
+  function omitUnsupportedPayloadTopP(payload: Record<string, unknown>): void {
+    const inferenceConfig = asOptionalRecord(payload.inferenceConfig);
+    if (inferenceConfig) {
+      delete inferenceConfig.topP;
+    }
   }
 
   function extractRegionFromBaseUrl(baseUrl: string | undefined): string | undefined {
@@ -455,6 +470,9 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
             }
             if (shouldOmitTemperature || traits?.omitTemperature) {
               omitUnsupportedClaudePayloadTemperature(payloadRecord);
+            }
+            if (traits?.omitTopP) {
+              omitUnsupportedPayloadTopP(payloadRecord);
             }
           }
           return originalOnPayload?.(payload, payloadModel);

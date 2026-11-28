@@ -66,6 +66,7 @@ export function resolveBedrockCachePoint(
 type BedrockThinkingDisplay = "summarized" | "omitted";
 
 export interface BedrockOptions extends StreamOptions {
+  topP?: number;
   region?: string;
   profile?: string;
   toolChoice?: "auto" | "any" | "none" | { type: "tool"; name: string };
@@ -75,6 +76,22 @@ export interface BedrockOptions extends StreamOptions {
   thinkingDisplay?: BedrockThinkingDisplay;
   requestMetadata?: Record<string, string>;
   bearerToken?: string;
+}
+
+export function buildBedrockInferenceConfig(
+  options: BedrockOptions,
+  modelId: string,
+  policy: { adaptiveThinking: boolean; claude: boolean },
+) {
+  const isGrok46 = modelId === "us.xai.grok-4.6" || modelId === "global.xai.grok-4.6";
+  return {
+    ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
+    // Grok 4.6 Converse profiles reject temperature/topP; Claude keeps Anthropic sampling (no top_p).
+    ...(options.temperature !== undefined &&
+      !policy.adaptiveThinking &&
+      !isGrok46 && { temperature: options.temperature }),
+    ...(options.topP !== undefined && !policy.claude && !isGrok46 && { topP: options.topP }),
+  };
 }
 
 function resolveBedrockClaudeCachePolicy(
