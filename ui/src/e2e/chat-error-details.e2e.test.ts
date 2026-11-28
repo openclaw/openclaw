@@ -212,7 +212,8 @@ suite.define(() => {
       await archived.waitFor();
       const activityRow = page.locator(".chat-tool-row, .chat-activity-group__summary").first();
       await activityRow.waitFor();
-      await gateway.waitForRequest("chat.history");
+      await page.getByRole("button", { name: "Show earlier", exact: true }).click();
+      await gateway.waitForRequest("chat.history", { match: { cursor: "older-child" } });
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const directory = createControlUiE2eArtifactDir("archived-child");
         const frame = await takeControlUiScreenshotFrame(

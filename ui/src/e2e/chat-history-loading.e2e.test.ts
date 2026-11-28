@@ -166,7 +166,8 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-        await gateway.waitForRequest("chat.history");
+        await pane.getByRole("button", { name: "Show earlier", exact: true }).click();
+        await gateway.waitForRequest("chat.history", { match: { cursor: "older-1" } });
         await gateway.rejectDeferred(
           "chat.history",
           { code: "UNAVAILABLE", message: "The connection was interrupted. Try again." },
