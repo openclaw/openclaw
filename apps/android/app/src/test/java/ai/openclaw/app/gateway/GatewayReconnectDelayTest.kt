@@ -37,6 +37,28 @@ class GatewayReconnectDelayTest {
   }
 
   @Test
+  fun serverDelayIsRetryableOnlyBoundedAndNeverShortenedByJitter() {
+    fun error(
+      delay: Int?,
+      retryable: Boolean = true,
+    ) = ErrorShape("UNAVAILABLE", "starting", retryable = retryable, retryAfterMs = delay)
+    assertEquals(0L, gatewayConnectRetryDelayMs(error(null)))
+    assertEquals(0L, gatewayConnectRetryDelayMs(error(0)))
+    assertEquals(0L, gatewayConnectRetryDelayMs(error(-1)))
+    assertEquals(0L, gatewayConnectRetryDelayMs(error(25_000, retryable = false)))
+    val cases =
+      listOf(
+        50 to 1_000L..1_200L,
+        3_000 to 3_000L..3_600L,
+        25_000 to 25_000L..30_000L,
+        Int.MAX_VALUE to 60_000L..60_000L,
+      )
+    for ((serverMs, range) in cases) {
+      repeat(30) { assertTrue(gatewayConnectRetryDelayMs(error(serverMs)) in range) }
+    }
+  }
+
+  @Test
   fun receivedWakeSurvivesTimeoutBeforeContinuationResumes() {
     // Control: the former receive-in-timeout primitive loses a consumed wake at this boundary.
     assertFalse(
