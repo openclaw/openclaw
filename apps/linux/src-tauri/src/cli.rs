@@ -315,10 +315,10 @@ impl OpenClawCli {
 
 /// Keep discovery, installation, and runtime binding on the same launcher path.
 pub(crate) fn managed_launcher(prefix: &Path) -> PathBuf {
-    prefix.join(if cfg!(target_os = "windows") {
-        "bin/openclaw.cmd"
+    prefix.join("bin").join(if cfg!(target_os = "windows") {
+        "openclaw.cmd"
     } else {
-        "bin/openclaw"
+        "openclaw"
     })
 }
 
@@ -379,6 +379,17 @@ pub fn openclaw_home() -> Result<PathBuf, CliError> {
 mod tests {
     use super::{output_tail, OpenClawCli};
     use std::path::PathBuf;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn managed_launcher_uses_native_separators_for_terminal_setup() {
+        let prefix = PathBuf::from(r"C:\Users\example\.openclaw");
+        let launcher = super::managed_launcher(&prefix);
+        assert_eq!(
+            launcher.to_str().unwrap(),
+            r"C:\Users\example\.openclaw\bin\openclaw.cmd"
+        );
+    }
 
     #[test]
     fn output_tail_keeps_the_last_twelve_nonempty_lines() {
