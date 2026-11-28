@@ -4,7 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path";
 import { listLegacyAuthProfileSources } from "../agents/auth-profiles/legacy-source-files.js";
-import { inspectSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { inspectSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.native.js";
 import {
   hasPendingSharedAuthCleanup,
   inspectSharedAuthLegacySourceFile,
