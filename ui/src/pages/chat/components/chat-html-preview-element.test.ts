@@ -724,6 +724,75 @@ describe("ordinary HTML preview transport", () => {
     await frameFor(view);
     expect(request).toHaveBeenCalledTimes(3);
   });
+
+  const sandboxAlert = (view: ChatHtmlPreviewElement) => view.querySelector('[role="alert"]');
+
+  it("adds collapsed sandbox routing guidance when an inferred remote sandbox never becomes ready", async () => {
+    vi.useFakeTimers();
+    const { view, request } = mount();
+    const frame = await frameFor(view);
+    await vi.runOnlyPendingTimersAsync();
+    await expect.poll(() => sandboxAlert(view)).not.toBeNull();
+    expect(sandboxAlert(view)!.textContent).toContain("The widget sandbox is unavailable.");
+    expect(view.querySelector("iframe")).toBeNull();
+    const details = sandboxAlert(view)!.querySelector("details")!;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")!.textContent).toBe("More info");
+    expect(details.textContent).toContain("set mcp.apps.sandboxOrigin");
+    details.querySelector("summary")!.click();
+    expect(details.open).toBe(true);
+    sandboxAlert(view)!.querySelector("button")!.click();
+    expect(await frameFor(view)).not.toBe(frame);
+    expect(sandboxAlert(view)).toBeNull();
+    expect(view.querySelector("details")).toBeNull();
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["loopback", "explicit origin", "capability path"])(
+    "omits sandbox routing guidance on ready timeout for a %s sandbox",
+    async (kind) => {
+      vi.useFakeTimers();
+      const html =
+        '<meta http-equiv="Content-Security-Policy" content="script-src \'self\'"><script src="app.js"></script>';
+      const request = vi.fn(async (method: string) => {
+        if (method === "canvas.document.preview") {
+          return kind === "explicit origin"
+            ? { ...metadata, sandboxOrigin: "https://sandbox.example" }
+            : { ...metadata, html };
+        }
+        if (method === "sessions.files.preview") {
+          return { status: "ready", html, omitted: 0, sandboxPath: previewSandboxPath };
+        }
+        return { released: true };
+      });
+      const { view, context } = mount(request, kind === "capability path" ? html : source);
+      if (kind === "loopback") {
+        context.gateway.connection.gatewayUrl = "ws://127.0.0.1:8443";
+      }
+      if (kind === "capability path") {
+        view.sessionFileSource = { sessionKey: "agent:main:main", path: "/report/index.html" };
+      }
+      const frame = await frameFor(view);
+      expect(new URL(frame.src).origin).toBe(
+        {
+          loopback: "http://127.0.0.1:8444",
+          "explicit origin": "https://sandbox.example",
+          "capability path": "http://gateway.example:8444",
+        }[kind],
+      );
+      await vi.runOnlyPendingTimersAsync();
+      await expect.poll(() => sandboxAlert(view)).not.toBeNull();
+      expect(sandboxAlert(view)!.textContent).toContain("The widget sandbox is unavailable.");
+      expect(view.querySelector("details")).toBeNull();
+    },
+  );
+
+  it("omits sandbox routing guidance for an inferred remote sandbox's unrelated frame error", async () => {
+    const { view } = mount();
+    (await frameFor(view)).dispatchEvent(new Event("error"));
+    await expect.poll(() => sandboxAlert(view)).not.toBeNull();
+    expect(view.querySelector("details")).toBeNull();
+  });
 });
 
 it("bootstraps ordinary previews but keeps capability file previews on their own sandbox origin", async () => {

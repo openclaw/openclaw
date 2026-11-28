@@ -13,6 +13,7 @@ import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-previe
 import type { EmbedSandboxMode } from "../../../lib/chat/canvas-embed-policy.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { isLoopbackHostname } from "../../../lib/gateway-locality.ts";
 import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useApplication } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -169,9 +170,15 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
       { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
     );
 
-    const ErrorNotice = (notice: { message: string }) => (
+    const ErrorNotice = (notice: { message: string; sandboxHint?: boolean }) => (
       <div class="chat-html-preview__error" role="alert">
         {notice.message}
+        <Show when={notice.sandboxHint}>
+          <details>
+            <summary>{t("board.widget.moreInfo")}</summary>
+            <p style={{ margin: "4px 0 0" }}>{t("board.widget.sandboxUnreachableHint")}</p>
+          </details>
+        </Show>
         <button
           class="btn btn--sm"
           type="button"
@@ -188,6 +195,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
     // The keyed branches pass plain identity values and own all transport presentation state.
     const renderFrame = (preview: PreviewView, mode: EmbedSandboxMode) => {
       const [frameError, setFrameError] = createSignal("");
+      const [sandboxHint, setSandboxHint] = createSignal(false);
       const [rendered, setRendered] = createSignal(false);
       const [omittedAssets, setOmittedAssets] = createSignal(preview.preparedCsp?.omitted ?? 0);
       const generation = ++frameGeneration;
@@ -203,9 +211,16 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
           sandboxHost = undefined;
         }
       };
-      const fail = (reason: unknown) => {
+      // Like board widgets: without an explicit origin or capability path, the derived
+      // sandbox port of a remote Gateway is often not routed by its proxy or tunnel.
+      const inferredRemoteSandbox =
+        !preview.preparedCsp?.sandboxPath &&
+        !preview.document.sandboxOrigin &&
+        !isLoopbackHostname(new URL(preview.origin).hostname);
+      const fail = (reason: unknown, readyTimeout = false) => {
         if (currentFrame()) {
           release();
+          setSandboxHint(readyTimeout && inferredRemoteSandbox);
           setFrameError(formatUiError(reason));
         }
       };
@@ -253,9 +268,9 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
               setRendered(true);
             }
           },
-          onError: fail,
+          onError: (reason) => fail(reason),
           // A failed frame stays terminal until Retry or a mode change.
-          onReadyTimeout: () => fail(new Error(t("board.widget.sandboxUnavailable"))),
+          onReadyTimeout: () => fail(new Error(t("board.widget.sandboxUnavailable")), true),
         });
         sandboxHost = transport;
         const stopMessages = listen(window, "message", (event) => {
@@ -276,7 +291,10 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
         };
       });
       return (
-        <Show when={!frameError()} fallback={<ErrorNotice message={frameError()} />}>
+        <Show
+          when={!frameError()}
+          fallback={<ErrorNotice message={frameError()} sandboxHint={sandboxHint()} />}
+        >
           <Show when={preview.preparedCsp?.status === "unsupported"}>
             <div class="file-view__save-notice" role="status">
               {t("chat.detailPanel.cspPreviewUnsupported")}
