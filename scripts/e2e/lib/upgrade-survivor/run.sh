@@ -2600,7 +2600,7 @@ if [ "$SCENARIO" = "boot-plugin-convergence" ]; then
     "" "" "1.0.0" "" "$RUNTIME_ROOT/boot-plugin-registry-v1" plugin_registry_pid \
     survivor-boot-plugin 1.0.0 "$ARTIFACT_ROOT/survivor-boot-plugin-1.0.0.tgz"
   phase install-boot-plugin-v1 openclaw_e2e_fixture_plugin_command openclaw -- \
-    plugins install survivor-boot-plugin@latest --force
+    plugins install npm:survivor-boot-plugin@latest --force
   phase configure-boot-plugin node "$boot_plugin_helper" configure
   GATEWAY_LOG="$ARTIFACT_ROOT/boot-plugin-baseline-gateway.log"
   boot_plugin_started="$(node -p 'Date.now()')"
