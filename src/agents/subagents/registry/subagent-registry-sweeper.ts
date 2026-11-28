@@ -58,6 +58,7 @@ export function createSubagentRegistrySweeper(params: {
     groupId: string,
     requesterAgentId?: string,
   ) => Iterable<[string, SubagentRunRecord]>;
+  info: (message: string) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 }) {
   const { runs } = params;
@@ -122,7 +123,8 @@ export function createSubagentRegistrySweeper(params: {
       await runWithGatewayDetachedWorkAdmission(() => sweepOnce(), "subagents:sweeper");
     } catch (error) {
       if (isGatewayRestartDrainError(error)) {
-        return params.warn("subagent run sweep skipped: gateway is draining for restart");
+        // Expected during every planned restart; the next Gateway resumes the sweep.
+        return params.info("subagent run sweep skipped: gateway is draining for restart");
       }
       params.warn(
         `subagent run sweep failed: ${error instanceof Error ? error.message : String(error)}`,

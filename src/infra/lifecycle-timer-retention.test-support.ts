@@ -49,6 +49,7 @@ function sweeperFixture() {
     retireObligations: unexpected,
     getRunsForChildSession: unexpected,
     getRunsForCollectorGroup: unexpected,
+    info: unexpected,
     warn: unexpected,
   });
   return { ...observeCallerTimer(sweeper.start), owner: undefined, close: () => sweeper.reset() };

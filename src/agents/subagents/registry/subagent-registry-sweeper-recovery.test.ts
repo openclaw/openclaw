@@ -348,6 +348,20 @@ describe("subagent registry cleanup scheduling", () => {
     },
   );
 
+  it("records a sweep refused by restart drain without warning", async () => {
+    const { entry, runs, callGateway, info, warn, sweeper } = createHarness(archivedRun());
+    markGatewayRestartDraining();
+
+    await sweeper.runTick();
+
+    expect(info).toHaveBeenCalledWith(
+      "subagent run sweep skipped: gateway is draining for restart",
+    );
+    expect(warn).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(runs.has(entry.runId)).toBe(true);
+  });
+
   it("does not terminalize a durable kill intent while a live run is not abortable", async () => {
     const { entry, completeSubagentRunWithRecovery, sweeper } = createHarness();
     entry.killIntent = {

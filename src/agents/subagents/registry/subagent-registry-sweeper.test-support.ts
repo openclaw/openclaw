@@ -80,6 +80,7 @@ export function createSubagentSweeperHarness(
     notifyContextEngineSubagentEnded: vi.fn(),
     runContextEngineSubagentEnded: vi.fn(),
     callGateway: vi.fn(),
+    info: vi.fn(),
     warn: vi.fn(),
     startSubagentAnnounceCleanupFlow: vi.fn(() => true),
     resumeRequesterSettleWake: vi.fn(),
