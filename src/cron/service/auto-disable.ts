@@ -17,9 +17,14 @@ export function autoDisableCronJob(params: {
   reason?: "schedule-errors" | "account-unavailable";
   /** Provider sign-in command for `account-unavailable`, when the provider is known. */
   signInCommand?: string;
+  /**
+   * Enablement the run was admitted with. A run outcome can disable a finished one-shot before
+   * this records why; an operator's own disable still leaves the job untouched.
+   */
+  enabledAtAdmission?: boolean;
 }): void {
   const { job } = params;
-  if (!job.enabled || job.state.autoDisabled) {
+  if (!(params.enabledAtAdmission ?? job.enabled) || job.state.autoDisabled) {
     return;
   }
   const reason = params.reason ?? "schedule-errors";

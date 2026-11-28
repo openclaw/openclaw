@@ -12,6 +12,7 @@ import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-
 import type { RestartRecoveryOperatorSource } from "../../gateway/operator-run-recovery-source.codec.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveCronConfigurationRefusal } from "../configuration-refusal.js";
+import { CRON_INFERENCE_ACCOUNT_RETIRED_CODE } from "../inference-binding.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import * as schedule from "../schedule.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
@@ -669,4 +670,17 @@ it("keeps a job running when only the authorization owner changed, not the accou
   expect(job.enabled).toBe(true);
   expect(job.state.nextRunAtMs).toBeGreaterThan(startedAt);
   expect(deferredNotifications.filter((notice) => notice.kind === "auto-disabled")).toEqual([]);
+});
+
+it("records why a due one-shot ended when its recorded account is gone", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
+    schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+  });
+  const refusal = Object.assign(new Error("Automation outcome runs on account openai:work"), {
+    code: CRON_INFERENCE_ACCOUNT_RETIRED_CODE,
+  });
+  apply({ status: "error", error: refusal.message, ...resolveCronConfigurationRefusal(refusal) });
+  expect(job.enabled).toBe(false);
+  expect(job.state.autoDisabled?.reason).toBe("account-unavailable");
+  expect(deferredNotifications.filter((notice) => notice.kind === "auto-disabled")).toHaveLength(1);
 });

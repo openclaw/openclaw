@@ -289,6 +289,7 @@ export function applyJobResult(
         // A replayed outcome records the fact without sending its notice again.
         deferredNotifications: opts.replay ? [] : opts.deferredNotifications,
         reason: "account-unavailable",
+        enabledAtAdmission: previousScheduleState.enabled,
         signInCommand:
           job.inferenceBinding && buildProviderReauthCommand(job.inferenceBinding.provider),
       });
