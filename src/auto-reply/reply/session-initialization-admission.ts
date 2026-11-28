@@ -10,6 +10,7 @@ import type { SessionAdmissionTransition } from "../../config/sessions/session-a
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { resolveSessionWorkStartBlock } from "../../config/sessions/session-work-start.js";
+import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding-metadata.js";
@@ -20,6 +21,7 @@ import { captureSessionTarget } from "../../sessions/session-controller.lifecycl
 import { acknowledgeReplySessionTransition } from "../../sessions/session-controller.session-reader.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import { cancelSelfSnooze } from "../../sessions/session-self-snooze.js";
+import type { SkillLibraryAuthoringPresentation } from "../../skills/library/authoring.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { shouldBypassAcpDispatchForCommand } from "./dispatch-acp-command-bypass.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -39,6 +41,7 @@ export type InitSessionStateParams = {
   expectedExistingSessionId?: string;
   recordedSessionActivity?: InternalGetReplyOptions["recordedSessionActivity"];
   inputOwnedByRecorder?: boolean;
+  skillLibraryAuthoringPresentation?: SkillLibraryAuthoringPresentation;
   pinExpectedExistingSession?: boolean;
   newlyCreatedSessionId?: string;
   requestedSessionId?: string;
@@ -233,10 +236,42 @@ export async function prepareReplySessionInitialization(
   return parentSessionKey;
 }
 
+export function applyReplySessionPresentation(
+  sessionEntry: InternalSessionEntry,
+  label: string | undefined,
+  authoring: SkillLibraryAuthoringPresentation | undefined,
+) {
+  if (authoring) {
+    sessionEntry.skillLibraryAuthoringPresentation = {
+      sessionId: sessionEntry.sessionId,
+      lifecycleRevision: sessionEntry.lifecycleRevision ?? null,
+      defaultTarget: authoring.defaultTarget,
+      multipleProfiles: authoring.multipleProfiles,
+    };
+  }
+  if (!sessionEntry.chatType) {
+    sessionEntry.chatType = "direct";
+  }
+  const threadLabel = normalizeOptionalString(label);
+  // Derived labels initialize titles; channel renames and generated titles own later changes.
+  if (threadLabel && !sessionEntry.displayName) {
+    sessionEntry.displayName = threadLabel;
+  }
+}
+
 export function resolveReplySessionInitializationOptions(
   opts: InternalGetReplyOptions | undefined,
 ) {
+  const authoring = opts?.skillLibraryAuthoring;
   return {
+    ...(authoring && !authoring.expired
+      ? {
+          skillLibraryAuthoringPresentation: {
+            defaultTarget: authoring.defaultTarget,
+            multipleProfiles: authoring.multipleProfiles,
+          },
+        }
+      : {}),
     operatorAuthority: opts?.operatorAuthority,
     providerReviewAcknowledgment: opts?.providerReviewAcknowledgment,
     replyOperation: opts?.replyOperation,

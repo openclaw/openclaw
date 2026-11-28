@@ -43,6 +43,11 @@ it("applies tool policy to recovered dashboard authoring", () => {
     toolConstructionPlan: createOpenClawOnlyToolConstructionPlan(),
   };
   expectPinnedOnlySchema(createOpenClawCodingTools(options));
+  const textOnly = createOpenClawCodingTools({
+    ...options,
+    listingClientCaps: ["tool-events"],
+  });
+  expect(widget(textOnly)).toBeUndefined();
   const deniedTools = createOpenClawCodingTools({
     ...options,
     config: { tools: { deny: ["show_widget"] } },
