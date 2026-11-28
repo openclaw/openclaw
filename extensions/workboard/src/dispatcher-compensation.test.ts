@@ -89,4 +89,95 @@ describe("Workboard dispatcher compensation", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("blocks and records the reason when a dir workspace does not exist instead of starting a doomed worker", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-missing-dir-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const missingWorkspace = path.join(dir, "not-yet-created");
+    const stores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
+    const store = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
+    try {
+      const card = await store.create({
+        title: "Missing dir worker",
+        status: "ready",
+        workspace: { kind: "dir", path: missingWorkspace },
+        workspaceAccess: { unrestricted: true },
+      });
+      const run = vi.fn().mockResolvedValue({ runId: "should-not-run" });
+
+      const result = await dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run },
+        options: { now: 10, maxStarts: 1 },
+      });
+
+      expect(run).not.toHaveBeenCalled();
+      expect(result.started).toEqual([]);
+      expect(result.startFailures).toEqual([
+        expect.objectContaining({
+          cardId: card.id,
+          error: expect.stringContaining("workspace directory does not exist:"),
+        }),
+      ]);
+      const persisted = await store.get(card.id);
+      expect(persisted?.status).toBe("blocked");
+      expect(persisted?.metadata?.notifications).toContainEqual(
+        expect.objectContaining({
+          kind: "failed",
+          message: expect.stringContaining("workspace directory does not exist:"),
+        }),
+      );
+      expect(persisted?.metadata?.comments).toContainEqual(
+        expect.objectContaining({
+          body: expect.stringContaining("workspace directory does not exist:"),
+        }),
+      );
+    } finally {
+      await stores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("blocks and records the reason when a dir workspace points to a file instead of a directory", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-workboard-file-dir-"));
+    const dbPath = path.join(dir, "workboard.sqlite");
+    const filePath = path.join(dir, "not-a-directory.txt");
+    fs.writeFileSync(filePath, "hello");
+    const stores = createWorkboardSqliteStores({ dbPath, workerModuleUrl });
+    const store = new WorkboardStore(stores.cards, sqliteTestAuxStores(stores));
+    try {
+      const card = await store.create({
+        title: "File workspace worker",
+        status: "ready",
+        workspace: { kind: "dir", path: filePath },
+        workspaceAccess: { unrestricted: true },
+      });
+      const run = vi.fn().mockResolvedValue({ runId: "should-not-run" });
+
+      const result = await dispatchAndStartWorkboardCards({
+        store,
+        subagent: { run },
+        options: { now: 10, maxStarts: 1 },
+      });
+
+      expect(run).not.toHaveBeenCalled();
+      expect(result.startFailures).toEqual([
+        expect.objectContaining({
+          cardId: card.id,
+          error: expect.stringContaining("workspace path is not a directory:"),
+        }),
+      ]);
+      const persisted = await store.get(card.id);
+      expect(persisted?.status).toBe("blocked");
+      expect(persisted?.metadata?.notifications).toContainEqual(
+        expect.objectContaining({
+          kind: "failed",
+          message: expect.stringContaining("workspace path is not a directory:"),
+        }),
+      );
+    } finally {
+      await stores.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
