@@ -74,9 +74,10 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     // scroll handoff; fixed-height widgets still use their saved rows.
     const fitAutoContent = owner.fitAutoContent();
     const positions = new Map<string, number>();
+    const preview = state.gesture.name ? state.previewItems : state.drop?.items;
     const rects = tabs.flatMap((tab) => {
       const tabRects = layout(
-        (tab.tabId === activeTabId && state.gesture.name ? state.previewItems : null) ??
+        (tab.tabId === activeTabId ? preview : null) ??
           boardWidgetGridItems(
             widgets.filter((widget) => widget.tabId === tab.tabId),
             owner.contentHeights,
@@ -126,7 +127,8 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
           widget: widgetsByName.get(rect.name),
           boardRevision: snapshot?.revision ?? 0,
           rect: stableRect,
-          contentHeightPx: owner.contentHeights.get(rect.name),
+          contentHeightPx:
+            state.drop?.resized === rect.name ? undefined : owner.contentHeights.get(rect.name),
           fitAutoContent,
           pageChrome: rect.name === props.pageWidgetName,
           tabs,

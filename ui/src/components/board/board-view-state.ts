@@ -99,6 +99,7 @@ export function createBoardViewState(
     contentHeights: initialHeights,
   };
   type Presentation = Omit<typeof initial, "mutationFailure"> & {
+    drop?: { items: BoardGridItem[]; resized?: string };
     mutationFailure: { result: Promise<void> } | undefined;
   };
   const [presentation, update] = createStore<Presentation>(sync, initial);
@@ -149,8 +150,9 @@ export function createBoardViewState(
       local.focusName = "";
     }
     if (
-      gesture &&
-      (snapshotChanged ||
+      (gesture || local.drop) &&
+      (ownerChanged ||
+        snapshotChanged ||
         before?.activeTabId !== props.activeTabId ||
         before?.pageWidgetName !== props.pageWidgetName ||
         !props.active)
@@ -211,6 +213,7 @@ export function createBoardViewState(
           mutationPending = false;
           update((local) => {
             local.mutationPending = false;
+            local.drop = undefined;
           });
         }
       }
@@ -522,7 +525,7 @@ export function createBoardViewState(
       const result = pointerPreview(event, active, local.previewItems);
       clearGesture(local);
       const widget = props.snapshot?.widgets.find((entry) => entry.name === active.name);
-      if (!widget || !result) {
+      if (!widget || !result || !props.callbacks) {
         return;
       }
       if (active.mode === "move") {
@@ -532,11 +535,17 @@ export function createBoardViewState(
         if (!result.hoverTabId && position === widget.position) {
           return;
         }
+        // The grid already showed this placement during the drag. Keep just its
+        // geometry until settlement; do not move a live document between tabs speculatively.
+        if (!result.hoverTabId) {
+          local.drop = { items: result.items };
+        }
         void moveWidget(widget, position, result.hoverTabId || undefined).catch(() => undefined);
         return;
       }
       const resized = result.items.find((item) => item.name === active.name);
       if (resized && (resized.w !== active.originW || resized.h !== active.originH)) {
+        local.drop = { items: result.items, resized: widget.name };
         void cellCallbacks.resizeTo(widget, resized.w, resized.h).catch(() => undefined);
       }
     });
@@ -556,6 +565,7 @@ export function createBoardViewState(
 
   function clearGesture(local: Presentation): void {
     stopGesture();
+    local.drop = undefined;
     local.gesture = { name: "", mode: "" };
     local.hoverTabId = "";
   }
