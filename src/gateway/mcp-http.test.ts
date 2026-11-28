@@ -98,6 +98,12 @@ const logWarnMock = vi.hoisted(() => vi.fn<(message: string) => void>());
 const sessionEntries = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({ session: { mainKey: "main" } })));
 
+vi.mock("./mcp-http.request.js", async (importOriginal) =>
+  (await import("./mcp-http.native-authority-wait.test-support.js")).mockNativeAuthorityWait(
+    importOriginal,
+  ),
+);
+
 // Partial: the real gateway resolver reaches other exports of this module when a
 // test drives it instead of the mock below.
 vi.mock("../config/io.js", async (importOriginal) => ({
@@ -153,6 +159,7 @@ import {
   mintAttachGrant,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
+  transferMcpLoopbackClientGrant,
 } from "./mcp-grant-store.js";
 import { handleMcpJsonRpc } from "./mcp-http.handlers.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
@@ -164,6 +171,7 @@ import {
   markMcpLoopbackToolCallStarted,
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "./mcp-http.loopback-runtime.js";
+import { nativeAuthorityWait } from "./mcp-http.native-authority-wait.test-support.js";
 import {
   angleSchema,
   buildMockMcpToolSchema,
@@ -961,6 +969,8 @@ describe("mcp loopback server", () => {
   });
 
   it("allows native discovery but denies calls until the current turn observes its tools", async () => {
+    // Unresolved calls wait (bounded) before the hard reject; keep the bound tiny.
+    nativeAuthorityWait.ms = 30;
     getRuntimeConfigMock.mockReturnValue({ session: { mainKey: "main" } });
     const execute = vi.fn(async (nativeTools: readonly string[] | null | undefined) => ({
       content: [{ type: "text", text: JSON.stringify(nativeTools) }],
@@ -1006,6 +1016,124 @@ describe("mcp loopback server", () => {
       error: { code: -32000 },
     });
     expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits for a concurrent native tool capture instead of rejecting immediately, and scopes tools against the resolved (not stale) allowlist", async () => {
+    getRuntimeConfigMock.mockReturnValue({ session: { mainKey: "main" } });
+    const execute = vi.fn(async (nativeTools: readonly string[] | null | undefined) => ({
+      content: [{ type: "text", text: JSON.stringify(nativeTools) }],
+    }));
+    resolveGatewayScopedToolsMock.mockImplementation(async () => {
+      const { nativeCronCreatorToolAllowlist } = getScopedToolsCall(
+        resolveGatewayScopedToolsMock.mock.calls.length - 1,
+      );
+      return {
+        agentId: "main",
+        tools: [makeMessageTool({ execute: () => execute(nativeCronCreatorToolAllowlist) })],
+      };
+    });
+    await startLoopbackServerForTest();
+    const { capture, scope: requestScope } = await createCliGrant("run-native-wait", {
+      context: { nativeCronCreatorToolAllowlist: ["read", "exec"] },
+      captureKey: "capture-native-wait",
+    });
+
+    // The allowlist is still null (pre-capture) when this fires. Publish the capture
+    // only once the request has entered the gateway's bounded wait, so this exercises
+    // the wait-then-wake path on every run rather than a scheduling coincidence.
+    const enteredWait = new Promise<void>((resolve) => {
+      nativeAuthorityWait.onEnter = resolve;
+    });
+    const callPromise = sendLoopbackToolCall({ ...requestScope, name: "message" });
+    await enteredWait;
+    expect(execute).not.toHaveBeenCalled();
+    expect(capture.captureNativeToolAuthority(["read", "exec"])).toBe(true);
+
+    // A result (not the -32000 timeout fallback) proves the request woke on the capture.
+    const payload = await readOkMcpPayload(await callPromise);
+    expectMcpResultText(payload, '["read","exec"]');
+    // The tool schema itself (not just the later gate) must reflect the
+    // freshly captured allowlist — never the null snapshot frozen at auth
+    // time before the wait began.
+    expect(
+      getScopedToolsCall(resolveGatewayScopedToolsMock.mock.calls.length - 1)
+        .nativeCronCreatorToolAllowlist,
+    ).toEqual(["read", "exec"]);
+  });
+
+  it("rejects a waiting call whose bearer was taken over by a successor turn before the wait", async () => {
+    const cfg = { session: { mainKey: "main" } };
+    getRuntimeConfigMock.mockReturnValue(cfg);
+    const execute = vi.fn(async () => ({ content: [{ type: "text", text: "ran" }] }));
+    resolveGatewayScopedToolsMock.mockImplementation(async () => ({
+      agentId: "main",
+      tools: [makeMessageTool({ execute })],
+    }));
+    await startLoopbackServerForTest();
+    const { token, scope: requestScope } = await createCliGrant("run-turn-a", {
+      context: { nativeCronCreatorToolAllowlist: ["read", "exec"] },
+      captureKey: "capture-warm-reuse",
+    });
+    const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "active MCP loopback runtime");
+    const admissionForSuccessor = await activeAdmission("run-turn-b");
+    // Warm turns reuse the child's bearer and capture key. Land the successor on
+    // turn A's token once the request has been authenticated, so the request
+    // resolves turn A's pending (null) allowlist, then finds turn B on the token.
+    getRuntimeConfigMock.mockImplementationOnce(() => {
+      const successor = mintMcpLoopbackClientGrant({
+        context: {
+          sessionKey: "agent:main:main",
+          senderIsOwner: true,
+          nativeCronCreatorToolAllowlist: ["read", "exec"],
+        },
+        runtimeOwnerToken: runtime.ownerToken,
+        admittedRunContext: admissionForSuccessor,
+        toolPolicyConfig: cfg,
+      });
+      transferMcpLoopbackClientGrant({
+        sourceToken: successor.token,
+        targetToken: token,
+        runtimeOwnerToken: runtime.ownerToken,
+      });
+      const successorCapture = activateMcpLoopbackClientGrantCapture({
+        token,
+        runtimeOwnerToken: runtime.ownerToken,
+        captureKey: "capture-warm-reuse",
+      });
+      if (!successorCapture) {
+        throw new Error("expected the successor turn to activate its capture");
+      }
+      successorCapture.captureNativeToolAuthority(["exec"]);
+      return cfg;
+    });
+
+    const response = await sendLoopbackToolCall({ ...requestScope, name: "message" });
+    expect(response.status).toBe(401);
+    expect(execute).not.toHaveBeenCalled();
+    expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
+  });
+
+  it("still hard-rejects with the original error once the wait times out with nothing resolved", async () => {
+    getRuntimeConfigMock.mockReturnValue({ session: { mainKey: "main" } });
+    nativeAuthorityWait.ms = 30;
+    await startLoopbackServerForTest();
+    const { scope: requestScope } = await createCliGrant("run-native-timeout-fallback", {
+      context: { nativeCronCreatorToolAllowlist: ["read", "exec"] },
+      captureKey: "capture-native-timeout-fallback",
+    });
+
+    // Nothing ever calls captureNativeToolAuthority for this grant. The
+    // request must still resolve (not hang) and land on the exact original
+    // hard-reject, byte for byte.
+    const response = await sendLoopbackToolCall({ ...requestScope, name: "message" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: -32000,
+        message:
+          "Native tool authority is not initialized. Retry after native startup, or start a fresh session; no tool action was taken.",
+      },
+    });
   });
 
   it("keeps admitted CLI tool policy across config publication while new grants use current policy", async () => {
