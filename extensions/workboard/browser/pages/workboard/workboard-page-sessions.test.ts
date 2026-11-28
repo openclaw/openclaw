@@ -88,7 +88,7 @@ function sessionsPage(options: { boardId?: string; gatewayId?: string; profileId
     if (method === "workboard.cards.list") {
       return { cards: [], boards: [{ ...board, total: 0, active: 0, archived: 0, byStatus: {} }] };
     }
-    if (method === "workboard.sessionsBoard.read") {
+    if (method === "workboard.sessionsBoard.read" || method === "workboard.sessionsBoard.move") {
       return structuredClone(result);
     }
     return request(method, params);

@@ -412,6 +412,76 @@ suite.define(() => {
     });
   });
 
+  it("places a dropped session immediately and distinguishes rejection from a failed refresh", async () => {
+    await withPage(async (page) => {
+      const board = makeBoard("sessions", {
+        kind: "sessions",
+        name: "Team sessions",
+        sessions: {
+          columns: [
+            {
+              id: "working",
+              label: "Working",
+              description: "Active sessions",
+              match: { run: ["active"] },
+            },
+            { id: "review", label: "Review", description: "Ready for review", fallback: true },
+          ],
+        },
+      });
+      const row = {
+        key: "agent:main:review",
+        sessionId: "review",
+        agentId: "main",
+        label: "Review navigation",
+        run: "active",
+        archived: false,
+        pullRequests: [],
+        lastActivityAt: Date.now(),
+        columnId: "working",
+        source: "state",
+        reason: "Active run",
+      };
+      const boardRead = { board, columns: board.sessions!.columns, sessions: [row], people: [] };
+      const read = "workboard.sessionsBoard.read";
+      const move = "workboard.sessionsBoard.move";
+      const gateway = await installWorkboard(page, [], {
+        methodResponses: {
+          "workboard.boards.list": { boards: [board] },
+          "workboard.cards.list": cardsListResponse([], [board]),
+          [read]: boardRead,
+        },
+      });
+      await page.goto(suite.server.baseUrl + "workboard/sessions");
+      const working = page.locator('[data-session-column="working"]');
+      const review = page.locator('[data-session-column="review"]');
+      const tile = ".workboard-session-tile";
+      await gateway.deferNext(move);
+      await working.locator(tile).dragTo(review.getByRole("heading"));
+      expect((await gateway.waitForRequest(move)).params).toEqual({
+        boardId: board.id,
+        sessionKey: row.key,
+        columnId: "review",
+      });
+      await expect.poll(() => review.locator(tile).getAttribute("aria-busy")).toBe("true");
+      await gateway.rejectDeferred(move, { message: "Placement was not saved" });
+      await working.locator(tile).waitFor();
+      await page.getByRole("alert").filter({ hasText: "Placement was not saved" }).waitFor();
+      await gateway.deferNext(read);
+      const reads = await requestCount(gateway, read);
+      await gateway.setMethodResponse(move, {
+        ...boardRead,
+        sessions: [{ ...row, columnId: "review", source: "operator" }],
+      });
+      await working.locator(tile).dragTo(review.getByRole("heading"));
+      await gateway.waitForRequest(read, { after: reads });
+      await gateway.rejectDeferred(read, { message: "Refresh unavailable" });
+      await page.getByRole("alert").filter({ hasText: "Refresh unavailable" }).waitFor();
+      await review.getByRole("button", { name: row.label }).click();
+      await expect.poll(() => new URL(page.url()).pathname).toContain("/chat");
+    });
+  });
+
   it("replaces the URL when selecting boards without adding history", async () => {
     const boards = [makeBoard("default"), makeBoard("ops", { name: "Operations" })];
     await withPage(async (page) => {

@@ -86,33 +86,41 @@ export function SessionsBoard(props: SessionsBoardProps) {
       });
     }
     const agents = listSelectableAgents(host.agents.rows);
+    const pending = controller.pendingMove;
+    const move = snapshot?.columns.some((column) => column.id === pending?.columnId)
+      ? pending
+      : undefined;
     const sessions = (snapshot?.sessions ?? [])
       .filter((session) => !host.agents.scopeId || session.agentId === host.agents.scopeId)
-      .map((session) => ({
-        key: session.key,
-        agentId: session.agentId,
-        columnId: session.columnId,
-        reason: session.reason,
-        headline: session.observerDigest?.headline,
-        lastActivityAt: session.lastActivityAt,
-        title: session.label || session.derivedTitle || session.key,
-        agentName: agentDisplayName(
-          agents.find((agent) => agent.id === session.agentId),
-          session.agentId,
-        ),
-        sourceLabel: t(`workboard.sessionsBoard.source.${session.source}`),
-        status: {
-          state: session.run === "active" ? "running" : session.run,
-          label: t(`workboard.sessionsBoard.run.${session.run}`),
-          detail: "",
-          visible: true,
-          tone: session.run === "active" ? "live" : session.run === "failed" ? "blocked" : "idle",
-        } satisfies SessionStatusPresentation,
-        pullRequests: session.pullRequests.toSorted(
-          (left, right) =>
-            PULL_REQUEST_STATE_PRIORITY[left.state] - PULL_REQUEST_STATE_PRIORITY[right.state],
-        ),
-      }));
+      .map((session) => {
+        const moving = move?.key === session.key && move.sessionId === session.sessionId;
+        return {
+          moving,
+          key: session.key,
+          agentId: session.agentId,
+          columnId: moving ? move.columnId : session.columnId,
+          reason: session.reason,
+          headline: session.observerDigest?.headline,
+          lastActivityAt: session.lastActivityAt,
+          title: session.label || session.derivedTitle || session.key,
+          agentName: agentDisplayName(
+            agents.find((agent) => agent.id === session.agentId),
+            session.agentId,
+          ),
+          sourceLabel: t(`workboard.sessionsBoard.source.${session.source}`),
+          status: {
+            state: session.run === "active" ? "running" : session.run,
+            label: t(`workboard.sessionsBoard.run.${session.run}`),
+            detail: "",
+            visible: true,
+            tone: session.run === "active" ? "live" : session.run === "failed" ? "blocked" : "idle",
+          } satisfies SessionStatusPresentation,
+          pullRequests: session.pullRequests.toSorted(
+            (left, right) =>
+              PULL_REQUEST_STATE_PRIORITY[left.state] - PULL_REQUEST_STATE_PRIORITY[right.state],
+          ),
+        };
+      });
     return {
       canWrite: host.connection.canWrite,
       boardOptions: [
@@ -282,9 +290,14 @@ export function SessionsBoard(props: SessionsBoardProps) {
                             },
                           ]}
                           data-session-key={session().key}
-                          title={[session().title, session().sourceLabel, session().reason]
-                            .filter(Boolean)
-                            .join("\n")}
+                          aria-busy={session().moving ? "true" : undefined}
+                          title={
+                            session().moving
+                              ? session().title
+                              : [session().title, session().sourceLabel, session().reason]
+                                  .filter(Boolean)
+                                  .join("\n")
+                          }
                           draggable={state().writable ? "true" : "false"}
                           onClick={() =>
                             props.host.sessions.open({
@@ -333,7 +346,11 @@ export function SessionsBoard(props: SessionsBoardProps) {
                             class="workboard-session-tile__time"
                             title={formatDateTimeMs(session().lastActivityAt)}
                           >
-                            <RelativeTime timestamp={session().lastActivityAt} now={Date.now()} />
+                            {session().moving ? (
+                              t("workboard.sessionsBoard.moving")
+                            ) : (
+                              <RelativeTime timestamp={session().lastActivityAt} now={Date.now()} />
+                            )}
                           </span>
                         </div>
                       )}
