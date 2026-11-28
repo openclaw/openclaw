@@ -300,9 +300,6 @@ export async function runUpdatedInstallGatewayCommand(
       args: [...args, ...(grant ? ["--update-executor", "run"] : [])],
     });
     const argv = [invocation.command, ...invocation.args];
-    // The successor may need the same state database before this child returns.
-    await releaseOpenClawStateDatabaseCustody();
-    assertCurrent();
     params.onGatewayStartAttempted?.(action);
     return await runSettledGatewayCommand(argv, {
       ...(grant
@@ -329,6 +326,11 @@ export async function runUpdatedInstallGatewayCommand(
     });
   };
   const childStartedAtMs = Date.now();
+  // The successor may need the same state database before this child returns.
+  // Release and recheck before delegation suspends the parent's mutation fence.
+  // The child owner then verifies its own lease and binds the spawned process.
+  await releaseOpenClawStateDatabaseCustody();
+  assertCurrent();
   const res = executor
     ? await withUpdateCommandExecutorChild(executor, params.result.root!, runChild)
     : await runChild();
