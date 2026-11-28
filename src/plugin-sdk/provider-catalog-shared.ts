@@ -14,7 +14,10 @@ export type {
   ProviderCatalogResult,
 } from "../plugins/types.js";
 
-export { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+export {
+  findConfiguredProviderModel,
+  resolveMergedModelProviderConfig,
+} from "../config/model-provider-config.js";
 
 export {
   clearLiveCatalogCacheForTests,
