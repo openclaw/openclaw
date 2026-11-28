@@ -31,6 +31,8 @@ import {
   withChatDb,
   createIMessageTestRequest,
   settleNotifications,
+  settleNotifiedDispatches,
+  notifyDbRows,
   type MonitorRunParams,
   type WatchClientParams,
 } from "./monitor.last-route.test-support.js";
@@ -351,7 +353,7 @@ describe("iMessage monitor last-route updates", () => {
             for (const message of messages) {
               notifyMessage(message);
             }
-            await settleNotifications();
+            await settleNotifiedDispatches(messages, dispatchReplyWithBufferedBlockDispatcherMock);
             await params.afterNotify?.();
           }
         : undefined);
@@ -1078,10 +1080,8 @@ describe("iMessage monitor last-route updates", () => {
         },
       },
       onClose: async (notify) => {
-        for (const message of readChatDbMessagesAfter(dbPath, effectiveWatcherCursor ?? 0)) {
-          notify(message);
-        }
-        await settleNotifications();
+        const dispatch = dispatchReplyWithBufferedBlockDispatcherMock;
+        await notifyDbRows(notify, dbPath, effectiveWatcherCursor ?? 0, dispatch);
       },
     });
 

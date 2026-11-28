@@ -9,6 +9,46 @@ export async function settleNotifications(): Promise<void> {
   await Promise.resolve();
 }
 
+export async function settleNotifiedDispatches(
+  messages: readonly IMessagePayload[],
+  dispatch: { mock: { calls: unknown[]; results: Array<{ value: unknown }> } },
+): Promise<void> {
+  const expected = messages.filter((message) => message.is_from_me !== true).length;
+  const read = () => ({
+    calls: dispatch.mock.calls.length,
+    pending: dispatch.mock.results.map((result) => result.value),
+  });
+  const deadline = Date.now() + 4_000;
+  while (Date.now() < deadline) {
+    const current = read();
+    if (expected > 0 && current.calls < expected) {
+      await new Promise((resolve) => setTimeout(resolve, 15));
+      continue;
+    }
+    await Promise.all(current.pending);
+    const after = read();
+    if (
+      after.calls === current.pending.length &&
+      (expected === 0 || current.pending.length >= expected)
+    ) {
+      return;
+    }
+  }
+}
+
+export async function notifyDbRows(
+  notify: (message: IMessagePayload) => void,
+  dbPath: string,
+  cursor: number,
+  dispatch: { mock: { calls: unknown[]; results: Array<{ value: unknown }> } },
+): Promise<void> {
+  const messages = readChatDbMessagesAfter(dbPath, cursor);
+  for (const message of messages) {
+    notify(message);
+  }
+  await settleNotifiedDispatches(messages, dispatch);
+}
+
 export function setAvailablePrivateApiMethods(rpcMethods: string[]): void {
   setCachedIMessagePrivateApiStatus("imsg", {
     available: true,
