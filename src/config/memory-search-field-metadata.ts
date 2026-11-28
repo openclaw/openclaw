@@ -1,6 +1,7 @@
 export const MEMORY_SEARCH_FIELD_LABELS: Record<string, string> = {
   "memory.search": "Memory Search",
   "memory.search.enabled": "Enable Memory Search",
+  "memory.search.coldStart": "Memory Cold Start",
   "memory.search.rememberAcrossConversations": "Remember Across Conversations",
   "memory.search.sources": "Memory Search Sources",
   "memory.search.extraPaths": "Extra Memory Paths",
