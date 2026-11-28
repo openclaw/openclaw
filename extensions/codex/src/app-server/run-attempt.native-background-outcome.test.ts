@@ -432,6 +432,10 @@ it.each([
   const complete = (patch: JsonObject): Promise<void> =>
     harness.notify(itemNotification("item/completed", { ...command, ...patch }));
   const harness = createStartedThreadHarness(async (method, input) => {
+    if (method === "thread/backgroundTerminals/terminate") {
+      expect(input).toMatchObject({ threadId: "thread-1", processId: "52627" });
+      return { terminated: true };
+    }
     if (method !== "thread/backgroundTerminals/list") {
       return undefined;
     }
@@ -502,6 +506,15 @@ it.each([
       expect(harness.requests).not.toContainEqual(unsubscribe);
       if (startProcessId === null) {
         source.abort(new Error("Synthetic retained source revoked"));
+        await vi.waitFor(() =>
+          expect(harness.requests).toContainEqual({
+            method: "thread/backgroundTerminals/terminate",
+            params: { threadId: "thread-1", processId: "52627" },
+          }),
+        );
+        expect(isCodexAppServerLiveThreadProtected(harness.client, "thread-1")).toBe(true);
+        expect(harness.requests).not.toContainEqual(unsubscribe);
+        await complete({ processId: "52627", status: "completed", exitCode: 0 });
       } else {
         await complete({ processId: "52627", status: "completed", exitCode: 0 });
       }
