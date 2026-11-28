@@ -10,6 +10,7 @@ import { isMarkdownBlockParked } from "./markdown-block-presentation.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
 import { createIconElement } from "./markdown-icon.ts";
 import { registerSessionTitleTarget } from "./markdown-link-display.ts";
+import { getRenderedMarkdownMathSource } from "./markdown-math-element.ts";
 import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
 
 const loadTableDialog = lazyModule(() => import("./markdown-table-dialog.ts"));
@@ -63,6 +64,12 @@ export function markdownTableCopyText(table: HTMLTableElement): string {
           const walker = cell.ownerDocument.createTreeWalker(
             cell,
             NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
+            {
+              acceptNode: (node) =>
+                getRenderedMarkdownMathSource(node.parentNode)
+                  ? NodeFilter.FILTER_REJECT
+                  : NodeFilter.FILTER_ACCEPT,
+            },
           );
           let text = "";
           for (let node = walker.nextNode(); node; node = walker.nextNode()) {
@@ -70,6 +77,8 @@ export function markdownTableCopyText(table: HTMLTableElement): string {
               text += node.textContent;
             } else if (node.nodeName === "BR") {
               text += "\n";
+            } else {
+              text += getRenderedMarkdownMathSource(node)?.literal ?? "";
             }
           }
           text = text.trim();

@@ -2,6 +2,10 @@ import { t } from "../i18n/index.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createIconElement } from "./markdown-icon.ts";
+import {
+  getRenderedMarkdownMathSource,
+  rememberRenderedMarkdownMathSource,
+} from "./markdown-math-element.ts";
 import "./modal-dialog.tsx";
 
 export function mountExpandedMarkdownTable(
@@ -47,7 +51,16 @@ export function mountExpandedMarkdownTable(
   dialog.initialFocus = () => dismiss;
   stopListeners.push(listen(dismiss, "click", close));
   dismiss.append(createIconElement("x", document));
-  content.append(dismiss, table.cloneNode(true));
+  const copy = table.ownerDocument.importNode(table, true);
+  const originals = table.getElementsByTagName("openclaw-markdown-math");
+  const copies = copy.getElementsByTagName("openclaw-markdown-math");
+  for (let index = 0; index < originals.length; index += 1) {
+    const source = getRenderedMarkdownMathSource(originals[index]!);
+    if (source) {
+      rememberRenderedMarkdownMathSource(copies[index]!, source);
+    }
+  }
+  content.append(dismiss, copy);
   dialog.append(content);
   // Keep delegated file/session actions and modal teardown with their transcript.
   owner.append(dialog);

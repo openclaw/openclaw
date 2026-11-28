@@ -49,6 +49,7 @@ describe.runIf("__vitest_browser__" in globalThis)("native modal transient surfa
     });
     expect(menu).not.toBeNull();
     await menu!.updateComplete;
+    finishElementAnimations(dialog);
     const actions = menu!.querySelectorAll<HTMLElement>(".session-menu__item");
     expect(actions).toHaveLength(3);
     for (const action of actions) {

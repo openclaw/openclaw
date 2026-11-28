@@ -96,6 +96,7 @@ let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | nul
 // The accessibility-tree suite remains Chromium-only until its CDP probe is replaced.
 const webkitTestFiles = [
   "src/pages/chat/components/chat-transcript-geometry-updates.browser.test.tsx",
+  "src/components/markdown-math.browser.test.ts",
   "src/pages/apps/apps-page.browser.test.tsx",
   "src/pages/config/view.config-read.browser.test.tsx",
   "src/pages/sessions/view.invalidation.browser.test.tsx",

@@ -21,7 +21,7 @@ function htmlText(value: string): string {
 function inlineText(tokens: readonly Token[]): string {
   const html = tokens
     .map((token) => {
-      if (token.type === "text" || token.type === "code_inline") {
+      if (token.type === "text" || token.type === "code_inline" || token.type === "math_inline") {
         return escapeHtml(token.content);
       }
       if (token.type === "html_inline") {
@@ -42,7 +42,7 @@ function blockText(tokens: readonly Token[], flattenHtml = true): string {
       if (token.type === "inline") {
         return inlineText(token.children ?? []);
       }
-      if (token.type === "code_block" || token.type === "fence") {
+      if (token.type === "code_block" || token.type === "fence" || token.type === "math_block") {
         return token.content;
       }
       if (token.type === "html_block") {

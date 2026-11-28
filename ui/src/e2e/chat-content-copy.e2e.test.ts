@@ -29,7 +29,7 @@ const selectionParagraph = "Select just these words for the clipboard.";
 const assistantMarkdown = [
   selectionParagraph,
   `\`\`\`ts\n${code}\n\`\`\``,
-  tableMarkdown,
+  tableMarkdown + "\n| Half | \\(\\frac{1}{2}\\) |",
   "[Reference](https://example.com/copy-reference)",
   "- [ ] Keep this item unchecked",
 ].join("\n\n");
@@ -180,11 +180,13 @@ suite.define(() => {
       await copy(codeBlock.locator(".code-block-viewport"), "Copy code", code);
 
       const table = assistant.locator(".markdown-table");
-      await copy(table.locator("td").first(), "Copy table", tableText);
+      await table.locator(".katex").waitFor();
+      const mathTableText = tableText + "\nHalf\t\\(\\frac{1}{2}\\)";
+      await copy(table.locator("td").first(), "Copy table", mathTableText);
       await exactButton(table, "Expand table").click();
       const expandedTable = page.locator(".markdown-table-dialog");
       await expandedTable.waitFor({ state: "visible" });
-      await copy(expandedTable.locator("td").first(), "Copy table", tableText);
+      await copy(expandedTable.locator("td").first(), "Copy table", mathTableText);
       await exactButton(expandedTable, "Close expanded table").click();
       await expandedTable.waitFor({ state: "detached" });
 
