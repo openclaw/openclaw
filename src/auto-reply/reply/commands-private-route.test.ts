@@ -249,7 +249,6 @@ describe("resolvePrivateCommandRouteTargets", () => {
     const targets = await resolvePrivateCommandRouteTargets({
       commandParams: buildCommandParams({
         commands: { ownerAllowFrom: ["tg:849985193"] },
-        channels: { telegram: { botToken: "test-token" } },
       }),
       ...routeRequest,
     });

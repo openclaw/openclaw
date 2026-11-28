@@ -7,7 +7,7 @@ import { persistAbortTargetEntry, persistCommandSession } from "./commands-sessi
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-command-session-store-");
 
-function makeEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
+function makeEntry(overrides: Partial<SessionEntry>): SessionEntry {
   return { sessionId: "command-session", updatedAt: 1, ...overrides };
 }
 
