@@ -44,6 +44,7 @@ import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
+import { registerExecApprovalsReconcileCli } from "./exec-approvals-cli.reconcile.js";
 import {
   EXEC_APPROVALS_STDIN_MAX_BYTES,
   formatCliError,
@@ -665,6 +666,7 @@ export function registerExecApprovalsCli(program: Command) {
     .addHelpText("after", () => formatDocsHelp("/cli/approvals"));
 
   registerNativeExecApprovalsCli(approvals);
+  registerExecApprovalsReconcileCli(approvals);
 
   const pendingCmd = approvals
     .command("pending")

@@ -1,6 +1,7 @@
 // Declarative CLI command catalog for startup policy and fast-path routing.
 import { hasFlag } from "./argv.js";
 import type { CliCommandCatalogEntry, CliCommandPathPolicy } from "./command-catalog-types.js";
+import { approvalsCommandPolicies } from "./command-catalog.approvals.js";
 
 // These commands own their state boundary; bootstrap must not observe or initialize it first.
 const PASSIVE_STARTUP_POLICY = {
@@ -362,7 +363,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     exact: true,
     policy: { ownsProtocolStdout: true },
   },
-  { commandPath: ["approvals"], policy: { networkProxy: "bypass" } },
+  ...approvalsCommandPolicies,
   {
     commandPath: ["approvals", "pending"],
     exact: true,
@@ -414,7 +415,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["triage"],
     policy: { configGuard: "skip", loadPlugins: "never" },
   },
-  { commandPath: ["exec-approvals"], policy: { networkProxy: "bypass" } },
+
   { commandPath: ["exec-policy"], policy: { networkProxy: "bypass" } },
   { commandPath: ["hooks"], policy: { networkProxy: "bypass" } },
   ...[["hooks"], ["hooks", "list"], ["hooks", "info"], ["hooks", "check"]].map(
