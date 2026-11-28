@@ -87,7 +87,13 @@ export function applyOpenAICompletionsToolReasoning(
 /** Return whether a model has a known GPT-6 reasoning and sampling contract. */
 export function isOpenAIGpt6Model(model: OpenAIReasoningModel): boolean {
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
-  return id === "gpt-6-astra" || id === "gpt-6-sol" || id === "gpt-6-luna" || id === "gpt-6.1-sol";
+  return (
+    id === "gpt-6-astra" ||
+    id === "gpt-6-sol" ||
+    id === "gpt-6-luna" ||
+    id === "gpt-6.1-sol" ||
+    id === "gpt-6.1-terra"
+  );
 }
 
 /** Normalize user-facing reasoning effort names to API effort names. */
