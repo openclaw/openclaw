@@ -560,39 +560,71 @@ it("clears displayed typing actors when the session instance rotates", () => {
   expect(pane.typingActors.size).toBe(0);
 });
 
-it("keeps an owner's self-authored resolved suggestion through the following list", async () => {
-  const listed = createDeferred<SessionSuggestionsListResult>();
-  const resolvedResponse = createDeferred<{ suggestion: SessionSuggestion }>();
-  const request = vi.fn((method: string) => {
-    if (method === "session.suggestions.resolve") {
-      return resolvedResponse.promise;
-    }
-    if (method === "session.suggestions.list") {
-      return listed.promise;
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
+it.each(["queue", "dismiss"] as const)(
+  "keeps the author’s own row through %s and its following list",
+  async (resolution) => {
+    const listed = createDeferred<SessionSuggestionsListResult>();
+    const resolvedResponse = createDeferred<{ suggestion: SessionSuggestion }>();
+    const request = vi.fn((method: string) => {
+      if (method === "session.suggestions.resolve") {
+        return resolvedResponse.promise;
+      }
+      if (method === "session.suggestions.list") {
+        return listed.promise;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const { pane, state } = createSuggestionPane(request);
+    pane.context.gateway.snapshot.selfUser = { id: "owner" } as never;
+    selectSuggestionRows(state, suggestionRow(state));
+    const pending = pendingSuggestion(state, "owner", "resolved suggestion", suggestionOwner);
+    const resolved: SessionSuggestion = {
+      ...pending,
+      state: resolution === "dismiss" ? "dismissed" : "accepted",
+    };
+    pane.collaboration.role = "owner";
+    pane.collaboration.suggestions = [pending];
+
+    const resolving = pane.resolveCurrentSessionSuggestion(pending, resolution);
+    expect(pane.sessionSuggestionChatProps(true, false, true).sessionSuggestions).toEqual([
+      pending,
+    ]);
+    expect(request).toHaveBeenCalledTimes(1);
+    pane.handleSessionSuggestionEvent({ action: "resolved", suggestion: resolved });
+    expect(pane.collaboration.suggestions).toEqual([resolved]);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    listed.resolve({ suggestions: [resolved], role: "owner" });
+    await vi.waitFor(() => expect(pane.collaboration.suggestions).toEqual([resolved]));
+    resolvedResponse.resolve({ suggestion: resolved });
+    await resolving;
+
+    expect(pane.collaboration.suggestions).toEqual([resolved]);
+    expect(pane.collaboration.role).toBe("owner");
+  },
+);
+
+it("keeps a confirmed dismissal out of an older unfinished list", async () => {
+  const oldList = createDeferred<SessionSuggestionsListResult>();
+  const reply = createDeferred<{ suggestion: SessionSuggestion }>();
+  const request = vi.fn().mockReturnValueOnce(oldList.promise).mockReturnValueOnce(reply.promise);
   const { pane, state } = createSuggestionPane(request);
-  pane.context.gateway.snapshot.selfUser = { id: "owner" } as never;
+  pane.context.gateway.snapshot.selfUser = { id: "owner", name: "Owner" };
   selectSuggestionRows(state, suggestionRow(state));
-  const pending = pendingSuggestion(state, "owner", "resolved suggestion", suggestionOwner);
-  const resolved = { ...pending, state: "accepted" as const };
-  pane.collaboration.role = "owner";
-  pane.collaboration.suggestions = [pending];
-
-  const resolving = pane.resolveCurrentSessionSuggestion(pending, "queue");
-  expect(request).toHaveBeenCalledTimes(1);
-  pane.handleSessionSuggestionEvent({ action: "resolved", suggestion: resolved });
-  expect(pane.collaboration.suggestions).toEqual([resolved]);
-  expect(request).toHaveBeenCalledTimes(2);
-
-  listed.resolve({ suggestions: [resolved], role: "owner" });
-  await vi.waitFor(() => expect(pane.collaboration.suggestions).toEqual([resolved]));
-  resolvedResponse.resolve({ suggestion: resolved });
+  const row = pendingSuggestion(state, "peer");
+  const other = pendingSuggestion(state, "newer");
+  pane.collaboration.suggestions = [row];
+  const stale = pane.refreshSessionSuggestions();
+  const resolving = pane.resolveCurrentSessionSuggestion(row, "dismiss");
+  reply.resolve({ suggestion: { ...row, state: "dismissed" } });
   await resolving;
-
-  expect(pane.collaboration.suggestions).toEqual([resolved]);
-  expect(pane.collaboration.role).toBe("owner");
+  const fresh = createDeferred<SessionSuggestionsListResult>();
+  request.mockReturnValueOnce(fresh.promise);
+  oldList.resolve({ suggestions: [row], role: "owner" });
+  await stale;
+  expect(pane.collaboration.suggestions).toEqual([]);
+  fresh.resolve({ suggestions: [other], role: "owner" });
+  await vi.waitFor(() => expect(pane.collaboration.suggestions).toEqual([other]));
 });
 
 it("drops a resolve completion after the same session key rotates instances", async () => {

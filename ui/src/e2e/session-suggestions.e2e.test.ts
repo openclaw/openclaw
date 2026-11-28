@@ -566,6 +566,49 @@ suite.define(() => {
     },
   );
 
+  it("removes the moderator's dismissed suggestion before the reply and restores it on rejection", async () => {
+    const first = pendingSuggestion("draft-outline", "Draft a release outline.", 1);
+    const second = pendingSuggestion("review-checklist", "List the remaining review steps.", 2);
+    const method = "session.suggestions.resolve";
+    const { page, gateway, composer } = await openSuggestions("owner", {
+      presenceUsers: [presenceUser("owner", true), presenceUser("alice")],
+      deferredMethods: [method],
+      historyMessages: [ownerMessage("What is left to review before the release?")],
+      methodResponses: {
+        "session.suggestions.list": { suggestions: [first, second], role: "owner" },
+      },
+    });
+    const row = page.locator('[data-suggestion-id="draft-outline"]');
+    const next = page.locator('[data-suggestion-id="review-checklist"]');
+    const dismiss = row.getByRole("button", { name: "Dismiss Alice's suggestion" });
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await composer.fill("I will check the release notes.");
+    await dismiss.click();
+    const request = await gateway.waitForRequest(method);
+    expect(request.params).toMatchObject({ id: first.id, resolution: "dismiss" });
+    await expect(row).toHaveCount(0);
+    const nextSummary = next.locator("summary");
+    await expect(nextSummary).toBeFocused();
+    await nextSummary.press("Enter");
+    await expect(next.locator("details")).toHaveAttribute("open", "");
+    await composer.fill("I will check the release notes and examples.");
+    await gateway.rejectDeferred(method, { message: "The suggestion could not be dismissed." });
+    await expect(dismiss).toBeEnabled();
+    await expect(page.locator(".session-suggestion__text")).toHaveText([first.text, second.text]);
+    await expect(composer).toHaveValue("I will check the release notes and examples.");
+    await expect(composer).toBeFocused();
+    await expect(
+      page.getByText("The suggestion could not be dismissed.", { exact: true }).first(),
+    ).toBeVisible();
+    await gateway.deferNext(method);
+    await dismiss.click();
+    await expect(row).toHaveCount(0);
+    await gateway.resolveDeferred(method, { suggestion: { ...first, state: "dismissed" } });
+    await expect(next.locator("details")).toHaveAttribute("open", "");
+    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    await expect(row).toHaveCount(0);
+  });
+
   it("loads an owner edit without replacing a newer composer draft", async () => {
     const suggestion = pendingSuggestion("suggestion-2", "Please edit this first", 2);
     const { page, gateway, composer } = await openSuggestions("owner", {

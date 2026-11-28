@@ -585,7 +585,7 @@ export abstract class ChatPaneStateOwner {
     suggestions: SessionSuggestion[];
     liveResolutions: Map<string, boolean>;
     role: SessionSharingRole | undefined;
-    busyIds: Set<string>;
+    resolutions: Map<string, { hideRow: boolean }>;
     addOperation: symbol | undefined;
     editOperation: symbol | undefined;
     typingViews: ChatTypingActorView[];
@@ -596,7 +596,7 @@ export abstract class ChatPaneStateOwner {
     suggestions: [],
     liveResolutions: new Map(),
     role: undefined,
-    busyIds: new Set(),
+    resolutions: new Map(),
     addOperation: undefined,
     editOperation: undefined,
     typingViews: [],

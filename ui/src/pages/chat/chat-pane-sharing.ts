@@ -25,6 +25,7 @@ import {
 import { readSessionChangedEvent } from "../../lib/sessions/session-row-reconcile.ts";
 import { EXPECTED_CHAT_REFUSAL } from "./chat-error-state.ts";
 import { ChatPaneReactions } from "./chat-pane-reactions.ts";
+import { focusAfterSuggestionDismiss } from "./chat-pane-shared.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   typingActorIdForSessionMessage,
@@ -119,7 +120,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       sessionSuggestions:
         multiIdentity ||
         (this.state && selectedChatSessionRow(this.state)?.invitedAccess === "suggest")
-          ? this.collaboration.suggestions
+          ? this.visibleSessionSuggestions
           : [],
       onCloseSessionSuggestion: (id: string) => {
         this.collaboration.liveResolutions = new Map(this.collaboration.liveResolutions).set(
@@ -129,7 +130,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       },
       sessionSuggestionLiveResolutions: this.collaboration.liveResolutions,
       sessionSuggestionRole: this.collaboration.role,
-      sessionSuggestionBusyIds: this.collaboration.busyIds,
+      sessionSuggestionBusyIds: this.collaboration.resolutions,
       sessionSuggestionsArchived: archived,
       canResolveSessionSuggestions:
         canWrite && isGatewayMethodAdvertised(snapshot, "session.suggestions.resolve") === true,
@@ -159,13 +160,20 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     return hasMultiplePresenceIdentities(this.presence.snapshot);
   }
 
+  protected get visibleSessionSuggestions(): SessionSuggestion[] {
+    const { suggestions, resolutions } = this.collaboration;
+    return resolutions.size
+      ? suggestions.filter((row) => !resolutions.get(row.id)?.hideRow)
+      : suggestions;
+  }
+
   protected resetSessionSuggestions(): void {
     this.sessionSuggestionsRequestVersion += 1;
     this.sessionSuggestionsRefreshQueued = false;
     this.collaboration.suggestions = [];
     this.collaboration.liveResolutions = new Map();
     this.collaboration.role = undefined;
-    this.collaboration.busyIds = new Set();
+    this.collaboration.resolutions = new Map();
     this.collaboration.addOperation = undefined;
     this.collaboration.editOperation = undefined;
   }
@@ -299,8 +307,6 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
         (item) => item.id !== event.suggestion.id,
       );
     }
-    this.collaboration.busyIds.delete(event.suggestion.id);
-    this.collaboration.busyIds = new Set(this.collaboration.busyIds);
     if (shouldRefresh) {
       void this.refreshSessionSuggestions();
     }
@@ -373,7 +379,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     const scope = this.captureConnectionScope();
     if (
       !scope ||
-      this.collaboration.busyIds.has(suggestion.id) ||
+      this.collaboration.resolutions.has(suggestion.id) ||
       (resolution === "edit" && this.collaboration.editOperation !== undefined) ||
       !this.suggestionMatchesCurrentSession(suggestion)
     ) {
@@ -384,7 +390,13 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     }
     const sessionKey = scope.state.sessionKey;
     const targetSignature = this.sessionSuggestionTargetSignature;
+    const selfId = this.context.gateway.snapshot.selfUser?.id;
+    // Keep the author's receipt authoritative, even when the author is now a moderator.
+    const operation = {
+      hideRow: resolution === "dismiss" && Boolean(selfId) && selfId !== suggestion.author.id,
+    };
     const isCurrentTarget = () =>
+      this.collaboration.resolutions.get(suggestion.id) === operation &&
       this.isConnectionScopeCurrent(scope) &&
       scope.state.sessionKey === sessionKey &&
       this.sessionSuggestionTargetSignature === targetSignature;
@@ -399,15 +411,18 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     if (editOperation) {
       this.collaboration.editOperation = editOperation;
     }
-    this.collaboration.busyIds = new Set(this.collaboration.busyIds).add(suggestion.id);
+    const composer = getChatComposerState(this.presentationId);
+    if (operation.hideRow) {
+      focusAfterSuggestionDismiss(this.element, suggestion.id, composer.composerTextarea);
+    }
+    this.collaboration.resolutions = new Map(this.collaboration.resolutions).set(
+      suggestion.id,
+      operation,
+    );
     if (resolution === "edit") {
       scope.state.handleChatDraftChange(suggestion.text, []);
       // The native pane hands focus to the composer renderer after publishing the draft.
-      queueMicrotask(() =>
-        focusComposerInput(getChatComposerState(this.presentationId).composerTextarea, {
-          preventScroll: true,
-        }),
-      );
+      queueMicrotask(() => focusComposerInput(composer.composerTextarea, { preventScroll: true }));
     }
     try {
       const result = await scope.client.request<{ suggestion: SessionSuggestion }>(
@@ -421,6 +436,11 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       );
       if (!isCurrentTarget()) {
         return;
+      }
+      if (operation.hideRow && this.sessionSuggestionsRefreshPromise) {
+        // A list captured before dismissal cannot restore the row after the mask lifts.
+        this.sessionSuggestionsRequestVersion += 1;
+        void this.refreshSessionSuggestions();
       }
       const remaining = this.collaboration.suggestions.filter((item) => item.id !== suggestion.id);
       this.collaboration.suggestions =
@@ -450,8 +470,8 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
         if (this.collaboration.editOperation === editOperation) {
           this.collaboration.editOperation = undefined;
         }
-        this.collaboration.busyIds.delete(suggestion.id);
-        this.collaboration.busyIds = new Set(this.collaboration.busyIds);
+        this.collaboration.resolutions.delete(suggestion.id);
+        this.collaboration.resolutions = new Map(this.collaboration.resolutions);
       }
     }
   }

@@ -228,6 +228,25 @@ export function stopChatRunFromEscape(
   }
 }
 
+export function focusAfterSuggestionDismiss(
+  pane: HTMLElement,
+  id: string,
+  composer: HTMLTextAreaElement | null,
+): void {
+  const row = pane.querySelector<HTMLElement>(".session-suggestion:focus-within");
+  if (row?.dataset.suggestionId !== id) {
+    return;
+  }
+  const neighbor =
+    row.nextElementSibling?.querySelector("summary") ??
+    row.previousElementSibling?.querySelector("summary");
+  if (neighbor) {
+    neighbor.focus({ preventScroll: true });
+  } else {
+    focusComposerInput(composer, { preventScroll: true });
+  }
+}
+
 export function focusChatComposerFromKeydown(
   root: HTMLElement,
   event: KeyboardEvent,
