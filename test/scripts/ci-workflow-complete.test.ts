@@ -82,7 +82,14 @@ describe("complete CI failure reporting", () => {
       preflightOutputs: { run_protocol_event_coverage: "true" },
       steps: { node_setup: { outputs: {}, outcome: "success" as const } },
     };
-    expectAdmission(coverage.if, admitted);
+    expectAdmission(coverage.if, admitted, [{ ...admitted, preflightOutputs: {} }]);
+    expectAdmission(coverage.if, {
+      ...admitted,
+      eventName: "push",
+      ref: "refs/heads/main",
+      preflightResult: "skipped",
+      preflightOutputs: {},
+    });
     expect(ciWorkflow.jobs["ci-gate"].needs).toContain("security-fast");
   });
 

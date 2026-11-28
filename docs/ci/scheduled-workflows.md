@@ -152,8 +152,9 @@ frozen release target or replace an exact-head PR release gate.
 ### What stays on pushes
 
 CodeQL batches main security scans hourly. CI retains
-`security-fast` (committed private keys and changed-workflow security auditing)
-on its existing non-docs push scope. Pull-request, push, and scheduled CI skip
+`security-fast` on its existing non-docs push scope. It checks for committed
+private keys, audits changed workflows, and checks mobile protocol event coverage
+even when preflight is skipped. Pull-request, push, and scheduled CI skip
 production dependency auditing; only release dispatches run it, as a warning.
 Default main pushes also run the baseline-growth, assertion-safety, test timeout
 race, and new protocol-method metadata guards there against the exact push
