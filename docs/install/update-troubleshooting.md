@@ -156,6 +156,40 @@ budget. These facts appear before the recovery guidance so bounded reports retai
 them. Preserve those facts when reporting the problem; task definitions and raw
 native output are excluded.
 
+## Confirming the Gateway actually stopped
+
+`pgrep -f "dist/index.js gateway"` is not a reliable check on macOS. Long argv
+matching truncates and can miss the real process (false negative), and the
+pattern can match unrelated agent or SSH processes (false positive). One
+observed host reported four remaining matches after the Gateway had already
+exited; another reported none while the Gateway was still serving requests.
+
+Check the port owner instead:
+
+```bash
+lsof -nP -tiTCP:18789 -sTCP:LISTEN   # PID listening on the Gateway port
+kill -0 <pid>                        # confirm that exact PID is alive
+```
+
+An empty `lsof` result plus a failed `kill -0` means the Gateway is stopped.
+
+Graceful shutdown waits for active work to drain before closing. A stop with a
+run in flight can take about 45 seconds (logged as `drain=44982ms`) versus a
+few seconds when idle (`completed cleanly in 3824ms`). Do not conclude that
+`bootout` or `kickstart` failed within the first 20-30 seconds; allow up to
+120 seconds before retrying, and prefer stopping while the Gateway is idle.
+
+## Replacing a running binary
+
+Do not overwrite a binary that the running Gateway is using (the Node binary or
+the package payload). An in-place overwrite of the same inode kills the process
+mid-write and leaves every subsequent `exec` failing with `write EPIPE`, while
+chat channels keep working and the agent still looks healthy.
+
+Stop the service first, confirm the port is free, then replace the file with
+`rm` followed by `cp` so the new copy gets a fresh inode. Start the service
+again and verify `readyz`.
+
 ## Node and global install permissions
 
 An updater containing the completed-journal repair automatically archives a
