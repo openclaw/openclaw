@@ -42,9 +42,8 @@ export function createFamilyVisibility(params: {
 /**
  * dispatch_action's repeat-guard declaration: each deferred trusted tool's own `repeatable`
  * by catalog id, with its name as an alias when unique, so a poll through the dispatcher is
- * exempt exactly as a direct call would be. Only exempt tools are listed: a call naming a
- * listed tool beside an unlisted one through two selectors reads as exempt here while the
- * dispatcher refuses it as ambiguous; that refused call is never stopped for repeating.
+ * exempt exactly as a direct call would be. The repeat guard treats any other selector as a
+ * different target, so a call the dispatcher refuses as ambiguous stays counted.
  */
 export function dispatchRepeatable(
   entries: readonly ToolSearchCatalogEntry[],

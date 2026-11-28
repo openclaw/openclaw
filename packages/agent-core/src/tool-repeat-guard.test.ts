@@ -91,6 +91,8 @@ describe("observeToolRepeat", () => {
       { id: "read", args: {} },
       { id: "toString", args: {} },
       { args: {} },
+      // Selectors that disagree: the dispatcher refuses the call, so it still counts.
+      { id: "jobs", name: "read", action: "status" },
     ]) {
       expect(verdictAt(args), JSON.stringify(args)).toMatchObject({ kind: "note" });
     }

@@ -44,7 +44,9 @@ function isRepeatable(repeatable: ToolRepeatable | undefined, args: unknown): bo
   }
   if (repeatable && "dispatch" in repeatable) {
     // Classify with the dispatcher's own argument reader, so every call form it executes
-    // resolves to the same target and input here.
+    // resolves to the same target and input here. The declaration lists only exempt targets,
+    // so a selector naming anything else counts as a distinct target: a call whose selectors
+    // disagree stays counted, as the dispatcher refuses it as ambiguous.
     const { targets, aliases } = repeatable.dispatch;
     const targetId = (value: string) =>
       Object.hasOwn(targets, value)
@@ -52,10 +54,9 @@ function isRepeatable(repeatable: ToolRepeatable | undefined, args: unknown): bo
         : Object.hasOwn(aliases, value)
           ? aliases[value]
           : undefined;
-    const call = readDispatchCall(prepareDispatchArguments(args), (value) => {
-      const id = targetId(value);
-      return id === undefined ? [] : [id];
-    });
+    const call = readDispatchCall(prepareDispatchArguments(args), (value) => [
+      targetId(value) ?? `\0other:${value}`,
+    ]);
     if ("error" in call) {
       return false;
     }
