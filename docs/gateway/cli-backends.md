@@ -423,7 +423,10 @@ Transient runtime context and notes excluded from model context are not replayed
 
 Claude Code registers OpenClaw MCP tools as `mcp__openclaw__<name>` and can
 defer them behind ToolSearch. The Claude CLI backend explains this mapping in
-the system prompt only when OpenClaw MCP tools are exposed to the invocation.
+the system prompt's Tooling section, before its exact-name rule, only when
+OpenClaw MCP tools are exposed to the invocation. Claude Code already lists every
+registered tool by name, so the Tooling list keeps only the entries that carry a
+description.
 Message delivery guidance is included only when `message` is exposed: it uses `mcp__openclaw__message`, and a deferred tool
 can be loaded with `select:mcp__openclaw__<name>`. This helps fresh sessions
 discover the delivery tool when a conversation requires message-tool-only replies.

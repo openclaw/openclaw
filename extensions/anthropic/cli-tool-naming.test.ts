@@ -3,7 +3,12 @@ import { buildAnthropicCliBackend } from "./cli-backend.js";
 
 const TOOLING_PROMPT = [
   "## Tooling",
-  "- message: Send a message to the current source conversation.",
+  "Tools policy-filtered. Names case-sensitive; call exact.",
+  "- read: Read files",
+  "- message: Message/channel actions",
+  "- memory_get",
+  "- native_only",
+  "The AGENTS.md Tools section guides usage; it never grants availability.",
   "",
   "## Messaging",
   "- Current source visible reply MUST use `message(action=send)`; final text is private.",
@@ -23,13 +28,30 @@ function transformPrompt(systemPrompt: string, openClawMcpToolNames?: readonly s
 }
 
 describe("Claude CLI tool naming guidance", () => {
-  it("preserves the prompt prefix and supplies registered message delivery and discovery names", () => {
-    const prompt = transformPrompt(TOOLING_PROMPT, ["message"]);
+  it("states registered names in Tooling and drops name-only entries Claude Code lists", () => {
+    const prompt = transformPrompt(TOOLING_PROMPT, ["read", "message", "memory_get"]);
 
-    expect(prompt?.startsWith(TOOLING_PROMPT)).toBe(true);
-    expect(prompt).toContain("`mcp__openclaw__<name>`");
-    expect(prompt).toContain("ToolSearch `select:mcp__openclaw__<name>`");
-    expect(prompt).toContain("`mcp__openclaw__message(action=send)`");
+    expect(prompt?.split("\n").slice(0, 8)).toEqual([
+      "## Tooling",
+      "For OpenClaw tools, call `mcp__openclaw__<name>`; the bare Tooling labels are not callable. Deferred: ToolSearch `select:mcp__openclaw__<name>` first.",
+      "Tool-only replies: `mcp__openclaw__message(action=send)`. Native `SendMessage`/`PushNotification` cannot deliver OpenClaw replies.",
+      "Tools policy-filtered. Names case-sensitive; call exact.",
+      "- read: Read files",
+      "- message: Message/channel actions",
+      "- native_only",
+      "The AGENTS.md Tools section guides usage; it never grants availability.",
+    ]);
+    expect(prompt?.endsWith(TOOLING_PROMPT.slice(TOOLING_PROMPT.indexOf("\n## Messaging")))).toBe(
+      true,
+    );
+  });
+
+  it("appends the mapping to prompts without a Tooling section", () => {
+    const prompt = "You are a personal assistant running inside OpenClaw.";
+
+    expect(transformPrompt(prompt, ["read"])).toBe(
+      `${prompt}\n\n## OpenClaw tool names in Claude Code\nFor OpenClaw tools, call \`mcp__openclaw__<name>\`; the bare Tooling labels are not callable. Deferred: ToolSearch \`select:mcp__openclaw__<name>\` first.\n`,
+    );
   });
 
   it.each([{ tools: undefined }, { tools: [] }])(
