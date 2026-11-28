@@ -66,6 +66,8 @@ enum CleanChatComposerMetrics {
     static let footerStrongInk = Color.primary.opacity(0.86)
     static let footerOutlineSize: CGFloat = 15
     static let footerOutlineStroke: CGFloat = 1.5
+    static let effortGaugeWidth: CGFloat = 17.5
+    /// Small glyphs hug their neighbors; the full control height keeps the vertical target.
     static let glyphControlWidth: CGFloat = 36
     /// Open, the primary disc sits 10 pt from the trailing and bottom edges.
     static let expandedControlInset: CGFloat = 4
@@ -87,8 +89,92 @@ enum CleanChatComposerMetrics {
     static let footerBlockInset: CGFloat = 6
     static let rowGap: CGFloat = 4
     static let regularModelMaxWidth: CGFloat = 148
+    static let effortTrailingPadding: CGFloat = 6
     static let compactModelWidth: CGFloat = controlTouchSize
 }
+
+#if !os(macOS)
+/// The Control UI effort gauge on the web icon's 24-unit grid: a 240° dial open at the
+/// bottom, a filled arc up to the selected level, and a needle from the hub.
+struct CleanChatEffortGauge: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Needle angle in degrees, from -120 (lowest level) to 120 (highest).
+    let angle: Double
+    let fastModeEnabled: Bool
+    let accentProgress: Bool
+    let width: CGFloat
+    let ink: Color
+    let needleInk: Color
+
+    var body: some View {
+        let unit = self.width / 22
+        let stroke = StrokeStyle(lineWidth: 2 * unit, lineCap: .round)
+        let fraction = min(max((self.angle + 120) / 240, 0), 1)
+        // Fast mode replaces the needle, so the lowest level keeps a dot at the dial's start.
+        let progress = fraction > 0 ? fraction : (self.fastModeEnabled ? 0.001 : 0)
+        ZStack {
+            CleanChatEffortGaugeDial()
+                .stroke(self.ink.opacity(0.32), style: stroke)
+            CleanChatEffortGaugeDial()
+                .trim(from: 0, to: progress)
+                .stroke(
+                    self.accentProgress
+                        ? AnyShapeStyle(LinearGradient(
+                            colors: [OpenClawChatTheme.accent.opacity(0.55), OpenClawChatTheme.accent],
+                            startPoint: .leading,
+                            endPoint: .trailing))
+                        : AnyShapeStyle(self.ink),
+                    style: stroke)
+            if self.fastModeEnabled {
+                Image(systemName: "bolt.fill")
+                    .font(.system(size: 9.5 * unit, weight: .semibold))
+                    .foregroundStyle(OpenClawChatTheme.accent)
+                    .offset(y: 2.5 * unit)
+            } else {
+                CleanChatEffortGaugeNeedle(angle: self.angle)
+                    .stroke(self.needleInk, style: stroke)
+            }
+        }
+        .frame(width: self.width, height: 17 * unit)
+        .animation(self.reduceMotion ? nil : .easeOut(duration: 0.18), value: self.angle)
+    }
+}
+
+private struct CleanChatEffortGaugeDial: Shape {
+    func path(in rect: CGRect) -> Path {
+        let unit = rect.width / 22
+        var path = Path()
+        path.addArc(
+            center: CGPoint(x: rect.midX, y: rect.minY + 11 * unit),
+            radius: 10 * unit,
+            startAngle: .degrees(150),
+            endAngle: .degrees(390),
+            clockwise: false)
+        return path
+    }
+}
+
+private struct CleanChatEffortGaugeNeedle: Shape {
+    var angle: Double
+
+    var animatableData: Double {
+        get { self.angle }
+        set { self.angle = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let unit = rect.width / 22
+        let hub = CGPoint(x: rect.midX, y: rect.minY + 11 * unit)
+        let radians = self.angle * .pi / 180
+        var path = Path()
+        path.move(to: hub)
+        path.addLine(to: CGPoint(
+            x: hub.x + 6 * unit * CGFloat(sin(radians)),
+            y: hub.y - 6 * unit * CGFloat(cos(radians))))
+        return path
+    }
+}
+#endif
 
 struct ChatComposerPlaceholder: View {
     let text: String

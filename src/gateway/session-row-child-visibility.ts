@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { MAX_SESSION_ROW_AUDIENCES } from "../shared/session-list-limits.js";
 import {
   identity,
   type MaterializedRow,
@@ -27,8 +28,6 @@ type Parent = {
   audiences: Map<string, Audience>;
 };
 
-// Retain a bounded number of sharing variants, never connections or their authorization callbacks.
-const MAX_AUDIENCES = 64;
 const EMPTY_VISIBILITY: Visibility = Object.freeze({ revision: {} });
 
 function updateExclusion(
@@ -222,7 +221,7 @@ export function createSessionRowChildVisibility() {
       const variant = `${Number(includeSwarm)}:${audienceKey}`;
       let audience = parent.audiences.get(variant);
       if (!audience) {
-        if (parent.audiences.size === MAX_AUDIENCES) {
+        if (parent.audiences.size === MAX_SESSION_ROW_AUDIENCES) {
           parent.audiences.delete(parent.audiences.keys().next().value!);
         }
         audience = { dirty: new Set(parent.dependencies), value: EMPTY_VISIBILITY };

@@ -233,12 +233,14 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    in the background. The same update details receive their results without a page
    reload. Only warning and error findings add advice; inspections do not delay
    completion, fail the update, or trigger rollback.
-8. The serving release updates installed plugins in the background, then reloads
-   changed plugins through the existing runtime lifecycle. Core settles at ready;
-   plugins converge after. Plugin failures and the next command appear in the
-   update details; they do not delay or rewrite the core result, send another
-   result notice, or trigger rollback. A successful reload's warnings stay in the
-   plugin details without marking activation failed or requesting a retry.
+8. Every Gateway boot updates installed plugins in the background after core
+   readiness, then reloads changed plugins through the existing runtime lifecycle.
+   A pending trial defers this work. The first plugin result and next command appear
+   in matching update details while that plugin step is unsettled; later boots do
+   not rewrite the recorded result. Failures otherwise use the Gateway warning log.
+   Plugin work does not delay or rewrite the core result, send another notice, or
+   trigger rollback. Successful reload warnings stay advisory in plugin details
+   without marking activation failed or requesting a retry.
 
 Saved update history does not grant or refuse a new release update. After taking
 its preparation lock and checking the installation, the serving release marks
@@ -546,26 +548,24 @@ the original history entry unchanged with the healthy release still selected.
 
 The Gateway preserves existing repair acknowledgments, unrelated failures, and
 recovery records. It needs one matching publication receipt before it can record
-success and run advisory Doctor inspections and plugin maintenance. If the older
+success and run advisory Doctor inspections. If the older
 updater exits because it can't read the migrated schema, its exit status still
 reflects that refusal.
 
-Prepared-release plugin maintenance normally runs after the candidate has migrated
-state and reported ready. Downgrades retain pre-trial maintenance because older
-releases do not have the post-ready job and do not migrate the schema forward.
-The previous Gateway no longer owns the shared state during post-ready maintenance,
-and plugin downloads and installs do not extend the restart outage. Core success
-is recorded first; final plugin results arrive later in the open details. The
-existing trial record carries explicit `--accept-capabilities` consent; an absent
-field does not approve new capabilities. Maintenance has a ten-minute command
-budget. A Gateway stop during that work can leave no plugin result for that
-update. Published compatible plugin versions load at the next Gateway start;
-`openclaw plugins update --all` finishes the rest. The next core update also retries.
+Plugin maintenance runs after every Gateway boot reports ready, including manual
+Git pulls, global package replacements, image swaps, and standalone binaries.
+Downgrades retain pre-trial maintenance because older releases do not have the
+post-ready job and do not migrate the schema forward. Plugin downloads and installs
+do not extend the restart outage. Core success is recorded first; plugin results
+arrive later in matching update details. Boot maintenance does not inherit
+`--accept-capabilities` consent from an update trial: widened capabilities are
+declined with the existing recovery command. Maintenance has a ten-minute command
+budget. A Gateway stop can leave no plugin result for that boot; the next boot
+tries again. `openclaw plugins update --all` also runs maintenance explicitly.
 Core rollback does not wait for plugin maintenance, and a candidate that fails
-before readiness does not update plugins on an upgrade. The candidate must contain
-the post-ready maintenance call; the installed updater must contain the version-aware
-pre-restart decision. A Git target with the same version string but an older revision
-does not receive plugin maintenance; run `openclaw plugins update --all` in that case.
+before readiness does not update plugins. The candidate must contain the post-ready
+maintenance call; the installed updater must contain the version-aware pre-restart
+decision.
 The internal maintenance-command result carries exact install-record hashes into
 the existing batch reload check. A record changed again before reload is refused.
 Removed records do not hot-unload a running plugin; the existing metadata-only

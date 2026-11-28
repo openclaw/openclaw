@@ -2,18 +2,20 @@ import {
   normalizeUsage,
   type AgentHarnessSideQuestionParamsV2,
   type AgentHarnessSideQuestionResult,
-  type AgentHarnessSideQuestionRequest,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ImageContent, Message } from "openclaw/plugin-sdk/llm";
-import { runCopilotIsolatedCompletion } from "./isolated-completion.js";
+import {
+  runCopilotIsolatedCompletion,
+  type CopilotSideQuestionRequest,
+} from "./isolated-completion.js";
 import type { CopilotClientPool } from "./runtime.js";
 
 function buildSideQuestionMessage(
   messages: Message[],
   question: string,
   images: ImageContent[],
-): AgentHarnessSideQuestionRequest {
-  const requestImages: NonNullable<AgentHarnessSideQuestionRequest["images"]> = [];
+): CopilotSideQuestionRequest {
+  const requestImages: NonNullable<CopilotSideQuestionRequest["images"]> = [];
   const attach = (image: ImageContent) => {
     const displayName = `context-image-${requestImages.length + 1}`;
     requestImages.push({ ...image, displayName });

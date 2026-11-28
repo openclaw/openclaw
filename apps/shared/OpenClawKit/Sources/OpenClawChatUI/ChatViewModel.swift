@@ -10,13 +10,13 @@ let chatUILogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
 @MainActor
 @Observable
 public final class OpenClawChatViewModel {
-    static let maxAttachmentBytes = 5_000_000
-    static let sessionListFetchLimit = 200
-
     public internal(set) var messages: [OpenClawChatMessage] = [] {
         didSet { self.sourcePreviewState.update(self.messages) }
     }
 
+    #if os(iOS)
+    let inlineVideos = ChatInlineVideos()
+    #endif
     let sourcePreviewState = ChatSourcePreviewState()
     var reactionState = ChatMessageReactionState()
 
@@ -62,7 +62,11 @@ public final class OpenClawChatViewModel {
     var modelAvailabilityIsSessionScoped = false
     var modelSelectionPolicy: OpenClawChatModelSelectionPolicy?
     var modelCatalogInvalidated = false
+    var hasReceivedModelCatalog = false
     public internal(set) var modelCatalogMessage: String?
+    /// The last effort, speed or model change that could not be saved, for the app's toast.
+    public internal(set) var settingsChangeFailure: ChatSettingsChangeFailure?
+    var modelCatalogCacheScopeOverride: String?
     var agentCatalog: OpenClawChatAgentsListResponse?
     var isLoadingAgents = false
     var agentsErrorText: String?
@@ -420,6 +424,8 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     private var settingsPatchTailsByTarget: [ModelPatchTarget: SettingsPatchTail] = [:]
     var latestThinkingSelectionRequestIDsByTarget: [ModelPatchTarget: UInt64] = [:]
+    /// The latest speed pick and the model a failed pick falls back to, per settings lane.
+    var optimisticSettingsLanes: [ModelPatchTarget: OptimisticSettingsLane] = [:]
     var confirmedThinkingPreference: PreferenceState
     var emittedThinkingPreference: PreferenceState
     var thinkingPreferenceRequests: [UInt64: PreferenceRequest] = [:]
@@ -790,16 +796,10 @@ public final class OpenClawChatViewModel {
               let request = reserveModelSelection(selectionID)
         else { return }
         enqueueSessionSettingsPatch(requestID: request.id, target: request.target) { [weak self] routeLease in
-            guard let self else { return }
+            // Latest wins: a model that a newer pick replaced before its turn is never sent.
+            guard let self, request.id == self.latestModelSelectionRequestIDsByTarget[request.target] else { return }
             await self.performSelectModel(request, routeLease: routeLease)
         }
-    }
-
-    var resolvedMainSessionKey: String {
-        if let agentID = self.explicitSessionAgentID ?? OpenClawChatSessionKey.agentID(from: self.sessionKey) {
-            return self.mainSessionKey(forAgent: agentID)
-        }
-        return ChatPayloadDecoding.trimmedNonEmptyString(self.sessionDefaults?.mainSessionKey) ?? "main"
     }
 
     private var usesMutableAgentRouting: Bool {
@@ -1386,7 +1386,8 @@ extension OpenClawChatViewModel {
             agentID: session.deliveryAgentID,
             sessionRoutingContract: session.sessionRoutingContract)
         let previous = self.modelSelectionID
-        let rollbackSelectionID = self.lastSuccessfulModelSelectionIDsByTarget[target] ?? previous
+        let rollbackSelectionID = self.lastSuccessfulModelSelectionIDsByTarget[target]
+            ?? self.modelLaneBaseline(for: target, current: previous)
         let previousRequestID = self.latestModelSelectionRequestIDsByTarget[target]
         let requestID = self.reserveSessionSettingsRequest(for: target)
         let nextModelRef = self.modelRef(forSelectionID: next)
@@ -1411,10 +1412,9 @@ extension OpenClawChatViewModel {
     {
         do {
             guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
-            let patchResult = try await routeLease.patchSessionSettings(
-                request.target.canonicalSessionKey,
-                request.target.agentID,
-                OpenClawChatSessionSettingsPatch(model: .some(request.modelRef)))
+            let patch = OpenClawChatSessionSettingsPatch(model: .some(request.modelRef))
+            let patchResult = try await Self.retryingOnce { try await routeLease.patchSessionSettings(
+                request.target.canonicalSessionKey, request.target.agentID, patch) }
             self.lastSuccessfulSettingsPatchRequestIDsByTarget[request.target] = request.id
             guard request.id == self.latestModelSelectionRequestIDsByTarget[request.target] else {
                 // Keep older successful patches as rollback state, but do not replay
@@ -1449,8 +1449,7 @@ extension OpenClawChatViewModel {
             guard self.isCurrentSession(request.session) else { return }
             self.modelSelectionID = rollbackSelectionID
             syncThinkingLevelOptions()
-            self.errorText = error.localizedDescription
-            chatUILogger.error("sessions.patch(model) failed \(error.localizedDescription, privacy: .public)")
+            self.reportModelChangeFailure(error, selectionID: request.selectionID)
         }
     }
 
@@ -1511,7 +1510,7 @@ extension OpenClawChatViewModel {
             self.acceptedThinkingOverrideClearedByTarget.removeValue(forKey: target)
             self.acceptedVerboseLevelsByTarget.removeValue(forKey: target)
             self.acceptedFastModesByTarget.removeValue(forKey: target)
-            self.latestThinkingSelectionRequestIDsByTarget.removeValue(forKey: target)
+            self.clearOptimisticSettingsLane(for: target)
             let waiters = self.settingsPatchWaitersByTarget.removeValue(forKey: target) ?? []
             for waiter in waiters {
                 waiter.resume()
@@ -1519,26 +1518,6 @@ extension OpenClawChatViewModel {
             return
         }
         self.inFlightSettingsPatchCountsByTarget[target] = remaining
-    }
-
-    func sessionSettingsPatchTarget(
-        in sessionKey: String,
-        canonicalSessionKey: String?,
-        agentID: String?,
-        sessionRoutingContract: String?) -> ModelPatchTarget
-    {
-        if canonicalSessionKey == nil,
-           agentID == nil,
-           sessionRoutingContract == nil,
-           sessionKey == self.sessionKey
-        {
-            return self.currentModelPatchTarget()
-        }
-        return modelPatchTarget(
-            sessionKey: sessionKey,
-            canonicalSessionKey: canonicalSessionKey,
-            agentID: agentID,
-            sessionRoutingContract: sessionRoutingContract)
     }
 
     func waitForPendingSessionSettings(for target: ModelPatchTarget) async {
@@ -1573,22 +1552,9 @@ extension OpenClawChatViewModel {
 
     func normalizedModelSelectionID(_ modelID: String?, provider: String? = nil) -> String? {
         guard let trimmed = ChatPayloadDecoding.trimmedNonEmptyString(modelID) else { return nil }
+        if let choice = self.modelChoice(modelID: trimmed, provider: provider) { return choice.selectionID }
         if let provider = ChatPayloadDecoding.trimmedNonEmptyString(provider) {
-            let providerQualified = Self.providerQualifiedModelSelectionID(modelID: trimmed, provider: provider)
-            if let match = modelChoices.first(where: {
-                $0.selectionID == providerQualified ||
-                    ($0.modelID == trimmed && ChatPayloadDecoding.trimmedNonEmptyString($0.provider) == provider)
-            }) {
-                return match.selectionID
-            }
-            return providerQualified
-        }
-        if self.modelChoices.contains(where: { $0.selectionID == trimmed }) {
-            return trimmed
-        }
-        let matches = self.modelChoices.filter { $0.modelID == trimmed }
-        if matches.count == 1 {
-            return matches[0].selectionID
+            return Self.providerQualifiedModelSelectionID(modelID: trimmed, provider: provider)
         }
         return trimmed
     }
