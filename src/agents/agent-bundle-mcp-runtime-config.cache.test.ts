@@ -10,7 +10,10 @@ import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metad
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
-import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
+import {
+  loadSessionMcpConfig,
+  resolveSessionMcpConfigSummary,
+} from "./agent-bundle-mcp-runtime-config.js";
 import { loadEnabledBundleAgentSettingsSnapshot } from "./agent-project-settings-snapshot.js";
 
 const tempHarness = createBundleMcpTempHarness();
@@ -101,6 +104,25 @@ it("reuses bundle file facts across MCP, LSP, settings, and live session policy"
     expect([settings.hideThinkingBlock, settings.shellPath]).toEqual([true, undefined]);
     probes.forEach((probe) => expect(probe).not.toHaveBeenCalled());
   });
+});
+
+it("reports only MCP plugin owners that survive configured and session overrides", async () => {
+  const { params } = await createBundle();
+  expect(resolveSessionMcpConfigSummary(params).pluginIdsByServer).toEqual(
+    new Map([["bundled", "cache-bundle"]]),
+  );
+  const configured = resolveSessionMcpConfigSummary({
+    ...params,
+    cfg: { ...params.cfg, mcp: { servers: { bundled: { command: "replacement" } } } },
+  });
+  expect(configured.serverNames).toEqual(["bundled"]);
+  expect(configured.pluginIdsByServer.size).toBe(0);
+  const disabled = resolveSessionMcpConfigSummary({
+    ...params,
+    toolOverrides: { mcpServers: { bundled: false } },
+  });
+  expect(disabled.serverNames).toEqual([]);
+  expect(disabled.pluginIdsByServer.size).toBe(0);
 });
 
 it("reads explicitly supplied settings snapshots from their original plugin cache", async () => {

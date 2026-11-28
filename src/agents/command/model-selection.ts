@@ -8,6 +8,8 @@ import {
 import { formatThinkingLevelClampNotice } from "../../auto-reply/thinking.shared.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { hasSessionAutoModelSelection } from "../../config/sessions/model-override-provenance.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
@@ -23,7 +25,7 @@ import {
 } from "../../sessions/model-overrides.js";
 import {
   resolveDirectStoredModelOverride,
-  resolveStoredModelOverrideCore,
+  resolveStoredModelOverrideCoreAsync,
 } from "../../sessions/stored-model-overrides.js";
 import {
   sessionDeliveryChannel,
@@ -42,6 +44,7 @@ import {
   resolveAgentConfig,
   resolveAgentDir,
   resolveNativeModelPrimary,
+  resolveSessionAgentId,
 } from "../agent-scope.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "../auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "../auth-profiles/session-override.js";
@@ -133,7 +136,6 @@ export async function resolveEmbeddedModelSelection(params: {
   const operatorAuthority = params.opts.operatorAuthority;
   if (operatorAuthority) {
     assertAdmittedRunOperatorAuthority(operatorAuthority);
-    operatorAuthority.assertCurrent();
   }
   const configuredDefaultRef = resolveDefaultModelForAgent({
     cfg: params.cfg,
@@ -158,10 +160,11 @@ export async function resolveEmbeddedModelSelection(params: {
     typeof params.opts.provider === "string"
       ? normalizeExplicitOverrideInput(params.opts.provider, "provider")
       : undefined;
-  const explicitModelOverride =
+  const explicitModelSelection =
     typeof params.opts.model === "string"
-      ? normalizeExplicitOverrideInput(params.opts.model, "model")
+      ? splitTrailingAuthProfile(normalizeExplicitOverrideInput(params.opts.model, "model"))
       : undefined;
+  const explicitModelOverride = explicitModelSelection?.model;
   const hasExplicitRunOverride = Boolean(explicitProviderOverride || explicitModelOverride);
   if (hasExplicitRunOverride && isModelSelectionLocked(sessionEntry)) {
     throw new ModelSelectionLockedError();
@@ -250,7 +253,6 @@ export async function resolveEmbeddedModelSelection(params: {
         storePath: params.storePath,
         initialEntry,
         entry,
-        assertCommitAllowed: operatorAuthority?.assertCurrent,
       });
       hasStoredOverride =
         sessionEntry?.modelOverrideSource !== "default" &&
@@ -271,8 +273,26 @@ export async function resolveEmbeddedModelSelection(params: {
 
   const effectiveStoredOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
     ? null
-    : resolveStoredModelOverrideCore({
+    : await resolveStoredModelOverrideCoreAsync({
         sessionEntry,
+        // A prepared command store holds only this session, so its parent's pick is read
+        // on demand. A complete one-off override never consults the inherited pick.
+        loadSessionEntry:
+          explicitProviderOverride && explicitModelOverride
+            ? undefined
+            : (parentKey) => {
+                const agentId = resolveSessionAgentId({
+                  sessionKey: parentKey,
+                  config: params.cfg,
+                  fallbackAgentId: params.sessionAgentId,
+                });
+                return readSessionEntryReadOnlyInWorker({
+                  agentId,
+                  storePath: resolveSessionStorePathCore(params.cfg.session?.store, { agentId }),
+                  sessionKey: parentKey,
+                  readConsistency: "latest",
+                });
+              },
         sessionStore: params.sessionStore,
         sessionKey: params.sessionKey,
         parentSessionKey: sessionEntry?.parentSessionKey,
@@ -551,6 +571,15 @@ export async function resolveEmbeddedModelSelection(params: {
     }
   }
 
+  if (explicitModelSelection?.profile) {
+    sessionEntryForAttempt = {
+      ...(sessionEntryForAttempt ?? { sessionId: params.sessionId, updatedAt: Date.now() }),
+      authProfileOverride: explicitModelSelection.profile,
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: undefined,
+    };
+  }
+
   const configuredThinkLevel = normalizeThinkLevel(
     resolveAgentConfig(params.cfg, params.sessionAgentId)?.thinkingDefault,
   );
@@ -619,7 +648,12 @@ export async function resolveEmbeddedModelSelection(params: {
   if (!primaryThinking.supported) {
     const explicitThink = Boolean(params.thinkOnce || params.thinkOverride);
     const isSubagentSpawnRun = params.isSubagentLane && isSubagentSessionKey(params.sessionKey);
-    if (explicitThink && !isSubagentSpawnRun) {
+    // A machine-selected preference (Talk consult) falls back to a supported level per candidate.
+    if (
+      explicitThink &&
+      !isSubagentSpawnRun &&
+      params.opts.normalizeThinkingLevelOverride !== true
+    ) {
       throw new Error(
         `Thinking level "${primaryThinking.requestedLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog, thinkingRuntime)}.`,
       );
@@ -645,7 +679,6 @@ export async function resolveEmbeddedModelSelection(params: {
         storePath: params.storePath,
         initialEntry: entry,
         entry: next,
-        assertCommitAllowed: operatorAuthority?.assertCurrent,
       })) ?? sessionEntry;
     sessionEntryForAttempt = {
       ...(sessionEntryForAttempt ?? next),

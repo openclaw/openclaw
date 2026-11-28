@@ -23,7 +23,6 @@ import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.j
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
-import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
 import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import type {
   RequesterSettleWakeEvaluation,
@@ -51,6 +50,7 @@ import {
   captureRequesterSettleRunIdentity,
   isSubagentObligationRetired,
 } from "./subagent-requester-settle-identity.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
 import {
   currentSubagentRunOrObserved,
@@ -129,7 +129,7 @@ export async function retireSubagentObligationsInContext(
         !isSameSubagentRunOwner(current, entry) ||
         !wake ||
         current.execution.status !== "terminal" ||
-        current.pauseReason === "sessions_yield"
+        isSubagentPausedByYield(current)
       ) {
         return { value: undefined };
       }
@@ -213,7 +213,7 @@ function isRetiredByLiveRequesterTurn(entry: SubagentRunRecord): boolean {
 
 function awaitsStoppedPauseRetirement(entry: SubagentRunRecord): boolean {
   return (
-    entry.pauseReason !== "sessions_yield" &&
+    !isSubagentPausedByYield(entry) &&
     entry.requesterSettleWake?.pauseNotice !== undefined &&
     isSubagentObligationRetired(entry)
   );
@@ -223,7 +223,7 @@ function awaitsStoppedPauseRetirement(entry: SubagentRunRecord): boolean {
 function requesterSettleWakeScope(entry: SubagentRunRecord): string {
   const wake = entry.requesterSettleWake;
   const owner = `${entry.requesterStorePath ?? ""}\0${entry.requesterAgentId ?? ""}\0${entry.requesterSessionKey}`;
-  if (entry.pauseReason === "sessions_yield" && wake?.pauseNotice) {
+  if (isSubagentPausedByYield(entry) && wake?.pauseNotice) {
     return `${owner}\0pause\0${entry.runId}\0${wake.rearmGeneration ?? ""}`;
   }
   return `${owner}\0${wake?.batchRunIds?.toSorted().join(",") ?? ""}\0${wake?.rearmGeneration ?? ""}`;
@@ -271,21 +271,19 @@ export function scheduleRequesterSettleWake(
   const pendingWait = context.waitingRequesterSettleWakes.get(scope);
   if (pendingWait) {
     if (
-      !isSameSubagentRunOwner(params.runs.get(pendingWait.entry.runId), pendingWait.entry) ||
-      !resume ||
-      pendingSettlement?.scope === scope ||
-      pendingTransition?.scope === scope
+      resume &&
+      isSameSubagentRunOwner(params.runs.get(pendingWait.entry.runId), pendingWait.entry) &&
+      pendingSettlement?.scope !== scope &&
+      pendingTransition?.scope !== scope
     ) {
-      clearRequesterSettleWait(context, scope);
-    } else {
       return;
     }
+    clearRequesterSettleWait(context, scope);
   }
   const requesterSessionKey = entry.requesterSessionKey?.trim();
   if (
     entry.collect ||
     !requesterSessionKey ||
-    (isCompletedRequesterDeliveryBlocked(entry) && admittedWake?.requesterYieldBatch !== true) ||
     entry.execution.status === "running" ||
     !hasSubagentRunEnded(entry) ||
     awaitsStoppedPauseRetirement(entry) ||
@@ -335,7 +333,12 @@ export function scheduleRequesterSettleWake(
       return false;
     }
   };
-  const pauseNotice = entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice;
+  const resumeCurrentWake = () => {
+    if (isSourceCurrent()) {
+      scheduleRequesterSettleWake(context, entry.runId, entry, stateContext);
+    }
+  };
+  const pauseNotice = isSubagentPausedByYield(entry) && admittedWake?.pauseNotice;
   // Failure settlement owns offered results, never a still-working member's future completion.
   const offeredBatch = (pauseNotice ? [runId] : (admittedWake?.batchRunIds ?? [runId])).flatMap(
     (id) => {
@@ -380,20 +383,12 @@ export function scheduleRequesterSettleWake(
         entry,
         async (releasePreparation) => {
           // Admission can wait; reread the row before a blocked receipt is executed again.
-          if (
-            !isSourceCurrent() ||
-            awaitsStoppedPauseRetirement(entry) ||
-            (isCompletedRequesterDeliveryBlocked(entry) &&
-              entry.requesterSettleWake?.requesterYieldBatch !== true)
-          ) {
+          if (awaitsStoppedPauseRetirement(entry)) {
             return;
           }
           try {
-            if (settleObserved) {
-              await settleObserved();
-              return;
-            }
-            if (!admittedWake) {
+            if (settleObserved || !admittedWake) {
+              await settleObserved?.();
               return;
             }
             if (publishDispatch) {
@@ -413,7 +408,7 @@ export function scheduleRequesterSettleWake(
                     await mutateRequesterSettleWakeBatch(
                       context,
                       batch,
-                      admittedWake?.rearmGeneration,
+                      admittedWake.rearmGeneration,
                       { kind: "requesterDelivery", fact },
                       stateContext,
                       {},
@@ -421,9 +416,7 @@ export function scheduleRequesterSettleWake(
                     );
                   },
                   onDescendantsPending: (deadline) => {
-                    if (isSourceCurrent()) {
-                      descendantWait = { entry, deadline };
-                    }
+                    descendantWait = { entry, deadline };
                   },
                   transitionBatch: async (batch, state, onPublished, requesterDelivery) => {
                     // New transitions need the whole batch; retained receipts may reconcile survivors.
@@ -572,19 +565,16 @@ export function scheduleRequesterSettleWake(
                     ? error.capacityAvailable
                     : undefined;
               if (ready) {
-                const continueWake = () => {
-                  if (isSourceCurrent()) {
-                    scheduleRequesterSettleWake(context, entry.runId, entry, stateContext);
-                  }
-                };
                 // The preparation owner owns this wait; do not keep a Gateway root open.
                 // Failure re-enters too: a final admission refusal records the terminal outcome.
-                void ready.then(continueWake, continueWake).catch((resumeError: unknown) => {
-                  params.warn("requester settle wake readiness continuation failed", {
-                    error: buildSafeLifecycleErrorMeta(resumeError),
-                    runId,
+                void ready
+                  .then(resumeCurrentWake, resumeCurrentWake)
+                  .catch((resumeError: unknown) => {
+                    params.warn("requester settle wake readiness continuation failed", {
+                      error: buildSafeLifecycleErrorMeta(resumeError),
+                      runId,
+                    });
                   });
-                });
               } else {
                 params.warn(
                   "requester settle wake preparation deferred until its next lifecycle event",
@@ -650,9 +640,7 @@ export function scheduleRequesterSettleWake(
                   return;
                 }
                 clearRequesterSettleWait(context, scope);
-                if (isSourceCurrent()) {
-                  scheduleRequesterSettleWake(context, entry.runId, entry, stateContext);
-                }
+                resumeCurrentWake();
               },
               Math.max(0, waiting.deadline - Date.now()),
             );

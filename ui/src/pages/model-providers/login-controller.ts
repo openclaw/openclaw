@@ -86,6 +86,7 @@ export function createModelProviderLogin(options: {
     onAnswer: (value, includeValue) => void run(() => runner.answer(value, includeValue)),
     onBackgroundCompletion: (completion) => run(() => Promise.resolve(completion), true),
     onStart: (method, intent) => signIn.onStart(method, intent),
+    readLostSession: (error) => signIn.readLostSession(error),
     requestFailedMessage: () => t("modelProviders.requestFailed"),
     sessionExpiredMessage: () => t("modelProviders.login.sessionExpired"),
     recovery: {
@@ -703,10 +704,11 @@ export function createModelProviderLogin(options: {
         doneMessage: connectedLabel
           ? t("modelSetup.providerConnected", { provider: connectedLabel })
           : t("modelSetup.wizard.connected"),
-        doneDescription:
+        doneDescription: `${signIn.signedInEmail ?? ""}\n${
           completionModel && !modelSelection.choosing
             ? t("modelProviders.login.modelReady", { model: completionModel.name })
-            : undefined,
+            : ""
+        }`.trim(),
       });
       return {
         ...current,

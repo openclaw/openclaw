@@ -624,7 +624,7 @@ describe("image resizing", () => {
         await expect(run()).rejects.toMatchObject({
           name: "MediaUnderstandingSkipError",
           reason: "maxBytes",
-          message: `Attachment 1 exceeds maxBytes ${maxBytes}`,
+          message: `Attachment 1 exceeds the size limit of ${maxBytes} bytes.`,
         });
         expect(describeImage).not.toHaveBeenCalled();
       },

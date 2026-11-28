@@ -77,6 +77,29 @@ function clock(now = 10_000) {
 }
 const rootResult = { code: 0, signal: null };
 
+it("cannot replace strict Linux custody with an inner anchor receipt", async () => {
+  const stub = mockWritableRelay("linux");
+  const starting = startRelay({ retainNativeCustody: true });
+  const { emit } = relayPeer(stub);
+  emit({ type: "ready", commandPid: 1234, anchorPid: 1235 });
+  const adapter = await starting;
+  const extinct = adapter.waitForExtinction();
+  void extinct.catch(() => {});
+  emit({ type: "root-result", code: 0, signal: null });
+  emit({ type: "closing", reason: "lineage-closed" });
+  stub.stdout.end();
+  stub.stderr.end();
+  stub.lineage.end();
+  stub.control.destroy();
+  stub.disconnectMock();
+  stub.emitExit(0);
+  await expect(extinct).rejects.toThrow(
+    "custody owner exited without kernel descendant extinction",
+  );
+  expect(adapter.confirmExtinction()).toBe(false);
+  adapter.dispose();
+});
+
 it.each([
   "dispatch-revoked",
   "post-dispatch",

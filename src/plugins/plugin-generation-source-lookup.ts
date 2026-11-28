@@ -51,8 +51,8 @@ export function isPluginSourceCaptureOperation(operation: object): boolean {
   return sourceCaptureOperations.has(operation);
 }
 
-type SourceCustody = {
-  source: PluginRecoverySource;
+type SourceCustody<Source> = {
+  source: Source;
   files: ReadonlyMap<string, PluginCapturedSourceFact>;
   executionAliases: ReadonlyMap<string, string>;
   executionSources: ReadonlyMap<string, string>;
@@ -67,7 +67,8 @@ export type PluginInspectedModule = {
     { kind: "file"; source: string } | { kind: "dependency"; importer: string; name: string }
   >;
 };
-export type PluginSourceCustodyFork = SourceCustody;
+export type PluginSourceCustodyFork = SourceCustody<PluginRecoverySource>;
+export type PluginSourceCustodyTransfer = SourceCustody<RecoveryInput>;
 const sourceCustody = new AsyncLocalStorage<{
   closing: boolean;
   prepared: Map<object, Map<string, Promise<PreparedSourceCustody>>>;
@@ -195,7 +196,7 @@ export function createPluginSourceFacts(
       };
     },
     resolveDependency: createPluginDependencyResolver(dependencyLookupBoundary),
-    captureCustody: (capture: () => PluginRecoverySource) => ({
+    captureCustody: <T>(capture: () => T) => ({
       source: capture(),
       files,
       executionAliases,
@@ -318,14 +319,56 @@ function copyRecoverySource(input: RecoveryInput): PluginRecoverySource {
   }
 }
 
+export async function receivePluginSourceCustody(
+  transfer: PluginSourceCustodyTransfer,
+  preparation: { close(): Promise<void>; assertAvailable(): void },
+): Promise<PluginSourceCustodyFork> {
+  // Keep the origin pinned through the copy. A destination outside the preparation scope
+  // owns its directory and native leases independently once the original session closes.
+  let source: PluginRecoverySource | undefined;
+  try {
+    const received = await settleWithCleanup(
+      pluginSourceCaptureDirectory.exit(async () => {
+        source = await copyRecoverySourceAsync(transfer.source);
+        preparation.assertAvailable();
+        return source;
+      }),
+      () => preparation.close(),
+      "Plugin operation source handoff and preparation cleanup failed",
+    );
+    return { ...transfer, source: received };
+  } catch (error) {
+    try {
+      await source?.disposeAsync();
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        "Plugin operation source handoff and destination cleanup failed",
+        { cause: cleanupError },
+      );
+    }
+    throw error;
+  }
+}
+
 async function copyRecoverySourceAsync(input: RecoveryInput): Promise<PluginRecoverySource> {
-  let owner: Awaited<ReturnType<typeof createPluginCaptureOwner>> | undefined;
+  let release: (() => Promise<void>) | undefined;
   let recovery: ReturnType<typeof createPluginSourceCapture> | undefined;
   try {
     // Recovery ports and their descriptor outlive the caller, so neither may capture its context.
-    owner = await runInDetachedAsyncContext(() =>
+    const owner = await runInDetachedAsyncContext(() =>
       createPluginCaptureOwner(captureRetainedNativeWorkerSource({ runtimeGeneration: undefined })),
     );
+    let disposal: Promise<void> | undefined;
+    const dispose = () =>
+      (disposal ??= settleWithCleanup(
+        owner.releaseSource(1),
+        () => owner.close(),
+        "Plugin recovery source release and owner close failed",
+      ));
+    // The broker can own ID 1 even if its successful copy reply never reaches the caller.
+    // Releasing an absent ID is safe; closing an owner with a live source is rejected.
+    release = dispose;
     const metrics = getPluginGenerationMetrics();
     const { root, copiedBytes } = await owner.copyRecovery(1, {
       rootDir: input.rootDir,
@@ -336,14 +379,6 @@ async function copyRecoverySourceAsync(input: RecoveryInput): Promise<PluginReco
       storage: resolvePluginSourceCaptureStorage(),
       directory: pluginSourceCaptureDirectory.getStore(),
     });
-    const captureOwner = owner;
-    let disposal: Promise<void> | undefined;
-    const dispose = () =>
-      (disposal ??= settleWithCleanup(
-        captureOwner.releaseSource(1),
-        () => captureOwner.close(),
-        "Plugin recovery source release and owner close failed",
-      ));
     recovery = createPluginSourceCaptureState({
       directory: root.directory,
       outputRoot: root.managedRoot,
@@ -355,12 +390,12 @@ async function copyRecoverySourceAsync(input: RecoveryInput): Promise<PluginReco
     if (metrics) {
       metrics.copiedBytes += copiedBytes;
     }
-    return retainRecoverySource(input, recovery);
+    return joinBrokerRecoveryDisposal(retainRecoverySource(input, recovery));
   } catch (error) {
     try {
       throwIfSettledRejected(
         await Promise.allSettled([
-          recovery ? recovery.disposeAsync() : owner?.close(),
+          recovery ? recovery.disposeAsync() : release?.(),
           input.native?.disposeAsync(),
         ]),
         "Plugin recovery custody cleanup failed",
@@ -379,6 +414,20 @@ async function copyRecoverySourceAsync(input: RecoveryInput): Promise<PluginReco
     }
     throw error;
   }
+}
+
+// Binding failure can start synchronous disposal before its outer owner joins it. Keep
+// the complete native and directory release available to every subsequent waiter.
+function joinBrokerRecoveryDisposal(source: PluginRecoverySource): PluginRecoverySource {
+  let closing: Promise<void> | undefined;
+  const disposeAsync = () => (closing ??= source.disposeAsync());
+  return {
+    ...source,
+    dispose() {
+      void disposeAsync().catch((error: unknown) => process.emitWarning(String(error)));
+    },
+    disposeAsync,
+  };
 }
 
 function retainRecoverySource(
@@ -432,7 +481,10 @@ function retainRecoverySource(
     async disposeAsync() {
       if (!disposed) {
         disposed = true;
-        await Promise.all([sourceCapture.disposeAsync(), native?.disposeAsync()]);
+        throwIfSettledRejected(
+          await Promise.allSettled([sourceCapture.disposeAsync(), native?.disposeAsync()]),
+          "Plugin recovery directory and native custody cleanup failed",
+        );
       }
     },
   };
@@ -486,6 +538,7 @@ export function createPluginGenerationSourceLookup({
     };
   };
   return {
+    recoveryInput,
     hasSource: (source: string) => resolveCaptured(source) !== undefined,
     resolve: markPluginSourcePreparationOperation((source: string, rejectHardlinks = false) => {
       // Public exports may be loaded for the first time after the original package

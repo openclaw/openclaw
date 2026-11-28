@@ -1,0 +1,108 @@
+name: Plugin NPM Trust Closeout
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+      tooling_sha:
+        required: true
+        type: string
+      tooling_ref:
+        required: true
+        type: string
+      release_run_id:
+        required: true
+        type: string
+      release_run_attempt:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  verify:
+    name: Resolve bootstrapped plugin trust after publication
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: write
+      contents: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      SOURCE_SHA: ${{ inputs.source_sha }}
+      TOOLING_SHA: ${{ inputs.tooling_sha }}
+      TOOLING_REF: ${{ inputs.tooling_ref }}
+      RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+      RELEASE_RUN_ATTEMPT: ${{ inputs.release_run_attempt }}
+      # Shared dispatch helpers verify the original protected tooling ref.
+      PARENT_WORKFLOW_SHA: ${{ inputs.tooling_sha }}
+    steps:
+      - name: Checkout trusted closeout tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Setup supported Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.22.1"
+          package-manager-cache: false
+      - name: Download original release child dispatch record
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: openclaw-release-children-${{ inputs.release_run_id }}-${{ inputs.release_run_attempt }}
+          path: ${{ runner.temp }}/plugin-npm-trust-closeout
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.release_run_id }}
+      - name: Read original successful bootstrap jobs
+        id: plan
+        env:
+          CLOSEOUT_DIR: ${{ runner.temp }}/plugin-npm-trust-closeout
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_RUN_ID" =~ ^[1-9][0-9]*$ && "$RELEASE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          npm_run_id="$(jq -r '.npmRunId // empty' "$CLOSEOUT_DIR/dispatch.json")"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/attempts/$RELEASE_RUN_ATTEMPT" > "$CLOSEOUT_DIR/parent.json"
+          if [[ -n "$npm_run_id" ]]; then
+            [[ "$npm_run_id" =~ ^[1-9][0-9]*$ ]]
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$npm_run_id" > "$CLOSEOUT_DIR/plugin-run.json"
+            gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/actions/runs/$npm_run_id/jobs?filter=all&per_page=100" \
+              --jq '{total_count: .[0].total_count, jobs: [.[].jobs[]]}' > "$CLOSEOUT_DIR/jobs.json"
+          else
+            printf 'null\n' > "$CLOSEOUT_DIR/plugin-run.json"
+            printf 'null\n' > "$CLOSEOUT_DIR/jobs.json"
+          fi
+          node scripts/plugin-npm-trust-closeout.mjs
+      - name: Verify trust through the real publishing workflow
+        if: steps.plan.outputs.plugins != ''
+        env:
+          PLUGINS: ${{ steps.plan.outputs.plugins }}
+        run: |
+          set -euo pipefail
+          source scripts/lib/release-publish-children.sh
+          run_id="$(dispatch_workflow_at_ref "$TOOLING_REF" "$TOOLING_SHA" plugin-npm-release.yml \
+            -f publish_scope=selected -f ref="$SOURCE_SHA" -f plugins="$PLUGINS" \
+            -f preflight_only=true -f trusted_publisher_preflight=true)"
+          # Do not automatically approve the npm-publish environment.
+          wait_for_run plugin-npm-release.yml "$run_id" "$TOOLING_SHA" "" false
+      - name: Explain unresolved closeout
+        if: failure()
+        run: |
+          {
+            echo '## Plugin trust closeout incomplete — release remains published'
+            echo
+            echo 'Configure the listed packages on npm for repository openclaw/openclaw, workflow plugin-npm-release.yml, environment npm-publish. Complete npm login/2FA outside this workflow.'
+            echo 'Then rerun only the failed closeout job. Do not rerun publication or create another package version.'
+            echo 'If an accepted preflight is still waiting on environment approval, inspect that linked run before retrying.'
+            echo 'A successful exchange verifies current trust, not a future publication or permanent activation.'
+          } >> "$GITHUB_STEP_SUMMARY"

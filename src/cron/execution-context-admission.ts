@@ -1,17 +1,12 @@
 /**
  * Reads the parent row once and holds its generation for the occurrence.
- * Each trigger or payload run checks its requester's current ownership when
- * it starts, then keeps that decision fixed for the run.
+ * Each trigger or payload run admits its requester when it starts, then keeps
+ * that grant fixed for the run.
  */
 import { access } from "node:fs/promises";
-import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
-import {
-  prepareCommandOwnerAuthority,
-  type PreparedCommandOwnerAuthority,
-} from "../auto-reply/command-auth.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -22,14 +17,10 @@ import {
 } from "../config/sessions/transcript-lease.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  isOperatorRoleEnforcedFor,
-  operatorRoleSubject,
-} from "../gateway/operator-role-enforcement.js";
+import { admitScheduledRequesterGrant } from "../gateway/operator-admission.js";
 import { resolveCreatorSandbox } from "../gateway/operator-role-policy.js";
 import { decodeGatewayOperatorRecoverySource } from "../gateway/operator-run-recovery-source.codec.js";
 import { chatRef } from "../sessions/chat-ref.js";
-import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import { bindScheduledExecutionContext } from "./execution-context-registry.js";
 import {
   buildScheduledExecutionContext,
@@ -67,55 +58,6 @@ function ingressFor(boundary: string | undefined): ScheduledAdmissionFacts["ingr
     return "plugin-hook";
   }
   return boundary === "gateway.hooks.agent" ? "webhook" : "channel-join";
-}
-
-/** The requester's owner status at one run's admission. */
-type RequesterOwnerCheck = Readonly<{
-  owner: boolean;
-  recoveryReference?: PreparedCommandOwnerAuthority["recoveryReference"];
-}>;
-
-const NOT_OWNER: RequesterOwnerCheck = { owner: false };
-
-/**
- * Owner check for requesters a run can verify; operator sources are restored per run.
- * Scheduler turns about a job (its repair or notices) take the same check.
- */
-export async function checkRequesterOwner(
-  cfg: OpenClawConfig,
-  requester: Exclude<ScheduledRequesterRef, { kind: "operator-source" }>,
-): Promise<RequesterOwnerCheck> {
-  switch (requester.kind) {
-    case "channel": {
-      // The stored envelope's version would select the recovery-reference branch; pass
-      // only the native sender identity so configured and linked owners are rechecked.
-      const { channel, accountId, senderId } = requester.requester;
-      const prepared = await prepareCommandOwnerAuthority(cfg, { channel, accountId, senderId });
-      return {
-        owner: prepared.source !== undefined && prepared.isCurrent(cfg),
-        recoveryReference: prepared.recoveryReference,
-      };
-    }
-    case "profile": {
-      try {
-        const profileAccess = captureResidentUserProfileAccess(requester.profileId);
-        // Named roles describe team operators; only an untiered install or the
-        // Gateway owner profile carries owner authority.
-        return {
-          owner:
-            !isOperatorRoleEnforcedFor(
-              cfg,
-              operatorRoleSubject(profileAccess.readCurrentFacts()),
-            ) || requester.profileId === GATEWAY_OWNER_PROFILE_ID,
-        };
-      } catch {
-        return NOT_OWNER;
-      }
-    }
-    case "unknown":
-      return NOT_OWNER;
-  }
-  return NOT_OWNER;
 }
 
 /**
@@ -327,11 +269,16 @@ export async function admitScheduledOccurrence(
     async mint(run) {
       let result: ScheduledExecutionContextResult;
       try {
-        // Stored operator sources carry the owner decision frozen by their run admission.
-        // Other requesters use current config because run settings can predate a slot wait.
-        const requesterOwner =
-          !operatorSourceRequester && requester && requester.kind !== "operator-source"
-            ? await checkRequesterOwner(await captureRuntimeConfigAsyncReader()(), requester)
+        // Stored operator sources carry the owner from their run admission's grant.
+        // Other requesters are admitted now: run settings can predate a slot wait.
+        const requesterGrant =
+          !operatorSourceRequester &&
+          (requester?.kind === "channel" || requester?.kind === "profile")
+            ? await admitScheduledRequesterGrant(
+                await captureRuntimeConfigAsyncReader()(),
+                run.agentId,
+                requester,
+              )
             : undefined;
         const facts = assembleScheduledAdmissionFacts(
           {
@@ -346,8 +293,8 @@ export async function admitScheduledOccurrence(
           },
           parentRow,
           operatorSourceRequester
-            ? run.operatorAuthority?.requesterOwner === true
-            : requesterOwner?.owner,
+            ? run.operatorAuthority?.grant.owner === true
+            : requesterGrant?.owner,
         );
         result = buildScheduledExecutionContext(job, facts);
       } catch (error) {

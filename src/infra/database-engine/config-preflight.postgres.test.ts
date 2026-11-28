@@ -286,7 +286,7 @@ it.skipIf(!connection)(
 );
 
 it.skipIf(!connection)(
-  "reports legacy config issues under Gateway PostgreSQL admission",
+  "repairs legacy heartbeat config under Gateway PostgreSQL admission",
   async () => {
     expect(threadId).toBe(0);
     installDatabaseProcessRole("gateway");
@@ -315,10 +315,14 @@ it.skipIf(!connection)(
             });
 
             const result = await runStartupConfigPreflight({ gateway: true, observe: false });
-            expect(result.snapshot.valid).toBe(false);
-            expect(result.snapshot.legacyIssues).toContainEqual(
+            expect(result.snapshot.valid).toBe(true);
+            expect(result.snapshot.config).not.toHaveProperty("agents.defaults.heartbeat");
+            expect(result.snapshot.legacyIssues).not.toContainEqual(
               expect.objectContaining({ path: "agents.defaults.heartbeat" }),
             );
+            const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8"));
+            expect(persisted).not.toHaveProperty("agents.defaults.heartbeat");
+            expect(persisted).toMatchObject({ database, gateway: { mode: "local" } });
           });
         } finally {
           await closeStateDatabaseForTest();

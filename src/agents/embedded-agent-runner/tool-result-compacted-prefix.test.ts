@@ -72,6 +72,6 @@ it("keeps a fitting image in the model context along with compacted text", async
   const text = getToolResultText(result);
   expect(result.content.filter((block) => block.type === "image")).toEqual([image]);
   expect(text).toContain("record-0001");
-  expect(text.match(/more characters truncated/gu)).toHaveLength(1);
+  expect(text.match(/chars omitted/gu)).toHaveLength(1);
   expect(text).not.toContain("image omitted");
 });

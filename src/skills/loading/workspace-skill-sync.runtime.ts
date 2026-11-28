@@ -21,13 +21,13 @@ import { getSkillsSnapshotVersion, getSkillsResourceVersion } from "../runtime/r
 import { syncSkillsFilesystem } from "../runtime/refresh.js";
 import { resolveSkillSnapshotExecutionFileHost } from "../runtime/skill-snapshot-provenance.js";
 import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-fingerprint.js";
+import { resolveSkillKey } from "../skill-key.js";
 import type {
   SkillEligibilityContext,
   SkillEntry,
   SkillSnapshot,
   SkillUsagePath,
 } from "../types.js";
-import { resolveSkillKey } from "./frontmatter.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import { prepareWorkspaceSkills } from "./workspace-skill-loader.js";
 

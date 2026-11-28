@@ -267,7 +267,7 @@ export async function dispatchSessionsSendFollowup(
         }
         return accepted;
       };
-      const accepted = await (request ? request.custody.run(claim) : claim());
+      const accepted = await (request ? request.custody.runWithRequester(claim) : claim());
       assertCurrent();
       if (instance) {
         mergeAcceptedSessionSpawnsForRun(instance, [accepted]);

@@ -2,6 +2,7 @@ import { getDefaultHighWaterMark } from "node:stream";
 import { createPermitPool } from "openclaw/plugin-sdk/concurrency-runtime";
 
 export const MAX_BODY_BYTES = 32 * 1024 * 1024;
+export const CODEX_INFERENCE_REQUEST_TOO_LARGE = `Request exceeds the maximum size accepted by the Codex inference relay (${MAX_BODY_BYTES} bytes).`;
 export const MAX_UPLOADS = 16;
 export const MAX_PENDING_REQUESTS = MAX_UPLOADS;
 

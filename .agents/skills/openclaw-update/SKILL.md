@@ -16,7 +16,7 @@ Read the owner runbook and choose the matching workflow:
 | Installation                               | Update path                                                                                                                                                |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Canonical live main checkout and macOS app | [openclaw-live-updater](../openclaw-live-updater/SKILL.md).                                                                                                |
-| Operator-configured Team server            | [update-team-server](../update-team-server/SKILL.md).                                                                                                      |
+| Operator-configured Team server            | [update-team-server](https://github.com/openclaw/maintainers/blob/main/.agents/skills/update-team-server/SKILL.md).                                        |
 | Other managed deployments                  | Deployment-specific skill/runbook and existing owner, including containers and declarative installations.                                                  |
 | Standard package or single-user source     | [Updating](../../../docs/install/updating.md) and the [update CLI contract](../../../docs/cli/update.md), using the owning CLI on the target host/profile. |
 

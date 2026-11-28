@@ -107,10 +107,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
     if (recorder.hasPersisted()) {
       return blockedOwner();
     }
-    const assertCurrent = () => {
-      state.getPreDispatchAbortSignal()?.throwIfAborted();
-      params.replyOptions?.operatorAuthority?.assertCurrent();
-    };
+    const assertCurrent = () => state.getPreDispatchAbortSignal()?.throwIfAborted();
     let lastOwner: PluginBindingTranscriptOwner | undefined;
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const targetSessionStoreEntry = await resolveSessionStoreLookup(

@@ -24,7 +24,7 @@ import { redactToolPayloadText } from "../logging/redact.js";
 import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
-import type { SpawnInput } from "../process/supervisor/types.js";
+import type { SpawnInput, TerminationReason } from "../process/supervisor/types.js";
 import type {
   SecretEgressProcessGrant,
   SecretEgressSentinelBinding,
@@ -58,6 +58,7 @@ import { maybeNotifyOnExit, prepareExecExitNotification } from "./bash-tools.exe
 import {
   buildExecExitOutcome,
   buildExecRuntimeErrorOutcome,
+  buildStoppedRunExit,
   EXEC_OUTPUT_FILE_MAX_BYTES,
   joinExecFailureOutput,
   type ExecProcessOutcome,
@@ -71,7 +72,7 @@ import { chunkString, clampWithDefault, readEnvInt } from "./bash-tools.shared.j
 import type { ExecApprovalTransport } from "./exec-approval-transport.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { openPrivateTempFileStream } from "./sessions/tools/private-temp-file.js";
+import { openPrivateTempFileStream, type SpillOwner } from "./sessions/tools/private-temp-file.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
 import {
   getGatewayToolCallerIdentity,
@@ -207,6 +208,7 @@ export async function runExecProcess({
   ...opts
 }: {
   command: string;
+  spillOwner?: SpillOwner;
   durable?: DurableExecOptions;
   sessionId?: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
@@ -264,7 +266,7 @@ export async function runExecProcess({
       ? AbortSignal.any([requestSignal, initialStartupSignal])
       : (requestSignal ?? initialStartupSignal);
   startupSignal?.throwIfAborted();
-  let operatorAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
+  const operatorAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
   const operatorSignal = operatorAuthority?.signal;
   let releaseOperatorAuthority: (() => void) | undefined;
   const startedAt = Date.now();
@@ -434,6 +436,7 @@ export async function runExecProcess({
     });
   const finalizeAndSettleSession = async (
     outcome: ExecProcessOutcome,
+    stopFailure?: unknown,
   ): Promise<ExecProcessOutcome> => {
     secretEgressGrant?.revoke();
     let finalOutcome = outcome;
@@ -455,7 +458,10 @@ export async function runExecProcess({
       ]);
       // Cancellation may arrive while the backend is finalizing its artifacts.
       const termination = sandboxTermination ? await sandboxTermination : undefined;
-      const errors = termination ? [termination.error] : [];
+      const errors = [
+        ...(stopFailure === undefined ? [] : [stopFailure]),
+        ...(termination ? [termination.error] : []),
+      ];
       if (artifacts.status === "rejected") {
         errors.push(artifacts.reason);
       }
@@ -525,6 +531,7 @@ export async function runExecProcess({
   };
 
   let managedRun: ManagedRun | null = null;
+  let cancelReason: TerminationReason | undefined;
   const onRequestCancelled = () => {
     session.requestCancelled = true;
     markCancellationRequested(session);
@@ -560,12 +567,11 @@ export async function runExecProcess({
       target: diagnosticTarget,
     });
   const spawn = async (input: SpawnInput) => {
-    const assertOperatorCurrent = operatorAuthority?.assertCurrent;
     const assertRuntimeCurrent = assertSandboxCurrent;
     const assertHostPolicyCurrent = assertPolicyCurrent;
     const assertCurrent = () => {
       startupSignal?.throwIfAborted();
-      assertOperatorCurrent?.();
+      operatorSignal?.throwIfAborted();
       assertRuntimeCurrent?.();
     };
     // Source authority covers construction; approval policy ends at native launch.
@@ -600,7 +606,8 @@ export async function runExecProcess({
           supervisor.spawn({
             ...input,
             env: resolveExecLaunchEnv(input.env, Boolean(opts.sandbox), grant?.env),
-            onCancel: () => {
+            onCancel: (reason) => {
+              cancelReason ??= reason;
               beginSandboxTermination();
               grant?.revoke();
             },
@@ -619,10 +626,11 @@ export async function runExecProcess({
 
   // Sandboxed reads cannot reach host temp files, and durable commands keep their own log.
   if (!opts.sandbox && !opts.durable) {
-    session.outputFile = openPrivateTempFileStream("openclaw-exec", EXEC_OUTPUT_FILE_MAX_BYTES);
+    session.outputFile = openPrivateTempFileStream("openclaw-exec", EXEC_OUTPUT_FILE_MAX_BYTES, {
+      owner: opts.spillOwner,
+    });
   }
   try {
-    operatorAuthority?.assertCurrent();
     releaseOperatorAuthority = operatorAuthority?.retain?.();
     const spawnSpec = await prepareSpawnSpec();
     usingPty = spawnSpec.mode === "pty";
@@ -694,7 +702,6 @@ export async function runExecProcess({
   } finally {
     launchLifecycle.dispose();
     assertPolicyCurrent = undefined;
-    operatorAuthority = undefined;
     assertSandboxCurrent = undefined;
     prepareSandboxCurrent = undefined;
   }
@@ -708,8 +715,17 @@ export async function runExecProcess({
   const promise = withoutGatewayToolCallerIdentity(async (): Promise<ExecProcessOutcome> => {
     try {
       let outcome: ExecProcessOutcome;
+      let stopFailure: unknown;
       try {
-        const exit = await startedRun.wait();
+        const exit = await startedRun.wait().catch((error: unknown) => {
+          // OpenClaw stopped the command (timeout, memory bound) and its cleanup then failed:
+          // the stop stays the result, and finalization reports the cleanup failure after it.
+          if (!cancelReason || cancelReason === "manual-cancel") {
+            throw error;
+          }
+          stopFailure = error;
+          return buildStoppedRunExit(cancelReason, Date.now() - startedAt);
+        });
         outcome = buildExecExitOutcome({
           exit,
           aggregated: session.aggregated.trim(),
@@ -723,7 +739,7 @@ export async function runExecProcess({
         // Release foreground delivery before finalization marks the record exited.
         onUpdate = undefined;
       }
-      const finalOutcome = await finalizeAndSettleSession(outcome);
+      const finalOutcome = await finalizeAndSettleSession(outcome, stopFailure);
       emitCompleted(finalOutcome);
       return finalOutcome;
     } finally {

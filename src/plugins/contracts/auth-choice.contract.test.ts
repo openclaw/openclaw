@@ -9,21 +9,14 @@ type ResolvePluginProviders =
   typeof import("../../plugins/provider-auth-choice.runtime.js").resolvePluginProviders;
 type ResolveProviderPluginChoice =
   typeof import("../../plugins/provider-auth-choice.runtime.js").resolveProviderPluginChoice;
-type RunProviderModelSelectedHook =
-  typeof import("../../plugins/provider-auth-choice.runtime.js").runProviderModelSelectedHook;
 const resolvePluginProvidersMock = vi.hoisted(() => vi.fn<ResolvePluginProviders>(() => []));
-const resolvePluginSetupProviderMock = vi.hoisted(() => vi.fn(() => undefined));
 const resolveProviderPluginChoiceMock = vi.hoisted(() => vi.fn<ResolveProviderPluginChoice>());
-const runProviderModelSelectedHookMock = vi.hoisted(() =>
-  vi.fn<RunProviderModelSelectedHook>(async () => {}),
-);
 const runAuthMethodMock = vi.hoisted(() => vi.fn(async () => ({ profiles: [] })));
 
+// mock-isolation: Exercise fallback selection without discovering or loading installed providers.
 vi.mock("../../plugins/provider-auth-choice.runtime.js", () => ({
   resolvePluginProviders: resolvePluginProvidersMock,
-  resolvePluginSetupProvider: resolvePluginSetupProviderMock,
   resolveProviderPluginChoice: resolveProviderPluginChoiceMock,
-  runProviderModelSelectedHook: runProviderModelSelectedHookMock,
 }));
 
 describe("provider auth-choice contract", () => {
@@ -54,7 +47,6 @@ describe("provider auth-choice contract", () => {
     resolvePluginProvidersMock.mockReturnValue([]);
     resolveProviderPluginChoiceMock.mockReset();
     resolveProviderPluginChoiceMock.mockReturnValue(null);
-    runProviderModelSelectedHookMock.mockReset();
     clearRuntimeAuthProfileStoreSnapshots();
   });
 

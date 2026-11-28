@@ -73,21 +73,20 @@ it.each(["status", "stop"])("rewrites /loop %s as a scoped work order", async (c
 });
 
 it.each([
-  { isAuthorizedSender: false, senderIsOwner: true, expected: { shouldContinue: false } },
-  {
-    isAuthorizedSender: true,
-    senderIsOwner: false,
-    expected: {
+  [false, true, "`commands.allowFrom` does not include"],
+  [true, false, "operator.admin"],
+] as const)(
+  "rejects authorization %s / ownership %s",
+  async (isAuthorizedSender, senderIsOwner, expected) => {
+    const params = buildLoopParams("/loop 5m check ci");
+    Object.assign(params.command, { isAuthorizedSender, senderIsOwner });
+    expect(await handleLoopCommand(params, true)).toEqual({
       shouldContinue: false,
-      reply: { text: expect.stringContaining("operator.admin") },
-    },
+      reply: { text: expect.stringContaining(expected) },
+    });
+    expect(params.ctx.BodyForAgent).toBe("/loop 5m check ci");
   },
-])("rejects authorization $isAuthorizedSender / ownership $senderIsOwner", async (row) => {
-  const params = buildLoopParams("/loop 5m check ci");
-  Object.assign(params.command, row);
-  expect(await handleLoopCommand(params, true)).toEqual(row.expected);
-  expect(params.ctx.BodyForAgent).toBe("/loop 5m check ci");
-});
+);
 
 it("rejects intervals below 30 seconds", async () => {
   const result = await handleLoopCommand(buildLoopParams("/loop 5s x"), true);

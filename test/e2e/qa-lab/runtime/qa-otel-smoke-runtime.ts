@@ -30,7 +30,6 @@ import {
   decodeRequestBody,
   type OtlpSignal,
   readPositiveIntegerEnv,
-  readRequestBody,
   startLocalOtlpReceiver,
 } from "./otel-test-support.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
@@ -280,9 +279,6 @@ function createBoundedTextAccumulator(maxBytes: number) {
         return;
       }
       tail = nextTail;
-    },
-    byteLength(): number {
-      return tail.byteLength;
     },
     text(): string {
       const output = tail.toString("utf8");
@@ -1182,13 +1178,8 @@ async function main() {
 export const testing = {
   appendCapturedBodyText,
   assertSmoke,
-  createBoundedTextAccumulator,
-  createStdoutDiagnosticLogCapture,
   decodeRequestBody,
   parseArgs,
-  parseStdoutDiagnosticLogLine,
-  readPositiveIntegerEnv,
-  readRequestBody,
   startLocalOtlpReceiver,
   startDockerOtelCollector,
 };

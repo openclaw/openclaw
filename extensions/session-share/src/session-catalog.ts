@@ -146,6 +146,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
     const linkParticipant = binding.linkGitHubIdentities ? linker?.linkParticipant : undefined;
     return sessions.map(({ originalPath, ...session }) =>
       Object.assign(bindSession(session, hostId, owner, linkParticipant), {
+        exportPolicy: { origin: "federated" as const, automatic: false },
         originalUrl: sessionShareOriginalUrl(
           binding.controlUiOrigin,
           session.threadId,

@@ -5,6 +5,7 @@ vi.mock("../current-plugin-metadata-snapshot.js", () => {
 });
 
 it("does not import the plugin metadata control plane", async () => {
+  vi.resetModules();
   const runtimeScope = await import("./gateway-request-scope.js");
 
   expect(runtimeScope.withPluginRuntimeGatewayRequestScope).toBeTypeOf("function");

@@ -19,6 +19,15 @@ their own conversation in a public project without a worktree, a PR, or GitHub
 credentials in the sandbox. Success returns the issue URL. If the result is
 unconfirmed, check the project’s issues before trying again.
 
+To leave a top-level comment in that project's repository, call `github_publish`
+with `action: "create_comment"`, `issueNumber`, and a Markdown `body`. The Gateway
+posts comments on the session's working PR without a separate approval. The target
+must match its selected PR association or current publication, including the
+GitHub host and repository. Comments on other issues or PRs in that repository
+still require approval of the exact target, account, and text. The tool cannot
+select another repository. Success returns the comment URL; check the thread
+before retrying an unconfirmed result.
+
 ## Session GitHub App reader
 
 A configured `tools.github` (or complete agent override) with
@@ -119,6 +128,9 @@ For OpenClaw-owned `exec` with `host=gateway`, including Pi `exec` and Codex `ga
 
 **Managed Codex execution uses the same host-owned boundary.** When a managed GitHub identity is selected for a run, OpenClaw disables Codex-native shell execution and routes commands through its host-owned execution tools. These tools retain the executing agent's selected profile, caller authority, approval checks, and cancellation lifecycle. A missing or unavailable managed profile refuses execution rather than falling back to a native account; reconnect or change the identity in Settings before retrying. Without a managed selection, native Codex defaults remain unchanged. This routing does not export Gateway credentials to ordinary paired-node execution.
 
+On packaged Windows Gateways, the credential reader reuses the known native dependency redirect
+from Gateway startup. Exec environment overrides do not change the reader's redirect roots.
+
 Choosing a different identity or inheritance target selects another profile for new runs. An admitted run keeps its prior profile selection, and already-launched local exec processes keep their launch token until they exit. Retired profile files are cleaned on the next Gateway restart, so changing this setting is not immediate credential revocation.
 
 If cleanup cannot read a directory's identity, it leaves that directory untouched, logs a warning with the path and reason, and continues checking the remaining profiles. Missing directories are skipped without a warning.
@@ -134,6 +146,8 @@ OpenClaw sandboxes exclude the Gateway's managed GitHub credentials by default; 
 The default sandbox tool policy also allows `github_publish` in managed Gateway conversations, including their first turn. The tool uses the same Gateway publisher and does not require `allowInSandbox`, a managed GitHub profile mount, or GitHub credentials inside the sandbox. Explicit tool denies and restrictive custom allowlists still apply. Offering the tool permits a publication request, not publication from an unbound workspace or an unavailable GitHub account: the Gateway checks the current workspace, caller, and selected credential when the tool is invoked. Missing or invalid credentials return the existing retry or reconnect guidance without falling back to another account.
 
 Publication may wait until the requesting turn finishes and its workspace is accepted. Its result is appended to the session transcript; this does not start another agent turn. When the authorized task also includes review, CI repair, or landing, the agent must arrange a separate continuation before ending the requesting turn. A draft PR or publication receipt does not complete a landing request.
+
+A publication that creates a PR uses the request's `title` and `body`. The first commit the branch adds to its base supplies each omitted field. For example, **Publish** in the Control UI supplies neither field. The PR body omits the commit's trailers. A branch with no commit of its own, such as a repository checkpoint publication, is titled `Publish <branch>`. The publication commit keeps the requested title, or `Publish <branch>`, as its subject.
 
 Use `github_publish` with `action: "inspect_pr"` and `pullRequestUrl` to inspect
 an existing PR authored by a currently verified GitHub account linked to the
@@ -510,7 +524,7 @@ Verification proves which account answered the GitHub API request. Status report
 
 Removing an agent override or choosing native credentials deletes the associated local refresh record after the config change. Already-running local processes may retain the old profile and its current access token until they exit, restart, or the token expires, while new runs use the updated identity immediately. This local change does not revoke the authorization at GitHub; revoke it separately from the OAuth application's GitHub settings when required.
 
-Control UI issue and pull request hover previews use the selected agent's effective managed GitHub identity, including an inherited system identity. An unavailable managed identity produces an actionable error rather than switching to another credential. Without a managed selection, previews retain the optional `gateway.controlUi.github.token` service credential, shared `GH_TOKEN`/`GITHUB_TOKEN` environment fallback for `github.com`, and anonymous public access. Set `gateway.controlUi.github.host` to match `gateway.github.host` for Enterprise service access; an omitted credential host means `github.com`. Previews remain public-only, and their caches are scoped to the credential and host. Project discovery continues to use the separate service credential. When this SecretRef is explicit, OpenClaw excludes its exact environment or store name from agent execution. A custom name does not clear unrelated `GH_TOKEN` or `GITHUB_TOKEN` values used by native identity; a ref named `GH_TOKEN` or `GITHUB_TOKEN` excludes that exact variable.
+Control UI GitHub previews, the side reader, and the `github_read` and `github_search` tools use the selected agent's effective managed GitHub identity, including an inherited system identity. An unavailable managed identity produces an actionable error rather than switching to another credential. Without a managed selection, they use an explicit `gateway.controlUi.github.token` service credential if configured. Otherwise, for `github.com`, they use the Gateway's native GitHub identity (shown in Settings as **Shared agent account**): `GH_TOKEN` or `GITHUB_TOKEN`, then the Gateway user's `gh` login (cached for 60 seconds). If no native credential is available or verified, they fall back to anonymous public access. Set `gateway.controlUi.github.host` to match `gateway.github.host` for Enterprise service access; an omitted credential host means `github.com`. Previews remain public-only, and their caches are scoped to the credential and host. Project discovery continues to use the separate service credential. When this SecretRef is explicit, OpenClaw excludes its exact environment or store name from agent execution. A custom name does not clear unrelated `GH_TOKEN` or `GITHUB_TOKEN` values used by native identity; a ref named `GH_TOKEN` or `GITHUB_TOKEN` excludes that exact variable.
 
 If a preview or detail view reports “GitHub request is no longer active,” open it again to retry. This describes the interrupted request, not a change to your GitHub account; reconnecting GitHub is unnecessary.
 

@@ -6,6 +6,8 @@ export interface ReusableReleaseChildRequest {
   inputs: Record<string, string | boolean | number>;
   /** Candidate version verified by receipt recovery before applying release policy. */
   policyTargetVersion?: string;
+  /** Required job names from the authenticated qualification coverage, when available. */
+  requiredJobs?: readonly string[];
   /** Exclude children dispatched by this parent run. */
   excludeRunId?: string;
 }
@@ -38,7 +40,7 @@ export interface ReusableReleaseChildDependencies {
     typeof import("./release-evidence-replay.mjs").createReleaseEvidenceReplay
   >;
   report?: (message: string) => void;
-  getJobLog?: (jobId: number) => unknown;
+
   github?: (endpoint: string) => Promise<unknown>;
   downloadArchive?: (input: Record<string, unknown>) => Promise<{
     artifactMetadata: unknown;
@@ -46,6 +48,8 @@ export interface ReusableReleaseChildDependencies {
   }>;
   now?: number;
   deadlineMs?: number;
+  /** Policy already authenticated by the receipt recovery owner. */
+  waiverPolicy?: import("./release-validation-waivers.mjs").ReleaseValidationWaiver[];
   token?: string;
 }
 
@@ -61,6 +65,7 @@ export function validateReusableReleaseChild(
 ): Promise<{
   selection: ReusableReleaseChildSelection;
   receipt: Record<string, unknown>;
+  compositeJobs: Record<string, unknown>[];
   run: Record<string, unknown>;
   jobs: Record<string, unknown>[];
 }>;

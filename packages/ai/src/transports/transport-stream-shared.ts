@@ -604,6 +604,9 @@ export function finalizeTransportStream(params: {
   if (output.stopReason === "aborted" || output.stopReason === "error") {
     throw new Error(output.errorMessage ?? "An unknown error occurred");
   }
+  // A turn that recorded no provider measurement completes as explicitly unmeasured, so context
+  // pressure never reads a silently absent size.
+  output.usage.contextUsage ??= { state: "unavailable" };
   stream.push({ type: "done", reason: output.stopReason, message: output });
   stream.end();
 }

@@ -459,7 +459,7 @@ export function closeOpenClawAgentDatabases(rootPath?: string): void {
 /** Latch integrity refusals so later opens fail without rescanning. */
 export function recordOpenClawAgentDatabaseOpenFailure(pathname: string, error: Error): void {
   // Quarantine revokes this process's trust because doctor may replace the file.
-  invalidateOpenClawAgentDatabaseValidation(pathname);
+  invalidateOpenClawAgentDatabaseValidation(pathname, "a refused open");
   revokeSqliteDatabaseAdmissionsForPath(pathname);
   cache.terminal.record(pathname, error);
 }

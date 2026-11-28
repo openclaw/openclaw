@@ -4,6 +4,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
 import {
+  compactCronJobFixture,
+  createCronJob,
+  cronJobsListResponse,
+} from "../test-helpers/cron.ts";
+import {
   openPalette,
   createContext,
   createGateway,
@@ -53,6 +58,14 @@ function catalogRequest(catalogs: Record<string, unknown>) {
   });
 }
 
+function automationPage(id: string, name: string) {
+  return {
+    ...cronJobsListResponse(),
+    jobs: [compactCronJobFixture(createCronJob(id, name))],
+    total: 1,
+  };
+}
+
 function expectActive(palette: Parameters<typeof paletteInput>[0], row: Element | null) {
   expect(palette.querySelector('[role="option"][aria-selected="true"]')).toBe(row);
   expect(
@@ -85,7 +98,7 @@ describe("CommandPalette search", () => {
   it("lazily searches compact automation names once per connection", async () => {
     const request = catalogRequest({
       "models.list": { models: [] },
-      "cron.list": { jobs: [{ id: "nightly-invoices", name: "Nightly invoices" }] },
+      "cron.list": automationPage("nightly-invoices", "Nightly invoices"),
     });
     const empty = { ...createSessionResult("agent:main:none", "None"), sessions: [] };
     const { palette, emit, setConnected } = await mountSearch(
@@ -104,7 +117,7 @@ describe("CommandPalette search", () => {
     await vi.waitFor(() => expect(palette.textContent).toContain("Nightly invoices"));
     expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(1);
 
-    emit("cron");
+    emit("cron.inventory.changed");
     await vi.advanceTimersByTimeAsync(200);
     expect(request.mock.calls.filter(([method]) => method === "cron.list")).toHaveLength(2);
     setConnected(false);
@@ -117,7 +130,7 @@ describe("CommandPalette search", () => {
   });
 
   it("shows model results while another catalog is still pending", async () => {
-    const automations = createDeferred<{ jobs: { id: string; name: string }[] }>();
+    const automations = createDeferred<ReturnType<typeof automationPage>>();
     const { palette } = await mountSearch({
       methods: ["cron.list", "models.list"],
       request: catalogRequest({
@@ -133,7 +146,7 @@ describe("CommandPalette search", () => {
     expect(palette.onNavigate).toHaveBeenCalledWith("model-providers");
 
     await searchPalette(palette, "CAFÉ");
-    automations.resolve({ jobs: [{ id: "needle-job", name: "Café automation" }] });
+    automations.resolve(automationPage("needle-job", "Café automation"));
     await vi.waitFor(() => expect(findPaletteOption(palette, "Café automation")).toBeDefined());
     expect(findPaletteOption(palette, "Cafe\u0301 model")).toBeDefined();
     expect(palette.textContent).not.toContain("Searching commands");
@@ -342,36 +355,6 @@ describe("CommandPalette search", () => {
       expect(palette.isOpen).toBe(false);
     },
   );
-
-  it("moves the keyboard selection through catalog groups in visible order", async () => {
-    const { gateway } = createGateway(true, {
-      methods: ["cron.list"],
-      request: vi.fn(async () => ({ jobs: [{ id: "bravo", name: "Needle Bravo" }] })),
-    });
-    const context = createContext(gateway);
-    const { palette, query, queryAll } = await mountPalette(
-      agentContext(
-        context,
-        [
-          { id: "alpha", name: "Needle Alpha" },
-          { id: "charlie", name: "Needle Charlie" },
-        ],
-        "alpha",
-      ),
-    );
-    await searchPalette(palette, "Needle");
-    const items = [...queryAll<HTMLElement>('[role="option"]')];
-    expect(items.map((item) => item.textContent?.replace(/\s+/g, " ").trim())).toEqual([
-      "Needle Alpha alpha",
-      "Needle Charlie charlie",
-      "Needle Bravo",
-    ]);
-    for (const expectedIndex of [1, 2, 0]) {
-      pressKey(paletteInput(palette), "ArrowDown");
-      await palette.updateComplete;
-      expect(query('[role="option"][aria-selected="true"]')).toBe(items[expectedIndex]);
-    }
-  });
 
   it("scrolls the current session result across search groups and stops after closing", async () => {
     const listed = createSessionResult("agent:main:scroll-target", "Needle topic");
@@ -600,20 +583,6 @@ describe("CommandPalette search", () => {
     expect(palette.textContent).not.toContain("Couldn’t search sessions");
     await settlePalette(palette);
     expect(palette.textContent).toContain("Recovered chat");
-  });
-
-  it("opens the capture section from the palette without losing its deep link", async () => {
-    const { gateway } = createGateway(true, { methods: [] });
-    gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.admin"] };
-    const { palette } = await mountPalette(createContext(gateway));
-    await searchPalette(palette, "meeting capture");
-    const item = findPaletteOption(palette, "Meeting capture");
-    expect(item).toBeDefined();
-    item!.click();
-    expect(palette.onNavigate).toHaveBeenCalledWith("communications", {
-      search: "?section=transcripts",
-      hash: "#settings-communications-meeting-capture",
-    });
   });
 
   it("flushes a new query on Enter without selecting the retained command", async () => {

@@ -249,24 +249,11 @@ suite.define(() => {
         expect(await blocked.textContent()).toContain(
           "The role deleted-role is not defined on this claw",
         );
-        await blocked.getByRole("button", { name: "Change role", exact: true }).click();
-        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            blocked,
-            [blocked.getByRole("button", { name: "Save role" })],
-            { animations: "disabled", scrollTo: blocked },
-          );
-          writeFileSync(path.join(suite.artifactDir, "blocked-member-change-role.png"), frame.png);
-        }
-        await blocked.getByRole("button", { name: "Cancel", exact: true }).click();
+        expect(await blocked.getByRole("button", { name: "Change role" }).count()).toBe(0);
         const node = page.locator('[aria-labelledby="ocid-nodes"] .ocid-access__row').first();
         for (const width of [390, 820, 1400]) {
           await page.setViewportSize({ width, height: width === 390 ? 480 : 844 });
-          await blocked.getByRole("button", { name: "Change role", exact: true }).click();
           await expectContained(surface);
-          await blocked.getByRole("button", { name: "Save role" }).click({ trial: true });
-          await blocked.getByRole("button", { name: "Cancel", exact: true }).click();
           await node.getByRole("button", { name: "Remove node", exact: true }).click();
           const nodeConfirm = node.getByRole("button", {
             name: "Remove Integration review workstation",

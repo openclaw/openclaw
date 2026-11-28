@@ -292,9 +292,9 @@ export async function authorizeSlackSystemEventSender(params: {
   eventScope?: SlackEventScope;
   expectedSenderId?: string;
   retryNameLookup?: boolean;
-  /** When true, requires expectedSenderId, rejects ambiguous channel types,
-   *  and applies interactive-only owner allowFrom checks without changing the
-   *  open-by-default channel behavior when no allowlists are configured. */
+  /** When true, requires expectedSenderId and applies interactive-only owner
+   *  allowFrom checks without changing the open-by-default channel behavior
+   *  when no allowlists are configured. */
   interactiveEvent?: boolean;
 }): Promise<SlackSystemEventAuthorization> {
   const senderId = params.senderId?.trim();
@@ -339,20 +339,16 @@ export async function authorizeSlackSystemEventSender(params: {
       };
     }
 
-    // For interactive events, reject when channel type could not be positively
-    // determined from either the explicit type or the channel ID prefix. This
-    // prevents a DM from being misclassified as "channel" and skipping
-    // DM-specific authorization.
-    if (params.interactiveEvent) {
-      const inferredFromId = inferSlackChannelType(channelId);
-      if (inferredFromId === undefined && !parseSlackChannelType(resolvedTypeSource)) {
-        return {
-          allowed: false,
-          reason: "ambiguous-channel-type",
-          channelType,
-          channelName,
-        };
-      }
+    // Slack ID prefixes are not a type contract: C- and G-prefixed IDs can be
+    // MPIMs. Without an event, cached, or API type the group policy cannot be
+    // chosen, so reject instead of applying the open channel policy.
+    if (inferSlackChannelType(channelId) !== "im" && !parseSlackChannelType(resolvedTypeSource)) {
+      return {
+        allowed: false,
+        reason: "ambiguous-channel-type",
+        channelType,
+        channelName,
+      };
     }
   }
 

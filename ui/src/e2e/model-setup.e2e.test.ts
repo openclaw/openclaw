@@ -1,7 +1,11 @@
 // Control UI tests cover guided model setup against a mocked Gateway.
 import { expect, it } from "vitest";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
+import {
+  createControlUiE2eSuite,
+  holdModuleResponse,
+} from "./control-ui-e2e-suite.test-support.ts";
 import {
   activated,
   button,
@@ -29,6 +33,65 @@ const suite = createControlUiE2eSuite({
 const prepareOptions = localPrepareOptions();
 
 suite.define(() => {
+  it.each(["cancel", "reload"] as const)(
+    "can %s while sign-in controls are unavailable",
+    async (action) => {
+      await suite.withPage(setupContext({ reducedMotion: "reduce" }), async ({ page }) => {
+        const module = controlUiE2eBuiltModuleRequest("ui/src/components/wizard-step-controls.tsx");
+        const controls = action === "cancel" ? await holdModuleResponse(page, module) : undefined;
+        if (action === "reload") {
+          await page.route(module, (route) => route.abort("internetdisconnected"), { times: 1 });
+        }
+        const gateway = await installSetupGateway(page, {
+          featureMethods: [rpc.detect, rpc.auth, rpc.next, rpc.cancel],
+          methodResponses: {
+            [rpc.detect]: makeDetection({
+              authOptions: [
+                { id: "provider-login", label: "Provider account", kind: "oauth", featured: true },
+              ],
+            }),
+            [rpc.auth]: runningWizard(),
+            [rpc.next]: runningStep("login", "text", "Complete provider sign-in"),
+            [rpc.cancel]: { status: "cancelled" },
+          },
+        });
+        await openModelSetup(page, suite.server.baseUrl);
+        await button(
+          page.locator('[data-auth-choice="provider-login"]'),
+          "Provider account",
+        ).click();
+        if (controls) {
+          try {
+            await controls.request;
+            await page.getByRole("status").filter({ hasText: "Loading" }).waitFor();
+            const wizard = page.locator(".model-setup-wizard");
+            await wizard.locator(".oc-dialog__close").click();
+            await gateway.waitForRequest(rpc.cancel);
+            await wizard.getByRole("button", { name: "Close", exact: true }).click();
+            await expectCount(wizard, 0);
+          } finally {
+            controls.release();
+          }
+          await expectCount(page.locator(".model-setup-wizard"), 0);
+          expect(await gateway.getRequests(rpc.auth)).toHaveLength(1);
+          expect(await gateway.getRequests(rpc.cancel)).toHaveLength(1);
+        } else {
+          const alert = page.getByRole("alert");
+          const reload = alert.getByRole("button", { name: "Reload", exact: true });
+          await expectText(alert, "Couldn’t load this step. Reload the page to start over.");
+          await Promise.all([page.waitForEvent("load"), reload.click()]);
+          await openModelSetup(page);
+          await button(
+            page.locator('[data-auth-choice="provider-login"]'),
+            "Provider account",
+          ).click();
+          await page.getByLabel("Complete provider sign-in").waitFor();
+          expect(await gateway.getRequests(rpc.auth)).toHaveLength(1);
+        }
+      });
+    },
+  );
+
   it("completes device-code sign-in from its verified activation result", async () => {
     await suite.withPage(
       setupContext({ reducedMotion: "reduce", viewport: { height: 900, width: 1280 } }),
@@ -80,8 +143,13 @@ suite.define(() => {
           },
         });
 
+        const controls = await holdModuleResponse(
+          page,
+          controlUiE2eBuiltModuleRequest("ui/src/components/wizard-step-controls.tsx"),
+        );
         const response = await openModelSetup(page, suite.server.baseUrl);
         expect(response?.status()).toBe(200);
+        expect(controls.requests()).toBe(0);
         await gateway.deferNext(rpc.next, { answer: { stepId: "scope" } });
         await button(
           page.locator('[data-auth-choice="provider-device-code"]'),
@@ -92,7 +160,17 @@ suite.define(() => {
         await gateway.waitForRequest(rpc.next, { match: { answer: { stepId: "scope" } } });
         await gateway.deferNext(rpc.next);
         await gateway.resolveDeferred(rpc.next);
+        try {
+          await controls.request;
+          await page.locator(".model-setup-wizard").waitFor();
+          await page.getByRole("status").filter({ hasText: "Loading" }).waitFor();
+          await page.getByRole("button", { name: "Cancel sign-in", exact: true }).waitFor();
+          expect(await page.getByText("ABCD-1234", { exact: true }).count()).toBe(0);
+        } finally {
+          controls.release();
+        }
         await page.getByText("ABCD-1234", { exact: true }).waitFor();
+        await expectFocused(page.getByRole("link", { name: "Reopen browser tab" }));
         await button(page, "Copy code").waitFor();
         expect(await button(page, "Continue").count()).toBe(0);
         expect(await page.locator(".model-setup-wizard__body").textContent()).not.toContain(

@@ -13,7 +13,7 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
   const release = createDeferred();
   const bridgeCalls: Promise<void>[] = [];
   const cleanups: Array<() => Promise<void>> = [];
-  const lookup = vi.fn<Registry["getSwarmRunByLaunchReplayKey"]>();
+  const lookup = vi.fn<Registry["resolveSwarmLaunchReplay"]>();
   const initialize = vi.fn();
   const prepareCollectors = vi.fn<Registry["prepareSubagentRunsByRunIds"]>();
   const wait = vi.fn<typeof import("./tools/agents-wait-tool.js").waitForCollectorCompletion>();
@@ -29,8 +29,9 @@ it("fences swarm effects after owner or policy loss during a shared runtime impo
     },
   );
   vi.doMock("./code-mode-swarm.runtime.js", load);
+  // mock-isolation: Delayed runtime imports must not initialize the process-global registry.
   vi.doMock("./subagents/registry/subagent-registry.js", () => ({
-    getSwarmRunByLaunchReplayKey: lookup,
+    resolveSwarmLaunchReplay: lookup,
     initSubagentRegistry: initialize,
     prepareSubagentRunsByRunIds: prepareCollectors,
   }));

@@ -23,36 +23,25 @@ afterEach(() => vi.unstubAllGlobals());
 const chip = (kind: SidebarAttentionKind, signature: string) => ({ kind, signature });
 const storedDismissals = () => JSON.parse(localStorage.getItem(ATTENTION_KEY) ?? "null");
 
-it("rearms changed alerts but retains legacy failures until adoption", () => {
-  localStorage.setItem(
-    ATTENTION_KEY,
-    JSON.stringify({
-      cronFailed: ["alpha"],
-      cronOverdue: ["previous@0"],
-      modelAuthExpired: ["openai"],
-    }),
-  );
-  expect(
-    reconcileSidebarAttentionDismissals({
-      key: ATTENTION_KEY,
-      active: [chip("cronFailed", "beta"), chip("modelAuthExpired", "openai")],
-    }),
-  ).toEqual({ cronFailed: ["alpha"], modelAuthExpired: ["openai"] });
-});
-
 it("preserves dismissals outside a partial agent inventory", () => {
   const stored = {
-    cronFailed: ["main-job", "writer-job"],
     modelAuthExpired: ["agent:main\nopenai", "agent:writer\nopenai"],
   };
   localStorage.setItem(ATTENTION_KEY, JSON.stringify(stored));
   expect(
     reconcileSidebarAttentionDismissals({
       key: ATTENTION_KEY,
-      active: [chip("cronFailed", "main-job"), chip("modelAuthExpired", "agent:main\nopenai")],
-      scope: { cronInventoryComplete: false, modelAuthAgentId: "main" },
+      active: [chip("modelAuthExpired", "agent:main\nopenai")],
+      scope: { modelAuthAgentId: "main" },
     }),
   ).toEqual(stored);
+  expect(
+    reconcileSidebarAttentionDismissals({
+      key: ATTENTION_KEY,
+      active: [],
+      scope: { modelAuthAgentId: "main" },
+    }),
+  ).toEqual({ modelAuthExpired: ["agent:writer\nopenai"] });
 });
 
 it("does not re-arm an immutable recovery use while the owner history is absent", () => {
@@ -81,9 +70,12 @@ it.each([
   expect(entry?.dismissal).toEqual(signature === null ? null : { kind: "scopeUpgrade", signature });
 });
 it("merges with the persisted map so another tab's dismissal survives", () => {
-  localStorage.setItem(ATTENTION_KEY, JSON.stringify({ cronFailed: ["alpha"] }));
-  const next = dismissSidebarAttention(ATTENTION_KEY, { kind: "cronFailed", signature: "beta" });
-  const expected = { cronFailed: ["alpha", "beta"] };
+  localStorage.setItem(ATTENTION_KEY, JSON.stringify({ modelAuthExpired: ["alpha"] }));
+  const next = dismissSidebarAttention(ATTENTION_KEY, {
+    kind: "modelAuthExpired",
+    signature: "beta",
+  });
+  const expected = { modelAuthExpired: ["alpha", "beta"] };
   expect(next).toEqual(expected);
   expect(storedDismissals()).toEqual(expected);
 });
@@ -93,14 +85,14 @@ it("leaves unknown-owner legacy dismissals untouched and unadopted", () => {
   const legacy = JSON.stringify({ cronFailed: "legacy-signature" });
   localStorage.setItem(legacyKey, legacy);
   expect(loadDismissals(ATTENTION_KEY)).toEqual({});
-  dismissSidebarAttention(ATTENTION_KEY, { kind: "cronFailed", signature: "new-incident" });
-  clearSidebarAttentionDismissal(ATTENTION_KEY, "cronFailed");
+  dismissSidebarAttention(ATTENTION_KEY, { kind: "modelAuthExpired", signature: "new-incident" });
+  clearSidebarAttentionDismissal(ATTENTION_KEY, "modelAuthExpired");
   expect(localStorage.getItem(legacyKey)).toBe(legacy);
   expect(localStorage.length).toBe(1);
 });
 
 it("does not read or write snoozes without a current authenticated profile", () => {
-  dismissSidebarAttention(ATTENTION_KEY, { kind: "cronFailed", signature: "incident" });
+  dismissSidebarAttention(ATTENTION_KEY, { kind: "modelAuthExpired", signature: "incident" });
   const gateway = createGatewayHarness(mockClient(async () => ({})));
   for (const state of [
     { phase: "connected" as const, selfUser: null },
@@ -110,9 +102,11 @@ it("does not read or write snoozes without a current authenticated profile", () 
     const key = resolveSidebarAttentionKey(gateway.gateway);
     expect(key).toBeNull();
     expect(loadDismissals(key)).toEqual({});
-    expect(dismissSidebarAttention(key, { kind: "cronFailed", signature: "other" })).toEqual({});
-    clearSidebarAttentionDismissal(key, "cronFailed");
-    expect(loadDismissals(ATTENTION_KEY)).toEqual({ cronFailed: ["incident"] });
+    expect(dismissSidebarAttention(key, { kind: "modelAuthExpired", signature: "other" })).toEqual(
+      {},
+    );
+    clearSidebarAttentionDismissal(key, "modelAuthExpired");
+    expect(loadDismissals(ATTENTION_KEY)).toEqual({ modelAuthExpired: ["incident"] });
   }
 });
 it.each([

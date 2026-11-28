@@ -37,6 +37,14 @@ const doctorCommandFiles = [
   "src/commands/doctor-maintenance.stopped-systemd.test.ts",
   "src/commands/doctor-plugin-package-consent.test.ts",
 ];
+const ciVolumeTargets = [
+  "src/config/io.load-async.test.ts",
+  "src/plugins/loader.runtime-registry.test.ts",
+  "test/scripts/ci-git-prerequisites.test.ts",
+  "test/scripts/ci-node-test-plan.selection-capacity.test.ts",
+  "test/scripts/ci-node-test-volume.test.ts",
+  "test/scripts/type-suppression-inventory.test.ts",
+];
 
 it.each([
   {
@@ -120,6 +128,12 @@ it.each([
     runtime: false,
   },
   { name: "broad Doctor commands", config: commands, files: [], runtime: false },
+  {
+    name: "CI volume tooling",
+    config: "test/vitest/vitest.unit-fast-isolated.config.ts",
+    files: ciVolumeTargets.slice(2),
+    runtime: true,
+  },
   {
     name: "mixed Doctor commands",
     config: commands,
@@ -260,6 +274,8 @@ it("uses runtime workers for the planned GitHub publication target", () => {
 });
 
 it.each([
+  { targets: ciVolumeTargets, extraArgs: false, preset: "runtime" },
+  { targets: [...ciVolumeTargets, "unknown.test.ts"], extraArgs: false, preset: "full" },
   { targets: [githubReadTarget], extraArgs: false, preset: "runtime" },
   { targets: [githubReadTarget, "unknown.test.ts"], extraArgs: false, preset: "full" },
   { targets: [...gatewayLifecycle, gatewayAcquisition], extraArgs: false, preset: "runtime" },

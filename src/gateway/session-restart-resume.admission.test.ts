@@ -52,7 +52,7 @@ import {
   resumeMarkedSessions,
   persistRunningSessionsForRestart,
 } from "./session-restart-resume.js";
-import { prepareSessionSystemTurnAuthority } from "./session-system-turn-authority.js";
+import { prepareSessionSystemTurnAuthority } from "./session-sharing-authorization-async.js";
 
 it.for(["current-writer", undefined] as const)(
   "logs the interrupted writer (%s), not a historical run, with the refusal notice",
@@ -146,7 +146,8 @@ it.for(["aborted", "draining"] as const)(
       void recovery.catch(() => {});
       try {
         await withinTest(entered.promise, test.signal);
-        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
+        const predecessor = { sourceRunId: "predecessor" };
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual(predecessor);
         if (mode === "aborted") {
           const error = new Error("Another restart interrupted admission");
           controller.abort(error);
@@ -161,7 +162,9 @@ it.for(["aborted", "draining"] as const)(
           accepted.resolve({ ok: true });
           await recovery;
         }
-        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({});
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual(
+          mode === "aborted" ? predecessor : {},
+        );
         expect(enqueue).toHaveBeenCalledOnce();
       } finally {
         accepted.resolve({ ok: true });
@@ -391,7 +394,6 @@ it.each([
         .spyOn(sessionEvents, "enqueueSessionEventForHost")
         .mockImplementation((text, options) => {
           const input = prepareSessionEventInput(text, options);
-          input.operatorAuthority?.assertCurrent();
           resumed.push({
             profileId: input.operatorAuthority?.profileId,
             scopes: input.operatorAuthority?.scopes,
@@ -492,7 +494,6 @@ it.each([true, false])(
           );
           try {
             expect(restored.authority.scopes).toEqual(["operator.write"]);
-            restored.authority.assertCurrent();
             effect();
           } finally {
             restored.release();
@@ -550,9 +551,7 @@ it("recovers a current owner certificate independently of the linked profile's r
         expect(restored.authority.profileId).toBe(person.id);
         expect(restored.authority.rolePolicy).toBeUndefined();
         setUserProfileRole(person.id, null);
-        restored.authority.assertCurrent();
         setOpenClawIdTunnelPrincipalLookup(() => undefined);
-        expect(restored.authority.assertCurrent).not.toThrow();
         await expect(
           prepareSessionSystemTurnAuthority({
             context: fixture.context,

@@ -14,7 +14,12 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Title routing uses fixture model choices without reading provider configuration.
-vi.mock("../agents/utility-model.js", () => ({ resolveUtilityModelRefForAgent: mocks.utility }));
+vi.mock("../agents/utility-model.js", () => ({
+  resolveUtilityModelSelectionForAgent: (params: unknown) => {
+    const modelRef: string | undefined = mocks.utility(params);
+    return modelRef ? { modelRef, source: "config" } : { disabled: "config" };
+  },
+}));
 // mock-isolation: Controlled label results exercise title lifecycle without live model requests.
 vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
   generateConversationLabelWithFallback: mocks.generate,
@@ -359,6 +364,27 @@ describe("maybeGenerateDashboardSessionTitle", () => {
       expectCalls(1, mocks.patch, mocks.generate);
     },
   );
+
+  it("does not start another model call from a read overtaken by a successful title write", async () => {
+    const naming = pendingLabel();
+    const params = titleParams();
+    const first = maybeGenerateSessionTitle(params);
+    await naming.started;
+
+    const delayedRead = createDeferredCore<SessionEntry>();
+    mocks.load.mockReturnValueOnce(delayedRead.promise);
+    const duplicate = maybeGenerateSessionTitle(params);
+    try {
+      naming.resolve("Release Planning");
+      await expect(first).resolves.toBe(true);
+    } finally {
+      // The worker had read the unnamed row before the winning write committed.
+      delayedRead.resolve(baseEntry);
+      await duplicate;
+    }
+
+    expectCalls(1, mocks.generate, mocks.patch);
+  });
 
   it("retries a joined title write failure only once", async () => {
     const naming = pendingLabel(true);

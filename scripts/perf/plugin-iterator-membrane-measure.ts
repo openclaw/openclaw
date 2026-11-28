@@ -16,6 +16,7 @@ import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 // An optional source module permits alternating frozen base/candidate owners.
 const { PluginInstance } = (await import(
@@ -78,12 +79,7 @@ for (const layers of [0, 1, 3]) {
     },
   });
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 1024,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 1024);
   }
   if (mode === "promises" || mode === "verify") {
     hook.enable();

@@ -46,6 +46,7 @@ export async function runAgentStep(params: {
   expectedSession?: AgentStepSession;
   expectedSourceSession?: AgentStepSession;
   replyAdmission?: SessionSendReplyAdmission;
+  hideInput?: boolean;
 }): Promise<void> {
   const promptedAt = Date.now();
   const stepIdem = crypto.randomUUID();
@@ -72,13 +73,12 @@ export async function runAgentStep(params: {
       throw new Error("Returned peer result requires its original source and target sessions.");
     }
     const config = getRuntimeConfig();
-    // Detached results retain the original operator's live continuation custody,
-    // not the completed tool's lifetime or authority reconstructed from metadata.
+    // Detached results keep the original operator request's Stop signal, not the
+    // completed tool's lifetime.
     const operatorSource =
       getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority;
     const assertSourceCurrent = composeSessionSourceAssertion([
       composePreparedOnlySessionSource(getGatewayToolCallerIdentity()),
-      operatorSource?.assertCurrent,
     ]);
     const load = async (
       endpointAgentId: string,
@@ -114,6 +114,7 @@ export async function runAgentStep(params: {
       inputProvenance,
       allowApproval: false,
       acceptedReply: params.replyAdmission,
+      hideInput: params.hideInput,
       assertSourceCurrent,
       signal: operatorSource?.signal,
       callGateway: gatewayCall,

@@ -159,8 +159,7 @@ struct ChatMessageTimestampPresentation: Equatable {
     }
 }
 
-/// Reply footer (web chat-message-timestamp-view.tsx:105-148,262-330): the relative time stays visible;
-/// run duration, exact time, tokens, cost, context and model open from a tap on the time.
+/// Opens exact time, duration and usage from the visible reply footer.
 struct ChatMessageFooter: View {
     let metadata: ChatMessageMetadata?
     let usage: ChatMessageUsagePresentation?
