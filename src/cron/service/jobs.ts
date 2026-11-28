@@ -198,6 +198,12 @@ export function createJob(
   const now = state.deps.nowMs();
   const id = normalizeOptionalString(input.id) ?? crypto.randomUUID();
   const schedule = normalizeJobSchedule(input.schedule, { kind: "create", nowMs: now });
+  const deleteAfterRun =
+    typeof input.deleteAfterRun === "boolean"
+      ? input.deleteAfterRun
+      : schedule.kind === "at"
+        ? true
+        : undefined;
   const enabled = typeof input.enabled === "boolean" ? input.enabled : true;
   const declarationKey = normalizeDeclarativeLabel(input.declarationKey, "declarationKey");
   const displayName = normalizeDeclarativeLabel(input.displayName, "displayName");
@@ -233,6 +239,7 @@ export function createJob(
     name: normalizeRequiredName(input.name),
     description: normalizeOptionalString(input.description),
     enabled,
+    deleteAfterRun,
     createdAtMs: opts?.createdAtMs ?? now,
     updatedAtMs: now,
     schedule,
@@ -324,10 +331,23 @@ export function applyJobPatch(
   if (typeof patch.enabled === "boolean") {
     job.enabled = patch.enabled;
   }
+  const hasDeleteAfterRunPatch = typeof patch.deleteAfterRun === "boolean";
+  if (hasDeleteAfterRunPatch) {
+    job.deleteAfterRun = patch.deleteAfterRun;
+  } else if (
+    patch.schedule?.kind === "at" &&
+    (previousScheduleKind === "every" || previousScheduleKind === "cron")
+  ) {
+    // A schedule-kind transition starts a new retention contract. Do not let a
+    // recurring job's ignored/stale flag defeat the one-shot cleanup default.
+    job.deleteAfterRun = true;
+  } else if (
+    (previousScheduleKind === "at" || previousScheduleKind === "on-exit") &&
+    (patch.schedule?.kind === "every" || patch.schedule?.kind === "cron")
+  ) {
+    delete job.deleteAfterRun;
+  }
   if (patch.schedule) {
-    if (patch.schedule.kind !== "at") {
-      delete job.pluginDeleteAfterRun;
-    }
     job.schedule = normalizeJobSchedule(patch.schedule, { kind: "patch", previous: job.schedule });
   }
   if ("trigger" in patch) {

@@ -12,7 +12,6 @@ import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js"
 import * as workerStore from "../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseWriteTransaction } from "../../test-utils/state-database-contention.js";
-import { readCronRunStateForTests } from "../run-history.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { stop } from "./ops-lifecycle.js";
 import { list } from "./ops-read.js";
@@ -98,8 +97,9 @@ it("services Gateway events while manual finalization waits for a writer", async
     try {
       expect(await run(state, job.id, "force")).toMatchObject({ ok: true, ran: true });
       expect(observed).toBe(1);
-      expect((await loadCronStore(storePath)).jobs).toEqual([]);
-      expect(readCronRunStateForTests(job.id)?.lastRunStatus).toBe("ok");
+      const persisted = (await loadCronStore(storePath)).jobs[0];
+      expect(persisted?.state.lastRunStatus).toBe("ok");
+      expect(persisted?.state.runningAtMs).toBeUndefined();
     } finally {
       mutation.mockRestore();
       stop(state);

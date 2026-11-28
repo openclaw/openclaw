@@ -324,6 +324,7 @@ describe("chat account selection", () => {
 
 describe("chat pane composer controls", () => {
   it("renders the selected Gateway model while keeping its model picker locked", async () => {
+    await import("./components/chat-model-picker-panel.tsx");
     const selectedSession: GatewaySessionRow = {
       key: "main",
       kind: "direct",

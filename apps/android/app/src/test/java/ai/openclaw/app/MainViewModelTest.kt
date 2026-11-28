@@ -543,6 +543,7 @@ class MainViewModelTest {
         name = name,
         description = "",
         enabled = true,
+        deleteAfterRun = false,
         schedule = GatewayCronScheduleEdit.At("2026-07-10T09:00:00Z"),
         sessionTarget = "isolated",
         wakeMode = "now",

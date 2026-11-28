@@ -70,6 +70,7 @@ const enCron = {
     },
     tabs: {
       filterLabel: "Automation status",
+      history: "History",
       all: "All",
       active: "Active",
       paused: "Paused",
@@ -303,6 +304,9 @@ const enCron = {
       clearTrigger: "Clear check",
       startEnabled: "Turn on after creating",
       startEnabledHelp: "When off, the automation is saved paused.",
+      deleteAfterRun: "Delete after it runs",
+      deleteAfterRunHelp:
+        "Removes the automation after one successful run. Good for one-time reminders.",
       sessionKey: "Session key",
       sessionKeyHelp:
         "The session that gets results when this automation isn’t linked to a chat. Most automations leave this blank.",
@@ -387,12 +391,10 @@ const enCron = {
     },
     jobState: {
       nextRelative: "Next {at}",
+      lastRunAt: "Last run {at}",
       waiting: "Waiting: {reason} since {since}",
     },
     runEntry: {
-      retryScheduled: "Retry scheduled.",
-      retryHelp:
-        "Run this one-time automation again. If delivery was uncertain, it may already have reached its destination.",
       tokens: "{count} Tokens",
       inputOutputTokens: "{input} in / {output} out",
       noSummary: "No summary.",
@@ -484,7 +486,7 @@ const enCron = {
       refreshing: "Refreshing...",
       paused: "Paused",
       tasksTab: "Automations",
-      runHistory: "Run history",
+      runHistory: "All runs",
     },
   },
 } satisfies TranslationMap;

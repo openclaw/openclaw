@@ -108,27 +108,27 @@ describe("cron view editor", () => {
         .textContent,
     ).toBe("Every");
     selectSchedule(everyContainer, "cron");
-    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "cron" });
+    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "cron", deleteAfterRun: false });
     selectSchedule(everyContainer, "at");
-    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "at" });
+    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "at", deleteAfterRun: true });
     expect(
       (await renderEditor({ scheduleKind: "at" })).querySelector("#cron-schedule-at"),
     ).not.toBeNull();
     const cronContainer = await renderEditor(
-      { scheduleKind: "cron", cronExpr: "*/15 * * * *" },
+      { scheduleKind: "cron", cronExpr: "*/15 * * * *", deleteAfterRun: true },
       { onFormChange },
     );
     expect(cronContainer.querySelector("#cron-cron-expr")).not.toBeNull();
     expect(findToggleByLabel(cronContainer, "Delete after it runs")).toBeNull();
     selectSchedule(cronContainer, "every");
-    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "every" });
+    expect(onFormChange).toHaveBeenCalledWith({ scheduleKind: "every", deleteAfterRun: false });
     const onExitFormChange = vi.fn();
     const onExitContainer = await renderEditor(
       { scheduleKind: "on-exit" },
       { onFormChange: onExitFormChange },
     );
     expect(text(onExitContainer, testId("cron-schedule-frequency"))).toBe("On exit");
-    expect(findToggleByLabel(onExitContainer, "Delete after it runs")).toBeNull();
+    expect(findToggleByLabel(onExitContainer, "Delete after it runs")).not.toBeNull();
 
     selectSchedule(onExitContainer, "at");
     expect(onExitFormChange).toHaveBeenCalledWith({ scheduleKind: "at" });

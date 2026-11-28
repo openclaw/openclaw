@@ -38,17 +38,16 @@ it.each<
         onReserved: () => {},
       }),
     ).resolves.toMatchObject({ ok: true, ran: true });
-    expect(await f.cron.readJob(job.id)).toBeUndefined();
+    const stored = await f.cron.readJob(job.id);
+    expect(stored?.state.nextRunAtMs).toBeUndefined();
+    expect(stored).toMatchObject({
+      enabled: false,
+      state: { consecutiveErrors: priorFailures + 1 },
+    });
+    expect(stored?.state.autoDisabled).toBeUndefined();
     expect(f.runCronFailureRepair).not.toHaveBeenCalled();
     expect(f.sendCronFailureAlert).toHaveBeenCalledTimes(alerts);
-    if (alerts) {
-      expect(f.enqueueSessionEvent).not.toHaveBeenCalled();
-    } else {
-      expect(f.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("Run history"),
-        expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
-      );
-    }
+    expect(f.enqueueSessionEvent).not.toHaveBeenCalled();
   });
 });
 

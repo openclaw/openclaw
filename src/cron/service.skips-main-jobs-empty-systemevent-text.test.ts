@@ -3,13 +3,12 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
-import { readCronRunStateForTests } from "./run-history.test-support.js";
 import { setupCronServiceSuite, withCronServiceForTest } from "./service.test-harness.js";
 import { onTimer } from "./service/timer.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite();
 
-it("records the skip and retires one-shot main jobs with empty systemEvent text", async () => {
+it("disables persisted main jobs with empty systemEvent text after skipping them", async () => {
   const clock = createGatewaySchedulerClock(Date.now());
   await withCronServiceForTest(
     {
@@ -20,7 +19,7 @@ it("records the skip and retires one-shot main jobs with empty systemEvent text"
     },
     async ({ cron, state, enqueueSystemEvent, runSessionEvent }) => {
       const atMs = Date.parse("2025-12-13T00:00:01.000Z");
-      const job = await cron.add({
+      await cron.add({
         name: "empty event",
         enabled: true,
         schedule: { kind: "at", at: new Date(atMs).toISOString() },
@@ -32,11 +31,11 @@ it("records the skip and retires one-shot main jobs with empty systemEvent text"
       await onTimer(state);
       expect(runSessionEvent).not.toHaveBeenCalled();
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
-      expect(await cron.list({ includeDisabled: true })).toEqual([]);
-      expect(readCronRunStateForTests(job.id)).toMatchObject({
-        lastRunStatus: "skipped",
-        lastError: expect.stringMatching(/non-empty/i),
-      });
+      const [job] = await cron.list({ includeDisabled: true });
+      expect(job?.enabled).toBe(false);
+      expect(job?.state.lastStatus).toBe("skipped");
+      expect(job?.state.lastError).toMatch(/non-empty/i);
+      expect(job?.state.nextRunAtMs).toBeUndefined();
     },
   );
 });

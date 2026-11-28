@@ -166,6 +166,8 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+        // A cold opening with visible messages loads earlier history only on reader intent.
+        await pane.getByRole("button", { name: "Show earlier", exact: true }).click();
         await gateway.waitForRequest("chat.history");
         await gateway.rejectDeferred(
           "chat.history",

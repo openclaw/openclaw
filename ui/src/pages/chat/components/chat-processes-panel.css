@@ -376,11 +376,13 @@
     background: var(--bg);
   }
   .chat-processes__back {
-    display: grid;
-    width: var(--mobile-panel-rail-control, 32px);
-    height: var(--mobile-panel-rail-control, 32px);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 44px;
+    margin-inline-end: auto;
+    font-size: var(--control-ui-text-sm);
     flex: 0 0 auto;
-    place-items: center;
     padding: 0;
     border: 0;
     border-radius: var(--radius-sm);
@@ -392,7 +394,7 @@
     height: 16px;
   }
   .chat-processes__detail-header .chat-processes__stop {
-    min-height: var(--mobile-panel-rail-control, 32px);
+    min-height: 44px;
     padding: 0 8px;
     border: 0;
     border-radius: var(--radius-sm);
@@ -494,21 +496,22 @@
   .chat-processes__detail {
     background: transparent;
   }
-  .chat-processes__detail-name {
-    font-family: inherit;
-    font-size: var(--mobile-panel-rail-title-size, 14px);
-    font-weight: 500;
-    line-height: 20px;
-  }
   .chat-processes__output-info {
-    padding: 10px 20px 16px;
+    padding: 10px 20px;
     border-bottom: 1px solid var(--border-strong);
+    background: var(--popover);
+    overflow-wrap: anywhere;
   }
   .chat-processes__identity {
     display: block;
-    overflow-wrap: anywhere;
+    overflow-x: auto;
+    direction: rtl;
+    text-align: match-parent;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     font-size: var(--control-ui-text-md);
     font-weight: 600;
+    line-height: 1.3;
   }
   .chat-processes__output-info .chat-processes__metadata {
     justify-content: flex-start;
@@ -516,18 +519,19 @@
   }
   .chat-processes__output h3 {
     text-transform: none;
-    margin: 0 0 12px;
-    padding: 0;
+    margin: 0;
+    padding: 12px 20px 8px;
     color: var(--muted);
     font-size: var(--control-ui-text-xs);
     font-weight: 400;
   }
   .chat-processes__output {
-    padding: 12px 20px;
+    padding: 0;
     background: var(--bg);
   }
   .chat-processes__output pre {
     width: auto;
+    padding: 0 20px 12px;
     font-size: var(--control-ui-text-xs);
     line-height: 1.8;
     white-space: pre-wrap;

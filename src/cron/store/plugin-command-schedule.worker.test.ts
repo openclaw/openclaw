@@ -820,8 +820,12 @@ it("recovers a timed request without replaying active work or reconstructing a l
   expect(active.runReceipt.receiptId).toBe(requested.runReceipt.receiptId);
   expect((await queue.recover()).interruptedRuns).toHaveLength(1);
   expect((await queue.drain()).launches).toEqual([]);
-  expect((await queue.read()).jobs).toEqual([]);
-  expect((await queue.history()).entries).toMatchObject([{ status: "error" }]);
+  const interrupted = (await queue.read()).jobs[0]!;
+  expect(interrupted).toMatchObject({
+    enabled: false,
+    state: { lastRunStatus: "error" },
+  });
+  expect(interrupted.state.runningAtMs).toBeUndefined();
 
   const manualJob = job("legacy");
   const legacy = await store("legacy", [manualJob]);

@@ -1,38 +1,9 @@
 /** Authored one-shot occurrence ownership across manual runs and scheduling. */
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import type { CronJob, CronRunStatus } from "../types.js";
-
-export const CRON_CLEANUP_REPAIR_REQUIRED_MESSAGE =
-  "cron cleanup policy requires migration; run openclaw doctor --fix before running this automation";
-
-export function hasLegacyCronCleanupPolicy(job: object): boolean {
-  return Object.hasOwn(job, "deleteAfterRun");
-}
-
-/** Do not copy one-use or identity-bound authority onto a new job ID. */
-export function canRetryArchivedCronJob(job: Record<string, unknown>): boolean {
-  return (
-    isRecord(job.schedule) &&
-    (job.schedule.kind === "at" || job.schedule.kind === "on-exit") &&
-    !hasLegacyCronCleanupPolicy(job) &&
-    !job.declarationKey &&
-    !job.operatorSource &&
-    !job.pluginCommand &&
-    !job.runtimeAuthority &&
-    !job.runtimeAuthorityRecoveryRequired &&
-    !job.ownerTransferPending &&
-    !job.toolsAllowExecTargetRequirement &&
-    !job.toolsAllowExecTarget &&
-    !job.cyberAccessProgram &&
-    isRecord(job.payload) &&
-    // Legacy text payloads can acquire their agentTurn kind during normalization.
-    !job.payload.skipIfScratchEmpty
-  );
-}
 
 /** Only explicit conversation continuations can rearm a one-shot through next_check. */
 export function isCronOneShotContinuationJob(

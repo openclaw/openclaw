@@ -198,8 +198,8 @@ it.each([false, true])(
     if (failWrite) {
       database.exec(`
       CREATE TRIGGER reject_startup_terminal_write
-      AFTER DELETE ON cron_jobs
-      WHEN OLD.job_id = 'overdue'
+      AFTER UPDATE ON cron_jobs
+      WHEN NEW.job_id = 'overdue' AND json_extract(NEW.state_json, '$.lastRunStatus') = 'ok'
       BEGIN
         SELECT RAISE(ABORT, 'injected terminal write failure');
       END;

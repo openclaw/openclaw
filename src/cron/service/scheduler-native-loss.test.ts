@@ -113,6 +113,7 @@ for (const loseReplacement of [false, true]) {
       const job = await cron.add({
         name: "native-loss-once",
         enabled: true,
+        deleteAfterRun: true,
         schedule: { kind: "at", at: new Date(Date.now() + 2_000).toISOString() },
         sessionTarget: "main",
         wakeMode: "now",

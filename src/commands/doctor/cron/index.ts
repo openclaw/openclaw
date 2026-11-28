@@ -14,7 +14,6 @@ import {
   maybeRepairCronStoreSelection,
   readCronStoreSelectionForDoctor,
 } from "./default-store-selection.js";
-import { describeEndedOneTimeCronRepair, planEndedOneTimeCronRepair } from "./ended-one-time.js";
 import type { LegacyCronRepairState } from "./legacy-repair-plan.js";
 import {
   applyLegacyCronStoreRepair,
@@ -179,9 +178,6 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   }
 
   const normalized = normalizeStoredCronJobs(rawJobs);
-  for (const message of describeEndedOneTimeCronRepair(planEndedOneTimeCronRepair(rawJobs))) {
-    recordFinding({ message, requirement: "ended-one-time-automation" });
-  }
   for (const line of formatLegacyIssuePreview(normalized.issues)) {
     recordFinding({
       message: line.replace(/^- /u, ""),
@@ -311,9 +307,7 @@ export async function maybeRepairLegacyCronStore(params: {
       "Cron",
     );
   }
-  const storagePreviewLines = describeEndedOneTimeCronRepair(
-    planEndedOneTimeCronRepair(rawJobs),
-  ).map((line) => "- " + line);
+  const storagePreviewLines: string[] = [];
   if (legacyQuarantine) {
     storagePreviewLines.push("- legacy JSON cron quarantine will be imported into SQLite");
   }

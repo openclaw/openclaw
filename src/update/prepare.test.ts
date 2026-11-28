@@ -564,7 +564,11 @@ describe("package release conversion", () => {
           channel: "stable",
           node,
         }),
-      ).toMatchObject({ status: "failed", reason: "package-not-writable" });
+      ).toMatchObject({
+        status: "failed",
+        reason: "package-not-writable",
+        message: `The global package at ${runningRoot} is not writable. Run the update as the user that owns it, or, if OpenClaw runs as a system service, run: sudo openclaw update`,
+      });
       expect(await fs.readdir(runningRoot)).toEqual([]);
       expect(await readTrial()).toBeNull();
     } finally {
@@ -876,7 +880,6 @@ describe("update preflight", () => {
         kind: "git",
         target: { kind: "git", ...target, version: "2026.11.21" },
         prefix: root,
-        stateDir: root,
         node,
       }),
     ).toMatchObject({ ok: false, reason: "node-engine-mismatch" });
@@ -897,7 +900,6 @@ describe("update preflight", () => {
           engines: { node: ">=999" },
         },
         prefix: root,
-        stateDir: root,
         node,
       }),
     ).toMatchObject({ ok: false, reason: "node-engine-mismatch" });
@@ -911,7 +913,6 @@ describe("update preflight", () => {
         kind: "git",
         target: { kind: "git", ...target, version: "2026.11.21" },
         prefix: root,
-        stateDir: root,
         env: { ...process.env, PATH: bin },
       }),
     ).toMatchObject({ ok: false, reason: "missing-tool" });
@@ -925,57 +926,28 @@ describe("update preflight", () => {
         kind: "git",
         target: { kind: "git", ...target, version: "2026.11.21" },
         prefix: root,
-        stateDir: root,
         node,
       }),
     ).toMatchObject({ ok: false, reason: "dirty" });
   });
 
-  it("refuses insufficient installation and state disk space", async () => {
+  it("requires installation space but not a full copy of state databases", async () => {
     const target = await repository();
     const params = {
       kind: "git" as const,
       target: { kind: "git" as const, ...target, version: "2026.11.21" },
       prefix: root,
-      stateDir: path.join(root, "data"),
       node,
     };
     expect(
       await preflight({ ...params, statfs: async () => ({ bavail: 1, bsize: 1 }) }),
     ).toMatchObject({ ok: false, reason: "insufficient-install-space" });
-    await fs.mkdir(path.join(params.stateDir, "state"), { recursive: true });
-    await fs.writeFile(path.join(params.stateDir, "state", "openclaw.sqlite"), "database bytes");
     expect(
       await preflight({
         ...params,
-        statfs: async (file) => ({ bavail: file === root ? 2_000_000_000 : 1, bsize: 1 }),
+        statfs: async () => ({ bavail: 2_000_000_000, bsize: 1 }),
       }),
-    ).toMatchObject({ ok: false, reason: "insufficient-state-space" });
-  });
-
-  it("counts state databases past a dangling link a tool left in an agent home", async () => {
-    const target = await repository();
-    const stateDir = path.join(root, "data");
-    const shims = path.join(stateDir, "agents", "main", "agent", "codex-home", "tmp", "arg0");
-    await fs.mkdir(shims, { recursive: true });
-    await fs.symlink(path.join(root, "gone", "apply_patch"), path.join(shims, "apply_patch"));
-    await fs.writeFile(
-      path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
-      "database bytes",
-    );
-    const params = {
-      kind: "git" as const,
-      target: { kind: "git" as const, ...target, version: "2026.11.21" },
-      prefix: root,
-      stateDir,
-      node,
-    };
-    expect(
-      await preflight({
-        ...params,
-        statfs: async (file) => ({ bavail: file === root ? 2_000_000_000 : 1, bsize: 1 }),
-      }),
-    ).toMatchObject({ ok: false, reason: "insufficient-state-space" });
+    ).toEqual({ ok: true });
   });
 
   it("prepares an install that runs inside a container", async () => {
@@ -987,7 +959,6 @@ describe("update preflight", () => {
         kind: "git",
         target: { kind: "git", ...target, version: "2026.11.21" },
         prefix: root,
-        stateDir: root,
         node,
         env: { ...process.env, container: "podman" },
         statfs: async () => ({ bavail: 2_000_000_000, bsize: 1 }),

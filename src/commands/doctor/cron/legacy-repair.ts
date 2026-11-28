@@ -43,17 +43,13 @@ import {
   repairModelRefAuthProfile,
 } from "../shared/retired-model-ref-repair.js";
 import { readCronStoreSelectionForDoctor } from "./default-store-selection.js";
-import {
-  applyEndedOneTimeCronRepair,
-  archiveEndedOneTimeCronRuns,
-  planEndedOneTimeCronRepair,
-} from "./ended-one-time.js";
 import { parseLegacyCronJobs } from "./legacy-json-shapes.js";
 import { loadLegacyCronQuarantineForMigration } from "./legacy-quarantine-migration.js";
 import { captureLegacyCronRepairAdmission } from "./legacy-repair-admission.js";
 import {
   hasLegacyCronStoreRepairWork,
   planLegacyCronStoreRepair,
+  type CronOwnerProjection,
   type LegacyCronRepairState,
   type LegacyCronStoreRepairParams,
 } from "./legacy-repair-plan.js";
@@ -68,11 +64,7 @@ import {
   collectStoredCronCodexRuntimePolicyTargets,
   type CronCodexRuntimePolicyTarget,
 } from "./store-migration.js";
-import {
-  backupCronStoreForDoctor,
-  inspectCronJobOwnersForDoctor,
-  projectCronOwner,
-} from "./store-repair.js";
+import { backupCronStoreForDoctor, inspectCronJobOwnersForDoctor } from "./store-repair.js";
 
 export type LegacyCronRepairResult = {
   changes: string[];
@@ -85,9 +77,19 @@ export function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined
     ?.store;
 }
 
-function hasOneTimeCronRepairWork(jobs: LegacyCronRepairState["rawJobs"]): boolean {
-  const { ended, incompatible, obsolete } = planEndedOneTimeCronRepair(jobs);
-  return ended.length > 0 || incompatible.length > 0 || obsolete.length > 0;
+function projectCronOwner(
+  job: { agentId?: unknown; sessionKey?: unknown },
+  runtimeDefaultAgentId: string | undefined,
+): CronOwnerProjection {
+  const explicitAgentId =
+    normalizeOptionalString(job.agentId) ??
+    parseAgentSessionKey(normalizeOptionalString(job.sessionKey))?.agentId;
+  if (explicitAgentId) {
+    return { kind: "explicit", agentId: explicitAgentId };
+  }
+  return runtimeDefaultAgentId
+    ? { kind: "runtime-default", agentId: runtimeDefaultAgentId }
+    : { kind: "unresolved" };
 }
 
 export async function loadLegacyCronRepairState(params: {
@@ -101,6 +103,9 @@ export async function loadLegacyCronRepairState(params: {
     params.storePath ?? resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg), params.env);
   await assertCronStateSchemaSupportedAsync(params.env);
   const legacyQuarantine = await loadLegacyCronQuarantineForMigration(storePath);
+  if (params.onlyIfLegacyDetected && !legacyQuarantine) {
+    return null;
+  }
   const persistedQuarantine = await loadCronQuarantinedJobs(storePath, params.env);
 
   const loaded = params.readOnly
@@ -141,9 +146,6 @@ export async function loadLegacyCronRepairState(params: {
           }),
         )
       : (loaded.store.jobs as unknown as Array<Record<string, unknown>>);
-  if (params.onlyIfLegacyDetected && !legacyQuarantine && !hasOneTimeCronRepairWork(currentJobs)) {
-    return null;
-  }
   for (const job of currentJobs) {
     const jobId = normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
     const sqlOwner = jobId ? sqlOwners.get(jobId) : undefined;
@@ -178,8 +180,6 @@ export async function applyLegacyCronStoreRepair(
     quarantineRecovery,
     persistedQuarantineEntrySet,
     retirementChanges,
-    oneTimeRepair,
-    oneTimeReports,
     storeChanged,
     changed,
   } = await planLegacyCronStoreRepair(params);
@@ -211,7 +211,7 @@ export async function applyLegacyCronStoreRepair(
       if (storeChanged) {
         const store = {
           version: 1,
-          jobs: applyEndedOneTimeCronRepair(state.rawJobs, oneTimeRepair) as unknown as CronJob[],
+          jobs: state.rawJobs as unknown as CronJob[],
         } as const;
         const { assertCurrent, assertRowsUnchanged: assertSnapshotCurrent } =
           captureLegacyCronRepairAdmission(state);
@@ -245,13 +245,8 @@ export async function applyLegacyCronStoreRepair(
         }
         await saveCronJobsStore(state.storePath, store, {
           ...saveOptions,
-          transactionHooks: archiveEndedOneTimeCronRuns(
-            state.storePath,
-            oneTimeRepair,
-            assertSnapshotCurrent,
-          ),
+          transactionHooks: { beforeWrite: assertSnapshotCurrent },
         });
-        changes.push(...oneTimeReports);
       } else if (quarantine) {
         await saveCronQuarantinedJobs({ storePath: state.storePath, ...quarantine });
       }
@@ -482,24 +477,11 @@ export async function checkDoctorPreflightCronPending(params: {
   ) {
     return "work";
   }
-  const readJobs = async (cfg: OpenClawConfig) =>
-    (await loadLegacyCronRepairState({ cfg, env: params.env, readOnly: true }))?.rawJobs ?? [];
-  try {
-    const repairJobs = await readJobs(params.repairConfig);
-    if (hasOneTimeCronRepairWork(repairJobs)) {
-      return "work";
-    }
-    // Preflight restores a retired store selector only for the repair pass.
-    const policyJobs =
-      readLegacyCronStorePath(params.repairConfig) ===
-      readLegacyCronStorePath(params.migrationConfig)
-        ? repairJobs
-        : await readJobs(params.migrationConfig);
-    return collectStoredCronCodexRuntimePolicyTargets(policyJobs).length > 0 ? "work" : "none";
-  } catch (err) {
-    rethrowSqliteSchemaVersionError(err);
+  const codex = await collectCronCodexRuntimePolicyTargetsReadOnly({ cfg: params.migrationConfig });
+  if (codex.warnings.length > 0) {
     return "undecidable";
   }
+  return codex.targets.length > 0 ? "work" : "none";
 }
 
 /** Commit Codex cron refs only after their model-scoped config policy is durable. */

@@ -322,7 +322,7 @@ const enSessionOrganization = {
     empty: "No managed worktrees.",
     restorable: "Restorable",
     restore: "Restore",
-    confirmDelete: "Snapshot and delete {name}?",
+    confirmDeleteCheckout: "Snapshot and delete this worktree?",
     confirmDeleteBody: "OpenClaw saves a safety snapshot first.",
     confirmForceDeleteTitle: "Delete without a snapshot?",
     confirmForceDelete: "Snapshot failed: {error}\n\nUncommitted changes are lost.",

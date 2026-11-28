@@ -60,7 +60,6 @@ describe("system prompt messaging routing", () => {
   it("omits silence guidance for a private completion on an external channel", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      sourceReplyDeliveryMode: "message_tool_only",
       silentReplyPromptMode: "none",
       toolNames: ["message"],
       runtimeInfo: { channel: "telegram" },

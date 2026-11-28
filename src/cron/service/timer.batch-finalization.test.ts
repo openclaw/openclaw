@@ -15,7 +15,6 @@ import * as activeJobs from "../active-jobs.js";
 import { isCronJobActive, markCronJobActive } from "../active-jobs.js";
 import {
   readCronRunHistoryPageForTests,
-  readCronRunStateForTests,
   readCronRunRecordsForTests,
 } from "../run-history.test-support.js";
 import { createCronExecutionId } from "../run-id.js";
@@ -115,8 +114,8 @@ function finalizeError(
 function rejectWrite(jobId: string) {
   const database = openOpenClawStateDatabase().db;
   database.exec(`
-    CREATE TRIGGER reject_terminal_write BEFORE DELETE ON cron_jobs
-    WHEN OLD.job_id = '${jobId}'
+    CREATE TRIGGER reject_terminal_write AFTER UPDATE ON cron_jobs
+    WHEN NEW.job_id = '${jobId}' AND json_extract(NEW.state_json, '$.lastRunStatus') = 'ok'
     BEGIN SELECT RAISE(ABORT, 'terminal write failed'); END;
   `);
   return () => database.exec("DROP TRIGGER IF EXISTS reject_terminal_write");
@@ -178,8 +177,7 @@ describe("cron batch outcome finalization", () => {
       }
       runner.release.resolve({ status: "ok", summary: "stale completion" });
       await batch;
-      expect(await persistedJob(storePath, job.id)).toBeUndefined();
-      expectSettled(readCronRunStateForTests(job.id));
+      expectSettled((await persistedJob(storePath, job.id))?.state);
       expect(isCronJobActive(job.id)).toBe(false);
       const receipt = openOpenClawStateDatabase()
         .db.prepare(
@@ -269,6 +267,7 @@ describe("cron batch outcome finalization", () => {
   it("does not apply a removed startup run to a same-id replacement", async () => {
     const original = dueJob("removed-replacement", {
       name: "removed original scheduled job",
+      deleteAfterRun: true,
     });
     const replacementAt = DUE_AT + 60 * 60_000;
     const runner = blockedRunner();
@@ -289,6 +288,7 @@ describe("cron batch outcome finalization", () => {
         id: original.id,
         name: "independent replacement scheduled job",
         enabled: true,
+        deleteAfterRun: true,
         schedule: { kind: "at", at: new Date(replacementAt).toISOString() },
         sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
@@ -303,6 +303,7 @@ describe("cron batch outcome finalization", () => {
           id: original.id,
           name: "independent replacement scheduled job",
           enabled: true,
+          deleteAfterRun: true,
           state: { nextRunAtMs: replacementAt },
         });
         expect(replacement?.state.lastRunAtMs).toBeUndefined();
@@ -357,8 +358,7 @@ describe("cron batch outcome finalization", () => {
       await runner.started.promise;
       runner.release.resolve({ status: "ok", summary: "later completion" });
       expect(await batch).toEqual(expect.objectContaining({ message: "terminal write failed" }));
-      expect(await persistedJob(storePath, second.id)).toBeUndefined();
-      expectSettled(readCronRunStateForTests(second.id));
+      expectSettled((await persistedJob(storePath, second.id))?.state);
       expectInactive(first.id, second.id);
     } finally {
       await finishBatch(batch, runner);
@@ -393,7 +393,7 @@ describe("cron batch outcome finalization", () => {
   });
 
   it("persists a completed startup job before its sibling drains", async () => {
-    const first = dueJob("startup-finished", { schedule: { kind: "every", everyMs: 60_000 } });
+    const first = dueJob("startup-finished", { deleteAfterRun: false });
     const second = dueJob("startup-blocked");
     const runner = blockedRunner(second.id);
     const events: CronEvent[] = [];
@@ -467,7 +467,9 @@ describe("cron batch outcome finalization", () => {
       expect(reachedFinalRun).toBe(true);
       await inactive.settled;
       const persistedJobs = (await loadCronStore(storePath)).jobs;
-      expect(persistedJobs.filter((job) => job.id !== lastJob.id)).toEqual([]);
+      expect(
+        persistedJobs.filter((job) => job.id !== lastJob.id && job.state.lastRunStatus === "ok"),
+      ).toHaveLength(jobCount - 1);
       expect(persistedJobs.find((job) => job.id === lastJob.id)?.state.runningAtMs).toBe(dueAt);
 
       for (const job of jobs.slice(0, -1)) {

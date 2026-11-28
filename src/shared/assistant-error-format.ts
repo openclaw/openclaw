@@ -34,6 +34,8 @@ const GENERIC_PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
 
 export const MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE =
   "OpenClaw transport error: malformed_streaming_fragment";
+export const POSSIBLE_TOOL_SIDE_EFFECTS_NOTE =
+  "Note: some tool actions may have already been executed — please verify before retrying.";
 export const CONTEXT_OVERFLOW_ERROR_MESSAGE =
   "Context overflow: prompt too large for the model. Try /reset (or /new) to start a fresh session, or use a larger-context model.";
 const MALFORMED_STREAMING_FRAGMENT_USER_MESSAGE =
@@ -51,10 +53,12 @@ const PROVIDER_REFUSAL_NOTICE_RE =
 
 /** Recognize canonical display copy, not refusal or retry authority. */
 export function isProviderRefusalNoticeText(text: string): boolean {
+  const suffix = ` ${POSSIBLE_TOOL_SIDE_EFFECTS_NOTE}`;
+  const notice = text.endsWith(suffix) ? text.slice(0, -suffix.length) : text;
   return (
-    text === PROVIDER_PRECAUTION_NOTICE ||
-    text === PROVIDER_LEGACY_MISALIGNMENT_NOTICE ||
-    PROVIDER_REFUSAL_NOTICE_RE.test(text)
+    notice === PROVIDER_PRECAUTION_NOTICE ||
+    notice === PROVIDER_LEGACY_MISALIGNMENT_NOTICE ||
+    PROVIDER_REFUSAL_NOTICE_RE.test(notice)
   );
 }
 

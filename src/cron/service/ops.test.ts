@@ -362,6 +362,7 @@ describe("cron service operations", () => {
     await withStateDirForStorePath(storePath, async () => {
       const replacement = createDueIsolatedJob(now);
       replacement.id = "startup-rescheduled-finalized-one-shot-true";
+      replacement.deleteAfterRun = true;
       replacement.schedule = { kind: "at", at: new Date(replacementAt).toISOString() };
       replacement.updatedAtMs = now - 10_000;
       replacement.state = { runningAtMs: startedAt, nextRunAtMs: replacementAt };
@@ -465,10 +466,13 @@ describe("cron service operations", () => {
 
       await expect(run(state, job.id)).resolves.toEqual({ ok: true, ran: true });
 
-      expect((await loadCronStore(storePath)).jobs).toEqual([]);
-      expect(readCronRunRecordsForTests(job.id)).toMatchObject([
-        { status: "failed", error: expect.stringContaining("changed while starting work") },
-      ]);
+      const restored = (await loadCronStore(storePath)).jobs[0];
+      expect(restored).toMatchObject({
+        id: job.id,
+        enabled: false,
+        state: { consecutiveErrors: 1 },
+      });
+      expect(restored?.state.nextRunAtMs).toBeUndefined();
     });
   });
 

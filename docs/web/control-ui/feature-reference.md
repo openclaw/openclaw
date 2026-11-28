@@ -49,7 +49,7 @@ Workboard sidebar entries offer pin/unpin and, with write access, confirmed boar
   </Accordion>
   <a id="cron-tasks-plugins-skills-devices-exec-approvals" />
   <Accordion title="Cron, plugins, skills, devices, exec approvals">
-    - Automations (cron jobs): stat cards (automation count, failing count, scheduler state, next wake) above an Automations/Run history tab switch; the Automations tab lists jobs in a filterable table (All/Active/Paused, search, schedule and last-run filters, per-row action menu) with starter suggestions below, and the Run history tab shows recent runs across all automations (`cron.*`).
+    - Automations (cron jobs): the sidebar groups saved automations under Active, Paused, and History. Open History to inspect a retained one-time automation after it ends. All runs shows individual runs across automations (`cron.*`).
     - A red dot on the Automations clock in the side rail means at least one automation in the current agent scope has failed. It stays visible while any automation in that scope still needs attention.
     - Complete Automations tables and conversation hover cards apply run status and next-run updates from cron events. Definition changes, unknown jobs, incomplete pages, and status-filtered tables still refresh from the Gateway. The Automations page also refreshes every ten minutes while visible; reconnecting or returning to the tab refreshes immediately.
     - Plugins: browse the installed inventory and curated store, search ClawHub, install and remove plugin code, and enable or disable installed plugins (`plugins.*`). **Install** starts immediately and accepts the staged plugin’s declared capabilities without changing your hook and model permissions. Configured install-policy warnings still require an explicit acknowledgment. Catalog categories remain available while you search. MCP server rows edit `mcp.servers` through the config methods.
@@ -150,8 +150,7 @@ Workboard sidebar entries offer pin/unpin and, with write access, confirmed boar
     - Channel/target fields appear when announce is selected; provide an explicit destination when the channel requires one.
     - Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.
     - For main-session tasks, webhook and none delivery modes are available.
-    - Advanced edit controls include clear agent override, cron exact/stagger options, agent model/thinking overrides, and best-effort delivery toggles.
-    - Ended one-time automations appear in **Run history**, not the Automations list. Administrators can use **Retry** on eligible failed runs.
+    - Advanced edit controls include delete-after-run, clear agent override, cron exact/stagger options, agent model/thinking overrides, and best-effort delivery toggles.
     - Model suggestions update when the Gateway publishes catalog or configuration changes. A failed read shows an error and keeps the last suggestions for the same agent and connection; the next successful read replaces them without changing your draft.
     - Saved interval labels retain millisecond precision: a 90-second interval displays as `Every 1m 30s`. Repeat and stagger inputs accept decimal amounts that resolve to whole milliseconds; editing a cron expression preserves its stagger window.
     - Form validation is inline with field-level errors, including invalid cron expressions and IANA timezones; invalid values disable the save button until fixed. Leave the timezone blank to use the Gateway host timezone.

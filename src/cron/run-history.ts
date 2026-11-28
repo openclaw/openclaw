@@ -12,7 +12,7 @@ import {
   isCronDeliveryStatus,
   isCronRunStatus,
 } from "./run-history-detail.js";
-import { cronRunEntryHasExactId, cronRunEntryMatchesLink } from "./run-link.js";
+import { cronRunEntryMatchesLink } from "./run-link.js";
 import type { CronRunLogEntry } from "./run-log-types.js";
 import type { CronRunRecord } from "./store/run-history.types.js";
 import type { CronDeliveryStatus, CronRunStatus } from "./types.js";
@@ -87,7 +87,6 @@ function queryText(entry: CronRunLogEntry, jobNameById?: Record<string, string>)
     entry.diagnostics?.summary ?? "",
     ...(entry.diagnostics?.entries ?? []).map((diagnostic) => diagnostic.message),
     entry.jobId,
-    entry.jobName ?? "",
     jobNameById?.[entry.jobId] ?? "",
     entry.delivery?.intended?.channel ?? "",
     entry.delivery?.resolved?.channel ?? "",
@@ -148,7 +147,7 @@ export function selectCronRunHistoryPage(
     .map((record) => ({ record, entry: cronRunRecordToRunLogEntry(record) }))
     .filter((row): row is { record: CronRunRecord; entry: CronRunLogEntry } => row.entry !== null);
   if (runId) {
-    const exact = rows.filter(({ entry }) => cronRunEntryHasExactId(entry, runId));
+    const exact = rows.filter(({ entry }) => entry.runId === runId);
     const aliases = exact.length
       ? []
       : rows.filter(({ entry }) => cronRunEntryMatchesLink(runId, entry));

@@ -11,7 +11,6 @@ import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.j
 import type { CronJob, CronRunStatus, CronStoredJob, CronTriggerEvalOutcome } from "../types.js";
 import { autoDisableCronJob } from "./auto-disable.js";
 import {
-  buildOneTimeCronFailureNotice,
   finalizeCronFailureNotifications,
   resolveFailureIncident,
   resolveFailureAlert,
@@ -80,7 +79,7 @@ function assignNextRunAtMs(
   return nextRunAtMs;
 }
 
-/** Applies run outcome state, delivery state, backoff/next-run scheduling, and one-time retirement. */
+/** Applies run outcome state, delivery state, backoff/next-run scheduling, and delete-after-run policy. */
 export function applyJobResult(
   state: CronJobPolicyContext,
   job: CronStoredJob,
@@ -225,9 +224,28 @@ export function applyJobResult(
   const preserveOneShotSchedule =
     opts.scheduleMode === "preserve" && oneShotOccurrenceAtMs !== undefined;
   const ownsSchedule = opts.scheduleOwnership !== "stale";
+  const isOneShotSchedule = job.schedule.kind === "at" || job.schedule.kind === "on-exit";
+  const oneShotNextCheck =
+    ownsSchedule &&
+    !preserveOneShotSchedule &&
+    !opts.replaySchedule &&
+    isJobEnabled(job) &&
+    isCronOneShotContinuationJob(job) &&
+    result.status === "ok"
+      ? result.nextCheck
+      : undefined;
   const restartRetryAtMs = result.interruptedByRestart
     ? resolveCronRestartRetryAtMs(job, result.startedAt, result.endedAt)
     : undefined;
+  // Authored completion includes intentional silence and the admitted best-effort policy.
+  const shouldDelete =
+    ownsSchedule &&
+    isOneShotSchedule &&
+    !preserveOneShotSchedule &&
+    !oneShotNextCheck &&
+    job.deleteAfterRun === true &&
+    completionStatus === "succeeded";
+  let terminalOneShot = false;
   // Set when a quick transient re-run is scheduled for a provider outage; finalize holds
   // the failure alert/repair until that retry ladder resolves.
   let pendingTransientRetry = false;
@@ -239,7 +257,7 @@ export function applyJobResult(
     if (opts.replaySchedule && job.schedule.kind !== "at") {
       applyReplaySchedule();
     }
-    if (job.schedule.kind === "event") {
+    if (shouldDelete || job.schedule.kind === "event") {
       job.state.nextRunAtMs = undefined;
     }
     if (
@@ -257,48 +275,17 @@ export function applyJobResult(
       runFailed &&
       !preserveOneShotSchedule &&
       result.failureNotificationDetail?.kind === "inference-account-retired";
-    const oneTimeEnded =
-      ownsSchedule &&
-      !preserveOneShotSchedule &&
-      (job.schedule.kind === "at" ||
-        (job.schedule.kind === "on-exit" && opts.onExitWatcherCompletion === true)) &&
-      job.state.nextRunAtMs === undefined;
-    const shouldDelete =
-      oneTimeEnded &&
-      (job.pluginDeleteAfterRun === undefined ||
-        (job.pluginDeleteAfterRun && completionStatus === "succeeded"));
-    const disposition = shouldDelete ? "retired" : "retained";
-    const terminalOneShot =
-      oneTimeEnded &&
-      completionStatus !== "succeeded" &&
-      (result.status !== "skipped" || alertConfig?.includeSkipped === true) &&
-      result.errorClassification?.kind !== "aborted";
-    // A retained job gets its pause notice. A retired one-shot points to Run history.
-    const failureNotification =
-      result.parentUnavailable || accountUnavailable
-        ? undefined
-        : finalizeCronFailureNotifications(state, {
-            job,
-            alertConfig,
-            result,
-            completionStatus,
-            terminalOneShot,
-            oneTimeDisposition: oneTimeEnded ? disposition : undefined,
-            pendingTransientRetry,
-            replay: opts.replay,
-            deferredNotifications: opts.deferredNotifications,
-          });
-    if (
-      terminalOneShot &&
-      !result.parentUnavailable &&
-      (!accountUnavailable || shouldDelete) &&
-      failureNotification !== "queued" &&
-      !opts.replay
-    ) {
-      opts.deferredNotifications.push({
-        kind: "auto-disabled",
-        job: cronNotificationJob(job),
-        text: buildOneTimeCronFailureNotice(job, disposition, result.failureNotificationDetail),
+    // A parent pause is not a failure: its own notice below replaces the skipped-run alert.
+    if (!result.parentUnavailable && !accountUnavailable) {
+      finalizeCronFailureNotifications(state, {
+        job,
+        alertConfig,
+        result,
+        completionStatus,
+        terminalOneShot,
+        pendingTransientRetry,
+        replay: opts.replay,
+        deferredNotifications: opts.deferredNotifications,
       });
     }
     // A newer operator edit owns enablement, so a stale result changes nothing.
@@ -307,8 +294,8 @@ export function applyJobResult(
         job,
         atMs: result.endedAt,
         consecutiveErrors: normalizeConsecutiveErrors(job.state.consecutiveErrors),
-        // A replay or retired one-shot records the reason without a second notice to re-enable it.
-        deferredNotifications: opts.replay || shouldDelete ? [] : opts.deferredNotifications,
+        // A replayed outcome records the fact without sending its notice again.
+        deferredNotifications: opts.replay ? [] : opts.deferredNotifications,
         reason: "account-unavailable",
         enabledAtAdmission: previousScheduleState.enabled,
         signInCommand:
@@ -350,15 +337,7 @@ export function applyJobResult(
     job.state.nextRunAtMs = previousScheduleState.nextRunAtMs;
     job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
     job.state.forcePreservedNextRunAtMs = previousScheduleState.forcePreservedNextRunAtMs;
-  } else {
-    const oneShotNextCheck =
-      !preserveOneShotSchedule &&
-      !opts.replaySchedule &&
-      isJobEnabled(job) &&
-      isCronOneShotContinuationJob(job) &&
-      result.status === "ok"
-        ? result.nextCheck
-        : undefined;
+  } else if (!shouldDelete) {
     if (
       result.status === "error" &&
       result.errorClassification?.kind === "permanent" &&
@@ -373,6 +352,7 @@ export function applyJobResult(
       job.enabled = false;
       job.state.nextRunAtMs = undefined;
       job.state.startupCatchupAtMs = undefined;
+      terminalOneShot = isOneShotSchedule && runFailed;
     } else if (job.schedule.kind === "event") {
       // The transferred ingress receipt owns this occurrence. A timer retry
       // would lose its immutable event and could repeat an external side effect.
@@ -428,8 +408,12 @@ export function applyJobResult(
           }
         } else {
           // Permanent error or max retries exhausted: disable.
+          // Note: deleteAfterRun:true only triggers on ok (see shouldDelete above),
+          // so exhausted-retry jobs are disabled but intentionally kept in the store
+          // to preserve the error state for inspection.
           job.enabled = false;
           job.state.nextRunAtMs = undefined;
+          terminalOneShot = retryDecision.reason !== "aborted";
           state.deps.log.warn(
             {
               jobId: job.id,
@@ -451,6 +435,7 @@ export function applyJobResult(
       // Re-enabling would rerun the completed watched command, even for a transient error.
       job.enabled = false;
       job.state.nextRunAtMs = undefined;
+      terminalOneShot = result.errorClassification?.kind !== "aborted";
     } else if (opts.scheduleMode === "preserve") {
       // Forced recurring or disabled one-shot runs cannot change a scheduled
       // slot. Preserve its absence, or its timestamp and paced provenance.

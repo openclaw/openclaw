@@ -20,7 +20,6 @@ import type { CronJob, CronSchedule } from "../types.js";
 import { autoDisableCronJob } from "./auto-disable.js";
 import {
   computeOneShotNextRunAtMs,
-  hasLegacyCronCleanupPolicy,
   clearInvalidForcePreservedNextRun,
   resolveForcePreservedOneShotAtMs,
 } from "./one-shot-schedule.js";
@@ -362,7 +361,7 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
 
 /** Returns the effective enabled flag, defaulting missing values to enabled. */
 export function isJobEnabled(job: Pick<CronJob, "enabled">): boolean {
-  return (job.enabled ?? true) && !hasLegacyCronCleanupPolicy(job);
+  return job.enabled ?? true;
 }
 
 export function isTimeScheduledJob(job: Pick<CronJob, "schedule">): boolean {
@@ -480,9 +479,6 @@ function normalizeJobTickState(params: {
   skip: boolean;
 } {
   const { job, ownership } = params;
-  if (hasLegacyCronCleanupPolicy(job)) {
-    return { changed: false, skip: true };
-  }
   let changed = false;
 
   if (!job.state) {
@@ -550,9 +546,6 @@ export function recomputeJobNextRunAtMs(params: {
   deferredNotifications: DeferredCronNotifications;
   skipScheduleErrorHandling?: boolean;
 }) {
-  if (hasLegacyCronCleanupPolicy(params.job)) {
-    return false;
-  }
   let changed = false;
   try {
     let newNext = computeJobNextRunAtMs(params.job, params.nowMs);
@@ -627,7 +620,7 @@ export function needsCronTimerMaintenance(
   nowMs: number,
   options?: CronScheduleMaintenanceOptions,
 ): boolean {
-  if (hasLegacyCronCleanupPolicy(job) || hasActiveCronRun(job, false)) {
+  if (hasActiveCronRun(job, false)) {
     return false;
   }
   if (!isTimeScheduledJob(job)) {

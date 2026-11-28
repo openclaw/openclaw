@@ -735,7 +735,7 @@ it("shares capacity across sibling services for timer, manual, stream, and consu
       expect.objectContaining({ message: "accepted stream payload\n\nline one\nline two" }),
     );
     const persistedExit = (await loadCronStore(storePath)).jobs.find((job) => job.id === exit.id);
-    expect(persistedExit).toBeUndefined();
+    expect(persistedExit).toMatchObject({ enabled: false, state: { lastRunStatus: "ok" } });
   } finally {
     release.resolve();
     stopObserving();

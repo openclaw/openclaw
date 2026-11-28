@@ -21,7 +21,6 @@ import {
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
 import {
-  readCronRunStateForTests,
   readCronRunHistoryPageForTests,
   readCronRunRecordsForTests,
 } from "../run-history.test-support.js";
@@ -79,11 +78,7 @@ function jobIn(jobs: CronJob[] | undefined, id: string) {
   const job = jobs?.find((candidate) => candidate.id === id);
   return expectDefined(job, "cron job " + id);
 }
-const jobState = (state: CronServiceState, id: string): CronJob["state"] =>
-  expectDefined(
-    state.store?.jobs.find((job) => job.id === id)?.state ?? readCronRunStateForTests(id),
-    "live or archived cron job " + id,
-  );
+const jobState = (state: CronServiceState, id: string) => jobIn(state.store?.jobs, id).state;
 async function setup(jobs: CronJob[], deps: Partial<CronServiceDeps> = {}) {
   const { storePath } = fixtures.makeStorePath();
   await saveCronStore(storePath, { version: 1, jobs });
@@ -171,9 +166,10 @@ describe("cron service timer regressions", () => {
     resetActiveCronTaskRunsForTests();
   });
 
-  it("#131491: archives a one-shot whose stale guard suppressed its delivery", async () => {
+  it("#131491: retains a deleteAfterRun one-shot whose stale guard suppressed its delivery", async () => {
     const job = {
       ...dueJob("stale-delivery"),
+      deleteAfterRun: true,
       delivery: { mode: "announce" as const },
     };
     now += 18 * HOUR;
@@ -191,7 +187,17 @@ describe("cron service timer regressions", () => {
     const { state, storePath } = await setup([job], { runIsolatedAgentJob });
     await tick(state);
     const persisted = await loadCronStore(storePath);
-    expect(persisted.jobs).toHaveLength(0);
+    expect(persisted.jobs).toHaveLength(1);
+    expect(jobIn(persisted.jobs, job.id)).toMatchObject({
+      enabled: false,
+      state: {
+        lastStatus: "ok",
+        lastDelivered: false,
+        lastDeliveryStatus: "not-delivered",
+        lastDeliveryError: expect.stringContaining("skipping stale delivery"),
+      },
+    });
+    expect(jobIn(persisted.jobs, job.id).state.nextRunAtMs).toBeUndefined();
     stop(state);
     const restarted = createCronServiceState(state.deps);
     await tick(restarted);
@@ -242,7 +248,7 @@ describe("cron service timer regressions", () => {
       const job = mainJob("script", { kind: "script", script: "return {}", timeoutSeconds: 0 });
       const runner = heldRunner({ status: "ok" as const, notify: "stale", wake: "now" as const });
       const onAbort = vi.fn();
-      const { state, storePath } = await setup([job], {
+      const { state, storePath, stored } = await setup([job], {
         cronConfig: { triggers: { enabled: true } },
         runScriptJob: async ({ abortSignal }) => {
           abortSignal?.addEventListener("abort", onAbort, { once: true });
@@ -273,7 +279,7 @@ describe("cron service timer regressions", () => {
       await vi.advanceTimersByTimeAsync(0);
       await Promise.resolve();
       if (reason === "restart generation") {
-        expect(readCronRunStateForTests(job.id)?.lastStatus).toBe("error");
+        expect((await stored(job.id)).lastStatus).not.toBe("ok");
       }
       expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
     },
@@ -517,11 +523,10 @@ describe("cron service timer regressions", () => {
     runner.release();
     await missed;
     const persisted = (await loadCronStore(storePath)).jobs;
-    expect(persisted.find((entry) => entry.id === job.id)).toBeUndefined();
-    const completedState = expectDefined(readCronRunStateForTests(job.id), "completed job");
-    const [unstartedState, replacementState] = [unstarted, replacement].map(
+    const [completedState, unstartedState, replacementState] = [job, unstarted, replacement].map(
       ({ id }) => jobIn(persisted, id).state,
     );
+    expect(completedState?.runningAtMs).toBeUndefined();
     expect(completedState?.lastStatus).toBe("ok");
     expect(unstartedState?.runningAtMs).toBeUndefined();
     expect(unstartedState?.lastStatus).toBeUndefined();

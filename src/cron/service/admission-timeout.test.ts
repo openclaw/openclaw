@@ -171,7 +171,7 @@ it("finishes startup and writes update history while cron host callbacks are sta
       expect(jobs.find(({ id }) => id === deferred.id)?.state.startupCatchupAtMs).toBeGreaterThan(
         now,
       );
-      expect(jobs.find(({ id }) => id === immediate.id)).toBeUndefined();
+      expect(jobs.find(({ id }) => id === immediate.id)?.state.lastRunStatus).toBe("ok");
       const db = openOpenClawStateDatabase().db;
       expect(getUpdateRun(update.runId, options)?.steps).toContainEqual(
         expect.objectContaining({ step: "cron-independent-history", status: "completed" }),

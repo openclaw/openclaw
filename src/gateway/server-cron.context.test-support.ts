@@ -104,6 +104,7 @@ export function registerGatewayCronContextTests({
     return { cfg: config(name), clock: createGatewaySchedulerClock(Date.now()) };
   }
   const scheduledJob = (): CronJobOverrides => ({
+    deleteAfterRun: false,
     schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
   });
   const gatewayContext = () => {
@@ -370,7 +371,7 @@ export function registerGatewayCronContextTests({
       }
       const addJob = mode === "session" ? addSystemEventJob : addAgentTurnJob;
       const job = await addJob(state, name, "run it", {
-        ...(clock ? scheduledJob() : {}),
+        ...(clock ? scheduledJob() : { deleteAfterRun: false }),
         ...(mode === "session" ? { sessionTarget: "main", wakeMode: "now" } : {}),
       });
       if (clock) {
@@ -401,7 +402,9 @@ export function registerGatewayCronContextTests({
     });
 
     using state = ownedService(cfg, { resolveGatewayContext });
-    const job = await addAgentTurnJob(state, "rpc-isolated", "run it", {});
+    const job = await addAgentTurnJob(state, "rpc-isolated", "run it", {
+      deleteAfterRun: false,
+    });
 
     await caller.run(() => state.cron.run(job.id, "force"));
 

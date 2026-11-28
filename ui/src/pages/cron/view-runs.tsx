@@ -38,9 +38,7 @@ type CronRunsSectionProps = Pick<
   | "onRetryRuns"
   | "onRunsFiltersChange"
   | "onRunMount"
-  | "onRetryRun"
 > & {
-  busy?: boolean;
   conditionActivity?: {
     checkCount: number;
     lastCheckedAtMs?: number;
@@ -408,8 +406,6 @@ export function RunsSection(
                 highlightedRunId={props.highlightedRunId}
                 showJobName={props.showJobName}
                 onRunMount={(element, getEntry) => props.onRunMount?.(element, getEntry)}
-                onRetryRun={props.onRetryRun}
-                busy={props.busy}
               />
             )}
           </For>
@@ -504,8 +500,6 @@ function Run(props: {
   formatTimestamp: ReturnType<typeof createCompactMsFormatter>;
   highlightedRunId?: string | null;
   showJobName?: boolean;
-  busy?: boolean;
-  onRetryRun?: CronProps["onRetryRun"];
   onRunMount?: (
     ...args: Parameters<NonNullable<CronProps["onRunMount"]>>
   ) => (() => void) | undefined;
@@ -653,19 +647,6 @@ function Run(props: {
         <Show when={error()}>
           <RunError error={error()} />
         </Show>
-      </Show>
-      <Show when={props.entry.runId && props.entry.retryAvailable && Boolean(props.onRetryRun)}>
-        <div class="cron-run-entry__body">
-          <button
-            type="button"
-            class="btn btn--sm"
-            disabled={props.busy}
-            title={t("cron.runEntry.retryHelp")}
-            onClick={() => props.onRetryRun?.(props.entry)}
-          >
-            {t("common.retry")}
-          </button>
-        </div>
       </Show>
       <div id={detailsId} class="cron-run-entry__details" hidden={!expanded()}>
         {props.entry.runAtMs !== undefined || props.entry.nextRunAtMs !== undefined ? (

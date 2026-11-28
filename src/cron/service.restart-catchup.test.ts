@@ -1,9 +1,6 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { cronRunRecordStoreKey } from "./run-history-detail.js";
-import { readCronRunRecordsForTests } from "./run-history.test-support.js";
 import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
 import {
@@ -13,7 +10,6 @@ import {
 import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import { onTimer, runMissedJobs } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
-import { cronStoreKey } from "./store/key.js";
 import type { CronJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
@@ -334,6 +330,7 @@ describe("CronService restart catch-up", () => {
       }),
       job({
         id: "one-shot",
+        deleteAfterRun: true,
         schedule: { kind: "at", at: new Date(dueAt).toISOString() },
         state: persistedState,
       }),
@@ -365,18 +362,16 @@ describe("CronService restart catch-up", () => {
   it("does not mistake a future retry for a rescheduled one-shot on restart", async () => {
     const runningAtMs = time("2025-12-13T16:30:00Z");
     await using h = await restartFixture({
+      deleteAfterRun: true,
       schedule: { kind: "at", at: "2025-12-13T16:00:00Z" },
       updatedAtMs: runningAtMs,
       state: { nextRunAtMs: time("2025-12-13T18:00:00Z"), runningAtMs },
     });
     const { cron, deps } = h;
-    expect(cron.getJob("restart-job")).toBeUndefined();
-    const detail = readCronRunRecordsForTests("restart-job").findLast(
-      (record) => cronRunRecordStoreKey(record) === cronStoreKey(deps.storePath),
-    )?.detail;
-    const recovered = isRecord(detail) ? detail.archivedJob : undefined;
+    const recovered = cron.getJob("restart-job");
     expect(recovered).toMatchObject({
       enabled: false,
+      deleteAfterRun: true,
       schedule: { kind: "at", at: "2025-12-13T16:00:00.000Z" },
       state: {
         lastRunAtMs: runningAtMs,
@@ -384,9 +379,11 @@ describe("CronService restart catch-up", () => {
         lastDeliveryStatus: "unknown",
       },
     });
-    expect(recovered).not.toHaveProperty("state.runningAtMs");
-    expect(recovered).not.toHaveProperty("state.nextRunAtMs");
-    expect(recovered).not.toHaveProperty("state.startupCatchupAtMs");
+    expect(recovered?.state).toMatchObject({
+      runningAtMs: undefined,
+      nextRunAtMs: undefined,
+      startupCatchupAtMs: undefined,
+    });
     expectInterrupted(deps, runningAtMs);
   });
 

@@ -269,7 +269,8 @@ describe("CronService persists delivered status", () => {
             "Gateway restarted during the run. The script was not rerun. | OPENCLAW_RESTART_ABORT",
         });
       }
-      expect(await h.cron.readJob(h.job.id)).toBeUndefined();
+      expect((await h.cron.readJob(h.job.id))?.enabled).toBe(false);
+      expect((await h.cron.readJob(h.job.id))?.state.nextRunAtMs).toBeUndefined();
       expect(runScriptJob).toHaveBeenCalledOnce();
       expect(h.sendCronFailureAlert).not.toHaveBeenCalled();
     },

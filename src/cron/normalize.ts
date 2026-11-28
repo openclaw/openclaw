@@ -466,6 +466,14 @@ export function normalizeCronJobInput(
     } else {
       delete next.sessionTarget;
     }
+    if (
+      "schedule" in next &&
+      isRecord(next.schedule) &&
+      next.schedule.kind === "at" &&
+      !("deleteAfterRun" in next)
+    ) {
+      next.deleteAfterRun = true;
+    }
     if ("schedule" in next && isRecord(next.schedule) && next.schedule.kind === "cron") {
       const schedule = next.schedule;
       if (schedule.staggerMs === undefined) {

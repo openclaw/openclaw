@@ -305,13 +305,6 @@ for pending subscription handlers within the host's bounded grace period.
 Cron scheduler. Cron owns timing and run history; the Plugin SDK only constrains
 the target session, plugin-owned naming, and cleanup.
 
-For new `at` and `delayMs` calls, omit `deleteAfterRun`. Once the turn ends,
-look up its outcome in Run history. To run the task again, schedule a new turn.
-Existing plugins can use the deprecated `false` option to keep the completed
-job paused, or `true` to remove it after confirmed success. Recurring schedules
-accept `false` or omission. Removal of this option requires an announced
-stable-release deprecation window.
-
 Within session extensions, `openclaw/plugin-sdk/agent-sessions` provides the host's
 model-selection helpers. Exact provider/model IDs take precedence over case-insensitive
 matches; ambiguous references need exact provider and model IDs. Pass the provider

@@ -10,7 +10,6 @@ import {
   createAgentDatabaseAdmissionErrorShape,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
-import { readGatewayRequestAdmission } from "../operator-admission.js";
 import {
   cronJobMatchesCallerScope,
   cronTrustedJobOwnedByCaller,
@@ -28,17 +27,6 @@ import type { GatewayRequestHandler, GatewayRequestHandlerOptions, RespondFn } f
 import { defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
-
-export function canRetryCronHistory(
-  client: GatewayRequestHandlerOptions["client"],
-  context: GatewayRequestHandlerOptions["context"],
-): boolean {
-  return (
-    !client?.internal?.agentRuntimeIdentity &&
-    readGatewayRequestAdmission(client).grant.owner &&
-    !createCronSessionVisibility(client, context).resolve()
-  );
-}
 
 function isLegacyCreatorPromptUpdate(job: CronJob, patch: CronJobPatch): boolean {
   // A prompt edit keeps the legacy execution policy; it cannot establish new
@@ -91,6 +79,7 @@ const TRUSTED_LIFECYCLE_PATCH_KEYS: ReadonlySet<string> = new Set([
   "schedule",
   "displayName",
   "description",
+  "deleteAfterRun",
   "wakeMode",
   "pacing",
   "activeHours",
@@ -190,34 +179,22 @@ type ScopedCronMethod =
   | "cron.remove"
   | "cron.run";
 
-type ScopedCronJobCallback<P extends CronJobIdParams> = (
-  options: Omit<GatewayRequestHandlerOptions, "params"> & {
-    params: P;
-  },
-  loaded: { jobId: string; callerScope: CronCallerScope | undefined; job: CronJob },
-) => ReturnType<GatewayRequestHandler>;
-
-type CronJobAccessOptions = {
-  allowCurrentJob?: boolean;
-  checkVisibility?: boolean;
-  preserveCronGetWireMessage?: boolean;
-};
-
 export function scopedCronJobHandler<P extends CronJobIdParams>(
   method: ScopedCronMethod,
   validate: Validator<P>,
-  run: ScopedCronJobCallback<P>,
-  scope: CronJobAccessOptions = {},
+  run: (
+    options: Omit<GatewayRequestHandlerOptions, "params"> & {
+      params: P;
+    },
+    loaded: { jobId: string; callerScope: CronCallerScope | undefined; job: CronJob },
+  ) => ReturnType<GatewayRequestHandler>,
+  scope: {
+    allowCurrentJob?: boolean;
+    checkVisibility?: boolean;
+    preserveCronGetWireMessage?: boolean;
+  } = {},
 ): GatewayRequestHandler {
-  return defineValidatedGatewayHandler(method, validate, withScopedCronJob(method, run, scope));
-}
-
-export function withScopedCronJob<P extends CronJobIdParams>(
-  method: ScopedCronMethod,
-  run: ScopedCronJobCallback<P>,
-  scope: CronJobAccessOptions = {},
-) {
-  return async (options: Omit<GatewayRequestHandlerOptions, "params"> & { params: P }) => {
+  return defineValidatedGatewayHandler(method, validate, async (options) => {
     const { params, respond, client, context } = options;
     const jobId = resolveCronJobId(params);
     if (!jobId) {
@@ -257,5 +234,5 @@ export function withScopedCronJob<P extends CronJobIdParams>(
     }
     // Consume authorized reads in this frame; mutations retain their lock-time commit guards.
     return await run(options, { jobId, callerScope, job });
-  };
+  });
 }

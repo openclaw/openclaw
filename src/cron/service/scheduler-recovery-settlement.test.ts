@@ -92,6 +92,7 @@ it.for(["replacement-loss", "stop-during-launch"] as const)(
       const job = await cron.add({
         name: "recovered-long-running-job",
         enabled: true,
+        deleteAfterRun: true,
         schedule: { kind: "at", at: new Date(Date.now()).toISOString() },
         sessionTarget: "main",
         wakeMode: "now",

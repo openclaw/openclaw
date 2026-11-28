@@ -1,7 +1,5 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { deletePluginSessionSchedulerJob } from "../plugins/host-hook-runtime.js";
-import { schedulePluginSessionTurn } from "../plugins/host-hook-scheduled-turns.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -93,67 +91,15 @@ async function fixture(
   };
 }
 
-it.each([
-  [false, "ok", true],
-  [true, "error", true],
-  [false, "error", true],
-  [true, "ok", false],
-] as const)(
-  "preserves explicit SDK deleteAfterRun=%s on %s across restart",
-  async (deleteAfterRun, status, retained) => {
-    await using f = await fixture({
-      nowMs: () => atMs,
-      runSessionEvent: async () =>
-        status === "error"
-          ? {
-              status,
-              error: "Session admission refused",
-              errorClassification: { kind: "permanent" },
-            }
-          : { status },
-    });
-    const pluginId = "scheduled-turn-contract";
-    const handle = await schedulePluginSessionTurn({
-      pluginId,
-      origin: "bundled",
-      cron: f.cron,
-      schedule: {
-        sessionKey: "agent:main:main",
-        message: "Check status",
-        at: atMs,
-        deliveryMode: "none",
-        deleteAfterRun,
-      },
-    });
-    if (!handle) {
-      throw new Error("Plugin did not schedule its turn");
-    }
-    try {
-      if (status === "error") {
-        await f.cron.update(handle.id, { failureAlert: deleteAfterRun ? { after: 8 } : false });
-      }
-      await f.tick(atMs);
-      await f.restart();
-      if (retained) {
-        expect(f.cron.getJob(handle.id)).toMatchObject({ enabled: false });
-      } else {
-        expect(f.cron.getJob(handle.id)).toBeUndefined();
-      }
-      expect(f.history(handle.id)).toMatchObject([{ status }]);
-      if (status === "error") {
-        expect(f.cron.getJob(handle.id)?.state.nextRunAtMs).toBeUndefined();
-        expect(f.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-          expect.stringContaining("Run Now or reschedule"),
-          expect.objectContaining({
-            contextKey: `cron:${handle.id}:${deleteAfterRun ? "failure-alert" : "auto-disabled"}`,
-          }),
-        );
-      }
-    } finally {
-      deletePluginSessionSchedulerJob({ pluginId, jobId: handle.id });
-    }
-  },
-);
+it("disables a retained one-shot after success and does not replay it when re-enabled", async () => {
+  await using f = await fixture();
+  const { job } = await f.run(mainJob({ deleteAfterRun: false }));
+  expect(f.cron.getJob(job.id)?.enabled).toBe(false);
+  expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+  expect((await f.cron.update(job.id, { enabled: true })).state.nextRunAtMs).toBeUndefined();
+  await f.tick(atMs + 1_000);
+  expect(f.deps.runSessionEvent).toHaveBeenCalledOnce();
+});
 
 it.each([
   ["default delivery failure", undefined, false, undefined, "failed"],
@@ -179,14 +125,22 @@ it.each([
       nextRunAtMs: undefined,
       ...(reason ? { deliverySuppressionReason: reason } : {}),
     });
-    expect(f.cron.getJob(job.id)).toBeUndefined();
-    expect(f.history(job.id)[0]).toMatchObject({ jobName: job.name, completionStatus: completion });
-    expect(f.history(job.id)[0]?.retryAvailable).toBe(
-      completion === "succeeded" ? undefined : true,
-    );
+    const expectRetained = () => {
+      const retained = f.cron.getJob(job.id);
+      if (completion === "succeeded") {
+        expect(retained).toBeUndefined();
+      } else {
+        expect(retained).toMatchObject({
+          enabled: false,
+          state: { lastRunStatus: "ok", consecutiveErrors: 0 },
+        });
+      }
+      expect(retained?.state.nextRunAtMs).toBeUndefined();
+    };
+    expectRetained();
     await f.restart();
     await f.tick(atMs + 60_000);
-    expect(f.cron.getJob(job.id)).toBeUndefined();
+    expectRetained();
     expect(run).toHaveBeenCalledOnce();
     expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
   },
@@ -214,15 +168,12 @@ it.each([
     );
     await f.cron.run(job.id, "force");
     expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(f.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("ended without a confirmed"),
-      expect.objectContaining({
-        contextKey: `cron:${job.id}:auto-disabled`,
-        agentId: "ops",
-        sessionKey: "agent:ops:telegram:direct:123:thread:123:456",
-      }),
-    );
-    expect(f.cron.getJob(job.id)).toBeUndefined();
+    expect(f.deps.enqueueSessionEvent).not.toHaveBeenCalled();
+    expect(f.cron.getJob(job.id)?.state).toMatchObject({
+      lastRunStatus: "error",
+      lastError: "session admission refused",
+    });
+    expect(f.cron.getJob(job.id)?.state.autoDisabled).toBeUndefined();
     expect(f.history(job.id)).toMatchObject([{ status: "error", completionStatus: "failed" }]);
   },
 );
@@ -232,14 +183,24 @@ it("consumes a scratch-empty one-shot without replaying it after restart", async
   await using f = await fixture({ nowMs: () => now });
   const job = await f.cron.add(
     mainJob({
+      deleteAfterRun: false,
       payload: { kind: "agentTurn", message: "Check the scratch", skipIfScratchEmpty: true },
     }),
   );
   await f.cron.writeScratch(job.id, { content: "" });
   await f.cron.run(job.id, "due");
-  expect(f.cron.getJob(job.id)).toBeUndefined();
+  expect(f.cron.getJob(job.id)).toMatchObject({
+    enabled: false,
+    state: {
+      lastStatus: "ok",
+      lastError: undefined,
+      consecutiveSkipped: 0,
+      nextRunAtMs: undefined,
+    },
+  });
   now += 90_000;
   await f.restart(createTestGatewayScheduler());
+  await f.cron.writeScratch(job.id, { content: "Check the newly populated scratch" });
   await f.tick(now);
   expect(f.deps.runSessionEvent).not.toHaveBeenCalled();
   expect(f.deps.enqueueSystemEvent).not.toHaveBeenCalled();
@@ -266,10 +227,12 @@ it.each([false, true])(
     const { job, event } = await f.run(isolatedJob());
     expect(event).toMatchObject({ jobId: job.id, status: "error" });
     const stored = f.cron.getJob(job.id);
+    expect(stored).toMatchObject({ enabled: !executionStarted, state: { consecutiveErrors: 1 } });
     if (executionStarted) {
-      expect(stored).toBeUndefined();
+      expect(stored?.state.autoDisabled).toBeUndefined();
+      expect(stored?.state.nextRunAtMs).toBeUndefined();
       expect(f.deps.enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("ended without a confirmed"),
+        expect.stringContaining('Automation "one-shot" failed'),
         expect.objectContaining({ contextKey: `cron:${job.id}:failure-alert` }),
       );
     } else {

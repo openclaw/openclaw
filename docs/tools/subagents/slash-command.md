@@ -17,8 +17,10 @@ read_when:
 /subagents info <id|#>
 ```
 
-`/subagents info` shows run metadata (status, timestamps, session id,
-transcript path, cleanup). `/subagents log` prints recent chat turns for a
+`/subagents info` shows the recorded status, timestamps, session ID and cleanup
+policy. For unfinished work, Activity can show a current tool, a wait or
+“current activity unavailable.” If activity is unavailable, check the original
+worker before repeating the task. `/subagents log` prints recent chat turns for a
 run; add the `tools` token to include tool-call/result messages (omitted
 by default). Use `sessions_history` for a bounded, safety-filtered recall
 view from within an agent turn, or inspect the transcript path on disk for

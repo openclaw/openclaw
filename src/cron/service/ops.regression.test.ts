@@ -36,7 +36,7 @@ import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronEvent, CronJob } from "../types.js";
 import { remove, update } from "./ops-mutations.js";
-import { enqueueRun, run, runOnExit, waitForManualRun } from "./ops-run.js";
+import { enqueueRun, run, waitForManualRun } from "./ops-run.js";
 import type { CronServiceDeps } from "./state.js";
 import { ensureLoaded } from "./store.js";
 import { onTimer } from "./timer.test-support.js";
@@ -533,8 +533,13 @@ it("#102238 waits for a disabled run to abort before a re-enabled timer tick", a
 
 it("#104518 finalizes watcher-fired on-exit job: onexit-delete-ok", async () => {
   const nowMs = Date.now();
-  const schedule = { kind: "on-exit", command: 'sh -c "exit 0"' } as const;
-  const job = recurringJob("onexit-delete-ok", nowMs, { schedule, state: {} });
+  const job = recurringJob("onexit-delete-ok", nowMs, {
+    schedule: { kind: "on-exit", command: 'sh -c "exit 0"' },
+    state: {},
+  });
+  job.deleteAfterRun = true;
+  // The gateway watcher persists this disable before force-running the payload.
+  job.enabled = false;
   const events: CronEvent[] = [];
   const state = await prepareJob(job, {
     cronEnabled: false,
@@ -543,14 +548,7 @@ it("#104518 finalizes watcher-fired on-exit job: onexit-delete-ok", async () => 
       .mockResolvedValue({ status: "ok", summary: "ok", delivered: true }),
     onEvent: (event) => events.push(event),
   });
-  await expect(
-    runOnExit(state, job.id, {
-      schedule,
-      signal: new AbortController().signal,
-      commitGuard() {},
-      onReserved() {},
-    }),
-  ).resolves.toEqual({ ok: true, ran: true });
+  await expect(run(state, job.id, "force")).resolves.toEqual({ ok: true, ran: true });
 
   const memoryJob = state.store?.jobs.find((entry) => entry.id === job.id);
   const durableJob = (await loadCronStore(state.deps.storePath)).jobs.find(

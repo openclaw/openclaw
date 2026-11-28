@@ -247,9 +247,6 @@ export function planCronJobMutation(
             nextJob.ownerProfileId = ownerProfileId;
           }
         }
-        if (options.pluginDeleteAfterRun !== undefined) {
-          nextJob.pluginDeleteAfterRun = options.pluginDeleteAfterRun;
-        }
         if (options.sourceConversation) {
           nextJob.sourceConversation = options.sourceConversation;
         }

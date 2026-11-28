@@ -418,8 +418,15 @@ suite.define(() => {
                     await menu.getByRole("menuitem", { name: "Your devices", exact: true }).count(),
                   )
                   .toBe(1);
-                // Server publication events change the open menu through its real subscription.
                 await page.setViewportSize({ width, height: 900 });
+                // The 360px viewport placed the menu with a position-try fallback. Chrome keeps
+                // that fallback for layout reads until the next rendering update re-chooses it.
+                await page.evaluate(async () => {
+                  await new Promise<void>((resolve) => {
+                    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+                  });
+                });
+                // Server publication events change the open menu through its real subscription.
                 for (const reducedMotion of ["no-preference", "reduce"] as const) {
                   await page.emulateMedia({ reducedMotion });
                   const before = await menu.boundingBox();

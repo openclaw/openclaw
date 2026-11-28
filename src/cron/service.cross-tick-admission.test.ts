@@ -17,7 +17,6 @@ import { CommandLane } from "../process/lanes.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import * as clocks from "../test-utils/gateway-scheduler-clock.js";
 import { createTestCronOperatorSource } from "./execution-context.test-support.js";
-import { readCronRunStateForTests } from "./run-history.test-support.js";
 import { mockCronAvailableMemory } from "./service.test-harness.js";
 import { handOver, start, stop } from "./service/ops-lifecycle.js";
 import {
@@ -543,7 +542,7 @@ it("recovers after default runs finish and resumes the same parked condition", a
     await vi.waitFor(() => expect(started).toContain(healthy.id));
     expect(started).not.toContain(waits.id);
     await vi.waitFor(async () => {
-      expect(readCronRunStateForTests(healthy.id)?.lastRunStatus).toBe("ok");
+      expect((await jobs()).find(({ id }) => id === healthy.id)?.state.lastRunStatus).toBe("ok");
     });
     vi.setSystemTime(Date.now() + 60_000);
     await wake(state);

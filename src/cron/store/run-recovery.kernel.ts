@@ -10,11 +10,7 @@ import {
   recomputeJobNextRunAtMs,
   resolveCronRestartRetryAtMs,
 } from "../service/jobs-scheduling.js";
-import {
-  canRetryArchivedCronJob,
-  hasLegacyCronCleanupPolicy,
-  resolveForcePreservedOneShotAtMs,
-} from "../service/one-shot-schedule.js";
+import { resolveForcePreservedOneShotAtMs } from "../service/one-shot-schedule.js";
 import { findCronRunRecoveryInDatabase } from "../service/run-history-recovery.js";
 import { resolveCronRunReceiptTerminalStatus } from "../service/run-receipts.js";
 import {
@@ -22,10 +18,9 @@ import {
   restoreFinalizedStartupRun,
 } from "../service/startup-run-repair.js";
 import type { CronJobPolicyContext, DeferredCronNotifications } from "../service/state.js";
-import type { CronStoredJob } from "../types.js";
+import type { CronJob } from "../types.js";
 import { deleteCronJobRowInDatabase, updateCronRuntimeRow } from "./row-codec.js";
 import {
-  archiveCronRunDefinitionInDatabase,
   recordCronRunInDatabase,
   recordSkippedCronRequestInDatabase,
 } from "./run-history.kernel.js";
@@ -41,8 +36,7 @@ function recordInterruptedRun(params: {
   storeKey: string;
   interrupted: InterruptedStartupRun;
   nowMs: number;
-  job?: CronStoredJob;
-  archive?: boolean;
+  job?: CronJob;
   receipt?: CronRunReceipt;
   taskRunId?: string;
 }): InterruptedStartupRun {
@@ -64,8 +58,6 @@ function recordInterruptedRun(params: {
       {
         ts: nowMs,
         jobId: interrupted.jobId,
-        jobName: job?.displayName ?? job?.name,
-        retryAvailable: params.archive && job && canRetryArchivedCronJob(job) ? true : undefined,
         action: "finished",
         status: "error",
         completionStatus: "failed",
@@ -79,7 +71,7 @@ function recordInterruptedRun(params: {
         durationMs: interrupted.durationMs,
         nextRunAtMs: job?.state.nextRunAtMs,
       },
-      { storeKey, ...(params.archive ? { archivedJob: job } : {}) },
+      { storeKey },
     ),
   });
   return interrupted;
@@ -93,10 +85,7 @@ export function recoverCronJobInDatabase(
     database: OpenClawStateDatabase;
     receiptSchema: CronRunReceiptWriteSchema;
     notifications: DeferredCronNotifications;
-  } & (
-    | { job: CronStoredJob; receipt?: CronRunReceipt }
-    | { job?: undefined; receipt: CronRunReceipt }
-  ),
+  } & ({ job: CronJob; receipt?: CronRunReceipt } | { job?: undefined; receipt: CronRunReceipt }),
 ): { removed?: true; interrupted?: InterruptedStartupRun; skipStartupCatchup?: true } {
   const { state, database, storeKey, job, receipt, notifications } = params;
   const nowMs = state.deps.nowMs();
@@ -155,9 +144,6 @@ export function recoverCronJobInDatabase(
   };
   if (!job) {
     return recoverUnmarkedReceipt(receipt);
-  }
-  if (hasLegacyCronCleanupPolicy(job)) {
-    return { skipStartupCatchup: true };
   }
   const previousEnabled = job.enabled ?? true;
   const runningAtMs = job.state.runningAtMs;
@@ -222,7 +208,6 @@ export function recoverCronJobInDatabase(
       })
     : undefined;
   let interrupted: InterruptedStartupRun | undefined;
-  let retireInterrupted = false;
   if (!restored) {
     interrupted = markInterruptedStartupRun({
       state,
@@ -242,13 +227,6 @@ export function recoverCronJobInDatabase(
     if (job.enabled && job.state.nextRunAtMs === undefined) {
       recomputeJobNextRunAtMs({ state, job, nowMs, deferredNotifications: notifications });
     }
-    retireInterrupted =
-      job.pluginDeleteAfterRun === undefined &&
-      previousEnabled &&
-      job.schedule.kind === "at" &&
-      interrupted.replacementAtMs === undefined &&
-      !job.state.runningScheduleChangeId &&
-      job.state.nextRunAtMs === undefined;
     interrupted = recordInterruptedRun({
       database: database.db,
       storeKey,
@@ -257,7 +235,6 @@ export function recoverCronJobInDatabase(
       taskRunId: task.taskRunId,
       interrupted,
       nowMs,
-      archive: retireInterrupted,
     });
   }
   finishReceipt(
@@ -267,35 +244,9 @@ export function recoverCronJobInDatabase(
     restored && finalized ? finalized.entry.ts : nowMs,
     restored && finalized ? finalized.entry.error : STARTUP_INTERRUPTED_ERROR,
   );
-  if (restored?.shouldDelete && finalized) {
-    const { entry } = finalized;
-    archiveCronRunDefinitionInDatabase(
-      database.db,
-      {
-        storeKey,
-        jobId: job.id,
-        runId: entry.runId ?? createCronExecutionId(job.id, runningAtMs),
-        agentId: receipt?.agentId ?? job.agentId,
-        startedAt: entry.runAtMs ?? runningAtMs,
-        endedAt: entry.ts,
-        status: entry.completionStatus === "succeeded" ? "succeeded" : "failed",
-        detail: cronRunLogEntryToDetail(
-          {
-            ...entry,
-            jobName: job.displayName ?? job.name,
-            retryAvailable: entry.completionStatus !== "succeeded" && canRetryArchivedCronJob(job),
-          },
-          { storeKey, archivedJob: job },
-        ),
-      },
-      nowMs,
-    );
+  if (restored?.shouldDelete) {
     deleteCronJobRowInDatabase(database.db, storeKey, job.id);
     return { removed: true, skipStartupCatchup: true };
-  }
-  if (retireInterrupted) {
-    deleteCronJobRowInDatabase(database.db, storeKey, job.id);
-    return { interrupted, removed: true, skipStartupCatchup: true };
   }
   updateCronRuntimeRow(database.db, storeKey, job, previousEnabled);
   return {

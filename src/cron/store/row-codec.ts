@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { operatorStandingGrantPublication } from "../../gateway/operator-approval-store.publication.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { jsonSetPath, jsonValue } from "../../infra/database-engine/json-values.js";
@@ -13,6 +14,7 @@ import {
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { normalizeSqliteNumber as normalizeNumber } from "../../infra/sqlite-number.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { tryCronScheduleIdentity } from "../schedule-identity.js";
 import {
@@ -20,7 +22,7 @@ import {
   normalizeCronToolsAllowExecTargetRequirement,
   restoreCronPinnedExecGrant,
 } from "../scheduled-tool-policy.js";
-import type { CronStoredJob, CronStoreFile } from "../types.js";
+import type { CronJobState, CronStoredJob, CronStoreFile } from "../types.js";
 import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
   hasCanonicalCronDeliveryMode,
@@ -31,7 +33,6 @@ import {
   resolveCronJobGrantDefinitionRevision,
   stripJobRuntimeFields,
 } from "./job-config-codec.js";
-import { normalizeStoredCronJob } from "./normalize-stored-job.js";
 import type {
   CronJobGenerationReadRow,
   CronJobInsert,
@@ -74,10 +75,43 @@ function bindCronJobRow(storeKey: string, job: CronStoredJob, sortOrder: number)
   };
 }
 
+function normalizeCronJobForSqlite(job: CronStoreFile["jobs"][number]): CronStoredJob | null {
+  const raw: Record<string, unknown> = structuredClone(job);
+  const hadDeleteAfterRun = Object.hasOwn(raw, "deleteAfterRun");
+  raw.id = normalizeOptionalString(raw.id);
+  delete raw.jobId;
+  const normalized = normalizeCronJobInput(raw, { applyDefaults: true });
+  if (!normalized || getInvalidPersistedCronJobReason(normalized)) {
+    return null;
+  }
+  if (!hasCanonicalCronDeliveryMode(raw.delivery)) {
+    normalized.delivery = raw.delivery;
+  }
+  if (!hadDeleteAfterRun) {
+    // Legacy rows omitted deleteAfterRun entirely; avoid writing the default
+    // back into job_json so config round-trips stay byte-light.
+    delete normalized.deleteAfterRun;
+  }
+  const createdAtMs =
+    typeof normalized.createdAtMs === "number" && Number.isFinite(normalized.createdAtMs)
+      ? normalized.createdAtMs
+      : Date.now();
+  const updatedAtMs =
+    typeof normalized.updatedAtMs === "number" && Number.isFinite(normalized.updatedAtMs)
+      ? normalized.updatedAtMs
+      : createdAtMs;
+  return {
+    ...normalized,
+    createdAtMs,
+    updatedAtMs,
+    state: isRecord(normalized.state) ? (normalized.state as CronJobState) : {},
+  } as CronStoredJob;
+}
+
 /** Fails before replacing SQLite rows when any config job cannot round-trip. */
 export function assertCronStoreCanPersist(store: CronStoreFile): void {
   const invalidJobs = store.jobs.reduce(
-    (count, job) => count + (normalizeStoredCronJob(job) ? 0 : 1),
+    (count, job) => count + (normalizeCronJobForSqlite(job) ? 0 : 1),
     0,
   );
   if (invalidJobs > 0) {
@@ -143,7 +177,7 @@ export function rowToCronJob(
 
 /** Projects a live job through the same normalization/codecs used by SQLite persistence. */
 export function projectCronJobThroughStorageCodec(job: CronStoredJob): CronStoredJob {
-  const normalized = normalizeStoredCronJob(job);
+  const normalized = normalizeCronJobForSqlite(job);
   if (!normalized) {
     throw new Error(`cannot project invalid cron job ${job.id}`);
   }
@@ -359,7 +393,7 @@ export function upsertCronJobRow(
   sortOrder: number,
   opts?: CronRowReplaceOptions,
 ): CronStoredJob {
-  const normalized = normalizeStoredCronJob(job);
+  const normalized = normalizeCronJobForSqlite(job);
   if (!normalized) {
     throw new Error(`Cannot persist invalid cron job ${job.id}`);
   }

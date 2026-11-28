@@ -232,24 +232,20 @@ export async function schedulePluginSessionTurn(params: {
   };
   let result: Awaited<ReturnType<CronServiceContract["add"]>>;
   try {
-    result = await cron.add(
-      {
-        name: cronJobName,
-        enabled: true,
-        schedule: cronSchedule,
-        sessionTarget: `session:${sessionKey}`,
-        payload: cronPayload,
-        ...(params.schedule.agentId ? { agentId: params.schedule.agentId } : {}),
-        wakeMode: "now",
-        delivery: {
-          mode: cronDeliveryMode,
-          ...(cronDeliveryMode === "announce" ? { channel: "last" } : {}),
-        },
+    result = await cron.add({
+      name: cronJobName,
+      enabled: true,
+      schedule: cronSchedule,
+      sessionTarget: `session:${sessionKey}`,
+      payload: cronPayload,
+      ...(params.schedule.agentId ? { agentId: params.schedule.agentId } : {}),
+      deleteAfterRun: params.schedule.deleteAfterRun ?? cronSchedule.kind === "at",
+      wakeMode: "now",
+      delivery: {
+        mode: cronDeliveryMode,
+        ...(cronDeliveryMode === "announce" ? { channel: "last" } : {}),
       },
-      cronSchedule.kind === "at" && params.schedule.deleteAfterRun !== undefined
-        ? { pluginDeleteAfterRun: params.schedule.deleteAfterRun }
-        : undefined,
-    );
+    });
   } catch (error) {
     logSchedulingFailure(formatErrorMessage(error), cronJobName);
     return undefined;

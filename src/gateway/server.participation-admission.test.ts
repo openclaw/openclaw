@@ -78,6 +78,7 @@ it("readmits pending native child and scheduled work under current invitation bo
             action: "add",
             job: {
               name: "Native pending invitation",
+              deleteAfterRun: false,
               schedule: { kind: "at", at: new Date(Date.now() + 86_400_000).toISOString() },
               sessionTarget: `session:${parent.key}`,
               wakeMode: "now",
@@ -183,14 +184,18 @@ it("readmits pending native child and scheduled work under current invitation bo
         ).not.toMatchObject({ status: "ok" });
         expect(childCalls).toBe(0);
         const afterParent = providerRequests.length;
+        const repair = createDeferred<SessionEventOutcome>();
         const fallback = createDeferred<SessionEventOutcome>();
         const enqueue = sessionEvents.enqueueSessionEventForHost;
         using _ = vi
           .spyOn(sessionEvents, "enqueueSessionEventForHost")
           .mockImplementation((...args) => {
             const receipt = enqueue(...args);
+            // The failure alert's turn is a hidden repair turn too (#207226): match it first.
             if (args[1].contextKey === `cron:${job.id}:failure-alert`) {
               fallback.resolve(receipt.settled);
+            } else if (args[1].source === "cron_failure_repair") {
+              repair.resolve(receipt.settled);
             }
             return receipt;
           });
@@ -198,9 +203,7 @@ it("readmits pending native child and scheduled work under current invitation bo
           "cron.update",
           {
             id: job.id,
-            patch: {
-              schedule: { kind: "every", everyMs: 3_600_000, anchorMs: Date.now() + 1_000 },
-            },
+            patch: { schedule: { kind: "at", at: new Date(Date.now() + 1_000).toISOString() } },
           },
           { signal },
         );
@@ -222,12 +225,15 @@ it("readmits pending native child and scheduled work under current invitation bo
           status: "error",
           error: expect.stringContaining("authority"),
         });
-        // Revocation pauses the recurring job. Let its failure alert settle before restoring access.
-        expect(await withinTest(fallback.promise, signal)).toMatchObject({
-          status: "failed",
-          executionStarted: false,
-          error: `Error: Session "${parent.key}" was not found.`,
-        });
+        // The rejected repair and the failure alert's turn are separate turns. Keep the invitation
+        // revoked until both have been refused, before sharing the provider with manual runs.
+        for (const notice of [repair, fallback]) {
+          expect(await withinTest(notice.promise, signal)).toMatchObject({
+            status: "failed",
+            executionStarted: false,
+            error: `Error: Session "${parent.key}" was not found.`,
+          });
+        }
         expect(providerRequests.length).toBe(afterParent);
         await expect(fs.access(outside)).rejects.toThrow();
         await sender.request(

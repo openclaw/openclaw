@@ -110,16 +110,33 @@ it("keeps its rows while the tab is hidden and reads again when it returns", asy
   expect(sidebar.textContent).not.toContain("no longer presented");
 });
 
-it("lists failing automations in their own group, out of Active and Paused", async () => {
+it("keeps failures visible and links ended one-shots from History", async () => {
   const pages = inventory.read.getMockImplementation()!;
   inventory.read.mockImplementation(async () => ({
     jobs: [
       { id: "ok", name: "Healthy", enabled: true, updatedAtMs: 0, lastRunStatus: "ok" },
       { id: "error", name: "Broken", enabled: true, updatedAtMs: 0, lastRunStatus: "error" },
       { id: "stopped", name: "Stopped", enabled: false, updatedAtMs: 0, autoDisabled: true },
-      { id: "paused", name: "Resting", enabled: false, updatedAtMs: 0 },
+      {
+        id: "paused",
+        name: "Resting",
+        enabled: false,
+        updatedAtMs: 0,
+        schedule: { kind: "at", at: "2030-01-01T00:00:00Z" },
+        lastRunAtMs: 1000,
+        lastRunStatus: "ok",
+      },
+      {
+        id: "ended",
+        name: "Release check",
+        enabled: false,
+        updatedAtMs: 1_795_897_544_231,
+        schedule: { kind: "at", at: "1795897544000" },
+        lastRunAtMs: 1_795_897_544_231,
+        lastRunStatus: "error",
+      },
     ],
-    total: 4,
+    total: 5,
     offset: 0,
     hasMore: false,
     nextOffset: null,
@@ -131,20 +148,37 @@ it("lists failing automations in their own group, out of Active and Paused", asy
     const { sidebar } = await mountSidebarContext(context);
     Object.assign(sidebar, { connected: true, navigationView: "automations" });
     await sidebar.updateComplete;
-    const group = (label: string) =>
-      [
-        ...(sidebar
-          .querySelector(`[role='group'][aria-label='${label}']`)
-          ?.querySelectorAll(".sidebar-automations__name") ?? []),
-      ].map((name) => name.textContent);
-    await waitForSolid(() => expect(group("Needs attention")).toEqual(["Broken", "Stopped"]));
-    expect(group("Active")).toEqual(["Healthy"]);
+    const group = (label: string) => sidebar.querySelector(`[role='group'][aria-label='${label}']`);
+    const groupNames = (label: string) =>
+      [...(group(label)?.querySelectorAll(".sidebar-automations__name") ?? [])].map(
+        (name) => name.textContent,
+      );
+    const groupFailureIndicator = (label: string) =>
+      group(label)?.querySelector(".sidebar-session-group-attention[aria-label='Failed']");
+    await waitForSolid(() => expect(group("Needs attention")).toBeNull());
+    expect(groupNames("Active")).toEqual(["Broken", "Healthy"]);
+    expect(groupFailureIndicator("Active")).not.toBeNull();
+    const activeToggle = sidebar.querySelector<HTMLButtonElement>(
+      "[role='group'][aria-label='Active'] button",
+    );
+    expect(activeToggle).not.toBeNull();
+    activeToggle!.click();
+    await waitForSolid(() => expect(groupNames("Active")).toEqual([]));
+    expect(groupFailureIndicator("Active")).not.toBeNull();
     const pausedToggle = sidebar.querySelector<HTMLButtonElement>(
       "[role='group'][aria-label='Paused'] button",
     );
     expect(pausedToggle).not.toBeNull();
+    expect(pausedToggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(groupFailureIndicator("Paused")).not.toBeNull();
     pausedToggle!.click();
-    await waitForSolid(() => expect(group("Paused")).toEqual(["Resting"]));
+    await waitForSolid(() => expect(groupNames("Paused")).toEqual(["Resting", "Stopped"]));
+    expect(group("Paused")?.querySelector(".sidebar-automations__failed")).not.toBeNull();
+    expect(groupFailureIndicator("History")).not.toBeNull();
+    group("History")!.querySelector("button")!.click();
+    await waitForSolid(() =>
+      expect(group("History")?.querySelector("a")?.getAttribute("href")).toContain("?job=ended"),
+    );
   } finally {
     inventory.read.mockImplementation(pages);
   }

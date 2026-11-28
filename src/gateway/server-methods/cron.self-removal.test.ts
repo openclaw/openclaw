@@ -158,6 +158,7 @@ describe("cron self-removal", () => {
           {
             name: "self-cleanup",
             enabled: true,
+            deleteAfterRun: false,
             schedule: { kind: "at", at: new Date(clock.clock.now() + 1_000).toISOString() },
             sessionTarget: "isolated",
             wakeMode: "next-heartbeat",

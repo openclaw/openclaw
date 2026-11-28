@@ -23,7 +23,6 @@ import {
   loadCronJobsPage,
   loadCronStatus,
   removeCronJob,
-  retryCronRun,
   runCronJob,
   startCronClone,
   startCronEdit,
@@ -710,8 +709,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     onClone: cloneJob,
     onToggle: (job: CronJob, enabled: boolean) => toggle(job, enabled),
     onRun: (job: CronJob) => runCronAdminTask(job, (cronState) => runCronJob(cronState, job.id)),
-    onRetryRun: (entry: CronRunLogEntry) =>
-      void presentation.runTask((state) => retryCronRun(state, entry)),
     onRemove: (job: CronJob) => {
       const view = presentation.capture();
       return removeJob(job).catch((error: unknown) => presentation.reportError(view, error));

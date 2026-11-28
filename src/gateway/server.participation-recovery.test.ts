@@ -15,6 +15,7 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
 import { withInvitedGuestGateway } from "./guest-session-access.test-support.js";
 import { readClosedDatabase } from "./server-close.lifecycle.test-support.js";
+import * as cronNotifications from "./server-cron-notifications.js";
 import * as restartResume from "./session-restart-resume.js";
 
 it("readmits persisted participant work after restart without substituting the creator", async ({
@@ -22,16 +23,12 @@ it("readmits persisted participant work after restart without substituting the c
 }) => {
   const enqueue = sessionEvents.enqueueSessionEventForHost;
   const resumedRoot = createDeferred<SessionEventReceipt>();
-  let alertContext: string | undefined;
-  let alertReceipt = createDeferred<SessionEventReceipt>();
   using eventObserver = vi
     .spyOn(sessionEvents, "enqueueSessionEventForHost")
     .mockImplementation((...args) => {
       const receipt = enqueue(...args);
       if (args[1].source === "restart") {
         resumedRoot.resolve(receipt);
-      } else if (alertContext && args[1].contextKey === alertContext) {
-        alertReceipt.resolve(receipt);
       }
       return receipt;
     });
@@ -48,6 +45,24 @@ it("readmits persisted participant work after restart without substituting the c
       }
     });
   void observer;
+  const createRepair = cronNotifications.createGatewayCronFailureRepair;
+  let repairSettled = createDeferred();
+  using repairObserver = vi
+    .spyOn(cronNotifications, "createGatewayCronFailureRepair")
+    .mockImplementation((...args) => {
+      const owner = createRepair(...args);
+      return {
+        ...owner,
+        runCronFailureRepair: async (request) => {
+          try {
+            await owner.runCronFailureRepair(request);
+          } finally {
+            repairSettled.resolve();
+          }
+        },
+      };
+    });
+  void repairObserver;
   await withInvitedGuestGateway(
     signal,
     async (fixture) => {
@@ -113,7 +128,6 @@ it("readmits persisted participant work after restart without substituting the c
       const jobs = (await loadCronJobsStore()).jobs;
       expect(jobs, JSON.stringify(outputs)).toHaveLength(1);
       const job = jobs[0]!;
-      alertContext = `cron:${job.id}:failure-alert`;
       expect(job.operatorSource?.source.snapshot.participationCeiling).toMatchObject({
         profileId: carol.id,
         sessionKey: key,
@@ -317,11 +331,7 @@ it("readmits persisted participant work after restart without substituting the c
       expect(receipt).toMatchObject({
         run: { status: "error", error: expect.stringContaining("authority") },
       });
-      const alert = await withinTest(alertReceipt.promise, signal);
-      expect(await withinTest(alert.settled, signal)).toMatchObject({
-        status: "failed",
-        executionStarted: false,
-      });
+      await withinTest(repairSettled.promise, signal);
       expect
         .soft(
           providerRequests.slice(before).map((body) => ({
@@ -330,7 +340,7 @@ it("readmits persisted participant work after restart without substituting the c
               ({ name }) => name,
             ),
           })),
-          "removed membership must refuse the failure alert before the provider",
+          "removed membership must refuse repair before the provider",
         )
         .toEqual([]);
       await activeSender.request(
@@ -344,8 +354,7 @@ it("readmits persisted participant work after restart without substituting the c
           { ...target, identityId: carol.id, access },
           { signal },
         );
-        alertReceipt = createDeferred();
-        const beforeAlert = (await loadCronJobsStore()).jobs[0]?.state.lastFailureNotificationId;
+        repairSettled = createDeferred();
         const beforeDowngrade = providerRequests.length;
         const refused = await activeSender.request(
           "cron.run",
@@ -355,11 +364,7 @@ it("readmits persisted participant work after restart without substituting the c
         expect(refused).toMatchObject({
           run: { status: "error", error: expect.stringContaining("authority") },
         });
-        // The scheduler suppresses repeated notices for the same incident.
-        if ((await loadCronJobsStore()).jobs[0]?.state.lastFailureNotificationId !== beforeAlert) {
-          const next = await withinTest(alertReceipt.promise, signal);
-          expect(await withinTest(next.settled, signal)).toMatchObject({ executionStarted: false });
-        }
+        await withinTest(repairSettled.promise, signal);
         expect.soft(providerRequests.length, access).toBe(beforeDowngrade);
       }
       await activeSender.request(

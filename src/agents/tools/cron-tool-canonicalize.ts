@@ -60,6 +60,7 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "delivery",
   "enabled",
   "description",
+  "deleteAfterRun",
   "agentId",
   "sessionKey",
   "failureAlert",

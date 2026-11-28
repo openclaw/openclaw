@@ -165,7 +165,7 @@ struct ChatProTab: View {
                     .accessibilityLabel("Back")
                     .disabled(self.isAttachmentOwnerPinned)
                 } else if let headerSidebarAction {
-                    OpenClawSidebarControlButton(action: headerSidebarAction)
+                    OpenClawSidebarControlButton(action: headerSidebarAction, glass: .regular.interactive())
                 } else if self.isMainChat {
                     Color.clear
                         .frame(
@@ -188,7 +188,8 @@ struct ChatProTab: View {
         if let headerSidebarAction {
             OpenClawSidebarToolbarItem(
                 action: headerSidebarAction,
-                placement: .topBarLeading)
+                placement: .topBarLeading,
+                glass: .regular.interactive())
         }
         ToolbarItem(placement: .principal) {
             self.headerAgentIdentity

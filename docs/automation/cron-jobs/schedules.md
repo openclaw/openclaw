@@ -31,11 +31,11 @@ Recurring top-of-hour expressions (minute `0` with a wildcard hour field) are au
 
 In the Control UI, enable **Exact timing** to disable staggering. For recurring top-of-hour expressions, turn it off and clear **Stagger window** to restore the default window of up to 5 minutes. For other expressions, clearing a saved window without changing the expression disables staggering and reopens with **Exact timing** enabled. A new schedule with a blank window keeps default timing when its expression changes.
 
-An `on-exit` job disables itself when its payload is queued. While that run is still active, you can re-enable the job to watch again and optionally change the command or working directory. If the new command exits before the previous run settles, its exit waits until that run and any cleanup after a timeout finish. The job then disables itself and starts the next payload. Disabling or changing the watch cancels its pending exit.
-
-If the payload finishes without a replacement schedule, the automation retires. To watch again, create a new `on-exit` automation. For an eligible failed or uncertain run, an administrator can also choose **Retry** in **Automations → Run history**. Retry starts a fresh watch and runs the watched command again.
+An `on-exit` job disables itself when its payload is queued to run. Re-enable the job to watch again; this also works while the previous payload is still finishing. If the new command exits before that payload finishes, its exit waits for the previous run to settle before disabling the job and starting the next payload. This includes cleanup still running after a timeout response. Disabling or changing the watch cancels its pending exit. You can change the watched command or working directory when re-enabling it.
 
 The Gateway owns the watched command's process tree, including cleanup after failed startup. Cleanup must finish before its payload fires or a replacement command starts. If cleanup cannot be confirmed, the Gateway reports the failure, keeps a suspension blocker, and refuses to rearm that watch in the same process. Inspect and stop any remaining command processes, then restart the Gateway; disabling and re-enabling the job does not clear uncertain cleanup.
+
+Changing an `at` or `on-exit` job to an `every` or `cron` schedule clears its inherited `deleteAfterRun` setting. An explicit `deleteAfterRun` value in the same update takes precedence.
 
 ### Heartbeat task migration
 

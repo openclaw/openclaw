@@ -55,6 +55,7 @@ const scope = { agentId: "main", sessionKey: "agent:main:main" };
 const reminder = (text: string, wakeMode: "now" | "next-heartbeat" = "next-heartbeat") => ({
   name: text,
   enabled: false,
+  deleteAfterRun: false,
   schedule: { kind: "at" as const, at: new Date(Date.now() + 60_000).toISOString() },
   sessionTarget: "main" as const,
   wakeMode,

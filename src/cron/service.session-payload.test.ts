@@ -7,7 +7,6 @@ import {
 import {
   readCronRunRecordsForTests,
   readCronRunHistoryPageForTests,
-  readCronRunStateForTests,
 } from "./run-history.test-support.js";
 import { cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService, type CronEvent } from "./service.js";
@@ -222,6 +221,7 @@ describe("unstarted scheduled admission", () => {
       const job = await cron.add(
         jobInput({
           name: `Active hours ${scheduleKind}`,
+          deleteAfterRun: false,
           schedule: schedule(scheduleKind, Date.parse("2026-10-20T09:00:00Z")),
           activeHours: { start: "10:00", end: "17:00", timezone: "UTC" },
           payload: { kind: "agentTurn", message: "Run inside active hours" },
@@ -248,11 +248,11 @@ describe("unstarted scheduled admission", () => {
 
       await tick(Date.parse("2026-10-20T10:00:00Z"));
       expect(run).toHaveBeenCalledOnce();
-      expect(readCronRunStateForTests(job.id)?.lastRunStatus).toBe("ok");
+      expect(cron.getJob(job.id)!.state.lastRunStatus).toBe("ok");
       expect(readCronRunRecordsForTests(job.id)).toHaveLength(scheduleKind === "at" ? 1 : 2);
       if (scheduleKind === "at") {
-        expect(cron.getJob(job.id)).toBeUndefined();
-        expect(readCronRunStateForTests(job.id)?.nextRunAtMs).toBeUndefined();
+        expect(cron.getJob(job.id)!.enabled).toBe(false);
+        expect(cron.getJob(job.id)!.state.nextRunAtMs).toBeUndefined();
       }
       await tick(scheduler.now() + MIN_REFIRE_GAP_MS);
       expect(run).toHaveBeenCalledOnce();
@@ -291,6 +291,7 @@ describe("unstarted scheduled admission", () => {
       const job = await cron.add(
         jobInput({
           name: `Idle ${scheduleKind} ${boundary}`,
+          deleteAfterRun: false,
           schedule: schedule(scheduleKind, scheduler.now() + 1_000),
           idleOnly: true,
           payload: { kind: "agentTurn", message: "Check once idle" },
@@ -343,14 +344,14 @@ describe("unstarted scheduled admission", () => {
       expect(run).toHaveBeenCalledTimes(boundary === "preflight" ? 1 : 2);
       expect(sendWebhook).toHaveBeenCalledOnce();
       expect(readCronRunRecordsForTests(job.id)).toHaveLength(1);
-      const completed = events.findLast((event) => event.action === "finished")?.job;
-      expect(completed?.state.lastRunStatus).toBe("ok");
-      expect(completed?.state.admissionDeferred).toBeUndefined();
+      const completed = cron.getJob(job.id)!;
+      expect(completed.state.lastRunStatus).toBe("ok");
+      expect(completed.state.admissionDeferred).toBeUndefined();
       if (scheduleKind === "at") {
-        expect(cron.getJob(job.id)).toBeUndefined();
-        expect(completed?.state.nextRunAtMs).toBeUndefined();
+        expect(completed.enabled).toBe(false);
+        expect(completed.state.nextRunAtMs).toBeUndefined();
       } else {
-        expect(cron.getJob(job.id)?.state.nextRunAtMs).toBeGreaterThan(scheduler.now());
+        expect(completed.state.nextRunAtMs).toBeGreaterThan(scheduler.now());
       }
     },
   );

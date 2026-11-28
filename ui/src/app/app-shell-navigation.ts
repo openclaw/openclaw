@@ -24,7 +24,7 @@ import {
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
 import { settingsParentTarget } from "../lib/settings-navigation.ts";
-import { canonicalModelSetupLocation } from "../pages/model-setup/route.ts";
+import { modelProvidersFirstRun } from "../pages/model-providers/route.ts";
 import { newSessionSearch, type NewSessionTarget } from "../pages/new-session/location.ts";
 import { selectApplicationSession } from "./agent-selection.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
@@ -279,8 +279,7 @@ export class ShellNavigationOwner {
       location &&
       (routeState.routeId === "custodian"
         ? resolveOnboardingMode(location.search)
-        : routeState.routeId === "model-setup" &&
-          canonicalModelSetupLocation(location, this.host.context?.basePath ?? "") === location)
+        : routeState.routeId === "model-providers" && modelProvidersFirstRun(location.search))
     ) {
       this.host.firstUse = true;
       this.communityInviteVisitAllowed = enterCommunityInviteVisit(true);

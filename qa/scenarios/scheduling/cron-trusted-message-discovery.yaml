@@ -68,6 +68,7 @@ flow:
               name:
                 expr: "`qa-cron-trusted-message-${randomUUID()}`"
               enabled: true
+              deleteAfterRun: false
               schedule:
                 kind: at
                 at:

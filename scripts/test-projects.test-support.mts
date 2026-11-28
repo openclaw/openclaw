@@ -870,7 +870,6 @@ const SOURCE_TEST_TARGETS = new Map([
     "src/channels/plugins/contracts/test-helpers/manifest.ts",
     [
       ...CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS,
-      "src/channels/plugins/contracts/registry.contract.test.ts",
       "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
     ],
   ],

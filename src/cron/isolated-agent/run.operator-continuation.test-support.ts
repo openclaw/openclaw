@@ -14,42 +14,6 @@ import type { CronServiceDeps } from "../service/state.js";
 import { runCronSessionTurn } from "../session-run.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import type { runCronIsolatedAgentTurn } from "./run.js";
-import { PRINCIPAL_POLICY_CASES } from "./run.operator-restart.test-support.js";
-
-export const OPERATOR_CONTINUATION_SCENARIOS = [
-  "operator",
-  "write-scoped operator",
-  "cron-scoped operator",
-  "self removal",
-  "self removal then role revoked during merge",
-  "self removal then session replaced during merge",
-  "paused force run",
-  "restart",
-  "principal reload",
-  ...PRINCIPAL_POLICY_CASES,
-  "principal owner unavailable",
-  "principal store unavailable",
-  "restart before scheduling",
-  "restart before scheduling revoked ingress",
-  "restart before scheduling without source",
-  "principal ingress revoked",
-  "principal ingress replaced",
-  "principal role revoked",
-  "principal access revoked",
-  "guest",
-  "legacy attribution",
-  "foreign target",
-  "current tool deny",
-  "role revoked",
-  "role definition edited",
-  "role revoked during merge",
-  "session edited",
-  "session replaced",
-  "queued owner payload edit",
-  "queued manager rename",
-  "owner capture races manager payload",
-  "recurring trigger reload",
-] as const;
 
 /** The fixture uses the same session and detached execution owners as the Gateway. */
 export function createOperatorContinuationService(params: {

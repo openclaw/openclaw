@@ -220,6 +220,7 @@ it("refuses an unversioned cron-only catalog without adopting its data", () => {
     id: "legacy-job",
     name: "Legacy job",
     enabled: true,
+    deleteAfterRun: true,
     createdAtMs: 123,
     updatedAtMs: 456,
     agentId: "agent-a",

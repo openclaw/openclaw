@@ -53,7 +53,7 @@ async function executeAndApply(job: ReturnType<typeof makeJob>, deps: Partial<Cr
 
 describe("resolveTransientCronRetryDecision", () => {
   it.each([false, true])(
-    "notifies once when an invalid-target one-shot ends (alert route: %s)",
+    "ends an invalid-target one-shot, alerting only through a route (alert route: %s)",
     async (route) => {
       const job = makeJob("at");
       job.sessionTarget = "main";
@@ -71,17 +71,12 @@ describe("resolveTransientCronRetryDecision", () => {
       expect(job.state.nextRunAtMs).toBeUndefined();
       expect(job.state.lastError).toBe("Automation has no valid session destination");
       expect(job.state.autoDisabled).toBeUndefined();
-      expect(notifications).toHaveLength(1);
+      expect(notifications).toHaveLength(route ? 1 : 0);
       if (route) {
         const notice = notifications[0];
         expect(notice?.kind === "failure-alert" && notice.payload.text).toContain(
           "invalid automation target",
         );
-      } else {
-        expect(notifications[0]).toMatchObject({
-          kind: "auto-disabled",
-          text: expect.stringContaining("Run history"),
-        });
       }
     },
   );

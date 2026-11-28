@@ -7,14 +7,12 @@ import { readConfigFileSnapshot, transformConfigFile } from "../config/config.js
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
-import { readCronRunRecordsForTests } from "../cron/run-history.test-support.js";
 import { createCronServiceWithStateForTest } from "../cron/service.test-harness.js";
 import { waitForCronRunQueue } from "../cron/service/run-queue.js";
 import { captureCronSchedulerWakeForTest } from "../cron/service/scheduler-actor.test-support.js";
 import { saveCronJobsStore } from "../cron/store.js";
 import { resolveCronStoreKeyInDatabase } from "../cron/store/paths.js";
 import { loadCronRows, loadedCronStoreFromRows } from "../cron/store/row-codec.js";
-import { queueStore, scheduled } from "../cron/store/run-queue.test-support.js";
 import type { CronJob } from "../cron/types.js";
 import { runInitialConfigWriteHealth } from "../flows/doctor-health-contribution-runners.config.js";
 import { mintCronStandingGrantLocked } from "../gateway/operator-approval-standing-grants.worker.js";
@@ -247,6 +245,7 @@ it("preserves a due legacy one-shot through Doctor ownership repair, then runs i
   const dueAt = Date.now() - 1_000;
   await saveJobs(storePath, {
     id: "pending-one-shot",
+    deleteAfterRun: false,
     schedule: { kind: "at", at: new Date(dueAt).toISOString() },
     payload: { kind: "agentTurn", message: "Run after owner repair", toolsAllow: [] },
     state: { nextRunAtMs: dueAt },
@@ -269,50 +268,16 @@ it("preserves a due legacy one-shot through Doctor ownership repair, then runs i
   await wake(cronState);
   await waitForCronRunQueue(cronState);
   expect(execute).toHaveBeenCalledOnce();
-  expect(cron.getJob("pending-one-shot")).toBeUndefined();
-  expect(readCronRunRecordsForTests("pending-one-shot")).toMatchObject([
-    { agentId: "ops", detail: { status: "ok" } },
-  ]);
+  expect(cron.getJob("pending-one-shot")).toMatchObject({
+    agentId: "ops",
+    enabled: false,
+    state: { lastRunStatus: "ok" },
+  });
   expect(readReceipts()).toEqual([{ status: "ok" }]);
   cron.stop();
   await cron.start();
   expect(execute).toHaveBeenCalledOnce();
   expect(readReceipts()).toEqual([{ status: "ok" }]);
-});
-
-it("preserves a queued legacy receipt at startup and runs it once after Doctor converts the job", async () => {
-  const dueAt = Date.now() - 1_000;
-  const job = makeCronJob({
-    id: "queued-one-shot",
-    agentId: "ops",
-    schedule: { kind: "at", at: new Date(dueAt).toISOString() },
-    delivery: { mode: "none" },
-    state: { nextRunAtMs: dueAt },
-  });
-  const queue = await queueStore(storePath, [job], dueAt);
-  const request = scheduled(queue.storeKey, job, dueAt);
-  const { accepted } = await queue.request([request]);
-  expect(accepted).toHaveLength(1);
-  // The previous scheduler stored the cleanup policy alongside its accepted timed request.
-  sql`UPDATE cron_jobs SET job_json = json_set(job_json, '$.deleteAfterRun', json('true')) WHERE job_id = ${job.id}`.run();
-  const receipts = () =>
-    sql`SELECT receipt_id, status FROM cron_run_receipts WHERE job_id = ${job.id}`.all();
-
-  const before = createCron("ops");
-  await before.cron.start();
-  expect(receipts()).toEqual([{ receipt_id: request.receiptId, status: "running" }]);
-  expect(before.cron.getJob(job.id)?.state.queuedAtMs).toBe(dueAt);
-  expect(before.execute).not.toHaveBeenCalled();
-  before.cron.stop();
-  await before.cron.waitForIdle();
-
-  await repairLegacy(await repair());
-  expect(await backups()).toHaveLength(1);
-  const after = createCron("ops");
-  await after.cron.start();
-  await waitForCronRunQueue(after.state);
-  expect(after.execute).toHaveBeenCalledOnce();
-  expect(receipts()).toEqual([{ receipt_id: request.receiptId, status: "ok" }]);
 });
 
 it.each([

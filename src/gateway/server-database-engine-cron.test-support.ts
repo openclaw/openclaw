@@ -9,6 +9,7 @@ import {
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { CronJob } from "../cron/types.js";
 import type { GatewayClient } from "./client.js";
 
 export async function expectStoredCronOneShotComplete(
@@ -20,7 +21,12 @@ export async function expectStoredCronOneShotComplete(
     `SELECT CAST(enabled AS integer) AS enabled, state_json FROM ${quotedNamespace}.cron_jobs WHERE job_id = $1`,
     [jobId],
   );
-  expect(result.rows).toEqual([]);
+  expect(result.rows).toHaveLength(1);
+  expect(result.rows[0]!.enabled).toBe(0);
+  const state = JSON.parse(result.rows[0]!.state_json) as CronJob["state"];
+  expect(state.startupCatchupAtMs).toBeUndefined();
+  expect(state.runningReceiptId).toBeUndefined();
+  expect(state.queuedAtMs).toBeUndefined();
 }
 
 /** Only complete startup records can prove cumulative pool reuse across Gateway boots. */

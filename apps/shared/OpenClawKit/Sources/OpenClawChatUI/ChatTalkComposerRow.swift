@@ -182,7 +182,7 @@ struct ChatTalkComposerRow<Trailing: View>: View {
         case .muted:
             TalkWaveformView(phase: .idle, palette: Self.neutralPalette)
         case .thinking:
-            ChatWorkingClawView(seed: "talk-thinking", parked: true, tint: CleanChatComposerMetrics.footerInk)
+            ChatWorkingClawView(parked: true, tint: CleanChatComposerMetrics.footerInk)
                 .scaleEffect(0.8)
         case .issue:
             Image(systemName: "exclamationmark.circle")

@@ -1,8 +1,8 @@
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import * as setup from "./model-setup-fixtures.test-support.ts";
+import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI browser sign-in with an unresponsive Gateway",
@@ -17,7 +17,7 @@ const detection = setup.makeDetection({
 });
 
 async function startSignIn(page: Page, context: BrowserContext, held: string) {
-  const gateway = await installMockGateway(page, {
+  const gateway = await installSetupGateway(page, {
     featureMethods: ["openclaw.setup.detect", "openclaw.setup.auth.start", "wizard.next"],
     heldMethods: [held],
     methodResponses: {
@@ -26,6 +26,7 @@ async function startSignIn(page: Page, context: BrowserContext, held: string) {
     },
   });
   await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
+  await openModelSetup(page);
   const [reserved] = await Promise.all([
     context.waitForEvent("page"),
     page.locator('[data-auth-choice="openrouter-oauth"] button').click(),

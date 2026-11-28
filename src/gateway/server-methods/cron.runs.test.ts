@@ -8,7 +8,6 @@ import {
   deleteSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { cronRunLogEntryToDetail } from "../../cron/run-history-detail.js";
 import type { CronRunLogEntry } from "../../cron/run-log-types.js";
 import type { CronService } from "../../cron/service.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
@@ -37,122 +36,6 @@ import {
   initializeSessionReadContext,
 } from "./sessions-read-cache.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
-
-it("retries an ended one-time definition only for an administrator without exposing the definition", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (fixture) => {
-    const storePath = fixture.path("cron", "jobs.json");
-    const cron = createReadService({
-      storePath,
-      resolveDefaultAgentId: () => "main",
-      cronEnabled: false,
-      enqueueSystemEvent: vi.fn(),
-      runIsolatedAgentJob: vi.fn(),
-    });
-    const at = Date.now();
-    const job = await cron.add({
-      name: "Check staging build",
-      schedule: { kind: "at", at: new Date(at).toISOString() },
-      sessionTarget: "isolated",
-      wakeMode: "now",
-      enabled: false,
-      payload: { kind: "agentTurn", message: "Check the staging build status." },
-      delivery: { mode: "none" },
-    });
-    await cron.remove(job.id);
-    const entry = makeRun(job.id, "failed-build-run", {
-      sessionId: "failed-build-session",
-      jobName: job.name,
-      status: "error",
-      error: "staging unavailable",
-      retryAvailable: true,
-    });
-    const record = historyRecord(entry, storePath, "main", "failed-build-task");
-    const persistArchivedJob = (archivedJob: Record<string, unknown>) =>
-      persistRuns([
-        {
-          ...record,
-          detail: cronRunLogEntryToDetail(entry, { storeKey: record.storeKey, archivedJob }),
-        },
-      ]);
-    const context = createDirectChatContext({
-      cron,
-      cronStorePath: storePath,
-      getRuntimeConfig: () => ({}),
-    });
-    const scopes = ["operator.admin"];
-    const admin = { connect: { scopes } } as GatewayClient;
-    const selection = { id: job.id, retryRunId: entry.runId };
-    try {
-      for (const archived of [
-        { ...job, id: ` ${job.id} ` },
-        { ...job, deleteAfterRun: false },
-        { ...job, payload: { text: "Check status", skipIfScratchEmpty: true } },
-      ]) {
-        persistArchivedJob(archived);
-        expectError(
-          await invokeCron(context, "cron.run", selection, { client: admin }),
-          expect.objectContaining({ message: expect.stringContaining("must be recreated") }),
-        );
-      }
-      persistArchivedJob({ ...job, state: undefined });
-      // Retry requires the public run ID even when a transcript link uniquely identifies the run.
-      expectError(
-        await invokeCron(
-          context,
-          "cron.run",
-          { id: job.id, retryRunId: "failed-build-session" },
-          { client: admin },
-        ),
-        expect.objectContaining({ message: expect.stringContaining("no longer has a retryable") }),
-      );
-      const history = await invokeCron(
-        context,
-        "cron.runs",
-        { id: job.id, view: "summary" },
-        { client: admin },
-      );
-      expectReply(
-        history,
-        expect.objectContaining({
-          entries: [expect.objectContaining({ jobName: job.name, retryAvailable: true })],
-        }),
-      );
-      expect(JSON.stringify(history.mock.calls)).not.toContain("archivedJob");
-      const stale = await invokeCron(
-        context,
-        "cron.run",
-        {
-          ...selection,
-          expectedProcessInstanceId: "previous-process",
-        },
-        { client: admin },
-      );
-      expectError(
-        stale,
-        expect.objectContaining({ message: expect.stringContaining("Gateway process changed") }),
-      );
-      // A later request reads the new scopes. This one has already been admitted.
-      const readJob = cron.readJob.bind(cron);
-      vi.spyOn(cron, "readJob").mockImplementationOnce(async (id) => {
-        const loaded = await readJob(id);
-        scopes.length = 0;
-        return loaded;
-      });
-      const retried = await invokeCron(context, "cron.run", selection, { client: admin });
-      expect(retried.mock.calls[0]?.[0], JSON.stringify(retried.mock.calls[0])).toBe(true);
-      expectError(
-        await invokeCron(context, "cron.run", selection, { client: admin }),
-        expect.objectContaining({ message: expect.stringContaining("retry this automation") }),
-      );
-      expect(await cron.list({ includeDisabled: true })).toMatchObject([
-        { name: job.name, enabled: true, payload: job.payload },
-      ]);
-      expect(cron.getJob(job.id)).toBeUndefined();
-    } finally {
-      cron.stop();
-    }
-  });
-});
 
 function expectNotFound(respond: ReturnType<typeof vi.fn<RespondFn>>, jobId: string) {
   expectError(respond, expect.objectContaining({ details: { code: "CRON_JOB_NOT_FOUND", jobId } }));

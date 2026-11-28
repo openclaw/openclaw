@@ -7,10 +7,6 @@ import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import { findJobOrThrow, hasActiveCronRun, isJobEnabled } from "./jobs-scheduling.js";
 import { assertExternalSourceScheduleSupport, assertSupportedJobSpec } from "./jobs-validation.js";
-import {
-  CRON_CLEANUP_REPAIR_REQUIRED_MESSAGE,
-  hasLegacyCronCleanupPolicy,
-} from "./one-shot-schedule.js";
 import type { ManualRunOptions } from "./run-options.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
@@ -181,9 +177,6 @@ export async function inspectManualRunPreflight(
     (job.schedule.kind !== "event" || cronSourceIdentity(job) !== opts.event.input.sourceIdentity)
   ) {
     return { ok: true, ran: false, reason: "not-due" };
-  }
-  if (hasLegacyCronCleanupPolicy(job)) {
-    throw new Error(CRON_CLEANUP_REPAIR_REQUIRED_MESSAGE);
   }
   assertCronHostExecutionAllowed(state, job);
   assertCanonicalCronDeliveryMode(job.delivery);

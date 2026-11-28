@@ -68,6 +68,7 @@ it.each([
   "uses recorded %s completion for one-shot cleanup",
   (completionStatus, deliveryStatus, mode, failureNotificationDelivery) => {
     const { state, job, deferredNotifications, restore } = repairFixture({
+      deleteAfterRun: true,
       schedule: { kind: "at", at: runAt },
       sessionTarget: "isolated",
       payload: { kind: "agentTurn", message: "do not replay" },
@@ -79,8 +80,11 @@ it.each([
     state.deps.sendCronFailureAlert = vi.fn(async () => undefined);
     const restored = restore({ completionStatus, deliveryStatus, failureNotificationDelivery });
 
-    expect(restored?.shouldDelete).toBe(true);
+    expect(restored?.shouldDelete).toBe(completionStatus === "succeeded");
     expect(job.state).toMatchObject({ lastRunStatus: "ok", consecutiveErrors: 0 });
+    if (!restored?.shouldDelete) {
+      expect(job.enabled).toBe(false);
+    }
     expect(job.state.nextRunAtMs).toBeUndefined();
     expect(deferredNotifications).toEqual([]);
     expect(state.deps.sendCronFailureAlert).not.toHaveBeenCalled();

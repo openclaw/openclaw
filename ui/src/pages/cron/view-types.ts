@@ -9,8 +9,7 @@ type OptionalViewProp =
   | "channelLabels"
   | "channelMeta"
   | "highlightedRunId"
-  | "onRunMount"
-  | "onRetryRun";
+  | "onRunMount";
 
 export type CronProps = Omit<CronViewProps, OptionalViewProp | "gateway"> &
   Partial<Pick<CronViewProps, OptionalViewProp>> & {

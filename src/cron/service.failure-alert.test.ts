@@ -126,14 +126,11 @@ describe("CronService failure alerts", () => {
           }
           await expect(cron.run(oneShot.id, mode)).resolves.toEqual({ ok: true, ran: true });
           const saved = cron.getJob(oneShot.id);
-          if (mode === "force") {
-            expect(saved).toMatchObject({ enabled: true, state: { nextRunAtMs: atMs } });
-          } else {
-            expect(saved).toBeUndefined();
-          }
+          expect(saved?.enabled).toBe(mode === "force");
+          expect(saved?.state.nextRunAtMs).toBe(mode === "force" ? atMs : undefined);
           const guidance = alertCallArg(sendCronFailureAlert).text;
           if (mode === "due") {
-            expect(guidance).toContain("Run history");
+            expect(guidance).toContain("use Run Now or reschedule");
             expect(guidance).not.toContain("will check again on a later scheduled run");
           } else {
             expect(guidance).toContain("will check again on a later scheduled run");
@@ -401,7 +398,7 @@ describe("CronService failure alerts", () => {
           expect(alert.text).toContain("Cause: auth_permanent");
           expect(alert.text).toContain("Send /login openai");
           if (oneShot) {
-            expect(cron.getJob(job.id)).toBeUndefined();
+            expect(cron.getJob(job.id)?.enabled).toBe(false);
           }
           const signIn = {
             label: "Sign in",

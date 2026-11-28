@@ -49,10 +49,6 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createGatewaySchedulerClock } from "../../test-utils/gateway-scheduler-clock.js";
-import {
-  readCronRunRecordsForTests,
-  readCronRunStateForTests,
-} from "../run-history.test-support.js";
 import type { CronEvent } from "../service.js";
 import { resolveCronRequesterExecutionRevision } from "../service/jobs-tool-policy.js";
 import { onTimer } from "../service/timer.test-support.js";
@@ -62,13 +58,13 @@ import { updateCronRuntimeRow } from "../store/row-codec.js";
 import { prepareAuthorityConfig, resetAuthorityRunHarness } from "./run.authority.test-support.js";
 import {
   createOperatorContinuationService,
-  OPERATOR_CONTINUATION_SCENARIOS as scenarios,
   prepareContinuationRoleConfig,
   publication,
   publicationCommandResult,
 } from "./run.operator-continuation.test-support.js";
 import {
   prepareContinuationClient,
+  PRINCIPAL_POLICY_CASES,
   isPrincipalPolicyScenario,
   preparePrincipalPolicyChange,
   principalGatewayPolicy,
@@ -134,7 +130,40 @@ afterEach(() => {
 });
 
 // Exercise custody transfer through durable reload, scheduled admission and the real action owner.
-it.each(scenarios)("scheduled continuation preserves the %s boundary", async (scenario) => {
+it.each([
+  "operator",
+  "write-scoped operator",
+  "cron-scoped operator",
+  "self removal",
+  "self removal then role revoked during merge",
+  "self removal then session replaced during merge",
+  "paused force run",
+  "restart",
+  "principal reload",
+  ...PRINCIPAL_POLICY_CASES,
+  "principal owner unavailable",
+  "principal store unavailable",
+  "restart before scheduling",
+  "restart before scheduling revoked ingress",
+  "restart before scheduling without source",
+  "principal ingress revoked",
+  "principal ingress replaced",
+  "principal role revoked",
+  "principal access revoked",
+  "guest",
+  "legacy attribution",
+  "foreign target",
+  "current tool deny",
+  "role revoked",
+  "role definition edited",
+  "role revoked during merge",
+  "session edited",
+  "session replaced",
+  "queued owner payload edit",
+  "queued manager rename",
+  "owner capture races manager payload",
+  "recurring trigger reload",
+] as const)("scheduled continuation preserves the %s boundary", async (scenario) => {
   const restartBeforeScheduling = scenario.startsWith("restart before scheduling");
   const principalSource = scenario.startsWith("principal") || restartBeforeScheduling;
   const unavailableSource =
@@ -355,6 +384,7 @@ it.each(scenarios)("scheduled continuation preserves the %s boundary", async (sc
                           : ["github_publish"],
                     },
                     delivery: { mode: "none" },
+                    deleteAfterRun: false,
                   },
                 });
                 if (queuedEdit) {
@@ -782,15 +812,9 @@ it.each(scenarios)("scheduled continuation preserves the %s boundary", async (sc
       clock.setTime(next);
       await onTimer(schedulerState);
       await execution.waitForIdle();
-      expect(await fixture.read()).toEqual([]);
+      expect((await fixture.read()).map((item) => item.id)).toEqual([job.id]);
     }
-    const settledJob = expectDefined(finishedEvent?.job, "finished scheduled job");
-    const state = settledJob.state;
-    if (!execution.getJob(job.id)) {
-      expect(readCronRunStateForTests(job.id)).toMatchObject({
-        lastRunStatus: state.lastRunStatus,
-      });
-    }
+    const state = expectDefined(execution.getJob(job.id), "finished scheduled job").state;
     if (personPolicyRemoved) {
       expect(reads, "Current person policy must fence protected RPC reads").toBe(0);
       expect(writes).toEqual([]);
@@ -802,9 +826,7 @@ it.each(scenarios)("scheduled continuation preserves the %s boundary", async (sc
     }
     if (managerRename || captureRace) {
       expect(admittedOperator).toBe(false);
-      expect(readCronRunRecordsForTests(job.id).at(-1)?.detail).not.toHaveProperty(
-        "archivedJob.operatorSource",
-      );
+      expect((await fixture.read())[0]?.operatorSource).toBeUndefined();
     }
     if (queuedEdit || recurring) {
       expect(state.autoDisabled).toBeUndefined();
@@ -832,8 +854,7 @@ it.each(scenarios)("scheduled continuation preserves the %s boundary", async (sc
       await execution.waitForIdle();
       expect(entered).toBe(2);
       expect(writes).toEqual([{ sha: "a".repeat(40), merge_method: "merge" }]);
-      expect(execution.getJob(job.id)).toBeUndefined();
-      expect(readCronRunStateForTests(job.id)?.lastRunStatus).toBe("ok");
+      expect(execution.getJob(job.id)?.state.lastRunStatus).toBe("ok");
       execution.stop();
       await execution.waitForIdle();
       await execution.start();

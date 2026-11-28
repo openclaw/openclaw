@@ -163,9 +163,9 @@ it.each<AccountCase>([
       const tasks = readCronRunRecordsForTests(job.id);
       const expectedStatus = fails ? "error" : "ok";
       const completionStatus = fails ? "failed" : "succeeded";
-      expect(persisted).toBeUndefined();
+      expect(persisted?.state.lastRunStatus).toBe(expectedStatus);
       expect(cronJobNeedsCreatorReauthorization({ job })).toBe(
-        history.entries[0]?.error?.includes("no recorded creator channel") === true,
+        persisted?.state.lastError?.includes("no recorded creator channel") === true,
       );
       expect(history.entries).toMatchObject([{ status: expectedStatus, completionStatus }]);
       expect(tasks).toMatchObject([{ status: completionStatus }]);
@@ -173,12 +173,14 @@ it.each<AccountCase>([
         expect.objectContaining({ status: expectedStatus }),
       ]);
       if (fails) {
-        const reason = history.entries[0]?.error;
+        const reason = persisted?.state.lastError;
         expect(reason).toContain(`Scheduled account "${accountId}" is unavailable`);
+        expect(history.entries[0]?.error).toBe(reason);
         expect(history.entries[0]?.diagnostics?.summary).toContain(reason);
+        expect(persisted?.state.lastDiagnosticSummary).toContain(reason);
         expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
       } else {
-        expect(history.entries[0]?.error).toBeUndefined();
+        expect(persisted?.state.lastError).toBeUndefined();
         expect(runEmbeddedAgentMock.mock.calls[0]?.[0].toolsAllow).toEqual(toolsAllow);
         if (!accountId) {
           expect(runEmbeddedAgentMock.mock.calls[0]?.[0].scheduledToolPolicy).toBeUndefined();

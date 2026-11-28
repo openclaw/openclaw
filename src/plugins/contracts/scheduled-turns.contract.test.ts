@@ -260,6 +260,7 @@ describe("plugin scheduled turns", () => {
     const job = getCronAddBody();
     expect(job.name).toBe("plugin:workflow-plugin:tag:nudge:agent:main:main:custom-nudge-name");
     expect(job.sessionTarget).toBe("session:agent:main:main");
+    expect(job.deleteAfterRun).toBe(true);
     expect(job.delivery).toEqual({ mode: "announce", channel: "last" });
     expect(job.payload).toEqual({ kind: "agentTurn", message: "wake" });
     expect(listPluginSessionSchedulerJobs(WORKFLOW_PLUGIN_ID)).toHaveLength(1);
@@ -418,8 +419,9 @@ describe("plugin scheduled turns", () => {
     await reject({
       sessionKey: MAIN_SESSION_KEY,
       message: "wake",
-      at: "invalid",
-    });
+      cron: "*/5 * * * *",
+      deleteAfterRun: true,
+    } as never);
     await reject({ ...DEFAULT_TURN_SCHEDULE, tag: "nudge:followup" });
     expect(workflowMocks.cronAdd).not.toHaveBeenCalled();
   });
@@ -495,6 +497,7 @@ describe("plugin scheduled turns", () => {
       enabled: true,
       sessionTarget: "session:agent:main:main",
       payload: { kind: "agentTurn", message: "wake" },
+      deleteAfterRun: true,
       wakeMode: "now",
       delivery: {
         mode: "announce",
@@ -534,10 +537,11 @@ describe("plugin scheduled turns", () => {
           delayMs: 1,
           tag: "bad:tag",
         });
-        const recurring = await scheduleSessionTurn({
+        const badDelete = await scheduleSessionTurn({
           sessionKey: "agent:main:main",
-          message: "wake recurring",
+          message: "bad delete",
           cron: "0 * * * *",
+          deleteAfterRun: true,
           tag: "nudge",
         });
         const removed = await unscheduleSessionTurnsByTag({
@@ -548,7 +552,7 @@ describe("plugin scheduled turns", () => {
           first,
           second,
           badTag: badTag ?? null,
-          recurring,
+          badDelete: badDelete ?? null,
           removed: removed ?? null,
         });
       });`,
@@ -609,22 +613,21 @@ describe("plugin scheduled turns", () => {
         "agent:main:main",
       ),
       badTag: null,
-      recurring: sessionTurnHandle("loader-scheduled-job-3", "loader-scheduler-runtime"),
-      removed: { removed: 3, failed: 0 },
+      badDelete: null,
+      removed: { removed: 2, failed: 0 },
     });
     const addedNames = addedJobs.map((job) => job.name);
-    expect(addedNames).toHaveLength(3);
-    for (const name of addedNames) {
-      expect(name).toMatch(
-        /^plugin:loader-scheduler-runtime:tag:nudge:agent:main:main:[0-9a-f-]{36}$/u,
-      );
-    }
-    expect(new Set(addedNames).size).toBe(3);
-    expect(addedJobs[2]?.schedule).toEqual({ kind: "cron", expr: "0 * * * *" });
+    expect(addedNames).toHaveLength(2);
+    expect(addedNames[0]).toMatch(
+      /^plugin:loader-scheduler-runtime:tag:nudge:agent:main:main:[0-9a-f-]{36}$/u,
+    );
+    expect(addedNames[1]).toMatch(
+      /^plugin:loader-scheduler-runtime:tag:nudge:agent:main:main:[0-9a-f-]{36}$/u,
+    );
+    expect(addedNames[0]).not.toBe(addedNames[1]);
     expect(addedJobs.map((job) => job.delivery)).toEqual([
       { mode: "announce", channel: "last" },
       { mode: "none" },
-      { mode: "announce", channel: "last" },
     ]);
     expect(listPluginSessionSchedulerJobs("loader-scheduler-runtime")).toEqual([]);
   });

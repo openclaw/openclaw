@@ -528,7 +528,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
           agentId: "main",
           sessionKey: "cron:test-job",
           job: makeIsolatedAgentJobFixture({
-            schedule: { kind: "at", at: new Date().toISOString() },
+            deleteAfterRun: true,
             delivery: { mode: "announce", bestEffort },
           }),
         }),

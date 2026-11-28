@@ -386,6 +386,7 @@ describe("CronService read operations", () => {
         await cron.start();
         const job = await cron.add({
           ...futureJob("edited-one-shot", clock.clock.now()),
+          deleteAfterRun: true,
           schedule: { kind: "at", at: new Date(startedAt).toISOString() },
           delivery: { mode: "none" },
         });
@@ -543,6 +544,7 @@ describe("CronService read operations", () => {
     const laterFinished = createDeferred();
     const recurringJob = (id: string, nextRunAtMs: number): CronJob => ({
       ...futureJob(id, now),
+      deleteAfterRun: false,
       schedule: { kind: "every", everyMs: 5 * 60_000 },
       payload: { kind: "agentTurn", message: "test" },
       delivery: { mode: "none" },

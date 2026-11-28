@@ -12,7 +12,6 @@ import {
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isCronJobActive } from "../cron/active-jobs.js";
-import { readCronRunStateForTests } from "../cron/run-history.test-support.js";
 import { CronService } from "../cron/service.js";
 import { waitForActiveCronTaskRuns } from "../cron/service/active-run-cancellation.js";
 import { captureCronSchedulerWakeForTest } from "../cron/service/scheduler-actor.test-support.js";
@@ -144,7 +143,7 @@ function observe(promise: Promise<unknown>) {
   };
 }
 
-async function addCommand(original: StartedGatewayCron, name: string) {
+async function addCommand(original: StartedGatewayCron, name: string, deleteAfterRun: boolean) {
   return original.cron.add({
     name,
     enabled: true,
@@ -153,6 +152,7 @@ async function addCommand(original: StartedGatewayCron, name: string) {
     sessionTarget: "isolated",
     wakeMode: "next-heartbeat",
     delivery: { mode: "none" },
+    deleteAfterRun,
   });
 }
 
@@ -269,7 +269,7 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     let run: Promise<unknown> | undefined;
     let drain: Promise<void> | undefined;
     try {
-      const job = await addCommand(original, "finalization drain");
+      const job = await addCommand(original, "finalization drain", false);
       jobId = job.id;
       run = original.cron.run(job.id, "force");
       await awaitGateBeforeSettlement(
@@ -293,9 +293,8 @@ describe("gateway cron stop-and-drain automation ownership", () => {
       await drain;
       expect(observed.outcome).toEqual({ ok: false, error: stopError });
       const completed = (await loadJobs(original)).store.jobs.find((entry) => entry.id === job.id);
-      expect(completed).toBeUndefined();
-      const archived = readCronRunStateForTests(job.id);
-      expect(archived).toMatchObject({ lastRunStatus: "ok" });
+      expect(completed).toMatchObject({ enabled: false, state: { lastRunStatus: "ok" } });
+      expect(completed?.state.runningAtMs).toBeUndefined();
       expect(isCronJobActive(job.id)).toBe(false);
     } finally {
       releaseFinalization.resolve();
@@ -304,30 +303,33 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     }
   });
 
-  it("publishes a one-shot binding removal after completion", async () => {
-    const original = await startGatewayCron("one-shot", false);
-    const changed = vi.fn();
-    let stop = () => {};
-    try {
-      const job = await addCommand(original, "one-shot binding");
-      const key = `agent:main:cron:${job.id}`;
-      expect(sessionHasAutomation(key, original.cfg)).toBe(true);
-      stop = sessionChanges.subscribe(changed);
-      expect(await original.cron.run(job.id, "force")).toMatchObject({
-        ok: true,
-        ran: true,
-      });
-      expect(original.cron.getJob(job.id)?.state.lastError).toBeUndefined();
-      expect(sessionHasAutomation(key, original.cfg)).toBe(false);
-      const automation = changed.mock.calls
-        .map(([change]) => change)
-        .filter((change) => change.scope === "automation");
-      expect(automation).toEqual([{ sessionKey: key, scope: "automation" }]);
-      expect(original.cron.getJob(job.id)?.enabled).toBe(undefined);
-    } finally {
-      stop();
-    }
-  });
+  it.each([false, true])(
+    "publishes a one-shot binding removal after completion (delete=%s)",
+    async (deleteAfterRun) => {
+      const original = await startGatewayCron(`one-shot-${deleteAfterRun}`, false);
+      const changed = vi.fn();
+      let stop = () => {};
+      try {
+        const job = await addCommand(original, "one-shot binding", deleteAfterRun);
+        const key = `agent:main:cron:${job.id}`;
+        expect(sessionHasAutomation(key, original.cfg)).toBe(true);
+        stop = sessionChanges.subscribe(changed);
+        expect(await original.cron.run(job.id, "force")).toMatchObject({
+          ok: true,
+          ran: true,
+        });
+        expect(original.cron.getJob(job.id)?.state.lastError).toBeUndefined();
+        expect(sessionHasAutomation(key, original.cfg)).toBe(false);
+        const automation = changed.mock.calls
+          .map(([change]) => change)
+          .filter((change) => change.scope === "automation");
+        expect(automation).toEqual([{ sessionKey: key, scope: "automation" }]);
+        expect(original.cron.getJob(job.id)?.enabled).toBe(deleteAfterRun ? undefined : false);
+      } finally {
+        stop();
+      }
+    },
+  );
 
   it.each(["drain", "superseded restart"] as const)(
     "waits for cancelled exit watchers before completing %s",

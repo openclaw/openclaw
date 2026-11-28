@@ -12,7 +12,6 @@ import type {
 
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
-  pluginDeleteAfterRun?: CronStoredJob["pluginDeleteAfterRun"];
   /** Validated host invocation facts; immutable after fresh command-job creation. */
   pluginCommand?: CronStoredJob["pluginCommand"];
   /** Captured source digest of the admitting plugin instance; enables restart continuity. */

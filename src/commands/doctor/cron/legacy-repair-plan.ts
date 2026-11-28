@@ -15,7 +15,6 @@ import {
   repairRetiredModelSlots,
   repairModelRefAuthProfile,
 } from "../shared/retired-model-ref-repair.js";
-import { describeEndedOneTimeCronRepair, planEndedOneTimeCronRepair } from "./ended-one-time.js";
 import { migrateLegacyNotifyFallback } from "./legacy-notify.js";
 import type { LegacyCronQuarantine } from "./legacy-quarantine-migration.js";
 import { planCronCodexRefRewriteAgainstPersistedConfig } from "./runtime-policy-migration.js";
@@ -27,7 +26,12 @@ import {
   normalizeStoredCronJobs,
   recoverValidQuarantinedCronScheduleJobs,
 } from "./store-migration.js";
-import type { CronOwnerProjection, inspectCronJobOwnersForDoctor } from "./store-repair.js";
+import type { inspectCronJobOwnersForDoctor } from "./store-repair.js";
+
+export type CronOwnerProjection =
+  | { kind: "explicit"; agentId: string }
+  | { kind: "runtime-default"; agentId: string }
+  | { kind: "unresolved" };
 
 export type LegacyCronRepairState = {
   storePath: string;
@@ -176,10 +180,7 @@ export async function planLegacyCronStoreRepair(params: LegacyCronStoreRepairPar
     }
   }
 
-  const oneTimeRepair = planEndedOneTimeCronRepair(state.rawJobs);
-  const oneTimeReports = describeEndedOneTimeCronRepair(oneTimeRepair);
   const storeChanged =
-    oneTimeReports.length > 0 ||
     (state.legacyImport?.count ?? 0) > 0 ||
     retirementChanges.length > 0 ||
     state.invalidConfigRows.length > 0 ||
@@ -194,8 +195,6 @@ export async function planLegacyCronStoreRepair(params: LegacyCronStoreRepairPar
     quarantineRecovery,
     persistedQuarantineEntrySet,
     retirementChanges,
-    oneTimeRepair,
-    oneTimeReports,
     storeChanged,
     changed,
   };

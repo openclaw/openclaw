@@ -149,7 +149,7 @@ export type CronRunFinalizationOutcome = CronJobExecutionResult & {
   // Undefined is a completed classification, not a request for worker-side inference.
   errorReason: CronRunLogEntry["errorReason"];
   jobId: string;
-  job: CronStoredJob;
+  job: CronJob;
   taskRunId?: string;
   completionStatus: CronCompletionStatus;
   deliveryState: CronResolvedDeliveryState;
@@ -275,7 +275,7 @@ export type CronRuntimeMutationContracts = {
   "cron.recordFailureAlertOutcome": {
     input: CronRuntimeMutationInputs["cron.recordFailureAlertOutcome"];
     snapshot: Record<string, never>;
-    outcome: { job?: CronJob; recorded?: boolean };
+    outcome: { job?: CronJob };
   };
 };
 

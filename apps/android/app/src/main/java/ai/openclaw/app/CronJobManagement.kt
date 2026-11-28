@@ -194,6 +194,7 @@ data class GatewayCronJobEdit(
   val name: String,
   val description: String,
   val enabled: Boolean,
+  val deleteAfterRun: Boolean,
   val schedule: GatewayCronScheduleEdit,
   val sessionTarget: String,
   val wakeMode: String,
@@ -202,6 +203,7 @@ data class GatewayCronJobEdit(
   fun withSchedule(value: GatewayCronScheduleEdit): GatewayCronJobEdit =
     copy(
       schedule = value,
+      deleteAfterRun = deleteAfterRun && value is GatewayCronScheduleEdit.At,
     )
 }
 
@@ -323,6 +325,8 @@ internal fun GatewayCronJobDetail.toCronJobEdit(): GatewayCronJobEdit =
     name = name,
     description = description,
     enabled = enabled,
+    // Gateway deletion only runs after a successful one-shot schedule.
+    deleteAfterRun = deleteAfterRun && scheduleKind == "at",
     schedule =
       when (scheduleKind) {
         "at" -> {
@@ -414,6 +418,9 @@ internal fun buildCronUpdateParams(
       if (name != original.name) put("name", JsonPrimitive(name))
       if (description != original.description) put("description", JsonPrimitive(description))
       if (edit.enabled != original.enabled) put("enabled", JsonPrimitive(edit.enabled))
+      if (edit.deleteAfterRun != original.deleteAfterRun) {
+        put("deleteAfterRun", JsonPrimitive(edit.deleteAfterRun))
+      }
       schedulePatch?.let { put("schedule", it) }
       if (sessionTarget != original.sessionTarget) {
         put("sessionTarget", JsonPrimitive(sessionTarget))

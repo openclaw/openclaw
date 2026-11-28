@@ -7,7 +7,6 @@ import {
 } from "../run-history-detail.js";
 import { createCronExecutionId } from "../run-id.js";
 import { failureNotificationDeliveryFromJobState } from "../service/failure-alerts.js";
-import { canRetryArchivedCronJob } from "../service/one-shot-schedule.js";
 import type { CronEvent, CronJob } from "../types.js";
 import type { CronRunHistoryWrite } from "./run-history.types.js";
 import type { CronRunFinalizationOutcome } from "./runtime-worker.types.js";
@@ -55,7 +54,6 @@ export function cronRunResultHistory(
   job: CronJob,
   result: CronRunFinalizationOutcome,
   defaultAgentId?: string,
-  endedOneTime = false,
 ): CronRunHistoryWrite {
   const quiet = result.status === "ok" && result.triggerEval?.fired === false;
   const entry = cronRunLogEntryFromEvent(
@@ -63,13 +61,6 @@ export function cronRunResultHistory(
     result.endedAt,
     result.errorReason,
   );
-  const { state: _state, runtimeAuthority: _runtimeAuthority, ...definition } = result.job;
-  const retryAvailable =
-    endedOneTime && result.completionStatus !== "succeeded" && canRetryArchivedCronJob(result.job);
-  entry.jobName = result.job.displayName ?? result.job.name;
-  if (retryAvailable) {
-    entry.retryAvailable = true;
-  }
   return {
     storeKey,
     jobId: result.jobId,
@@ -89,12 +80,6 @@ export function cronRunResultHistory(
         ? cronQuietTriggerDetail(storeKey, { ...result.triggerEval, fired: false })
         : cronRunLogEntryToDetail(entry, {
             storeKey,
-            ...(endedOneTime
-              ? {
-                  archivedJob: definition,
-                  failureNotificationId: job.state.lastFailureNotificationId,
-                }
-              : {}),
             scriptResult: result,
             triggerEval: result.triggerEval,
           }),

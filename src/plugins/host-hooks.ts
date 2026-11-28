@@ -314,18 +314,15 @@ type PluginSessionTurnScheduleCommonParams = {
 export type PluginSessionTurnScheduleParams =
   | ({
       at: string | number | Date;
-      /** @deprecated Omit to retire the completed turn into Run history. */
       deleteAfterRun?: boolean;
     } & PluginSessionTurnScheduleCommonParams)
   | ({
       delayMs: number;
-      /** @deprecated Omit to retire the completed turn into Run history. */
       deleteAfterRun?: boolean;
     } & PluginSessionTurnScheduleCommonParams)
   | ({
       cron: string;
       tz?: string;
-      /** @deprecated Recurring schedules already stay active between runs. */
       deleteAfterRun?: false;
     } & PluginSessionTurnScheduleCommonParams);
 

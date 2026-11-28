@@ -338,6 +338,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         name: "in-process-restart-one-shot",
         agentId: "main",
         enabled: true,
+        deleteAfterRun: false,
         schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
         sessionTarget: "isolated",
         wakeMode: "now",
@@ -372,13 +373,13 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       ).resolves.toMatchObject({
         entries: [{ runId: run.runId, status: "error", completionStatus: "failed" }],
       });
-      await expect(restarted.request("cron.get", { id: job.id })).rejects.toThrow(
-        "cron job not found",
-      );
+      const retiredJob = await restarted.request<CronJob>("cron.get", { id: job.id });
+      expect(retiredJob.state.runningAtMs).toBeUndefined();
       const probe = await restarted.request<{ id: string }>("cron.add", {
         name: "after-in-process-restart",
         agentId: "main",
         enabled: true,
+        deleteAfterRun: false,
         schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
         sessionTarget: "isolated",
         wakeMode: "now",
@@ -433,6 +434,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         name: "automatic-restart-one-shot",
         agentId: "main",
         enabled: true,
+        deleteAfterRun: false,
         schedule: { kind: "at", at },
         sessionTarget: "isolated",
         wakeMode: "now",
@@ -544,9 +546,11 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
           }),
         ]),
       );
-      await expect(restarted.request("cron.get", { id: job.id })).rejects.toThrow(
-        "cron job not found",
-      );
+      const completed = await restarted.request<CronJob>("cron.get", { id: job.id });
+      expect(completed.enabled).toBe(false);
+      expect(completed.state.consecutiveErrors).toBe(0);
+      expect(completed.state.nextRunAtMs).toBeUndefined();
+      expect(completed.state.runningAtMs).toBeUndefined();
       await expectStoredCronOneShotComplete(client, quoteIdentifier(anchor.namespace), job.id);
       await disconnectGatewayClient(restarted);
       const child = instance.child!;
@@ -616,6 +620,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         name: "gracefully-retained-one-shot",
         agentId: "main",
         enabled: true,
+        deleteAfterRun: false,
         // Automatic dispatch stays disabled until this manual run is finalized.
         schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
         sessionTarget: "isolated",
@@ -693,9 +698,10 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       });
       resources.defer(() => disconnectGatewayClient(restarted));
       await expect(restarted.request("cron.status", {})).resolves.toMatchObject({ enabled: true });
-      await expect(restarted.request("cron.get", { id: job.id })).rejects.toThrow(
-        "cron job not found",
-      );
+      await expect(restarted.request("cron.get", { id: job.id })).resolves.toMatchObject({
+        id: job.id,
+        enabled: false,
+      });
       await expect(
         restarted.request("cron.runs", { id: job.id, limit: 10 }),
       ).resolves.toMatchObject({
@@ -765,6 +771,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         name: "retained-one-shot",
         agentId: "main",
         enabled: true,
+        deleteAfterRun: false,
         // Automatic dispatch stays disabled; a due occurrence belongs to this manual run.
         schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
         sessionTarget: "isolated",
@@ -786,9 +793,10 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       ).resolves.toMatchObject({
         entries: [{ runId: run.runId, status: "ok", completionStatus: "succeeded", summary }],
       });
-      await expect(gateway.request("cron.get", { id: job.id })).rejects.toThrow(
-        "cron job not found",
-      );
+      await expect(gateway.request("cron.get", { id: job.id })).resolves.toMatchObject({
+        id: job.id,
+        enabled: false,
+      });
       expect(requests.filter((body) => body.includes(prompt))).toHaveLength(1);
       const readOwner = () =>
         queryRows<{ payload_json: string }>(
@@ -802,6 +810,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         name: "unfinished-one-shot",
         agentId: "main",
         enabled: true,
+        deleteAfterRun: false,
         schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
         sessionTarget: "isolated",
         wakeMode: "now",
@@ -826,9 +835,9 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
           receipt_id: string;
           request_run_id: string;
           status: string;
-          state_json: string | null;
+          state_json: string;
         }>(
-          `SELECT r.receipt_id, r.request_run_id, r.status, j.state_json FROM ${quoteIdentifier(anchor.namespace)}.cron_run_receipts r LEFT JOIN ${quoteIdentifier(anchor.namespace)}.cron_jobs j ON j.store_key = r.store_key AND j.job_id = r.job_id WHERE r.job_id = $1`,
+          `SELECT r.receipt_id, r.request_run_id, r.status, j.state_json FROM ${quoteIdentifier(anchor.namespace)}.cron_run_receipts r JOIN ${quoteIdentifier(anchor.namespace)}.cron_jobs j ON j.store_key = r.store_key AND j.job_id = r.job_id WHERE r.job_id = $1`,
           [unfinishedJob.id],
         );
       const activeReceipts = await readUnfinishedReceipt();
@@ -839,7 +848,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       };
       expect(activeReceipts[0]).toMatchObject({ ...receipt, status: "running" });
       // Public RPCs hide receipt IDs; bind the private marker and receipt in one SQL snapshot.
-      expect(JSON.parse(activeReceipts[0]!.state_json!)).toMatchObject({
+      expect(JSON.parse(activeReceipts[0]!.state_json)).toMatchObject({
         runningAtMs: activeJob.state.runningAtMs,
         runningReceiptId: receipt.receipt_id,
       });
@@ -888,6 +897,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         name: "automatic-scheduler-probe",
         agentId: "main",
         enabled: true,
+        deleteAfterRun: false,
         schedule: { kind: "at", at: new Date().toISOString() },
         sessionTarget: "isolated",
         wakeMode: "now",
@@ -910,9 +920,10 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
       ).resolves.toMatchObject({
         entries: [{ status: "ok", completionStatus: "succeeded", summary }],
       });
-      await expect(restarted.request("cron.get", { id: job.id })).rejects.toThrow(
-        "cron job not found",
-      );
+      await expect(restarted.request("cron.get", { id: job.id })).resolves.toMatchObject({
+        id: job.id,
+        enabled: false,
+      });
       const history = await restarted.request<{ entries: unknown[] }>("cron.runs", {
         id: job.id,
         limit: 10,
@@ -921,9 +932,21 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         expect.objectContaining({ runId: run.runId, status: "ok", completionStatus: "succeeded" }),
       ]);
       const interruptedError = "cron: job interrupted by gateway restart";
-      await expect(restarted.request("cron.get", { id: unfinishedJob.id })).rejects.toThrow(
-        "cron job not found",
-      );
+      const recovered = await restarted.request<CronJob>("cron.get", { id: unfinishedJob.id });
+      expect(recovered).toMatchObject({
+        enabled: false,
+        state: {
+          lastRunStatus: "error",
+          lastStatus: "error",
+          lastError: interruptedError,
+          lastDelivered: false,
+          lastDeliveryStatus: "unknown",
+          lastFailureNotificationDeliveryStatus: "not-requested",
+        },
+      });
+      expect(recovered.state.runningAtMs).toBeUndefined();
+      expect(recovered.state.nextRunAtMs).toBeUndefined();
+      expect(recovered.state.consecutiveErrors).toBe(activeJob.state.consecutiveErrors);
       const interruptedHistory = await restarted.request<{ entries: unknown[] }>("cron.runs", {
         id: unfinishedJob.id,
         limit: 10,
@@ -939,7 +962,13 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         }),
       ]);
       const recoveredReceipts = await readUnfinishedReceipt();
-      expect(recoveredReceipts).toEqual([{ ...receipt, status: "interrupted", state_json: null }]);
+      expect(recoveredReceipts).toEqual([
+        { ...receipt, status: "interrupted", state_json: expect.any(String) },
+      ]);
+      const privateState = JSON.parse(recoveredReceipts[0]!.state_json);
+      expect(privateState.runningReceiptId).toBeUndefined();
+      expect(privateState.runningScheduleChangeId).toBeUndefined();
+      expect(privateState.failureAlertIncident).toBeUndefined();
       await disconnectGatewayClient(restarted);
       await instance.stopGateway();
       await expect.poll(ownedBackends).toEqual([]);
@@ -951,7 +980,9 @@ describe.skipIf(!connection)("Gateway PostgreSQL cron lifecycle", () => {
         `SELECT enabled, job_json FROM ${quoteIdentifier(anchor.namespace)}.cron_jobs WHERE job_id = $1`,
         [job.id],
       );
-      expect(jobs).toEqual([]);
+      expect(jobs).toHaveLength(1);
+      expect(jobs[0]?.enabled).toBe("0");
+      expect(JSON.parse(jobs[0]!.job_json)).toMatchObject({ id: job.id, enabled: false });
       const runs = await queryRows<{
         status: string;
         terminal_summary: string;

@@ -5,7 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronDeliveryPreview } from "../../../cron/delivery-preview.js";
-import { readCronRunHistoryPageForTests } from "../../../cron/run-history.test-support.js";
 import * as cronStore from "../../../cron/store.js";
 import {
   loadCronQuarantinedJobs,
@@ -31,7 +30,6 @@ import { externalDoctorEnv } from "../../doctor-update.test-support.js";
 import { collectLegacyCronStoreHealthFindings, maybeRepairLegacyCronStore } from "./index.js";
 import {
   applyLegacyCronStoreRepair,
-  checkDoctorPreflightCronPending,
   loadLegacyCronRepairState,
   repairLegacyCronStoreWithoutPrompt,
 } from "./legacy-repair.js";
@@ -86,54 +84,6 @@ const updateDoctorEnv = {
   ...externalDoctorEnv(),
   OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
 };
-
-it(
-  "backs up old one-time jobs, moves only ended failures to Activity, and is repeatable",
-  withState(async (fixture) => {
-    const storePath = fixture.statePath("cron", "jobs.json");
-    const schedule = { kind: "at", at: "2026-01-01T00:00:00.000Z" } as const;
-    const started = Date.parse(schedule.at);
-    const ended = job("ended", {
-      schedule,
-      enabled: false,
-      state: {
-        lastRunAtMs: started,
-        lastRunStatus: "error",
-        lastError: "staging refused the build",
-      },
-    });
-    // The extra property represents bytes in an old job definition, not a current API field.
-    const keep = { ...job("keep", { schedule }), deleteAfterRun: false };
-    const paused = job("not-run", { schedule, enabled: false });
-    await saveJobs(storePath, ended, keep, paused);
-    const preflight = {
-      selectionConfig: {},
-      repairConfig: {},
-      migrationConfig: {},
-      env: process.env,
-    };
-    expect(await checkDoctorPreflightCronPending(preflight)).toBe("work");
-    const first = await repair(storePath);
-    expect(first.changes).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Saved pre-repair cron backup:"),
-        expect.stringContaining("Move ended automation ended"),
-        expect.stringContaining("Keep keep (keep) paused"),
-      ]),
-    );
-    expect(await readJobs(storePath)).toMatchObject([
-      { id: "keep", enabled: false, description: expect.stringContaining("Paused by Doctor") },
-      { id: "not-run", enabled: false },
-    ]);
-    expect(
-      readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId: "ended" }).entries,
-    ).toMatchObject([
-      { jobName: "ended", error: "staging refused the build", retryAvailable: true },
-    ]);
-    expect((await repair(storePath)).changes).toEqual([]);
-    expect(await checkDoctorPreflightCronPending(preflight)).toBe("none");
-  }),
-);
 
 it(
   "leaves canonical one-shot jobs untouched without a SQLite repair backup",

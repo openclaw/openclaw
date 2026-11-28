@@ -10,7 +10,6 @@ import { registerMessageCommands } from "../register.message.js";
 
 const mocks = vi.hoisted(() => ({
   command: vi.fn(async (_options: Record<string, unknown>) => undefined),
-  exit: vi.fn(),
 }));
 
 export const messageCliMocks = mocks;
@@ -43,10 +42,7 @@ vi.mock("../../deps.js", async (importOriginal) => ({
 }));
 vi.mock("../../one-shot-exit.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../one-shot-exit.js")>()),
-  requestExitAfterOneShotOutput: (_runtime: unknown, code: number) => {
-    mocks.exit(code);
-    return true;
-  },
+  requestExitAfterOneShotOutput: () => true,
 }));
 
 export function createMessageCliProgram(channels = "discord|matrix|msteams|slack") {

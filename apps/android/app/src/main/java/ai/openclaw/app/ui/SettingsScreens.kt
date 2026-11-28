@@ -2816,6 +2816,7 @@ private fun CronJobDetailPanel(job: GatewayCronJobDetail) {
         SettingsMetric(nativeString("Schedule Detail"), job.scheduleDetail.resolveNativeTextResource()),
         SettingsMetric(nativeString("Session Target"), cronSessionTargetLabel(job.sessionTarget)),
         SettingsMetric(nativeString("Wake Mode"), cronWakeModeLabel(job.wakeMode)),
+        SettingsMetric(nativeString("Delete After Run"), if (job.deleteAfterRun) nativeString("Yes") else nativeString("No")),
         SettingsMetric(nativeString("Payload"), job.payloadLabel.resolveNativeTextResource()),
         SettingsMetric(nativeString("Delivery"), job.deliveryLabel.resolveNativeTextResource()),
         SettingsMetric(nativeString("Failure Alert"), job.failureAlertLabel.resolveNativeTextResource()),

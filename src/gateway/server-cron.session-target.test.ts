@@ -1,6 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { assert, afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
-import { readCronRunStateForTests } from "../cron/run-history.test-support.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import * as cronNotifications from "./server-cron-notifications.js";
 import {
@@ -62,11 +61,12 @@ it("refuses a stored job whose explicit session belongs to another agent", async
     const job = await addAgentTurnJob(state, "mismatched-session", "hello", {
       agentId: "main",
       sessionTarget: "session:agent:ops:scheduled-report",
+      deleteAfterRun: false,
     });
 
     await state.cron.run(job.id, "force");
 
-    expect(readCronRunStateForTests(job.id)).toMatchObject({
+    expect(state.cron.getJob(job.id)?.state).toMatchObject({
       lastRunStatus: "error",
       lastError: expect.stringMatching(/session target belongs to another agent/i),
     });

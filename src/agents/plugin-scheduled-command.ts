@@ -221,6 +221,7 @@ export function preparePluginCommandScheduledTurns(params: {
           sessionTarget: `session:${envelope.parent.sessionKey}`,
           declarationKey,
           schedule,
+          deleteAfterRun: false,
           enabled: true,
           wakeMode: "next-heartbeat",
           payload: { kind: "agentTurn", message: PLUGIN_COMMAND_SCHEDULE_MESSAGE, toolsAllow },

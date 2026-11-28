@@ -36,6 +36,7 @@ suite.define(() => {
             kind: "agentTurn",
             message: "Check whether the fictional build has finished.",
           },
+          deleteAfterRun: true,
           state: {
             lastRunAtMs: Date.parse("2026-10-30T12:00:00Z"),
             lastRunStatus: "ok",

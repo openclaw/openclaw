@@ -1,6 +1,16 @@
 import OpenClawChatUI
 import SwiftUI
 
+private enum SidebarTitleCenter: AlignmentID {
+    static func defaultValue(in dimensions: ViewDimensions) -> CGFloat {
+        dimensions[VerticalAlignment.center]
+    }
+}
+
+extension VerticalAlignment {
+    fileprivate static let sidebarTitleCenter = VerticalAlignment(SidebarTitleCenter.self)
+}
+
 /// Value equality isolates the session button from unrelated roster changes.
 /// Question buttons stay outside this boundary; the approval label is a row input.
 /// Actions must use the tapped session and reference or @State-backed state; equality excludes closures.
@@ -33,19 +43,21 @@ struct RootSidebarSessionButton: View, Equatable {
     }
 
     var body: some View {
+        _ = self.dynamicTypeSize
         let session = self.node.session
         let isSelected = self.isSelected
         let mark = SessionRowActivityMark(session: session)
-        Button {
+        return Button {
             self.open(session)
         } label: {
-            HStack(spacing: 10) {
+            HStack(alignment: .sidebarTitleCenter, spacing: 10) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(verbatim: SessionPresentation.title(session))
                         .font(OpenClawType.subheadMedium)
                         .foregroundStyle(OpenClawSidebarPalette.textStrong)
                         .lineLimit(1)
                         .modifier(RootSidebarApprovalLabel(isVisible: self.needsApproval))
+                        .alignmentGuide(.sidebarTitleCenter) { $0[VerticalAlignment.center] }
                     if let subtitle = Self.activityLine(for: session, isWorking: mark == .working) {
                         Text(verbatim: subtitle)
                             .font(OpenClawType.caption2Medium)
@@ -91,20 +103,19 @@ struct RootSidebarSessionButton: View, Equatable {
     }
 }
 
-/// Keep the text column unchanged when a chat starts or stops; the unread dot stays at its trailing edge.
+/// All states reserve the same space, with the unread dot and running ring centered in it.
 struct SessionRowActivityIndicator: View {
     let mark: SessionRowActivityMark
 
     var body: some View {
         Color.clear
             .frame(width: 14, height: 14)
-            .overlay(alignment: .trailing) {
+            .overlay {
                 switch self.mark {
                 case .working:
                     OpenClawRingSpinner(lineWidth: 1.5)
                         .foregroundStyle(OpenClawSidebarPalette.muted)
                         .frame(width: 12, height: 12)
-                        .frame(maxWidth: .infinity)
                 case .unread:
                     Circle()
                         .fill(OpenClawSidebarPalette.accent)

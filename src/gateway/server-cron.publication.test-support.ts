@@ -339,7 +339,7 @@ export function registerGatewayCronPublicationTests({
     );
   });
 
-  it("publishes inventory removal committed by a one-shot run", async () => {
+  it("publishes an enabled flip committed by a one-shot run", async () => {
     const broadcast = vi.fn();
     await withCronService(
       createCronConfig("server-cron-run-disable"),
@@ -347,10 +347,11 @@ export function registerGatewayCronPublicationTests({
         const job = await addAgentTurnJob(state, "One-shot job", "synthetic run", {
           agentId: "main",
           sessionKey: "agent:main:probe",
+          deleteAfterRun: false,
         });
         broadcast.mockClear();
         expect(await state.cron.run(job.id, "force")).toEqual({ ok: true, ran: true });
-        expect(state.cron.getJob(job.id)).toBeUndefined();
+        expect(state.cron.getJob(job.id)?.enabled).toBe(false);
         expect(
           broadcast.mock.calls.filter(([event]) => event === "cron.inventory.changed"),
         ).toHaveLength(1);

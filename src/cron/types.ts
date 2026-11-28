@@ -472,10 +472,6 @@ export type CronToolsAllowProvenance =
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource"> & {
-  /** Explicit one-time cleanup preference supplied through the deprecated plugin SDK. */
-  pluginDeleteAfterRun?: boolean;
-  /** Legacy persisted input held for backed-up Doctor conversion; never a public option. */
-  deleteAfterRun?: boolean;
   /** Immutable host-captured scheduled command invocation; never public create/patch input. */
   pluginCommand?: PluginCommandSchedule;
   /** Original authenticated source for a same-conversation continuation, never a public grant. */

@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../../test/helpers/promise.js";
 import { invokeRemoteNativeHookRelay } from "./native-hook-relay-remote-client.js";
 
 const boundary = vi.hoisted(() => ({ request: vi.fn() }));
@@ -73,7 +73,7 @@ it.each(["response", "error"] as const)("joins the socket after %s delivery", as
     request.emit("error", new Error("private transport detail"));
     expect(request.destroy).toHaveBeenCalledOnce();
   }
-  await Promise.resolve();
+  await nextEventLoopTurn();
   expect(completed).toBe(false);
   request.emit("close");
   expect(await result).toEqual(

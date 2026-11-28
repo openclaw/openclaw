@@ -209,6 +209,7 @@ it("reconciles non-timed jobs provisioned while startup execution is pending", a
     ...job,
     id: "startup-command",
     name: "Startup command",
+    deleteAfterRun: false,
     schedule: { kind: "at", at: new Date(scheduler.now() - 1).toISOString() },
     state: { nextRunAtMs: scheduler.now() - 1 },
   };

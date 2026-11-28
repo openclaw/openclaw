@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -7,7 +6,6 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { cronRunLogEntryToDetail } from "../run-history-detail.js";
 import { projectCronRunHistoryPage } from "../run-history.js";
-import { readCronRunRecordsForTests } from "../run-history.test-support.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
@@ -17,6 +15,7 @@ import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import { createCronScheduledRunId } from "../store/run-request-id.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
+import { update, updateWithPrecondition } from "./ops-mutations.js";
 import { recoverCronRuns } from "./run-recovery.js";
 import { makeCronRecoveryState } from "./run-recovery.test-support.js";
 import { createCronServiceState } from "./state.js";
@@ -166,6 +165,35 @@ async function record(
 }
 
 describe("worker-owned startup recovery", () => {
+  it("can re-enable a transferred one-shot after startup recovery", async () => {
+    const entry = job("completed", {
+      ownerProfileId: "creator",
+      enabled: false,
+      schedule: { kind: "at", at: new Date(now - 1_000).toISOString() },
+      deleteAfterRun: false,
+      state: { lastRunAtMs: now - 1_000, lastRunStatus: "ok" },
+    });
+    const { storePath } = await recoveryStore([entry]);
+    const state = makeCronRecoveryState(logger, storePath, now);
+    await update(state, entry.id, { ownerProfileId: "recipient" });
+
+    try {
+      await start(state);
+      const schedule = { kind: "every", everyMs: 86_400_000 } as const;
+      await updateWithPrecondition(state, entry.id, { enabled: true, schedule }, (current) => {
+        expect(current.ownerProfileId).toBe("recipient");
+      });
+      expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
+        ownerProfileId: "recipient",
+        enabled: true,
+        schedule,
+      });
+    } finally {
+      stop(state);
+      await state.schedulerDrain;
+    }
+  });
+
   it("keeps recovered rows resident and observes a later in-process write", async () => {
     const entry = job("resident-recovery");
     const store = await recoveryStore([entry]);
@@ -223,13 +251,7 @@ describe("worker-owned startup recovery", () => {
       });
       try {
         await start(state);
-        const live = (await loadCronStore(store.storePath)).jobs[0];
-        if (kind === "at") {
-          expect(live).toBeUndefined();
-        }
-        const detail = readCronRunRecordsForTests(entry.id).at(-1)?.detail;
-        const recovered = live ?? (isRecord(detail) ? detail.archivedJob : undefined);
-        expect(recovered).toMatchObject({
+        expect((await loadCronStore(store.storePath)).jobs[0]).toMatchObject({
           enabled: kind !== "at",
           state: {
             lastRunStatus: "error",
@@ -245,13 +267,10 @@ describe("worker-owned startup recovery", () => {
             deliveryStatus: "unknown",
           },
         ]);
-        if (kind === "at") {
-          expect(recovered).not.toHaveProperty("state.nextRunAtMs");
-        } else {
-          expect(live?.state.nextRunAtMs).toBe(now + 3_601_000);
-        }
-        expect(recovered).not.toHaveProperty("state.autoDisabled");
-        expect(recovered).not.toHaveProperty("state.failureAlertIncident");
+        const recovered = (await loadCronStore(store.storePath)).jobs[0]!;
+        expect(recovered.state.nextRunAtMs).toBe(kind === "at" ? undefined : now + 3_601_000);
+        expect(recovered.state.autoDisabled).toBeUndefined();
+        expect(recovered.state.failureAlertIncident).toBeUndefined();
         expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
         expect(runCommandJob).not.toHaveBeenCalled();
         expect(onEvent.mock.calls.filter(([event]) => event.action === "finished")).toHaveLength(1);
@@ -400,6 +419,7 @@ describe("worker-owned startup recovery", () => {
   it("restores a recorded result and primary delivery before one-shot deletion", async () => {
     const entry = job("complete", {
       schedule: { kind: "at", at: new Date(now).toISOString() },
+      deleteAfterRun: true,
     });
     const store = await recoveryStore([entry]);
     const receipt = await activateManual(store, entry);

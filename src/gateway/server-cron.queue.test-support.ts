@@ -81,6 +81,7 @@ export function registerGatewayCronQueueTests(h: GatewayCronQueueTestHarness) {
     await state.cron.start();
     const job = await h.addAgentTurnJob(state, "activation-failure", "run it", {
       agentId: "main",
+      deleteAfterRun: false,
       delivery: { mode: "none" },
       schedule: { kind: "cron", expr: "* * * * *", staggerMs: 0 },
     });

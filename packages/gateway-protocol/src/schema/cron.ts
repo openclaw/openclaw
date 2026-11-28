@@ -117,6 +117,7 @@ const CronCommonOptionalFields = {
   sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   description: Type.Optional(Type.String()),
   enabled: Type.Optional(Type.Boolean()),
+  deleteAfterRun: Type.Optional(Type.Boolean()),
 };
 
 function cronIdOrJobIdParams<const Fields extends Record<string, TSchema>>(extraFields: Fields) {
@@ -525,6 +526,7 @@ export const CronJobSchema = closedObject({
   name: NonEmptyString,
   description: Type.Optional(Type.String()),
   enabled: Type.Boolean(),
+  deleteAfterRun: Type.Optional(Type.Boolean()),
   createdAtMs: CronDateTimestampMsSchema,
   updatedAtMs: CronDateTimestampMsSchema,
   /** Opaque Gateway-computed token for the job definition, excluding scheduler state. */
@@ -711,8 +713,6 @@ export const CronBindParamsSchema = cronIdOrJobIdParams({});
 /** Runs a cron job immediately, immediately if enabled, or only if due. */
 export const CronRunParamsSchema = cronIdOrJobIdParams({
   mode: Type.Optional(stringLiteralUnion(["due", "force", "if-enabled"])),
-  /** Schedule a fresh attempt from this exact retained one-time run. */
-  retryRunId: Type.Optional(NonEmptyString),
   /** Rejects the mutation if the Gateway restarted after the caller's preflight. */
   expectedProcessInstanceId: Type.Optional(NonEmptyString),
   /** Holds the response until the queued run records its outcome or this many ms pass. */
@@ -777,7 +777,6 @@ export const CronRunLogEntrySchema = closedObject({
     }),
   ),
   jobName: Type.Optional(Type.String()),
-  retryAvailable: Type.Optional(Type.Boolean()),
 });
 
 /** Transcript selection is bound to one recorded cron run, never a client-selected session. */

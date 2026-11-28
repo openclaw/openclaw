@@ -2219,10 +2219,6 @@ openclaw-tooltip:last-child > .refresh-button,
   container-type: inline-size;
 }
 
-.list-title {
-  font-weight: 500;
-}
-
 .chip-row {
   display: flex;
   flex-wrap: wrap;

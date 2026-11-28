@@ -35,7 +35,7 @@ import type {
   PluginDoctorCronInventory,
   PluginDoctorCronJob,
 } from "../../../plugins/doctor-contract-module.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../../routing/session-key.js";
+import { normalizeAgentId } from "../../../routing/session-key.js";
 import {
   capturePostgresBackup,
   fingerprintPostgresBackup,
@@ -55,26 +55,6 @@ import {
 import { runOpenClawStateWriteTransaction } from "../../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { inspectCronOwnerRowsForDoctor, inspectCronRowsForDoctor } from "./store-inventory.js";
-
-export type CronOwnerProjection =
-  | { kind: "explicit"; agentId: string }
-  | { kind: "runtime-default"; agentId: string }
-  | { kind: "unresolved" };
-
-export function projectCronOwner(
-  job: { agentId?: unknown; sessionKey?: unknown },
-  runtimeDefaultAgentId: string | undefined,
-): CronOwnerProjection {
-  const explicitAgentId =
-    normalizeOptionalString(job.agentId) ??
-    parseAgentSessionKey(normalizeOptionalString(job.sessionKey))?.agentId;
-  if (explicitAgentId) {
-    return { kind: "explicit", agentId: explicitAgentId };
-  }
-  return runtimeDefaultAgentId
-    ? { kind: "runtime-default", agentId: runtimeDefaultAgentId }
-    : { kind: "unresolved" };
-}
 
 type DoctorCronScope = { env: NodeJS.ProcessEnv };
 

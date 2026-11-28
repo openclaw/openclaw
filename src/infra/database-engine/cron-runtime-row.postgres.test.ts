@@ -33,7 +33,7 @@ const connection = typeof configured === "string" ? configured : undefined;
 
 for (const engine of ["sqlite", "postgres"] as const) {
   it.skipIf(engine === "postgres" && !connection)(
-    `preserves retained one-shot config, current scratch snapshots, and queue reconciliation on ${engine}`,
+    `preserves one-shot config, current scratch snapshots, and queue reconciliation on ${engine}`,
     async () => {
       const prefix = `cron_runtime_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
       try {
@@ -48,10 +48,9 @@ for (const engine of ["sqlite", "postgres"] as const) {
             const database = openOpenClawStateDatabase({ env: state.env });
             const job: CronStoredJob = {
               id: "one-shot",
-              // This case re-enables a retained definition and checks its authored fields.
-              pluginDeleteAfterRun: false,
               name: "synthetic one-shot",
               enabled: true,
+              deleteAfterRun: false,
               createdAtMs: 1,
               updatedAtMs: 1,
               schedule: { kind: "at", at: new Date(1_000).toISOString() },
