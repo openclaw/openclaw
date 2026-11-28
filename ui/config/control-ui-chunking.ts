@@ -314,7 +314,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/components/chat-message-attachment-availability.ts":
     case "ui/src/pages/chat/components/chat-media-playback.ts":
     case "ui/src/pages/chat/components/chat-message-image-loading.ts":
-      return "chat-message-media-runtime";
+      // Transcript media and live events already load with the Chat route.
+      return "chat-route-entry";
     case "ui/src/pages/chat/chat-provider-review-controller.tsx":
       return "chat-provider-review";
     // Keep optional compression groups separate from code evaluated by text-only Chat.
@@ -347,7 +348,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/tool-stream.ts":
     case "ui/src/pages/chat/tool-stream-status.ts":
     case "ui/src/pages/chat/tool-stream-preamble.ts":
-      return "chat-live-events-runtime";
+      return "chat-route-entry";
     case "ui/src/pages/chat/chat-mobile-host.runtime.tsx":
     case "ui/src/pages/chat/chat-mobile-scroll-fades.runtime.ts":
     case "ui/src/pages/chat/components/chat-mobile-people-grid.tsx":
@@ -414,9 +415,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "command-discovery-english";
     case "ui/src/i18n/locales/en-model-accounts.ts":
       return "model-account-settings-english";
-    case "ui/src/i18n/locales/en-session-organization-shared.ts":
-      // Settings, New Session, and Chat share this English copy.
-      return "chat-english";
     case "ui/src/i18n/locales/en-session-organization.ts":
       // Slash commands use shared labels; management copy loads with its own consumers.
       return "session-management-english";
