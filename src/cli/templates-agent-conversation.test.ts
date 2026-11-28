@@ -3,7 +3,6 @@ import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-termin
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { TemplateInstallEvent } from "../shared/template-install-notice.js";
 import { createLocalTemplateConversationAdapters } from "./templates-agent-conversation.js";
 
 const mocks = vi.hoisted(() => ({
@@ -49,15 +48,7 @@ const visible = () =>
     },
     "completed",
   );
-const event: TemplateInstallEvent = {
-  agentId: "scout",
-  sessionKey: "agent:scout:home",
-  kind: "automation-created",
-  declarationId: "morning",
-  schedulerJobId: "scheduler-morning",
-  name: "Morning review",
-  enabled: false,
-};
+const sessionKey = "agent:scout:home";
 function fixture() {
   const signal = new AbortController().signal;
   const assertCurrent = vi.fn();
@@ -80,7 +71,7 @@ beforeEach(() => {
   config = { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } };
   mocks.prepare.mockReset().mockResolvedValue({
     status: "completed",
-    sessionKey: event.sessionKey,
+    sessionKey,
     rollback: mocks.rollback,
   });
   mocks.ready.mockReset().mockImplementation(async (params) =>
@@ -110,9 +101,7 @@ it.for(["no model", "no sign-in"])(
     mocks.modelChoice.mockResolvedValue({ kind: "unavailable", message: "Sign-in needed." });
     const { adapters, runtime } = fixture();
     await expect(adapters.waitForAgentRuntime!()).resolves.toBe("applied");
-    await expect(
-      adapters.onAgentReady!({ agentId: "scout", sessionKey: event.sessionKey }),
-    ).resolves.toBeUndefined();
+    await expect(adapters.onAgentReady!({ agentId: "scout", sessionKey })).resolves.toBeUndefined();
     expect(mocks.turn).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Opening greeting skipped"));
   },
@@ -128,7 +117,7 @@ it("keeps the greeting when a configured fallback is ready", async () => {
   mocks.modelChoice.mockResolvedValueOnce({ kind: "unavailable", message: "Sign-in needed." });
   const { adapters, runtime } = fixture();
   await adapters.waitForAgentRuntime!();
-  await adapters.onAgentReady!({ agentId: "scout", sessionKey: event.sessionKey });
+  await adapters.onAgentReady!({ agentId: "scout", sessionKey });
   expect(mocks.turn).toHaveBeenCalledOnce();
   expect(runtime.log).toHaveBeenCalledWith("Hello from Scout");
   expect(runtime.error).not.toHaveBeenCalled();
@@ -137,9 +126,9 @@ it("reports preflight failure after runtime activation so Add retains the agent"
   mocks.modelChoice.mockRejectedValue(new Error("catalog read failed"));
   const { adapters } = fixture();
   await expect(adapters.waitForAgentRuntime!()).resolves.toBe("applied");
-  await expect(
-    adapters.onAgentReady!({ agentId: "scout", sessionKey: event.sessionKey }),
-  ).rejects.toThrow("catalog read failed");
+  await expect(adapters.onAgentReady!({ agentId: "scout", sessionKey })).rejects.toThrow(
+    "catalog read failed",
+  );
   expect(mocks.turn).not.toHaveBeenCalled();
 });
 it.for(["silent", "error"])(
@@ -154,9 +143,9 @@ it.for(["silent", "error"])(
       recordAgentRunTerminalOutcome(response, "failed");
     }
     mocks.turn.mockResolvedValue(response);
-    await expect(
-      adapters.onAgentReady!({ agentId: "scout", sessionKey: event.sessionKey }),
-    ).rejects.toThrow("did not complete with visible model output");
+    await expect(adapters.onAgentReady!({ agentId: "scout", sessionKey })).rejects.toThrow(
+      "did not complete with visible model output",
+    );
   },
 );
 it("rechecks owner authority after model completion before printing a success", async () => {
@@ -168,9 +157,9 @@ it("rechecks owner authority after model completion before printing a success", 
     });
     return visible();
   });
-  await expect(
-    adapters.onAgentReady!({ agentId: "scout", sessionKey: event.sessionKey }),
-  ).rejects.toThrow("offline custody lost");
+  await expect(adapters.onAgentReady!({ agentId: "scout", sessionKey })).rejects.toThrow(
+    "offline custody lost",
+  );
   expect(runtime.log).not.toHaveBeenCalled();
   expect(mocks.publish).not.toHaveBeenCalled();
 });
