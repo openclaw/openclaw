@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   listChannelPairingRequests: vi.fn(),
   approveChannelPairingCode: vi.fn(),
   notifyPairingApproved: vi.fn(),
+  resolveCommandConfigWithSecrets: vi.fn(),
   readConfigFileSnapshotForWrite: vi.fn(),
   replaceConfigFile: vi.fn(),
   normalizeChannelId: vi.fn((raw: string) =>
@@ -73,6 +74,10 @@ vi.mock("../channels/plugins/pairing.js", () => ({
   getPairingAdapter: mocks.getPairingAdapter,
 }));
 
+vi.mock("./command-config-resolution.js", () => ({
+  resolveCommandConfigWithSecrets: mocks.resolveCommandConfigWithSecrets,
+}));
+
 vi.mock("../channels/plugins/index.js", () => ({
   normalizeChannelId: mocks.normalizeChannelId,
 }));
@@ -102,6 +107,9 @@ beforeEach(() => {
   readConfigFileSnapshotForWrite.mockResolvedValue(configSnapshot());
   replaceConfigFile.mockResolvedValue(undefined);
   notifyPairingApproved.mockResolvedValue(undefined);
+  mocks.resolveCommandConfigWithSecrets.mockImplementation(async ({ config }) => ({
+    effectiveConfig: config,
+  }));
 });
 
 async function runPairing(command: "list" | "approve", ...args: string[]) {
@@ -224,4 +232,23 @@ it("does not bootstrap, notify, or approve locally after OUTCOME_UNKNOWN", async
   await expect(runPairing("approve", "telegram", "ABCDEFGH", "--notify")).rejects.toThrow(reason);
 
   expectNoCalls(approveChannelPairingCode, replaceConfigFile, notifyPairingApproved);
+});
+
+it("notifies the requester with the channel's resolved secrets", async () => {
+  const resolvedConfig = { channels: { telegram: { botToken: "resolved-token" } } };
+  mocks.resolveCommandConfigWithSecrets.mockResolvedValueOnce({ effectiveConfig: resolvedConfig });
+
+  await runPairing("approve", "telegram", "ABCDEFGH", "--notify");
+
+  expect(mocks.resolveCommandConfigWithSecrets).toHaveBeenCalledWith(
+    expect.objectContaining({ commandName: "pairing approve" }),
+  );
+  expect(
+    mocks.resolveCommandConfigWithSecrets.mock.calls[0]?.[0].targetIds.has(
+      "channels.telegram.botToken",
+    ),
+  ).toBe(true);
+  expect(notifyPairingApproved).toHaveBeenCalledWith(
+    expect.objectContaining({ channelId: "telegram", id: "123", cfg: resolvedConfig }),
+  );
 });
