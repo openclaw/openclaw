@@ -94,7 +94,7 @@ extension RootTabs {
             case .instances: .dashboard(DashboardRouteMap.devicesSettingsPath)
             case .dreaming: .dashboard(DashboardRouteMap.dreamingPagePath)
             case .usage: .dashboard(DashboardRouteMap.usagePagePath)
-            case .cron: .dashboard(DashboardRouteMap.cronJobsPagePath)
+            case .cron: .automations
             case .chat: .chat
             case .sessions: .sessions
             case .files: .files
@@ -112,7 +112,7 @@ extension RootTabs {
 
     enum SidebarScreen: Equatable {
         case dashboard(String)
-        case chat, sessions, files, desktop, terminal, settings, gateway
+        case chat, sessions, files, desktop, terminal, settings, gateway, automations
     }
 
     static func notificationSettingsPath(servingEnabled: Bool, disclosureAccepted: Bool) -> String {

@@ -399,6 +399,9 @@ struct RootTabs: View {
                     // The strip above the composer offers the same recovery as the top banner.
                     .environment(\.gatewayProblemRecovery, GatewayProblemRecovery(
                         perform: { self.handleGatewayProblemPrimaryAction($0, reportsRetryFailure: false) }))
+        case .automations:
+            AutomationsScreen(header: self.sidebarHeaderAction, gatewayID: self.appModel.chatTranscriptCacheGatewayID)
+                .id("automations:\(self.appModel.operatorAuthorityGeneration):\(self.appModel.chatViewModelIdentityID)")
         case let .dashboard(path):
             DashboardPageScreen(
                 path: path,

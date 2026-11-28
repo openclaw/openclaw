@@ -121,19 +121,11 @@ struct ChatInfoAutomations: View {
             if !Task.isCancelled { self.automations = self.automations.replaced(by: automations) }
         }
         .sheet(item: self.$detail) { job in
-            if SettingsHubScreen.usesDashboard(
-                isOperatorConnected: self.app.isOperatorGatewayConnected,
-                hasOperatorAdminScope: self.app.hasOperatorAdminScope,
-                isDemoMode: self.app.isAppleReviewDemoModeEnabled,
-                isScreenshotMode: ProcessInfo.processInfo.arguments
-                    .contains("--openclaw-screenshot-mode")),
-                self.visit.catalogGatewayID == self.app.chatTranscriptCacheGatewayID
-            {
-                DashboardPageScreen(
-                    path: DashboardRouteMap.cronJobsPagePath,
-                    title: job.displayName ?? job.name,
-                    queryItems: job.detailQuery,
-                    onClose: { self.detail = nil })
+            if let gatewayID = self.visit.catalogGatewayID, gatewayID == self.app.chatTranscriptCacheGatewayID {
+                NavigationStack {
+                    AutomationsScreen(gatewayID: gatewayID, initialJobID: job.id)
+                        .id(self.app.operatorAuthorityGeneration)
+                }
             } else {
                 Text("Couldn’t open this automation").font(OpenClawType.body)
                     .foregroundStyle(OpenClawBrand.textSecondary).presentationDetents([.medium])
