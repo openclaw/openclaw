@@ -283,7 +283,8 @@ type MemoryAudience =
 - Operator-created root sessions record a `direct` chat type at creation under
   every `session.dmScope` and `session.scope`, so sessions started later by
   `sessions_send`, cron, or the `agent` method resolve an audience. Children,
-  forks, plugin-owned sessions, and incognito sessions do not take this stamp.
+  forks, plugin-owned sessions, incognito sessions, and the agent's main
+  session do not take this stamp.
   The turn's owner status still selects `owner-private` or `conversation`.
   `openclaw agent exec` records the same `direct` type on the root session it
   creates and runs its turn as the owner, because local CLI access is Gateway
@@ -298,6 +299,13 @@ type MemoryAudience =
 - Missing, malformed, cyclic, or stale lineage produces no audience. Unknown or
   missing durable chat type also produces no audience. The Gateway logs every
   denial as `memory_audience_denied` with the session key and reason.
+- A root row that the Gateway `agent` method creates records no chat type, so
+  its turns get no audience. This covers a new `openclaw agent --session-id <id>`
+  session and the agent's main session (for example `agent:main:main`) when
+  only the `agent` method has run turns there. The log reason is
+  `root session <key> has no durable chat type`. A chat or channel message turn
+  in that session records `direct`. For new work, create the session with
+  `sessions.create` or use `openclaw agent exec`.
 
 Audience is separate from sandbox policy. A provider can deny sandboxed callers
 even when they have a valid audience. Operator authority is also separate and
@@ -443,6 +451,12 @@ const providerRuntime: MemoryProviderRuntime = {
   read-only.
 - A backend that declares `store` lets the owner write through
   `backend.provider.store(...)` under the same caller authority.
+- Backends have no audience of their own. When the caller's session has no
+  [memory audience](#memory-audience), an audience-scoped backend grants it no
+  private or conversation memory, exactly as it would as the slot owner. A
+  legacy backend such as `memory-core` still returns its ordinary memory hits.
+  Report the skipped backend with `warning` and `coverage: "partial"` so the
+  caller can tell it from an empty result.
 - Backends load beside the owner in the Gateway registry and in standalone CLI
   lookups. A configuration change hot-reloads the plugin runtime like any other
   `plugins.entries` change; a retired backend's open leases fail on their next
