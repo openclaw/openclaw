@@ -201,11 +201,19 @@ describe("CronService failure repair", () => {
       expect(f.runCronFailureRepair.mock.calls[1]?.[0]?.message).toContain(
         "failed 3 runs in a row",
       );
+      await vi.waitFor(() =>
+        expect(f.cron.getJob(job.id)?.state.lastFailureNotificationDeliveryStatus).toBe(
+          "delivered",
+        ),
+      );
 
       // A different failure is news.
       f.runIsolatedAgentJob.mockResolvedValue({ status: "error", error: "wrong model id" });
       await f.cron.run(job.id, "force");
       expectNotifications(f, 3, 0);
+      expect(f.runCronFailureRepair.mock.calls[2]?.[0]?.message).toContain(
+        "Previous failure alert delivery: delivered.",
+      );
 
       f.runIsolatedAgentJob.mockResolvedValueOnce({ status: "ok", delivered: true });
       await f.cron.run(job.id, "force");

@@ -2,16 +2,35 @@
 import type { FailoverReason } from "../../agents/failover/signal.js";
 import { wrapUntrustedPromptDataBlock } from "../../agents/sanitize-for-prompt.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import type { CronJob } from "../types.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import type { CronFailureNotificationDelivery, CronJob } from "../types.js";
 
 const REPAIR_PAYLOAD_MAX_CHARS = 4_000;
 const REPAIR_ERROR_MAX_CHARS = 1_000;
+
+export function formatCronFailureAlertDeliveryNote(
+  label: string,
+  delivery: CronFailureNotificationDelivery,
+): string {
+  const status = `${label}: ${delivery.status}.`;
+  if (delivery.status !== "not-delivered" || !delivery.error?.trim()) {
+    return status;
+  }
+  const detail = wrapUntrustedPromptDataBlock({
+    label: "Failure alert delivery error",
+    text: formatErrorMessage(delivery.error),
+    maxChars: REPAIR_ERROR_MAX_CHARS,
+    truncationMarker: " [truncated]",
+  });
+  return `${status}\n${detail}`;
+}
 
 export function buildCronFailureRepairBrief(params: {
   job: CronJob;
   consecutiveErrors: number;
   error?: string;
   errorReason?: FailoverReason;
+  previousFailureAlert?: CronFailureNotificationDelivery;
   terminal?: boolean;
 }): string {
   const { job } = params;
@@ -32,6 +51,14 @@ export function buildCronFailureRepairBrief(params: {
     params.terminal
       ? `A one-time automation (id ${job.id}), created in this conversation, failed and will not run again (now disabled). The user was not alerted; you are their notice.`
       : `An automation (id ${job.id}), created in this conversation, failed${params.consecutiveErrors > 1 ? ` ${params.consecutiveErrors} runs in a row` : ""}. The user was not alerted; you are their notice.`,
+    ...(params.previousFailureAlert
+      ? [
+          formatCronFailureAlertDeliveryNote(
+            "Previous failure alert delivery",
+            params.previousFailureAlert,
+          ),
+        ]
+      : []),
     `Schedule: ${JSON.stringify(job.schedule)}. Payload kind: ${payload.kind}.`,
     // Job text and provider errors can carry third-party content: data, never instructions.
     wrapUntrustedPromptDataBlock({ label: "Automation name", text: job.name, maxChars: 200 }),

@@ -5,6 +5,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { noteCronJobsStoreCommit } from "../store.js";
 import type { CronFailureNotificationDelivery } from "../types.js";
+import { formatCronFailureAlertDeliveryNote } from "./failure-repair-brief.js";
 import { locked } from "./locked.js";
 import {
   captureCronNotificationRouting,
@@ -210,16 +211,20 @@ async function transportFailureAlert(
           outcome,
         );
         if (recordResult !== "stale" && outcome.status === "not-delivered") {
+          const privateFallback =
+            params.route.target === "owner" || params.route.directPolicy === "block";
+          // Routed fallbacks can reach a conversation outside the operator's private scope.
+          const note = formatCronFailureAlertDeliveryNote(
+            "Failure alert delivery",
+            privateFallback ? outcome : { status: outcome.status },
+          );
           await enqueueCronNotification(
             state,
             params.job,
-            params.payload.text ?? "",
+            [params.payload.text, note].filter(Boolean).join("\n"),
             "failure-alert",
             routing,
-            {
-              privateFallback:
-                params.route.target === "owner" || params.route.directPolicy === "block",
-            },
+            { privateFallback },
           );
         }
       },

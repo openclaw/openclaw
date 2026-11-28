@@ -11,6 +11,7 @@ import type { CronRunFinalizationOutcome } from "../store/runtime-worker.types.j
 import type { CronJob, CronRunStatus, CronStoredJob, CronTriggerEvalOutcome } from "../types.js";
 import { autoDisableCronJob } from "./auto-disable.js";
 import {
+  failureNotificationDeliveryFromJobState,
   finalizeCronFailureNotifications,
   resolveFailureIncident,
   resolveFailureAlert,
@@ -160,6 +161,7 @@ export function applyJobResult(
   job.state.lastDeliveryStatus = deliveryState.status;
   job.state.deliverySuppressionReason = deliveryState.deliverySuppressionReason;
   job.state.lastDeliveryError = deliveryState.error;
+  const previousFailureAlert = failureNotificationDeliveryFromJobState(job);
   job.state.lastFailureNotificationDelivered = undefined;
   job.state.lastFailureNotificationDeliveryStatus = "not-requested";
   job.state.lastFailureNotificationDeliveryError = undefined;
@@ -283,6 +285,7 @@ export function applyJobResult(
         result,
         completionStatus,
         terminalOneShot,
+        previousFailureAlert,
         pendingTransientRetry,
         replay: opts.replay,
         deferredNotifications: opts.deferredNotifications,

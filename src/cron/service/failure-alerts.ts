@@ -417,6 +417,7 @@ function maybeEmitFailureAlert(
     runAtMs: number;
     consecutiveCount: number;
     terminalOneShot?: boolean;
+    previousFailureAlert?: CronFailureNotificationDelivery;
     deferredNotifications: DeferredCronNotifications;
   },
 ): void {
@@ -500,6 +501,7 @@ function maybeEmitFailureAlert(
         consecutiveErrors: params.consecutiveCount,
         error: params.error,
         errorReason: params.errorReason,
+        previousFailureAlert: params.previousFailureAlert,
         terminal,
       }),
     });
@@ -537,6 +539,7 @@ export function finalizeCronFailureNotifications(
     };
     completionStatus: CronCompletionStatus;
     terminalOneShot?: boolean;
+    previousFailureAlert?: CronFailureNotificationDelivery;
     /** A quick re-run for a provider outage is scheduled; alert/repair wait for its outcome. */
     pendingTransientRetry?: boolean;
     replay?: boolean;
@@ -572,6 +575,7 @@ export function finalizeCronFailureNotifications(
           ? params.job.state.consecutiveSkipped
           : params.job.state.consecutiveErrors) ?? 0,
       terminalOneShot: params.terminalOneShot,
+      previousFailureAlert: params.previousFailureAlert,
       deferredNotifications: params.deferredNotifications,
     });
   } else if (
