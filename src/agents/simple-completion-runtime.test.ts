@@ -704,7 +704,7 @@ describe("acquired simple completion profile failover", () => {
     vi.mocked(authProfileRecords.markAuthProfileSuccess).mockRestore();
   });
 
-  async function acquireProfiles(pinned = false) {
+  async function acquireProfiles(pinned = false, unavailableProfile?: string) {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -719,6 +719,9 @@ describe("acquired simple completion profile failover", () => {
     hoisted.ensureAuthProfileStoreMock.mockReturnValue(store);
     hoisted.getApiKeyForModelMock.mockImplementation(({ profileId }: { profileId?: string }) => {
       const credential = profileId ? store.profiles[profileId] : undefined;
+      if (profileId && profileId === unavailableProfile) {
+        throw new Error("Fixture credential lookup failed.");
+      }
       if (!profileId || credential?.type !== "api_key") {
         throw new Error("The auth planner must select a configured fixture profile.");
       }
@@ -844,6 +847,36 @@ describe("acquired simple completion profile failover", () => {
     );
     expect(hoisted.markAuthProfileSuccessMock).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledTimes(bookkeepingFails ? 2 : 0);
+  });
+
+  it("distinguishes a profile skipped in initial preparation from a provider rejection", async () => {
+    const fixture = await acquireProfiles(false, "openai:p1");
+    await using prepared = fixture.prepared;
+    const failure = makeAssistantMessageFixture({ errorMessage: "429: rate limit exceeded" });
+    const complete = vi.fn(async () => failure);
+    const onExhausted = vi.fn();
+
+    await completeWithAuthProfileFailover({
+      prepared,
+      cfg: fixture.cfg,
+      agentDir: prepared.selection.agentDir,
+      assertCurrent: () => {},
+      complete,
+      onExhausted,
+      warn: vi.fn(),
+    });
+
+    expect(complete).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ auth: expect.objectContaining({ profileId: "openai:p2" }) }),
+    );
+    expect(onExhausted).toHaveBeenCalledExactlyOnceWith({
+      profileCount: 2,
+      failedProfileCount: 1,
+      attempts: [
+        { profileId: "openai:p1", reason: "not_dispatched" },
+        expect.objectContaining({ profileId: "openai:p2", reason: "rate_limit" }),
+      ],
+    });
   });
 
   it("rotates past a connection dropped before any response without cooling the profile", async () => {

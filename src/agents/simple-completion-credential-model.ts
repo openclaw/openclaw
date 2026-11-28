@@ -4,9 +4,14 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import { ensureAuthProfileStoreAsync } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
 import type { ResolvedProviderAuth } from "./model-auth.js";
+import { resolveModelRouteIntent } from "./model-runtime-policy.js";
+import { resolveDefaultModelForAgent } from "./model-selection.js";
+import { resolveOpenAIModelRoutes } from "./openai-model-routes.js";
 import { resolveProviderModelMaterializationAuthMode } from "./provider-model-route-auth.js";
 import { providerUsesCredentialScopedModelMetadata } from "./runtime-plan/credential-scoped-model.js";
+import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
 import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
 
 /** A caller-supplied store wins. Plugin-owned credentials never open an agent store. */
@@ -33,6 +38,63 @@ export async function resolveSimpleCompletionAuthStore(params: {
     config: params.cfg,
     profileId: params.profileId,
   });
+}
+
+/** Use the same route and account input for both auth admission and model resolution. */
+export function prepareSimpleCompletionRuntimeAuth(params: {
+  auth: Parameters<typeof prepareAgentRuntimeAuth>[0];
+  agentRuntimeId?: string;
+  profileId?: string;
+  requiresPreparedAuth: boolean;
+}) {
+  const { auth, agentRuntimeId, profileId } = params;
+  const { config, provider, modelId, modelApi, modelBaseUrl, agentId, authProfileStore } = auth;
+  const primaryModel = config
+    ? resolveDefaultModelForAgent({
+        cfg: config,
+        agentId,
+        allowManifestNormalization: false,
+        allowPluginNormalization: false,
+      })
+    : undefined;
+  const resolveProfileAuthMode = (id: string) => authProfileStore?.profiles[id]?.type;
+  const resolveProfileAuthFlow = (id: string) => {
+    const credential = authProfileStore?.profiles[id];
+    return credential?.type === "oauth" ? credential.authFlow : undefined;
+  };
+  const routeIntent = agentRuntimeId
+    ? { runtimeId: agentRuntimeId, source: "explicit" as const }
+    : resolveModelRouteIntent({
+        config,
+        provider,
+        modelId,
+        agentId,
+        primaryModel,
+        resolveProfileAuthMode,
+        resolveProfileAuthFlow,
+      });
+  const routeResolution = resolveOpenAIModelRoutes({
+    provider,
+    modelId,
+    api: modelApi,
+    baseUrl: modelBaseUrl,
+    config,
+    agentId,
+    routeIntent,
+    resolveProfileAuthMode,
+    resolveProfileAuthFlow,
+    pinnedAuthRequirement: profileId
+      ? (resolveProviderModelAuthPolicy({
+          provider,
+          mode: resolveProfileAuthMode(profileId),
+          authFlow: resolveProfileAuthFlow(profileId),
+        }).authRequirement ?? undefined)
+      : undefined,
+    env: process.env,
+  });
+  return params.requiresPreparedAuth || routeResolution?.kind === "routes"
+    ? prepareAgentRuntimeAuth({ ...auth, routeIntent })
+    : undefined;
 }
 
 /**

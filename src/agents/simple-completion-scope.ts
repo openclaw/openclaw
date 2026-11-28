@@ -1,5 +1,7 @@
+import { requiredWorkerHelperError } from "../config/required-worker-profile.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
+import type { PrepareSimpleCompletionModelParams } from "./simple-completion.types.js";
 
 /** Shipped SDK resolver callbacks do not supply core-owned logical reference facts. */
 export type SimpleCompletionModelResolver = (
@@ -11,6 +13,17 @@ export type PreparedSimpleCompletionResolverContext = Readonly<{
   preparedModelRuntime: PreparedModelRuntimeSnapshot;
   workspaceDir: string;
 }>;
+
+export function resolveSimpleCompletionWorkerBlock(
+  params: PrepareSimpleCompletionModelParams,
+  runtime: PreparedModelRuntimeSnapshot,
+) {
+  const hasWorkerAuthority = Boolean(params.workerInferenceAuthority);
+  return (
+    requiredWorkerHelperError(runtime.config, hasWorkerAuthority) ??
+    requiredWorkerHelperError(params.cfg ?? {}, hasWorkerAuthority)
+  );
+}
 
 /** Bind every resolution in one completion to one prepared generation and store pair. */
 export function createPreparedSimpleCompletionResolverContext(params: {

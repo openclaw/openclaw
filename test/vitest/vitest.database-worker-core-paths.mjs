@@ -1477,6 +1477,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-runtime.catalog-projection.test.ts",
   "src/agents/prepared-model-runtime.metadata-handoff.test.ts",
   "src/agents/prepared-model-runtime.descriptor-reuse.test.ts",
+  "src/agents/isolated-completion.host-auth-rotation.test.ts",
 ];
 
 const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);

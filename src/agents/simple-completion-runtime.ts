@@ -29,8 +29,8 @@ import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedProviderAuth,
 } from "./execution-auth-binding.js";
+import { AUTH_PROFILE_COOLDOWN_ERROR_CODE, isFailoverError } from "./failover/error.js";
 import { createAgentRuntimeMetadataPluginIdScope } from "./harness/runtime-plugin-load-plan.js";
-import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
 import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
 import {
   applySecretRefHeaderSentinels,
@@ -39,9 +39,6 @@ import {
   getApiKeyForModelCore,
   type ResolvedProviderAuth,
 } from "./model-auth.js";
-import { resolveModelRouteIntent } from "./model-runtime-policy.js";
-import { resolveDefaultModelForAgent } from "./model-selection.js";
-import { resolveOpenAIModelRoutes } from "./openai-model-routes.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -49,21 +46,27 @@ import {
 } from "./prepared-model-runtime.js";
 import { applyPreparedRuntimeAuthToModel } from "./provider-request-config.js";
 import { protectPreparedProviderRuntimeAuth } from "./provider-runtime-auth-protection.js";
+import { providerUsesCredentialScopedModelMetadata } from "./runtime-plan/credential-scoped-model.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
-import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
+import type { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
 import {
   resolvePreparedRuntimeAuthAttempts,
   resolvePreparedRuntimeModelAuth,
 } from "./runtime-plan/resolve-auth.js";
-import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
+import type {
+  AgentRuntimeAuthPlan,
+  PreparedAgentRuntimeAuthAttempt,
+} from "./runtime-plan/types.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import {
+  prepareSimpleCompletionRuntimeAuth,
   resolveModelForSelectedCredential,
   resolveSimpleCompletionAuthStore,
 } from "./simple-completion-credential-model.js";
 import type { SimpleCompletionAuthProfiles } from "./simple-completion-profile-failover.js";
 import {
   createPreparedSimpleCompletionResolverContext,
+  resolveSimpleCompletionWorkerBlock,
   type PreparedSimpleCompletionResolverContext,
 } from "./simple-completion-scope.js";
 import { resolveSimpleCompletionSelectionRequest } from "./simple-completion-selection.js";
@@ -80,26 +83,25 @@ export type { PrepareSimpleCompletionModelParams } from "./simple-completion.typ
 
 type PreparedStreamCompletionModel =
   | (Extract<PreparedSimpleCompletionModel, { model: Model }> & {
+      authProfiles?: SimpleCompletionAuthProfiles;
       recordServiceTierObservation?: ReturnType<
         NonNullable<PreparedModelRuntimeSnapshot["accountCatalog"]>["prepareServiceTierObserver"]
       >;
     })
   | Extract<PreparedSimpleCompletionModel, { error: string }>;
 
-function resolveSimpleCompletionWorkerBlock(
-  params: PrepareSimpleCompletionModelParams,
-  runtime: PreparedModelRuntimeSnapshot,
-) {
-  return (
-    requiredWorkerHelperError(runtime.config, Boolean(params.workerInferenceAuthority)) ??
-    requiredWorkerHelperError(params.cfg ?? {}, Boolean(params.workerInferenceAuthority))
-  );
-}
+type ObserveAuthProfiles = (store: AuthProfileStore, profileIds: string[]) => void;
+type ProfileAttempt = Extract<PreparedAgentRuntimeAuthAttempt, { kind: "profile" }>;
+type RetainedProfileAttempt = {
+  attempt: ProfileAttempt;
+  resolution: Awaited<ReturnType<PreparedSimpleCompletionResolverContext["modelResolver"]>>;
+};
 
 /** Prepares a model within the exact generation already held by its caller. */
 export async function prepareSimpleCompletionModel(
   params: PrepareSimpleCompletionModelParams & {
     preparedModelRuntime: PreparedModelRuntimeSnapshot;
+    profileFailover?: boolean;
   },
   assertCurrent?: () => void,
 ): Promise<PreparedStreamCompletionModel> {
@@ -125,6 +127,7 @@ export async function prepareSimpleCompletionModel(
 export async function prepareModelWithCredentials(
   params: PrepareModelWithCredentialsParams & {
     preparedModelRuntime: PreparedModelRuntimeSnapshot;
+    profileFailover?: boolean;
   },
   assertCurrent?: () => void,
 ): Promise<PreparedStreamCompletionModel> {
@@ -156,7 +159,7 @@ export async function prepareModelWithCredentials(
 
 async function prepareSimpleCompletionModelCore(
   params: PrepareSimpleCompletionModelParams & {
-    onAuthProfiles?: (store: AuthProfileStore, profileIds: string[]) => void;
+    onAuthProfiles?: ObserveAuthProfiles;
   },
   context: PreparedSimpleCompletionResolverContext,
   assertCurrent?: () => void,
@@ -171,7 +174,9 @@ async function prepareSimpleCompletionModelCore(
 
 async function prepareModelWithCredentialsCore(
   params: PrepareModelWithCredentialsParams & {
-    onAuthProfiles?: (store: AuthProfileStore, profileIds: string[]) => void;
+    onAuthProfiles?: ObserveAuthProfiles;
+    profileFailover?: boolean;
+    retainedProfileAttempt?: RetainedProfileAttempt;
   },
   context: PreparedSimpleCompletionResolverContext,
   assertCurrent?: () => void,
@@ -180,12 +185,9 @@ async function prepareModelWithCredentialsCore(
     ? captureAgentDatabaseAdmission(params.agentId, { access: "read" })
     : undefined;
   const { modelResolver, workspaceDir } = context;
-  const resolved = await modelResolver(
-    params.provider,
-    params.modelId,
-    params.agentDir,
-    params.cfg,
-    {
+  const resolved =
+    params.retainedProfileAttempt?.resolution ??
+    (await modelResolver(params.provider, params.modelId, params.agentDir, params.cfg, {
       abortSignal: params.signal,
       assertCurrent,
       modelIdSource: params.modelIdSource,
@@ -196,8 +198,7 @@ async function prepareModelWithCredentialsCore(
       ...(params.skipAgentDiscovery ? { skipAgentDiscovery: true } : {}),
       authProfileId: params.profileId,
       preferredProfile: params.preferredProfile,
-    },
-  );
+    }));
   if (!resolved.model) {
     return {
       error: resolved.error ?? `Unknown model: ${params.provider}/${params.modelId}`,
@@ -208,6 +209,7 @@ async function prepareModelWithCredentialsCore(
   const initialModel = resolved.model;
   let resolvedModel = initialModel;
   let authStore: AuthProfileStore | undefined;
+  let authProfiles: SimpleCompletionAuthProfiles | undefined;
   let auth: ResolvedProviderAuth;
   try {
     const pluginOwnedAuth =
@@ -247,53 +249,19 @@ async function prepareModelWithCredentialsCore(
     assertCurrent?.();
     params.signal?.throwIfAborted();
 
-    const primaryModel = params.cfg
-      ? resolveDefaultModelForAgent({
-          cfg: params.cfg,
-          agentId: params.agentId,
-          allowManifestNormalization: false,
-          allowPluginNormalization: false,
-        })
-      : undefined;
-    const resolveProfileAuthMode = (profileId: string) => authStore?.profiles[profileId]?.type;
-    const resolveProfileAuthFlow = (profileId: string) => {
-      const credential = authStore?.profiles[profileId];
-      return credential?.type === "oauth" ? credential.authFlow : undefined;
-    };
-    const routeIntent = params.agentRuntimeId
-      ? { runtimeId: params.agentRuntimeId, source: "explicit" as const }
-      : resolveModelRouteIntent({
-          config: params.cfg,
-          provider: initialModel.provider,
-          modelId: initialModel.id,
-          agentId: params.agentId,
-          primaryModel,
-          resolveProfileAuthMode,
-          resolveProfileAuthFlow,
+    const retainedAttempt = params.retainedProfileAttempt?.attempt;
+    const preparedAuth = retainedAttempt
+      ? { attempts: [retainedAttempt] }
+      : prepareSimpleCompletionRuntimeAuth({
+          auth: authParams,
+          agentRuntimeId: params.agentRuntimeId,
+          profileId: params.profileId,
+          requiresPreparedAuth: Boolean(
+            pluginOwnedAuth || params.onAuthProfiles || params.profileFailover,
+          ),
         });
-    const routeResolution = resolveOpenAIModelRoutes({
-      provider: initialModel.provider,
-      modelId: initialModel.id,
-      api: initialModel.api,
-      baseUrl: initialModel.baseUrl,
-      config: params.cfg,
-      agentId: params.agentId,
-      routeIntent,
-      resolveProfileAuthMode,
-      resolveProfileAuthFlow,
-      pinnedAuthRequirement: params.profileId
-        ? (resolveProviderModelAuthPolicy({
-            provider: initialModel.provider,
-            mode: resolveProfileAuthMode(params.profileId),
-            authFlow: resolveProfileAuthFlow(params.profileId),
-          }).authRequirement ?? undefined)
-        : undefined,
-      env: process.env,
-    });
-    const preparedAuth =
-      pluginOwnedAuth || routeResolution?.kind === "routes" || params.onAuthProfiles
-        ? prepareAgentRuntimeAuth({ ...authParams, routeIntent })
-        : undefined;
+    const rematerialize =
+      Boolean(retainedAttempt) && providerUsesCredentialScopedModelMetadata(authParams);
     const materializeModel = async ({
       plan,
       model,
@@ -311,7 +279,7 @@ async function prepareModelWithCredentialsCore(
         workspaceDir,
         metadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
         model,
-        forceResolve,
+        forceResolve: forceResolve || rematerialize,
         resolveModel: ({ config, authProfileId, authProfileMode }) =>
           modelResolver(initialModel.provider, initialModel.id, params.agentDir, config, {
             abortSignal: params.signal,
@@ -346,14 +314,38 @@ async function prepareModelWithCredentialsCore(
       });
       auth = resolvedAuth.auth;
       resolvedModel = resolvedAuth.model;
-      if (authStore) {
-        params.onAuthProfiles?.(authStore, [
-          ...new Set(
-            preparedAuth.attempts.flatMap((attempt) =>
-              attempt.kind === "profile" ? [attempt.profileId] : [],
-            ),
-          ),
-        ]);
+      if (authStore && (params.onAuthProfiles || params.profileFailover)) {
+        const profiles = new Map<string, ProfileAttempt>();
+        for (const attempt of preparedAuth.attempts) {
+          if (attempt.kind === "profile" && !profiles.has(attempt.profileId)) {
+            profiles.set(attempt.profileId, attempt);
+          }
+        }
+        const profileIds = [...profiles.keys()];
+        params.onAuthProfiles?.(authStore, profileIds);
+        if (params.profileFailover) {
+          authProfiles = {
+            store: authStore,
+            profileIds,
+            prepare: (profileId, validate) => {
+              const attempt = profiles.get(profileId);
+              if (!attempt) {
+                return Promise.resolve({ error: "Prepared auth profile is unavailable." });
+              }
+              // Keep the route and automatic source. Only the candidate cursor may advance.
+              const plan = { ...attempt.plan, forwardedAuthProfileCandidateIds: [profileId] };
+              return prepareModelWithCredentialsCore(
+                {
+                  ...params,
+                  profileFailover: false,
+                  retainedProfileAttempt: { resolution: resolved, attempt: { ...attempt, plan } },
+                },
+                context,
+                validate,
+              );
+            },
+          };
+        }
       }
     } else {
       auth = await getApiKeyForModelCore({
@@ -379,6 +371,13 @@ async function prepareModelWithCredentialsCore(
       }
     }
   } catch (err) {
+    if (
+      params.profileFailover &&
+      isFailoverError(err) &&
+      err.code === AUTH_PROFILE_COOLDOWN_ERROR_CODE
+    ) {
+      throw err;
+    }
     return {
       error: `Auth lookup failed for provider "${initialModel.provider}": ${formatErrorMessage(err)}`,
     };
@@ -445,11 +444,12 @@ async function prepareModelWithCredentialsCore(
       getProviderAuthAuthority(resolvedAuth),
     );
   }
-  const profileCredential = params.profileId ? authStore?.profiles[params.profileId] : undefined;
+  const boundProfileId = params.profileId ?? params.retainedProfileAttempt?.attempt.profileId;
+  const profileCredential = boundProfileId ? authStore?.profiles[boundProfileId] : undefined;
   const sourceAuthFingerprint = params.bindAuthOwner
-    ? profileCredential?.type === "oauth" && params.profileId
+    ? profileCredential?.type === "oauth" && boundProfileId
       ? fingerprintAuthProfileCredential({
-          profileId: params.profileId,
+          profileId: boundProfileId,
           credential: profileCredential,
         })
       : fingerprintResolvedProviderAuth(auth)
@@ -508,6 +508,7 @@ async function prepareModelWithCredentialsCore(
   return {
     model: bindModelLlmRuntime(preparedModel, modelRuntime.llmRuntime, completionTransport),
     auth: resolvedAuth,
+    ...(authProfiles ? { authProfiles } : {}),
     ...(sourceAuthFingerprint ? { sourceAuthFingerprint } : {}),
     ...(recordServiceTierObservation ? { recordServiceTierObservation } : {}),
   };
