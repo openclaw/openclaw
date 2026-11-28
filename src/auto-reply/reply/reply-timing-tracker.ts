@@ -4,6 +4,7 @@ import {
   createStageTimingTracker,
   formatStageTimings,
   type StageTiming,
+  type StageTimingKind,
 } from "../../shared/stage-timing.js";
 
 type ReplyTimingLogParams = {
@@ -19,6 +20,9 @@ export function isReplyProfilerEnabled(params?: { config?: OpenClawConfig }): bo
   return isDiagnosticFlagEnabled("profiler", cfg) || isDiagnosticFlagEnabled("reply.profiler", cfg);
 }
 
+/** Profiling lowers the stage warning threshold to this value. */
+export const REPLY_PROFILER_STAGE_WARN_MS = 500;
+
 /** Keeps slow replies diagnosable; profiling lowers the warning thresholds. */
 export function createReplyTimingTracker<TLogParams extends object = ReplyTimingLogParams>(params: {
   log: { warn: (message: string, details?: Record<string, unknown>) => void };
@@ -33,14 +37,14 @@ export function createReplyTimingTracker<TLogParams extends object = ReplyTiming
   ) => string;
   detailKeys?: (params: TLogParams) => readonly string[];
 }): {
-  measure: <T>(name: string, run: () => Promise<T> | T) => Promise<T>;
-  measureSync: <T>(name: string, run: () => T) => T;
+  measure: <T>(name: string, run: () => Promise<T> | T, kind?: StageTimingKind) => Promise<T>;
+  measureSync: <T>(name: string, run: () => T, kind?: StageTimingKind) => T;
   logIfSlow: (params: TLogParams, options?: { repeat?: boolean }) => void;
 } {
   const timing = createStageTimingTracker();
   let didLog = false;
   const totalWarnMs = params.enabled ? 1_000 : 10_000;
-  const stageWarnMs = params.enabled ? 500 : 5_000;
+  const stageWarnMs = params.enabled ? REPLY_PROFILER_STAGE_WARN_MS : 5_000;
   return {
     measure: timing.measure,
     measureSync: timing.measureSync,

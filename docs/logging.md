@@ -1352,7 +1352,11 @@ Delayed first assistant/tool activity is logged once at `info` by default,
 because provider and tool latency is not itself a preparation warning.
 These are runtime observations: native turn acceptance does not prove that a
 provider request has started. Whole-turn summaries remain profiler-only because
-their totals include model and tool time. Compare the individual preparation
+their totals include model and tool time. With profiler flags enabled, a
+completed summary logs at `info` unless a preparation span crosses the profiler
+threshold; spans that enclose model or tool execution (`model_fallback`,
+`embedded_run`, `cli_run`) stay timing detail and do not turn a healthy completed
+turn into a warning. Compare the individual preparation
 stages before attributing a long turn to Gateway startup. A simultaneous
 `liveness warning` with high event-loop delay
 can explain delays across several sessions.

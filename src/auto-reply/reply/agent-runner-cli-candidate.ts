@@ -196,7 +196,7 @@ export async function runCliFallbackCandidate(
   const toolAuthorityRoute = { provider: params.provider, model: params.model };
   const toolAuthorityFingerprint =
     await turn.replyOperation?.bindToolAuthorityRouteAsync(toolAuthorityRoute);
-  return params.timing.measure("cli_run", () =>
+  return params.timing.measureExecution("cli_run", () =>
     withAdmittedCliCandidate(
       {
         claim: {
