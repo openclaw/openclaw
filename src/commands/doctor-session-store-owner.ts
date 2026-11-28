@@ -86,7 +86,12 @@ export async function prepareSessionStoreOwnerRecovery(params: {
       );
       break;
     }
-    const restoreCommand = formatCliCommand(`openclaw config set ${OWNER_KEY} ${owner.trim()}`);
+    // Agent IDs such as `123` or `true` are valid, but `config set` parses a
+    // bare value as JSON5. Quote the value and force strict JSON so the printed
+    // command always writes a string.
+    const restoreCommand = formatCliCommand(
+      `openclaw config set ${OWNER_KEY} '${JSON.stringify(owner.trim())}' --strict-json`,
+    );
     const accepted = await params.prompter?.confirmRuntimeRepair({
       message: sanitizeDoctorNote(
         `Restore ${OWNER_KEY}=${JSON.stringify(owner)} from ${backupPath}? Its removal may have been intentional.`,

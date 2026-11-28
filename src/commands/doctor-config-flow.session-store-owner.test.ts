@@ -118,12 +118,37 @@ it.each(["accepted", "declined", "noninteractive update"] as const)(
           expectNote(
             scenario === "accepted"
               ? "Restored agents.defaults.sessionStore.agentId"
-              : "openclaw config set agents.defaults.sessionStore.agentId ops",
+              : `openclaw config set agents.defaults.sessionStore.agentId '"ops"' --strict-json`,
           );
         },
       );
     }),
 );
+
+it("quotes literal-like agent ids in the restore command", () =>
+  withDoctorConfigPreflightHome(async (home) => {
+    const config = (owner?: string): OpenClawConfig => ({
+      agents: {
+        ownership: "explicit",
+        entries: { "123": {} },
+        defaults: {
+          model: "anthropic/claude-sonnet-4-6",
+          systemAgent: { agentId: "123" },
+          authInheritance: { agentId: "123" },
+          ...(owner === undefined ? {} : { sessionStore: { agentId: owner } }),
+        },
+      },
+      gateway: { mode: "local" },
+      plugins: { enabled: false },
+    });
+    const configPath = await writeOpenClawConfig(home, config());
+    await writeBackup(configPath, config("123"));
+    await using ctx = await prepareDoctorContext(configPath, {
+      options: { repair: true, yes: true, nonInteractive: true },
+    });
+    await runInitialConfigWriteHealth(ctx);
+    expectNote(`agents.defaults.sessionStore.agentId '"123"' --strict-json`);
+  }));
 
 it.each(["store-roundtrip", "retired-agent"])("never invents ownership from %s", (scenario) =>
   withDoctorConfigPreflightHome(async (home) => {
