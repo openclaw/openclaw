@@ -64,7 +64,18 @@ export async function prepareGitHubReaderIdentity(
     }
   }
   return {
-    identity,
+    identity: identity && {
+      ...identity,
+      ...(identity.selection.source === "agent-override" ||
+      identity.selection.source === "system-configured"
+        ? {
+            readerAccount: {
+              accountId: identity.selection.accountId,
+              source: identity.selection.source,
+            },
+          }
+        : {}),
+    },
     assertSelected:
       identity?.assertSelected ??
       (() => {
