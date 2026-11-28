@@ -299,9 +299,10 @@ it.each([
 });
 
 it("adds non-secret routing headers to runtime cache identity", async () => {
-  const result = await embeddingFixture(undefined, {
+  const result = await createProvider({
     model: "tenant-embedder",
     remote: {
+      baseUrl: "http://127.0.0.1:18001/v1",
       apiKey: "secret-api-key",
       headers: {
         "x-api-key": "also-secret",
