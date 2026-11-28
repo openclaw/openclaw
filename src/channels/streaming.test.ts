@@ -383,7 +383,7 @@ it.each([
   [readCoalesce, { block: { coalesce } }, { minChars: 40, maxChars: 80, idleMs: 250 }],
   [readChunk, { preview: { chunk } }, { minChars: 10, maxChars: 20, breakPreference: "sentence" }],
   [readTools, { preview: { toolProgress: false } }, false],
-  [readCommand, { preview: { commandText: "status" } }, "status"],
+  [readCommand, { preview: { commandText: "raw" } }, "raw"],
 ] as const)("reads canonical nested streaming config with %s", (read, streaming, expected) => {
   expect(read({ streaming })).toEqual(expected);
 });

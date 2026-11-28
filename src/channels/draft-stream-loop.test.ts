@@ -24,10 +24,7 @@ async function waitForBackgroundFlushError(
   }
 }
 
-async function captureUnhandledRejections(
-  run: (rejections: unknown[]) => Promise<void>,
-  settle: () => Promise<void> = flushMacrotask,
-) {
+async function captureUnhandledRejections(run: (rejections: unknown[]) => Promise<void>) {
   const rejections: unknown[] = [];
   const onUnhandledRejection = (reason: unknown) => {
     rejections.push(reason);
@@ -35,7 +32,7 @@ async function captureUnhandledRejections(
   process.on("unhandledRejection", onUnhandledRejection);
   try {
     await run(rejections);
-    await settle();
+    await flushMacrotask();
   } finally {
     process.off("unhandledRejection", onUnhandledRejection);
   }
