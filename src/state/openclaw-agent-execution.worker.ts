@@ -54,6 +54,7 @@ import {
 } from "./openclaw-agent-db.js";
 import {
   createAgentDatabaseExecutionCloser,
+  isOpenRefusalWithoutHandle,
   prepareCreatedAgentDatabaseBackend,
 } from "./openclaw-agent-execution-close.js";
 import type {
@@ -96,7 +97,7 @@ export function createSqliteWorkerBackend(
   input: AgentDatabaseExecutionOpen,
   opening: { databasePath: string },
 ): SqliteWorkerPreparedBackend<AgentDatabaseOperations> {
-  return prepareCreatedAgentDatabaseBackend(openAgentDatabaseBackend(input, opening, true));
+  return prepareCreatedAgentDatabaseBackend(openAgentDatabaseBackend(input, opening, true), input);
 }
 
 /** The broker supplies a private admission channel before invoking this native factory. */
@@ -265,8 +266,9 @@ function openAgentDatabaseBackend(
         releaseBorrow = retainAgentDatabase(opened.db);
         openingResult = { ok: true, value: opened };
       } catch (error) {
-        // An explicit pre-open refusal cannot retain a native handle.
-        if (!(error instanceof SqliteWorkerOpenRefusedError)) {
+        // An explicit pre-open refusal cannot retain a native handle, and the opener closes its
+        // handle and releases its lease before a later host refusal reaches this frame.
+        if (!isOpenRefusalWithoutHandle(error, input)) {
           materializeErrorStack(error);
           openingFailure = { error };
         }
