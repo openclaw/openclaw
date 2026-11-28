@@ -188,7 +188,9 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
     return typeof runtimeId === "string" && runtimeId ? [WRITE_SCOPE] : [READ_SCOPE];
   }
   if (method === "channels.pairing.approve") {
-    return record?.bootstrapCommandOwner === true ? [PAIRING_SCOPE, ADMIN_SCOPE] : [PAIRING_SCOPE];
+    return record?.bootstrapCommandOwner === true || record?.linkProfileId !== undefined
+      ? [PAIRING_SCOPE, ADMIN_SCOPE]
+      : [PAIRING_SCOPE];
   }
   if (method === "fs.listDir") {
     const targetsNode = record && Object.hasOwn(record, "nodeId");

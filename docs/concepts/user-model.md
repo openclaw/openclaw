@@ -354,6 +354,19 @@ All three Gateway methods require `operator.admin`:
 | `users.listChannelIdentities` | `profileId`             | `links` for that profile                  |
 | `users.unlinkChannelIdentity` | `profileId`, `identity` | `removed`                                 |
 
+Administrators can also create these links without calling the methods directly:
+
+- Approving a DM access request in **Settings → Channels → DM access requests**
+  with **Link to person** set to **This is me** or another person. The sender
+  proved control of the account by sending the DM. See
+  [Approve from the Control UI](/channels/pairing#approve-from-the-control-ui).
+- Choosing **Set up my operator account** during Control UI channel setup while
+  signed in with an administrator profile, then confirming the link to that
+  profile. See
+  [Set up an owner without DM pairing](/channels/pairing#set-up-an-owner-without-dm-pairing).
+
+DM allowlists never create links.
+
 For example, the `identity` object for a Discord user is:
 
 ```json

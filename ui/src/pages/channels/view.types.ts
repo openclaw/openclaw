@@ -16,6 +16,14 @@ export type ChannelPairingPrompt = {
   request: ChannelsPairingRequest;
   notify: boolean;
   bootstrapCommandOwner: boolean;
+  /** The existing person the approving administrator says this sender is, if any. */
+  linkProfileId: string | null;
+};
+
+/** People an administrator can link an approved sender to; `selfProfileId` is the approver. */
+export type ChannelPairingLinkTargets = {
+  selfProfileId: string | null;
+  people: ReadonlyArray<{ id: string; label: string }>;
 };
 
 /** What the last Save of one channel reported; only that channel's dialog shows it. */
@@ -47,6 +55,7 @@ export type ChannelsProps = {
   pairingNotice: string | null;
   canManagePairing: boolean;
   canAdmin: boolean;
+  pairingLinkTargets: ChannelPairingLinkTargets | null;
   showAdvancedSettings: boolean;
   selectedChannel: string | null;
   onShowDetail: (channelId: string) => void;
@@ -60,7 +69,9 @@ export type ChannelsProps = {
   onPairingApprove: (request: ChannelsPairingRequest) => void;
   onPairingDismiss: (request: ChannelsPairingRequest) => void;
   onPairingPromptChange: (
-    patch: Partial<Pick<ChannelPairingPrompt, "notify" | "bootstrapCommandOwner">>,
+    patch: Partial<
+      Pick<ChannelPairingPrompt, "notify" | "bootstrapCommandOwner" | "linkProfileId">
+    >,
   ) => void;
   onPairingPromptCancel: () => void;
   onPairingPromptConfirm: () => void;

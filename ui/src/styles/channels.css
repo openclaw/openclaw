@@ -287,6 +287,12 @@
   margin-top: 3px;
 }
 
+.channels-pairing-dialog__link label {
+  display: grid;
+  gap: var(--space-1);
+  color: var(--text);
+}
+
 @media (max-width: 640px) {
   .channels-pairing-request__main {
     align-items: stretch;

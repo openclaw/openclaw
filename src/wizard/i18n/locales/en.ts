@@ -581,6 +581,8 @@ export const en = {
       commandOwnerUserId: "Your personal {label} user ID (not a bot, server, or channel ID)",
       commandOwnerInvalidId: "Enter one user ID without spaces or wildcards.",
       commandOwnerConfirm: "This is my account: allow {owner} to administer this installation?",
+      commandOwnerLinkProfile:
+        "Also link {owner} to your profile ({profile}) so OpenClaw knows this chat account is you?",
       configuredAction: "{label} already configured. What do you want to do?",
       configuredDeleteUnsupported: "{label} does not support deleting config entries.",
       configureDmPolicies: "Configure DM access policies now? (default: pairing)",

@@ -282,6 +282,7 @@ describe("channels controller DM pairing", () => {
     senderId: "+1555",
     notification: "not-requested" as const,
     commandOwnerBootstrap: "not-requested" as const,
+    identityLink: "not-requested" as const,
   };
   const emptyPairing: ChannelsPairingListResult = {
     accounts: [],

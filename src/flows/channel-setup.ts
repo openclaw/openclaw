@@ -895,7 +895,7 @@ export async function setupChannels(
   if (hasConfiguredCommandOwners(next)) {
     return next;
   }
-  const ownerChannels: Array<{ id: ChannelChoice; label: string }> = [];
+  const ownerChannels: Array<{ id: ChannelChoice; label: string; accountId: string }> = [];
   await withCommandPluginMetadata(
     { config: next, workspaceDir: resolveWorkspaceDir() },
     async () => {
@@ -910,7 +910,11 @@ export async function setupChannels(
           // A later setup action can remove or disable an earlier selection.
           const status = await refreshStatus(id);
           if (status?.configured) {
-            ownerChannels.push({ id, label: getVisibleChannelPlugin(id)?.meta.label ?? id });
+            ownerChannels.push({
+              id,
+              label: getVisibleChannelPlugin(id)?.meta.label ?? id,
+              accountId: accountIdsByChannel.get(id) ?? DEFAULT_ACCOUNT_ID,
+            });
           }
         } catch (error) {
           await prompter.note(
@@ -921,6 +925,11 @@ export async function setupChannels(
       }
     },
   );
-  return await maybeConfigureCommandOwner({ cfg: next, channels: ownerChannels, prompter });
+  return await maybeConfigureCommandOwner({
+    cfg: next,
+    channels: ownerChannels,
+    prompter,
+    operatorProfile: options?.operatorProfile,
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

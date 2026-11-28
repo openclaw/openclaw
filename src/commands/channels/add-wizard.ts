@@ -19,8 +19,10 @@ import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-typ
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import { readConfigFileSnapshotForWrite, type OpenClawConfig } from "../../config/config.js";
 import { readCurrentConfigForPolicyCheckAsync } from "../../config/io.runtime.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import type { UserChannelIdentity } from "../../state/user-profiles.types.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { describeBinding } from "../agents.binding-format.js";
 import { applyAgentBindings } from "../agents.bindings.js";
@@ -125,7 +127,36 @@ type ChannelsAddWizardFlowParams = {
   deferDeviceLinkToClient?: boolean;
   /** Reports the channel accounts actually configured, after config commit. */
   onConfigured?: (accounts: Array<{ channel: string; accountId: string }>) => void;
+  /** Signed-in administrator who may link their operator account to their own profile. */
+  operatorProfile?: ChannelSetupOperatorProfile;
 };
+
+/** A person profile (never the shared Owner) whose administrator started this setup. */
+export type ChannelSetupOperatorProfile = { profileId: string; label: string };
+
+async function linkOperatorAccount(
+  profile: ChannelSetupOperatorProfile,
+  identity: UserChannelIdentity,
+  prompter: WizardPrompter,
+) {
+  const [{ changeCanonicalUserChannelIdentity }, { UserChannelIdentityConflictError }] =
+    await Promise.all([
+      import("../../state/user-channel-identity-operations.js"),
+      import("../../state/user-channel-identities.js"),
+    ]);
+  const account = `${identity.channelId}:${identity.senderId}`;
+  try {
+    await changeCanonicalUserChannelIdentity("link", profile.profileId, identity);
+    await prompter.note(`Linked ${account} to ${profile.label}.`, "Profile link");
+  } catch (error) {
+    await prompter.note(
+      error instanceof UserChannelIdentityConflictError
+        ? `${account} is already linked to another profile. Unlink it from that profile first.`
+        : `Could not link ${account} to ${profile.label}: ${formatErrorMessage(error)}`,
+      "Profile link",
+    );
+  }
+}
 
 /** Run the interactive channel-setup flow and persist the resulting config. */
 export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowParams): Promise<void> {
@@ -142,6 +173,8 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
       : {}),
   });
   let selection: ChannelChoice[] = [];
+  let operatorIdentity: UserChannelIdentity | undefined;
+  const { operatorProfile } = params;
   const accountIds: Partial<Record<ChannelChoice, string>> = {};
   const resolvedPlugins = new Map<ChannelChoice, ChannelSetupPlugin>();
   await prompter.intro("Channel setup");
@@ -173,6 +206,16 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
     onResolvedPlugin: (channel, plugin) => {
       resolvedPlugins.set(channel, plugin);
     },
+    ...(operatorProfile
+      ? {
+          operatorProfile: {
+            label: operatorProfile.label,
+            onLink: (identity) => {
+              operatorIdentity = identity;
+            },
+          },
+        }
+      : {}),
   });
   const commitWizardConfig = async (config: OpenClawConfig) => {
     const committed = await persistChannelPluginConfig({
@@ -309,6 +352,9 @@ export async function runChannelsAddWizardFlow(params: ChannelsAddWizardFlowPara
   }
 
   await commitWizardConfig(nextConfig);
+  if (operatorProfile && operatorIdentity) {
+    await linkOperatorAccount(operatorProfile, operatorIdentity, prompter);
+  }
   params.onConfigured?.(
     selection.map((channel) => ({
       channel,
@@ -329,6 +375,7 @@ export async function runChannelsSetupWizard(
     /** Revalidate/lock cancellation immediately before durable effects. */
     beforePersistentEffect?: () => Promise<void>;
     assertPersistentEffectCurrent?: () => void;
+    operatorProfile?: ChannelSetupOperatorProfile;
   },
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
@@ -359,5 +406,6 @@ export async function runChannelsSetupWizard(
     ...(opts.assertPersistentEffectCurrent
       ? { assertPersistentEffectCurrent: opts.assertPersistentEffectCurrent }
       : {}),
+    ...(opts.operatorProfile ? { operatorProfile: opts.operatorProfile } : {}),
   });
 }

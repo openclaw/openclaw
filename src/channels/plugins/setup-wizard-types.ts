@@ -270,6 +270,14 @@ export type SetupChannelsOptions = {
   /** Finish after the explicitly targeted channel is configured or paused. */
   finishAfterInitialSelection?: boolean;
   secretInputMode?: "plaintext" | "ref";
+  /**
+   * The signed-in administrator running setup. When they set up their own operator account,
+   * they may also link it to this profile; `onLink` runs during the prompt, before config commit.
+   */
+  operatorProfile?: {
+    label: string;
+    onLink: (identity: { channelId: string; accountId: string; senderId: string }) => void;
+  };
 };
 
 export type PromptAccountIdParams = {

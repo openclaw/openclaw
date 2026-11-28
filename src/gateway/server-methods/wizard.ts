@@ -8,20 +8,25 @@ import {
   validateWizardStartParams,
   validateWizardStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
+import type { ChannelSetupOperatorProfile } from "../../commands/channels/add-wizard.js";
 import type { OnboardOptions } from "../../commands/onboard-types.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { createNonExitingRuntime, ExitError, type RuntimeEnv } from "../../runtime.js";
+import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
   sanitizeWizardStepForClient,
   WizardSession,
   type WizardStep,
 } from "../../wizard/session.js";
+import { resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { canAccessWizardSession, noteWizardReader } from "../server-wizard-sessions.js";
 import { formatForLog } from "../ws-log.js";
 import { startGatewayWizard, whenAdmittedWizardSessionSettled } from "./setup-admission.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { prepareUserProfileAdministration } from "./users-profile-access.js";
 import { assertValidParams, defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
 export type SetupWizardRunner = (
@@ -36,6 +41,7 @@ export type ChannelSetupWizardRunner = (
     onConfigured?: (accounts: Array<{ channel: string; accountId: string }>) => void;
     beforePersistentEffect?: () => Promise<void>;
     assertPersistentEffectCurrent?: () => void;
+    operatorProfile?: ChannelSetupOperatorProfile;
   },
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
@@ -50,6 +56,26 @@ export const runDefaultChannelSetupWizard: ChannelSetupWizardRunner = async (...
   const { runChannelsSetupWizard } = await import("../../commands/channels/add-wizard.js");
   return runChannelsSetupWizard(...args);
 };
+
+/** A signed-in person administrator can link their own operator account during channel setup. */
+async function resolveChannelSetupOperatorProfile(
+  request: GatewayRequestHandlerOptions,
+): Promise<ChannelSetupOperatorProfile | undefined> {
+  const actor = resolveGatewayOperatorRoleActor(request.client);
+  if (actor?.kind !== "operator" || !actor.profileId) {
+    return undefined;
+  }
+  try {
+    await prepareUserProfileAdministration(request);
+    const profile = await prepareUserProfileRoleAuthority(actor.profileId);
+    if (!profile || profile.profileId === GATEWAY_OWNER_PROFILE_ID) {
+      return undefined;
+    }
+    return { profileId: profile.profileId, label: profile.display.displayName ?? "your profile" };
+  } catch {
+    return undefined;
+  }
+}
 
 async function runHostedWizard(run: (runtime: RuntimeEnv) => Promise<void>): Promise<void> {
   await using cache = createPluginCache();
@@ -111,6 +137,8 @@ export const wizardHandlers: GatewayRequestHandlers = {
     }
     const sessionId = randomUUID();
     const flow = params.flow ?? "setup";
+    const operatorProfile =
+      flow === "channels" ? await resolveChannelSetupOperatorProfile(request) : undefined;
     const createSession = () =>
       new WizardSession((prompter, _signal, wizardSession) =>
         runHostedWizard((runtime) =>
@@ -124,6 +152,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
                   beforePersistentEffect: async () => wizardSession.lockCancellation(),
                   assertPersistentEffectCurrent: () =>
                     wizardSession.assertPersistentEffectCurrent(),
+                  ...(operatorProfile ? { operatorProfile } : {}),
                 },
                 runtime,
                 prompter,

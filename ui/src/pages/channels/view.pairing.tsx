@@ -20,7 +20,11 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { ChannelRefresh } from "./view.shared.tsx";
-import type { ChannelsProps } from "./view.types.ts";
+import type {
+  ChannelPairingLinkTargets,
+  ChannelPairingPrompt,
+  ChannelsProps,
+} from "./view.types.ts";
 
 function accountName(account: Pick<ChannelsPairingAccount, "accountLabel" | "accountId">): string {
   return account.accountLabel || account.accountId;
@@ -336,6 +340,45 @@ export function renderChannelPairingDetail(channelId: string, props: ChannelsPro
   );
 }
 
+function PairingLinkPicker(params: {
+  prompt: ChannelPairingPrompt;
+  targets: ChannelPairingLinkTargets;
+  disabled: boolean;
+  onChange: (profileId: string | null) => void;
+}) {
+  const options = createMemo(() => {
+    const { selfProfileId, people } = params.targets;
+    const self = people.find((person) => person.id === selfProfileId);
+    return [
+      { value: "", label: t("channels.pairing.linkNone") },
+      ...(self
+        ? [{ value: self.id, label: t("channels.pairing.linkSelf", { name: self.label }) }]
+        : []),
+      ...people
+        .filter((person) => person.id !== self?.id)
+        .map((person) => ({ value: person.id, label: person.label })),
+    ];
+  });
+  return (
+    <div class="channels-pairing-dialog__link">
+      <label>
+        <span>{t("channels.pairing.linkPerson")}</span>
+        <Picker
+          params={{
+            label: t("channels.pairing.linkPerson"),
+            value: params.prompt.linkProfileId ?? "",
+            options: options(),
+            disabled: params.disabled,
+            searchable: true,
+            onChange: (value) => params.onChange(value || null),
+          }}
+        />
+      </label>
+      <div class="settings-row__desc">{t("channels.pairing.linkHelp")}</div>
+    </div>
+  );
+}
+
 export function renderChannelPairingPrompt(props: ChannelsProps) {
   return (
     <Show when={props.canManagePairing && props.pairingPrompt}>
@@ -402,6 +445,14 @@ function PairingPromptContent(params: {
               {option("bootstrapCommandOwner", t("channels.pairing.makeCommandOwner"))}
               <div class="settings-row__desc">{t("channels.pairing.commandOwnerHelp")}</div>
             </>
+          ) : undefined}
+          {approving() && params.props.canAdmin && params.props.pairingLinkTargets ? (
+            <PairingLinkPicker
+              prompt={params.prompt}
+              targets={params.props.pairingLinkTargets}
+              disabled={busy()}
+              onChange={(linkProfileId) => params.props.onPairingPromptChange({ linkProfileId })}
+            />
           ) : undefined}
           {approving() && ownerMissing() && !params.props.canAdmin ? (
             <InlineAlert tone="warning">{t("channels.pairing.commandOwnerNeedsAdmin")}</InlineAlert>

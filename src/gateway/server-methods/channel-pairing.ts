@@ -33,10 +33,13 @@ import {
   listChannelPairingRequests,
   resolveChannelPairingRequestId,
 } from "../../pairing/pairing-store.js";
+import { UserChannelIdentityConflictError } from "../../state/user-channel-identities.js";
+import { changeCanonicalUserChannelIdentity } from "../../state/user-channel-identity-operations.js";
 import { formatForLog } from "../ws-log.js";
 import { captureLocalStateMutationGuard } from "./local-state-owner.js";
 import { respondError, respondUnavailable, respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
+import { prepareUserProfileAdministration } from "./users-profile-access.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 type PairingAccount = {
@@ -283,6 +286,15 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
       if (!account) {
         return;
       }
+      if (params.linkProfileId !== undefined) {
+        try {
+          // Linking is the approving administrator's attestation of who this sender is.
+          await prepareUserProfileAdministration(opts);
+        } catch (error) {
+          respondError(respond, ErrorCodes.FORBIDDEN, formatForLog(error));
+          return;
+        }
+      }
       try {
         const approved = await approveChannelPairingRequest({
           channel: account.plugin.id,
@@ -313,6 +325,29 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
           }
         }
 
+        const senderId = approved.entry.meta?.senderId ?? approved.id;
+        let identityLink: ChannelsPairingApproveResult["identityLink"] = "not-requested";
+        if (params.linkProfileId !== undefined) {
+          try {
+            // The sender proved control of this account by sending the DM that created the request.
+            await changeCanonicalUserChannelIdentity("link", params.linkProfileId, {
+              channelId: account.plugin.id,
+              accountId: account.accountId,
+              senderId,
+            });
+            identityLink = "linked";
+          } catch (error) {
+            if (error instanceof UserChannelIdentityConflictError) {
+              identityLink = "linked-elsewhere";
+            } else {
+              context.logGateway.warn(
+                `DM pairing identity link failed channel=${account.plugin.id} account=${account.accountId}: ${formatForLog(error)}`,
+              );
+              identityLink = "unavailable";
+            }
+          }
+        }
+
         let notification: ChannelsPairingApproveResult["notification"] = "not-requested";
         if (params.notify === true) {
           try {
@@ -337,9 +372,10 @@ export const channelPairingHandlers: GatewayRequestHandlers = {
           true,
           {
             requestId: params.requestId,
-            senderId: approved.entry.meta?.senderId ?? approved.id,
+            senderId,
             notification,
             commandOwnerBootstrap,
+            identityLink,
           },
           undefined,
         );

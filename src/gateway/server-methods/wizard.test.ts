@@ -23,9 +23,13 @@ import {
   runWithGatewayIndependentRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import type { WizardSession } from "../../wizard/session.js";
+import { authorizationClient } from "../server-methods.authorization.test-support.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 
 const setupTargetLock = vi.hoisted(() => ({
   beforeRelease: undefined as Promise<void> | undefined,
@@ -539,4 +543,53 @@ it.each([false, true])("redacts sensitive defaults after plain step=%s", async (
   expect(result.step).toMatchObject({ sensitive: true });
   expect(result.step).not.toHaveProperty("initialValue");
   await cancelWizardSessions(context.wizardSessions);
+});
+
+describe("channel setup operator profile", () => {
+  it.each(["person", "shared owner", "anonymous"] as const)(
+    "offers the operator-account link only to a signed-in person administrator: %s",
+    async (kind) => {
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async () => {
+          const profile =
+            kind === "person"
+              ? ensureProfileForEmail("ada@example.test")
+              : kind === "shared owner"
+                ? ensureGatewayOwnerProfile(null)
+                : undefined;
+          const seen = createDeferred<unknown>();
+          const runner = vi.fn(async (opts: { operatorProfile?: unknown }) => {
+            seen.resolve(opts.operatorProfile);
+          });
+          const context = {
+            ...createWizardContext(vi.fn()),
+            channelWizardRunner: runner,
+            getRuntimeConfig: () => ({}),
+          };
+          const client = authorizationClient(
+            "wizard-operator",
+            ["operator.admin"],
+            profile ? { authenticatedUserProfile: gatewayProfile(profile.id, "Ada") } : {},
+          );
+          try {
+            await expectDefined(
+              wizardHandlers["wizard.start"],
+              "wizard.start",
+            )({
+              params: { flow: "channels" },
+              respond: vi.fn(),
+              context,
+              client,
+            } as never);
+            expect(await seen.promise).toEqual(
+              kind === "person" ? { profileId: profile?.id, label: expect.any(String) } : undefined,
+            );
+          } finally {
+            await cancelWizardSessions(context.wizardSessions);
+          }
+        },
+      );
+    },
+  );
 });

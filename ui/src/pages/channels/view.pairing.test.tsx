@@ -176,7 +176,13 @@ it.each(["approve", "dismiss"] as const)(
     );
     const channels = createChannelCapability(gateway);
     const props = createProps({
-      pairingPrompt: { kind, request, notify: false, bootstrapCommandOwner: false },
+      pairingPrompt: {
+        kind,
+        request,
+        notify: false,
+        bootstrapCommandOwner: false,
+        linkProfileId: null,
+      },
     });
     props.channels = channels.state;
     channels.state.pairingSnapshot = pairingSnapshot();
@@ -231,6 +237,7 @@ it("shows explicit notification and first-owner choices for an admin", () => {
         request,
         notify: false,
         bootstrapCommandOwner: false,
+        linkProfileId: null,
       },
     }),
     renderChannelPairingPrompt,
@@ -263,4 +270,43 @@ it("links a channel account detail back to the filtered request queue", () => {
   expect(container.querySelector("button")).toBe(button);
   expect(container.textContent).toContain("No pending requests");
   expect(container.textContent).not.toContain("1 pending");
+});
+
+it("lets an admin link the approved sender to themselves or another person", async () => {
+  const onPairingPromptChange = vi.fn();
+  const container = renderInto(
+    createProps({
+      pairingPrompt: {
+        kind: "approve",
+        request,
+        notify: false,
+        bootstrapCommandOwner: false,
+        linkProfileId: null,
+      },
+      pairingLinkTargets: {
+        selfProfileId: "ada",
+        people: [
+          { id: "grace", label: "Grace" },
+          { id: "ada", label: "Ada" },
+        ],
+      },
+      onPairingPromptChange,
+    }),
+    renderChannelPairingPrompt,
+  );
+  await updatePickers(container);
+  const picker = container.querySelector<SelectPicker>("openclaw-select-picker")!;
+  await openPicker(picker);
+  expect(
+    [...picker.querySelectorAll<HTMLElement>('[role="option"]')].map((option) => [
+      option.dataset.value,
+      option.textContent?.trim(),
+    ]),
+  ).toEqual([
+    ["", "Don’t link"],
+    ["ada", "This is me (Ada)"],
+    ["grace", "Grace"],
+  ]);
+  await choosePickerValue(picker, "grace");
+  expect(onPairingPromptChange).toHaveBeenCalledWith({ linkProfileId: "grace" });
 });

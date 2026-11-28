@@ -1,5 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, expect, it, vi } from "vitest";
+import { resolveUserChannelIdentity } from "../../state/user-channel-identities.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
 import {
   expectRpcError as expectError,
   expectRpcResult as expectSuccess,
@@ -97,6 +102,7 @@ async function invoke(
   method: keyof typeof channelPairingHandlers,
   params: Record<string, unknown>,
   scopes: string[] = [],
+  profileId?: string,
 ) {
   const respond = vi.fn();
   const handler = expectDefined(channelPairingHandlers[method], `${method} test invariant`);
@@ -104,7 +110,11 @@ async function invoke(
     params,
     respond,
     context: { getRuntimeConfig: () => ({}), logGateway: { warn: vi.fn() } },
-    client: { connect: { scopes } },
+    client: {
+      connId: "pairing-test",
+      connect: { role: "operator", scopes },
+      ...(profileId ? { authenticatedUserProfile: gatewayProfile(profileId, "Admin") } : {}),
+    },
   } as unknown as Parameters<typeof handler>[0]);
   return respond;
 }
@@ -250,6 +260,7 @@ it.each(["notification", "command-owner"])(
       senderId,
       notification: notify ? "failed" : "not-requested",
       commandOwnerBootstrap: notify ? "configured" : "unavailable",
+      identityLink: "not-requested",
     });
   },
 );
@@ -269,4 +280,64 @@ it("dismisses a request without approving the sender", async () => {
   expect(mocks.dismiss).toHaveBeenCalledWith(target);
   expect(mocks.approve).not.toHaveBeenCalled();
   expectSuccess(respond, { requestId: "opaque-request-id", senderId });
+});
+
+it("links the approved sender to the person the administrator names, without reopening links", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const admin = ensureProfileForEmail("admin@example.test");
+    setUserProfileRole(admin.id, "admin");
+    const other = ensureProfileForEmail("other@example.test");
+    const owner = ensureGatewayOwnerProfile(null);
+    const identity = { channelId: "whatsapp", accountId: "personal", senderId };
+    const approveAs = (linkProfileId: string) =>
+      invoke(
+        "channels.pairing.approve",
+        { ...target, linkProfileId },
+        ["operator.pairing", "operator.admin"],
+        admin.id,
+      );
+    mocks.approve.mockResolvedValue(approved());
+
+    for (const repeat of [false, true]) {
+      const respond = await approveAs(admin.id);
+      expectSuccess(respond, {
+        requestId: target.requestId,
+        senderId,
+        notification: "not-requested",
+        commandOwnerBootstrap: "not-requested",
+        identityLink: "linked",
+      });
+      expect(resolveUserChannelIdentity(identity)?.profileId, String(repeat)).toBe(admin.id);
+    }
+
+    // A link owned by another person stays until it is explicitly unlinked; approval still lands.
+    const respond = await approveAs(other.id);
+    expect(respond.mock.calls[0]?.[1]).toMatchObject({ identityLink: "linked-elsewhere" });
+    expect(resolveUserChannelIdentity(identity)?.profileId).toBe(admin.id);
+
+    const ownerSender = { ...identity, senderId: "+15550000000" };
+    mocks.approve.mockResolvedValue(approved(ownerSender.senderId));
+    const ownerResult = await approveAs(owner.id);
+    expect(ownerResult.mock.calls[0]?.[1]).toMatchObject({ identityLink: "unavailable" });
+    expect(resolveUserChannelIdentity(ownerSender)).toBeUndefined();
+    expect(mocks.approve).toHaveBeenCalledTimes(4);
+  });
+});
+
+it("refuses to link from a non-administrator before approving the sender", async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+    const member = ensureProfileForEmail("member@example.test");
+    mocks.approve.mockResolvedValue(approved());
+    const respond = await invoke(
+      "channels.pairing.approve",
+      { ...target, linkProfileId: member.id },
+      ["operator.pairing"],
+      member.id,
+    );
+    expectError(respond, { code: "FORBIDDEN" });
+    expect(mocks.approve).not.toHaveBeenCalled();
+    expect(
+      resolveUserChannelIdentity({ channelId: "whatsapp", accountId: "personal", senderId }),
+    ).toBeUndefined();
+  });
 });

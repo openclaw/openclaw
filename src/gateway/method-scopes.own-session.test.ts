@@ -145,6 +145,7 @@ describe("method scope resolution and authorization", () => {
     ["talk.config", { includeSecrets: true }, [READ, SECRETS], READ],
     ["channels.pairing.approve", {}, PAIRING],
     ["channels.pairing.approve", { bootstrapCommandOwner: true }, [PAIRING, ADMIN], PAIRING],
+    ["channels.pairing.approve", { linkProfileId: "person" }, [PAIRING, ADMIN], PAIRING],
     ["agent", { message: "hello" }, WRITE],
     ["agent", { message: "/reset" }, ADMIN, WRITE],
     ["agent", { message: "/new follow up" }, ADMIN],
