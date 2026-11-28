@@ -398,6 +398,27 @@ async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void
         process.exitCode = 1;
         return;
       }
+      // A system unit that runs this installation as another account gets its own state
+      // steps, as that account, before this root process repairs its own state.
+      const { updateSystemServiceAsAccount } =
+        await import("../cli/update-cli/update-command-service-account-activation.js");
+      assertCurrent();
+      const systemService = await updateSystemServiceAsAccount({
+        root: input.root,
+        remainingMs: remaining,
+        warn: (message) => process.stderr.write(`${message}\n`),
+      });
+      if (systemService?.status === "failed") {
+        throw new Error(systemService.message);
+      }
+      if (systemService) {
+        process.stderr.write(
+          `Gateway service ${systemService.unitName} was updated as ${systemService.account} and serves this release (not serving for ${Math.round(systemService.notServingMs / 1000)}s).\n`,
+        );
+        for (const warning of systemService.warnings) {
+          process.stderr.write(`${warning}\n`);
+        }
+      }
       const { runDoctorHealthFlow } = await import("../flows/doctor-health.js");
       assertCurrent();
       remaining();

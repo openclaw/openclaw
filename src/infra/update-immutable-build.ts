@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isSystemdControlGroupEmpty } from "../daemon/systemd-cgroup.js";
+import { serviceAccountArgv } from "../daemon/systemd-service-account-command.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
@@ -105,20 +106,20 @@ export async function runImmutableBuild(params: {
     }
     assertCurrent();
     await checked(
-      [
-        "/usr/sbin/runuser",
-        "-u",
-        descriptor.service.account,
-        "--",
-        "/usr/bin/env",
-        "-i",
-        "PATH=/usr/bin:/bin",
-        descriptor.runtime.path,
-        "-e",
-        runtimeProbe,
-        descriptor.service.stateDir,
-        String(build.resources.runtimeFreeBytes),
-      ],
+      serviceAccountArgv({
+        runuser: "/usr/sbin/runuser",
+        account: descriptor.service.account,
+        argv: [
+          "/usr/bin/env",
+          "-i",
+          "PATH=/usr/bin:/bin",
+          descriptor.runtime.path,
+          "-e",
+          runtimeProbe,
+          descriptor.service.stateDir,
+          String(build.resources.runtimeFreeBytes),
+        ],
+      }),
       stage,
     );
     assertCurrent();

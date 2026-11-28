@@ -64,6 +64,7 @@ import {
   hasSchemaRefusal,
 } from "./schema-preflight.js";
 import { resolveUpdateRoot, UpdatePreMutationError } from "./shared.js";
+import { admitAsServiceAccount } from "./update-command-admit-as-service-account.js";
 import { inspectSystemServiceAccountForAdmission } from "./update-command-admit-service-account.js";
 import { preflightConfiguredNpmPluginTargets } from "./update-command-plugin-preflight.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
@@ -129,11 +130,24 @@ async function inspectUpdateAdmission(
       packageManager: context.installation.packageManager,
       candidateVersion,
     });
+    if (serviceAccount?.kind === "switch") {
+      return await admitAsServiceAccount(serviceAccount, context, {
+        candidateRoot,
+        candidateVersion,
+        installedVersion,
+      });
+    }
     if (serviceAccount) {
       return {
         protocol: UPDATE_ADMISSION_PROTOCOL,
         verdict: "refuse",
-        reasons: [{ code: "service-account-mismatch", ...serviceAccount }],
+        reasons: [
+          {
+            code: "service-account-mismatch",
+            message: serviceAccount.message,
+            nextAction: serviceAccount.nextAction,
+          },
+        ],
         warnings: [],
         facts: {
           candidateVersion,

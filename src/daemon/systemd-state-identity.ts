@@ -4,20 +4,30 @@ import { execFileUtf8 } from "./exec-file.js";
 import type { SystemdBusQuery } from "./systemd-bus-query.js";
 
 export async function readSystemdAccountHome(user: string): Promise<string | undefined> {
+  return (await readSystemdAccount(user))?.home;
+}
+
+/** The NSS passwd entry for a unit's User=; uncertainty is undefined, never a guess. */
+export async function readSystemdAccount(
+  user: string,
+): Promise<{ uid: number; gid: number; home: string } | undefined> {
   try {
     const key = user || "0";
     const result = await execFileUtf8("/usr/bin/getent", ["passwd", key], { timeout: 1_000 });
     const fields = result.stdout.trim().split(":");
     const name = fields[0];
     const uid = fields[2];
+    const gid = fields[3];
     const home = fields[5];
     return result.code === 0 &&
       result.termination === "exit" &&
       fields.length === 7 &&
       (name === key || (/^\d+$/u.test(key) && uid === key)) &&
+      /^\d+$/u.test(uid ?? "") &&
+      /^\d+$/u.test(gid ?? "") &&
       home &&
       path.posix.isAbsolute(home)
-      ? home
+      ? { uid: Number(uid), gid: Number(gid), home }
       : undefined;
   } catch {
     // NSS failures are uncertainty, never proof that the service has separate state.
