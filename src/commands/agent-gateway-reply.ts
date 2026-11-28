@@ -8,7 +8,7 @@ import {
   type AcceptedSessionSpawn,
 } from "../agents/accepted-session-spawn.js";
 import type { EmbeddedAgentRunMeta } from "../agents/embedded-agent-runner/types.js";
-import type { ProgressReporter } from "../cli/progress.js";
+import { createCliProgress, type ProgressReporter } from "../cli/progress.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 
@@ -168,11 +168,14 @@ export function createYieldFollower(params: {
         spawns?.filter((spawn) => spawn.expectsCompletionMessage).map((spawn) => spawn.runId),
       );
       follower.following = response;
+      // A live spinner redraws over lines printed beneath it; stop it before the reply.
+      input.progress.done();
       printed = true;
       await printGatewayAgentReply(response, {}, runtime);
-      input.progress.setLabel(
-        `Waiting on ${children.size === 1 ? "1 subagent" : `${children.size} subagents`}…`,
-      );
+      const waiting = createCliProgress({
+        label: `Waiting on ${children.size === 1 ? "1 subagent" : `${children.size} subagents`}…`,
+        indeterminate: true,
+      });
       const done = Promise.withResolvers<YieldFollowUp>();
       let childEnded = false;
       let followUpRunId: string | undefined;
@@ -230,7 +233,11 @@ export function createYieldFollower(params: {
       if (input.connection.aborted) {
         done.resolve({ kind: "disconnected" });
       }
-      outcome = await done.promise;
+      try {
+        outcome = await done.promise;
+      } finally {
+        waiting.done();
+      }
     },
     /** Prints the turn's reply, then the follow-up; a wait that ends early says where the result goes. */
     async finish(response: GatewayAgentResponse, sessionKey: string | undefined): Promise<void> {
