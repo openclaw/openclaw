@@ -843,10 +843,16 @@
   line-height: 1.5;
 }
 
+.chat-notice-inline--static,
 .chat-notice-inline > summary {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.chat-notice-inline > summary {
+  padding: 1px 4px;
+  margin-inline: -4px;
   width: fit-content;
   max-width: 100%;
   border-radius: var(--radius-sm);

@@ -31,6 +31,11 @@ before the session can continue. Queued messages stay held; review and retry eac
 message separately after continuation is accepted. A session stopped without
 reviewable findings cannot continue.
 
+When chat switches to a temporary model, the transcript shows a single line with
+the model name. If a reason was recorded, expand that line to see it. Chat shows
+another line when it switches to a different temporary model or returns to the
+selected one.
+
 An existing session with an empty transcript shows **No messages yet** and keeps
 the composer available. The agent welcome and recent sessions appear only on the
 **New session** page. If no model is configured, the existing session's composer

@@ -1,4 +1,3 @@
-import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, For, lazy, Loading, Match, Show, Switch } from "solid-js";
 import type { ModelCatalogEntry } from "../../../api/types.ts";
@@ -7,10 +6,7 @@ import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatItem } from "../../../lib/chat/chat-types.ts";
-import {
-  buildQualifiedChatModelValue,
-  normalizeChatModelProviderId,
-} from "../../../lib/chat/model-ref.ts";
+import { resolveTranscriptModel } from "../../../lib/chat/model-ref.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -84,18 +80,25 @@ function SystemLine(props: {
 
 export function ChatDivider(props: { item: Extract<ChatItem, { kind: "divider" }> }) {
   return (
-    <div
-      class="chat-divider"
-      data-chat-row-key={props.item.key}
-      data-ts={String(props.item.timestamp)}
-    >
-      <SystemLine icon={props.item.icon} label={props.item.label} metric={props.item.metric} />
-      <Show when={props.item.description}>
-        <div class="chat-divider__details">
-          <span class="chat-divider__description">{props.item.description}</span>
+    <Show
+      when={props.item.systemEvent === "info"}
+      fallback={
+        <div
+          class="chat-divider"
+          data-chat-row-key={props.item.key}
+          data-ts={String(props.item.timestamp)}
+        >
+          <SystemLine icon={props.item.icon} label={props.item.label} metric={props.item.metric} />
+          <Show when={props.item.description}>
+            <div class="chat-divider__details">
+              <span class="chat-divider__description">{props.item.description}</span>
+            </div>
+          </Show>
         </div>
-      </Show>
-    </div>
+      }
+    >
+      <InlineNotice item={props.item} />
+    </Show>
   );
 }
 
@@ -111,28 +114,50 @@ function NoticeBody(props: { text: string }) {
   );
 }
 
-/** Context injected mid-run reads as part of the agent's turn, not as a session divider. */
-function InlineNotice(props: ChatNoticeProps) {
+/** Mid-run context and model transitions read as part of the agent's turn. */
+function InlineNotice(props: { item: Extract<ChatItem, { kind: "notice" | "divider" }> }) {
+  const label = () => (
+    <>
+      <span class="chat-notice-inline__icon" aria-hidden="true">
+        <Icon name={props.item.icon ?? "cpu"} />
+      </span>
+      <span class="chat-notice-inline__label">{props.item.label}</span>
+    </>
+  );
   return (
-    <details
-      class="chat-notice-inline"
-      data-chat-row-key={props.item.key}
-      data-ts={String(props.item.timestamp)}
+    <Show
+      when={props.item.kind === "notice" || props.item.description}
+      fallback={
+        <div
+          class="chat-notice-inline chat-notice-inline--static"
+          data-chat-row-key={props.item.key}
+          data-ts={String(props.item.timestamp)}
+        >
+          {label()}
+        </div>
+      }
     >
-      <summary>
-        <span class="chat-notice-inline__icon" aria-hidden="true">
-          <Icon name={props.item.icon ?? "cpu"} />
-        </span>
-        <span class="chat-notice-inline__label">{props.item.label}</span>
-        <Show when={props.item.showTimestamp}>
-          <span class="chat-notice-inline__time">{formatTimeMs(props.item.timestamp)}</span>
-        </Show>
-        <span class="chat-notice-inline__chevron" aria-hidden="true">
-          <Icon name="chevronRight" />
-        </span>
-      </summary>
-      <NoticeBody text={props.item.text} />
-    </details>
+      <details
+        class="chat-notice-inline"
+        data-chat-row-key={props.item.key}
+        data-ts={String(props.item.timestamp)}
+      >
+        <summary>
+          {label()}
+          <Show when={props.item.kind === "notice" && props.item.showTimestamp}>
+            <span class="chat-notice-inline__time">{formatTimeMs(props.item.timestamp)}</span>
+          </Show>
+          <span class="chat-notice-inline__chevron" aria-hidden="true">
+            <Icon name="chevronRight" />
+          </span>
+        </summary>
+        {props.item.kind === "notice" ? (
+          <NoticeBody text={props.item.text} />
+        ) : (
+          <div class="chat-notice__body">{props.item.description}</div>
+        )}
+      </details>
+    </Show>
   );
 }
 
@@ -142,27 +167,11 @@ function NoticeModel(props: {
   suffix?: string;
   catalog?: ModelCatalogEntry[];
 }) {
-  const reference = createMemo(() => parseProviderModelRef(props.value));
-  const provider = () => normalizeChatModelProviderId(reference()?.provider ?? "");
-  const catalogEntry = createMemo(() =>
-    props.catalog?.find((candidate) => {
-      const ref = parseProviderModelRef(
-        buildQualifiedChatModelValue(candidate.id, candidate.provider),
-      );
-      return (
-        ref?.model === reference()?.model &&
-        normalizeChatModelProviderId(ref?.provider ?? "") === provider()
-      );
-    }),
-  );
-  const name = createMemo(() => {
-    const entry = catalogEntry();
-    return entry?.name.trim() || entry?.alias?.trim() || reference()?.model || props.value;
-  });
+  const model = createMemo(() => resolveTranscriptModel(props.value, props.catalog));
   const icon = () => (
     <ProviderBrandIcon
-      provider={provider()}
-      presentation={catalogEntry()}
+      provider={model().provider}
+      presentation={model().entry}
       class="chat-divider__icon"
     />
   );
@@ -171,18 +180,18 @@ function NoticeModel(props: {
       <Show when={props.prefix}>
         <span class="chat-divider__model-affix">{props.prefix}</span>
       </Show>
-      <Show when={provider()}>
+      <Show when={model().provider}>
         <Errored fallback={icon}>
           <Loading fallback={icon()}>
             <ModelProviderIcon
-              provider={provider()}
-              presentation={catalogEntry()}
+              provider={model().provider}
+              presentation={model().entry}
               class="chat-divider__icon"
             />
           </Loading>
         </Errored>
       </Show>
-      <bdi>{name()}</bdi>
+      <bdi>{model().name}</bdi>
       <Show when={props.suffix}>
         <span class="chat-divider__model-affix">{props.suffix}</span>
       </Show>

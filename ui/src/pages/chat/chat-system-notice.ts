@@ -1,8 +1,10 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { ModelFallbackNotice } from "../../../../src/shared/model-fallback-notice.js";
 import { readRunFailureNotice } from "../../../../src/shared/run-failure-notice.js";
 import { readSkillWorkshopChangeNotice } from "../../../../src/shared/skill-workshop-change-notice.js";
 import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../../src/shared/transcript-only-openclaw-assistant.js";
+import type { ModelCatalogEntry } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { registerChatSystemNoticeEnglish } from "../../i18n/locales/en-chat-system-notice.ts";
@@ -10,6 +12,7 @@ import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import { resolveTranscriptModel } from "../../lib/chat/model-ref.ts";
 import { optionalBoundaryIdentity } from "./chat-thread-run-identity.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import {
@@ -20,6 +23,31 @@ import {
 
 registerChatSessionEnglish();
 registerChatSystemNoticeEnglish();
+
+export function buildModelFallbackDivider(
+  key: string,
+  timestamp: number,
+  fallback: ModelFallbackNotice,
+  catalog?: ModelCatalogEntry[],
+): Extract<ChatItem, { kind: "divider" }> {
+  return {
+    kind: "divider",
+    key: `divider:model-fallback:${key}`,
+    systemEvent: "info",
+    label: t(
+      fallback.phase === "restored"
+        ? "chat.composer.backToModel"
+        : "chat.composer.usingTemporaryModel",
+      {
+        model: resolveTranscriptModel(fallback.toModel, catalog).name,
+      },
+    ),
+    description: fallback.reason
+      ? t("chat.composer.fallbackReason", { reason: fallback.reason.replace(/_/g, " ") })
+      : undefined,
+    timestamp,
+  };
+}
 
 type SubmittedModel = { provider: string; model: string };
 

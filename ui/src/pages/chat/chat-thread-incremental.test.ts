@@ -479,6 +479,36 @@ describe("older-page prepend reuse", () => {
     resetChatThreadState();
   });
 
+  it("moves the fallback notice to its first occurrence even beyond the rebuilt seam", () => {
+    const transition = (id: string, seq: number) =>
+      message(id, "assistant", seq, "", {
+        openclawDeliveryMirror: {
+          kind: "model-fallback",
+          runId: id,
+          fromModel: "demo/large",
+          toModel: "demo/mini",
+        },
+      });
+    const recent = [
+      ...Array.from({ length: 8 }, (_, i) => [
+        message("u-" + i, "user", 2 + 2 * i, "Check " + i),
+        message("a-" + i, "assistant", 3 + 2 * i, "Done " + i),
+      ]).flat(),
+      transition("repeat", 20),
+    ];
+    const keys = (session: string, messages: unknown[]) =>
+      build(session, messages, {})
+        .filter((item) => item.kind === "divider")
+        .map((item) => item.key);
+    expect(keys("paged", recent)).toEqual([expect.stringContaining("repeat")]);
+    expect(keys("paged", [transition("first", 1), ...recent])).toEqual([
+      expect.stringContaining("first"),
+    ]);
+    expect(keys("independent", structuredClone(recent))).toEqual([
+      expect.stringContaining("repeat"),
+    ]);
+  });
+
   it("builds only an older page and its seam turns", () => {
     resetChatThreadState();
     const corpus = createPrependCorpus(3_000);
