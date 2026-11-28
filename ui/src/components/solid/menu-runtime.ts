@@ -6,41 +6,15 @@ import {
   type Api,
 } from "@zag-js/menu";
 import { isPointInPolygon } from "@zag-js/rect-utils";
-import { VanillaMachine, normalizeProps } from "@zag-js/vanilla";
+import { VanillaMachine } from "@zag-js/vanilla";
 import { focusProgrammatically } from "../../lib/programmatic-focus.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed } from "../overlay-registry.ts";
 import { revealInScrollRegion } from "../scroll-state.ts";
 import { focusMenuRow, MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
+import { menuPropNormalizer } from "./menu-runtime-props.ts";
 
-// Focus events use bubbling DOM names; all other listener names stay canonical.
-const normalize = (props: object) => {
-  const out: Record<string, unknown> = { ...props };
-  for (const from of ["onFocus", "onBlur"] as const) {
-    if (from in out) {
-      out[from === "onFocus" ? "onFocusIn" : "onFocusOut"] = out[from];
-      delete out[from];
-    }
-  }
-  return out;
-};
-const normalizer: Parameters<typeof connect>[1] = {
-  element: normalize,
-  // The native trigger defers focus on mousedown without canceling WebKit's touch click.
-  button: ({ onPointerDown: _focus, ...props }) => normalize(props),
-  input: normalize,
-  label: normalize,
-  circle: normalize,
-  img: normalize,
-  output: normalize,
-  path: normalize,
-  select: normalize,
-  svg: normalize,
-  textarea: normalize,
-  rect: normalize,
-  style: normalizeProps.style,
-};
 type MenuNavigationItem = { value: string; disabled?: boolean; label?: string };
 
 export type MenuRuntime = {
@@ -411,7 +385,7 @@ export function createMenuRuntime(
   // Keep one current input snapshot. Vanilla updateProps retains every prior
   // source, making each subsequent prop read replay the whole update history.
   const service = new VanillaMachine(adapted, () => props);
-  const read = () => connect(service.service, normalizer);
+  const read = () => connect(service.service, menuPropNormalizer);
   const start = () => {
     props.dir = direction();
     // Machine transitions move roving focus synchronously; markup follows through the revision.
@@ -447,7 +421,7 @@ export function createMenuRuntime(
     syncOpen(overlay.open);
     if (parent) {
       read().setParent(parent);
-      connect(parent, normalizer).setChild(service.service);
+      connect(parent, menuPropNormalizer).setChild(service.service);
     }
     return () => {
       unsubscribe();
