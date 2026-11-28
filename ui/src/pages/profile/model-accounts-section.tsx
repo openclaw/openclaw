@@ -72,6 +72,7 @@ function ProviderRow(
   });
   return (
     <SettingsRow
+      setting={`profile.modelAccounts.${props.provider}`}
       title={name()}
       control={
         <Picker
@@ -101,6 +102,7 @@ function SignInChoice(props: StateProps & { pending: boolean; cancel: JSX.Elemen
   return (
     <div class="model-accounts-choice">
       <SettingsRow
+        info
         title={t("profilePage.modelAccounts.provider")}
         stackedOnNarrow
         control={
@@ -124,6 +126,7 @@ function SignInChoice(props: StateProps & { pending: boolean; cancel: JSX.Elemen
       />
       <Show when={provider()}>
         <SettingsRow
+          info
           title={t("profilePage.modelAccounts.method")}
           stackedOnNarrow
           control={
@@ -149,9 +152,9 @@ function SignInChoice(props: StateProps & { pending: boolean; cancel: JSX.Elemen
       <Show
         when={!props.pending && !state().busy && !state().error && choice()?.providers.length === 0}
       >
-        <SettingsRow title={t("profilePage.modelAccounts.noMethods")} />
+        <SettingsRow info title={t("profilePage.modelAccounts.noMethods")} />
       </Show>
-      <div class="settings-row settings-row--actions">
+      <div class="settings-row settings-row--actions" data-settings-info>
         <div class="settings-row__control">
           {props.cancel}
           <button
@@ -200,6 +203,7 @@ function SignInContext(props: { readState: () => ModelAccountsState }) {
   return (
     <>
       <SettingsRow
+        info
         title={t("profilePage.modelAccounts.gateway")}
         control={
           <SettingsValue
@@ -209,6 +213,7 @@ function SignInContext(props: { readState: () => ModelAccountsState }) {
         }
       />
       <SettingsRow
+        info
         title={t("profilePage.modelAccounts.person")}
         control={<SettingsValue value={personLabel() ?? t("profilePage.modelAccounts.noPerson")} />}
       />
@@ -268,6 +273,7 @@ function SignIn(props: StateProps) {
         fallback={
           <>
             <SettingsRow
+              info
               title={t("profilePage.modelAccounts.addAccount")}
               description={t("profilePage.modelAccounts.personalDescription")}
             />
@@ -305,6 +311,7 @@ function SignIn(props: StateProps) {
         }
       >
         <SettingsRow
+          info
           stacked
           title={
             flow()?.step?.title ?? provider()?.label ?? t("profilePage.modelAccounts.connectAction")
@@ -415,6 +422,7 @@ export function ModelAccountInventory(props: StateProps & { pending: boolean }) 
       </Show>
       <Show when={Boolean(state().nextCursor)}>
         <SettingsRow
+          info
           title={t("profilePage.modelAccounts.savedAccounts")}
           control={
             <button
@@ -439,6 +447,7 @@ function ModelAccountActions(props: StateProps) {
       <SignIn readState={props.readState} actions={props.actions} />
       <Show when={state().signIn && state().target?.canAdmin}>
         <SettingsRow
+          info
           title={t("profilePage.modelAccounts.inputLabel")}
           description={t("profilePage.modelAccounts.inputDescription")}
           stackedOnNarrow
@@ -471,19 +480,19 @@ function ModelAccountActions(props: StateProps) {
         />
       </Show>
       <Show when={state().notice}>
-        <div class="settings-row model-accounts-notice" role="status">
+        <div class="settings-row model-accounts-notice" role="status" data-settings-info>
           <span class="settings-row__desc">
             {t(`profilePage.modelAccounts.notices.${state().notice}`)}
           </span>
         </div>
       </Show>
       <Show when={state().error}>
-        <div class="settings-row model-accounts-error" role="alert">
+        <div class="settings-row model-accounts-error" role="alert" data-settings-info>
           <span class="settings-row__desc">{state().error}</span>
         </div>
       </Show>
       <Show when={state().inventoryError}>
-        <div class="settings-row model-accounts-error" role="alert">
+        <div class="settings-row model-accounts-error" role="alert" data-settings-info>
           <span class="settings-row__desc">
             {t("profilePage.modelAccounts.inventoryFailed")} {state().inventoryError}
           </span>
@@ -533,6 +542,7 @@ export function ModelAccountsSection(props: StateProps & { inventory: JSX.Elemen
     >
       <Show when={state().target && snapshot().phase !== "connected"}>
         <SettingsRow
+          info
           title={t("profilePage.modelAccounts.signInUnavailable")}
           description={t("profilePage.modelAccounts.unavailable.disconnected")}
         />
@@ -543,6 +553,7 @@ export function ModelAccountsSection(props: StateProps & { inventory: JSX.Elemen
           <>
             <SignInContext readState={props.readState} />
             <SettingsRow
+              info
               title={t("profilePage.modelAccounts.signInUnavailable")}
               description={t(`profilePage.modelAccounts.unavailable.${unavailableReason()}`)}
               stacked

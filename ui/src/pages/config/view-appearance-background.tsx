@@ -41,6 +41,7 @@ export function AppearanceBackground(props: AppearanceBackgroundView) {
       </div>
       <div class="settings-group">
         <SettingsRow
+          setting="local.background.source"
           title={t("configView.appearance.background.source")}
           description={t("configView.appearance.background.formats")}
           stacked={true}
@@ -119,6 +120,7 @@ export function AppearanceBackground(props: AppearanceBackgroundView) {
           }
         />
         <SettingsRow
+          setting="local.background.presentation"
           title={t("configView.appearance.background.presentation")}
           description={t(`configView.appearance.background.${presentation()}Hint`)}
           stackedOnNarrow={true}
@@ -142,6 +144,7 @@ export function AppearanceBackground(props: AppearanceBackgroundView) {
           }
         />
         <SettingsRow
+          setting="local.background.visibility"
           title={t("configView.appearance.background.visibility")}
           description={
             <span id="settings-background-visibility-hint">
@@ -193,6 +196,11 @@ export function AppearanceBackground(props: AppearanceBackgroundView) {
         >
           {([key, label]) => (
             <SettingsToggleRow
+              setting={
+                key === "showOnNewSession"
+                  ? "local.background.showOnNewSession"
+                  : "local.background.showInSessions"
+              }
               title={t(`configView.appearance.background.${label}`)}
               checked={preference()[key]}
               disabled={disabled()}

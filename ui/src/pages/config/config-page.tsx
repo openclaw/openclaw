@@ -1,6 +1,7 @@
 import "../../styles/config.css";
 import type { JSX } from "@solidjs/web";
 import { createMemo, Errored, lazy, Loading, Show } from "solid-js";
+import { findControlUiSetting } from "../../../../src/shared/control-ui-settings/index.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
@@ -14,6 +15,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
+import { configSettingSection } from "../../lib/config-setting-id.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -162,6 +164,7 @@ function ConfigBody(props: {
         }
       >
         <SettingsToggleRow
+          setting="local.openLinksInControlUiBrowser"
           title={t("browserLinkPreferences.openInControlUi")}
           checked={props.config.openLinksInControlUiBrowser === true}
           onChange={(enabled) =>
@@ -233,6 +236,7 @@ function ConfigBody(props: {
               sectionTitle={t("mcpPage.settings")}
               sectionPrelude={
                 <SettingsToggleRow
+                  setting="mcp.apps.enabled"
                   title={t("mcpPage.apps")}
                   description={
                     localizedHintForPath(["mcp", "apps", "enabled"], config().uiHints)?.help
@@ -295,15 +299,13 @@ function ConfigBody(props: {
 type ConfigPageProps = { pageId: ConfigPageId; routeData: ConfigRouteData | null };
 
 function ConfigPage(props: ConfigPageProps) {
-  let host!: HTMLElement;
   const context = useApplication();
-  const state = createConfigPage(
-    context,
-    () => ({ pageId: props.pageId, routeData: props.routeData }),
-    () => host,
-  );
+  const state = createConfigPage(context, () => ({
+    pageId: props.pageId,
+    routeData: props.routeData,
+  }));
   return (
-    <openclaw-config-page ref={(element) => (host = element)}>
+    <openclaw-config-page>
       <Show when={props.pageId !== "memory"}>
         <SettingsPageHeader
           title={titleForRoute(props.pageId, t)}
@@ -335,8 +337,23 @@ export type ConfigPageRouteData = ConfigRouteData & { pageId: ConfigPageId };
 
 // Keep renderer identity shared across subpages so route changes preserve this owner.
 export function ConfigRoute(props: SolidRouteProps<ConfigPageRouteData>) {
+  // A link to one setting names its section through the setting list or its config path. The
+  // list stays out of the boot bundle, so the route resolves it here rather than in its loader.
+  const routeData = createMemo(() => {
+    const data = props.data;
+    const place = data?.targetBlockId ? findControlUiSetting(data.targetBlockId) : undefined;
+    const section = place?.entry.section ?? configSettingSection(data?.targetBlockId ?? null);
+    return data && section !== null
+      ? {
+          ...data,
+          section: data.section ?? section,
+          // Hand-built rows sit outside the advanced group; only generic form rows need it open.
+          advanced: data.advanced || !place,
+        }
+      : data;
+  });
   return (
-    <Show when={props.data}>
+    <Show when={routeData()}>
       {(data) => <ConfigPage pageId={data().pageId} routeData={data()} />}
     </Show>
   );

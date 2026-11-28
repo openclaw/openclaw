@@ -49,6 +49,7 @@ export function ConfigTierGroups(
       <Show when={props.flat ? null : split().advanced}>
         {(node) => (
           <SettingsDisclosure
+            info
             class="config-advanced-disclosure"
             title={t("configForm.advancedSettings")}
             open={props.revealAdvanced}

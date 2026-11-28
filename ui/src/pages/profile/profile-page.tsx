@@ -328,9 +328,10 @@ export function ProfilePage(route: { routeData?: string | null }) {
                 }
               >
                 <Show when={!canEditIdentity() && view().identityReady}>
-                  <SettingsRow title={t("profilePage.identity.writeRequired")} />
+                  <SettingsRow info title={t("profilePage.identity.writeRequired")} />
                 </Show>
                 <SettingsRow
+                  setting="profile.avatar"
                   title={t("profilePage.identity.avatar")}
                   description={t("profilePage.identity.avatarLimits")}
                   control={
@@ -401,6 +402,7 @@ export function ProfilePage(route: { routeData?: string | null }) {
                   }
                 />
                 <SettingsRow
+                  setting="profile.displayName"
                   title={t("profilePage.identity.displayName")}
                   description={t("profilePage.identity.displayNameDescription")}
                   control={
@@ -442,6 +444,7 @@ export function ProfilePage(route: { routeData?: string | null }) {
                 />
                 <Show when={!isOwnerProfile() && profile().emails.length > 0}>
                   <SettingsRow
+                    info
                     title={t("profilePage.identity.linkedEmails")}
                     description={t("profilePage.identity.linkedEmailsDescription")}
                     control={
@@ -457,6 +460,7 @@ export function ProfilePage(route: { routeData?: string | null }) {
                   <DiscordIdentity />
                 </Show>
                 <SettingsRow
+                  info
                   title={t("profilePage.identity.githubAccount")}
                   description={
                     <span class="settings-row__meta">
@@ -491,7 +495,7 @@ export function ProfilePage(route: { routeData?: string | null }) {
                   <OpenClawIdIdentity />
                 </Show>
                 <Show when={view().identityError}>
-                  <div class="settings-row identity-error" role="alert">
+                  <div class="settings-row identity-error" role="alert" data-settings-info>
                     <span class="settings-row__desc">{view().identityError}</span>
                   </div>
                 </Show>
@@ -611,10 +615,12 @@ export function ProfilePage(route: { routeData?: string | null }) {
             <div id="settings-profile-access">
               <SettingsSection title={t("profilePage.access.title")}>
                 <SettingsRow
+                  info
                   title={t(`profilePage.access.${accessSummary(view().connectionScopes)}`)}
                   description={t("profilePage.access.limits")}
                 />
                 <SettingsRow
+                  info
                   title={t("profilePage.access.help")}
                   description={t("profilePage.access.nextStep")}
                   stackedOnNarrow
@@ -632,6 +638,7 @@ export function ProfilePage(route: { routeData?: string | null }) {
                 <Show when={upgrade.read()}>
                   {(current) => (
                     <SettingsRow
+                      setting="profile.adminAccess"
                       title={t("profilePage.access.adminRequest")}
                       description={
                         current().phase === "available"
@@ -650,8 +657,13 @@ export function ProfilePage(route: { routeData?: string | null }) {
                     />
                   )}
                 </Show>
-                <SettingsDisclosure quiet title={t("profilePage.access.details")}>
+                <SettingsDisclosure
+                  setting="profile.accessDetails"
+                  quiet
+                  title={t("profilePage.access.details")}
+                >
                   <SettingsRow
+                    info
                     title={t("profilePage.access.scopes")}
                     description={t("profilePage.access.description")}
                     stacked
@@ -677,6 +689,7 @@ export function ProfilePage(route: { routeData?: string | null }) {
           <Show when={hasPresentation() && !initialIdentityPending()}>
             <SettingsGroup>
               <SettingsNavRow
+                setting="profile.usageStatistics"
                 title={t("profilePage.usageStatistics")}
                 description={t("profilePage.usageStatisticsDescription")}
                 onClick={() => context.navigate("usage")}

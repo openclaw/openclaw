@@ -21,6 +21,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createIntersectionObserver } from "../../lib/reactive/observers.ts";
+import { createSettingsTargetReveal } from "../../lib/reactive/settings-target-arrival.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { AppearanceBackground } from "./appearance-background.tsx";
 import { formatThemeValidationError } from "./custom-theme-import.ts";
@@ -171,6 +172,7 @@ export function AppearanceSection(props: ConfigProps) {
     const message = props.customThemeImportMessage;
     return message?.kind === "error" ? message : null;
   };
+  const revealThemeImport = createSettingsTargetReveal("local.theme");
   let focusFrame = 0;
   const showCustomThemeImport = () =>
     props.hasCustomTheme || props.customThemeImportExpanded === true;
@@ -190,7 +192,7 @@ export function AppearanceSection(props: ConfigProps) {
     });
   }
   onSettled(() => {
-    if (showCustomThemeImport()) {
+    if (showCustomThemeImport() && !revealThemeImport()) {
       focusImporter();
     }
     return () => cancelAnimationFrame(focusFrame);
@@ -320,6 +322,7 @@ export function AppearanceSection(props: ConfigProps) {
         </Show>
         <div class="settings-group">
           <SettingsRow
+            setting="local.themeMode"
             title={t("common.colorMode")}
             stackedOnNarrow={true}
             control={
@@ -349,7 +352,7 @@ export function AppearanceSection(props: ConfigProps) {
               />
             }
           />
-          <div class="settings-row settings-row--stacked">
+          <div id="local.theme" class="settings-row settings-row--stacked">
             <div class="settings-theme-grid">
               <For each={themeOptions()} keyed={(entry) => entry.id}>
                 {(opt) => (
@@ -394,15 +397,15 @@ export function AppearanceSection(props: ConfigProps) {
               </For>
             </div>
           </div>
-          {showCustomThemeImport() ? (
-            <div class="settings-row settings-row--stacked">
+          {showCustomThemeImport() || revealThemeImport() ? (
+            <div id="local.customTheme" class="settings-row settings-row--stacked">
               <div
                 class="settings-theme-import"
                 onFocusIn={() => props.onCustomThemeImportFocus?.()}
               >
                 <div class="settings-theme-import__head">
                   <div class="settings-row__text">
-                    <span class="settings-row__title">
+                    <span class="settings-row__title" id="local.customTheme-title">
                       {t("configView.appearance.importFromTweakcn")}
                     </span>
                     <span class="settings-row__desc">
@@ -499,6 +502,7 @@ export function AppearanceSection(props: ConfigProps) {
           ) : undefined}
           <div id={APPEARANCE_SETTINGS_TARGET_IDS.accent}>
             <SettingsRow
+              setting="local.accent"
               title={t("configView.appearance.accent")}
               description={<span id="settings-accent-status">{accentSelectionName()}</span>}
               stackedOnNarrow={true}

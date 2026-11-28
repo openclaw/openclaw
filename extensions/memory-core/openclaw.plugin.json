@@ -2,7 +2,17 @@
   "controlUi": {
     "entry": "dist/control-ui/overview/index.js",
     "activation": "settings-only",
-    "settingsViews": [{"section": "memory", "panel": "overview"}, {"section": "memory", "panel": "memories"}]
+    "settingsViews": [
+      {
+        "section": "memory",
+        "panel": "overview",
+        "settings": {
+          "plugin.memory-core.dreamingSchedule": { "label": "Dreaming schedule" },
+          "plugin.memory-core.dreamingPhase.*": { "label": "Dreaming phase" }
+        }
+      },
+      { "section": "memory", "panel": "memories", "settings": {} }
+    ]
   },
   "id": "memory-core",
   "generationOverlap": true,

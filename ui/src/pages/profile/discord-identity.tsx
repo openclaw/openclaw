@@ -44,6 +44,7 @@ export function DiscordIdentity() {
   return (
     <>
       <SettingsRow
+        setting="profile.discord"
         title={t("profilePage.discord.title")}
         description={
           <span class="profile-discord-description">
@@ -162,6 +163,7 @@ export function DiscordIdentity() {
       <Show when={view.read().accounts.length > 1}>
         <div class="settings-subrows">
           <SettingsRow
+            info
             title={t("profilePage.discord.gatewayAccount")}
             stackedOnNarrow
             control={
@@ -186,7 +188,7 @@ export function DiscordIdentity() {
       </Show>
       <Show when={view.read().error}>
         {(error) => (
-          <div class="settings-row identity-error" role="alert">
+          <div class="settings-row identity-error" role="alert" data-settings-info>
             <span class="settings-row__desc">{error()}</span>
             <div class="settings-row__control">
               <button class="btn btn--sm" onClick={() => void state.load()}>

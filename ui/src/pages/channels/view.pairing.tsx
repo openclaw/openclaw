@@ -84,7 +84,10 @@ function PairingRequest(props: ChannelsProps & { request: ChannelsPairingRequest
   const request = () => props.request;
   const metadata = createMemo(() => Object.entries(request().metadata ?? {}));
   return (
-    <div class="settings-row settings-row--stacked channels-pairing-request">
+    <div
+      class="settings-row settings-row--stacked channels-pairing-request"
+      id={`channelsPage.pairingRequests.${request().requestId}`}
+    >
       <div class="channels-pairing-request__main">
         <div class="settings-row__text">
           <span class="settings-row__title">{request().senderId}</span>
@@ -172,7 +175,7 @@ function PairingReadFeedback(props: { channels: ChannelsState; prompt?: boolean 
                 {formatUiError(error())}
               </InlineAlert>
             ) : (
-              <div class="settings-row channels-pairing-feedback" role="alert">
+              <div class="settings-row channels-pairing-feedback" role="alert" data-settings-info>
                 <SettingsStatus kind="danger" label={formatUiError(error())} />
               </div>
             )
@@ -220,14 +223,14 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
         }
       >
         {!props.canManagePairing ? (
-          <div class="settings-row channels-pairing-feedback">
+          <div class="settings-row channels-pairing-feedback" data-settings-info>
             <SettingsStatus kind={"warn"} label={t("channels.pairing.missingPermission")} />
           </div>
         ) : (
           <>
             <Show when={props.channels.pairingError}>
               {(label) => (
-                <div class="settings-row channels-pairing-feedback" role="alert">
+                <div class="settings-row channels-pairing-feedback" role="alert" data-settings-info>
                   <SettingsStatus kind="danger" label={label()} />
                 </div>
               )}
@@ -235,7 +238,11 @@ export function renderChannelPairingQueue(props: ChannelsProps) {
             <PairingReadFeedback channels={props.channels} />
             <Show when={props.pairingNotice}>
               {(label) => (
-                <div class="settings-row channels-pairing-feedback" role="status">
+                <div
+                  class="settings-row channels-pairing-feedback"
+                  role="status"
+                  data-settings-info
+                >
                   <SettingsStatus kind="ok" label={label()} />
                 </div>
               )}
@@ -288,7 +295,7 @@ export function renderChannelPairingDetail(channelId: string, props: ChannelsPro
   );
   return (
     <Show when={props.canManagePairing && accounts().length > 0}>
-      <SettingsDisclosure title={t("channels.pairing.detailTitle")} open={waiting() > 0}>
+      <SettingsDisclosure info title={t("channels.pairing.detailTitle")} open={waiting() > 0}>
         <p class="channels-pairing-help">{t("channels.pairing.detailSubtitle")}</p>
         <For each={accounts()} keyed={(account) => account.accountId}>
           {(account) => {
@@ -302,6 +309,7 @@ export function renderChannelPairingDetail(channelId: string, props: ChannelsPro
             );
             return (
               <SettingsRow
+                info
                 title={accountName(account())}
                 description={
                   accountName(account()) === account().accountId ? undefined : account().accountId

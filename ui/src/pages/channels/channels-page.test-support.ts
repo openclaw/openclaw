@@ -84,7 +84,7 @@ export function createContext(gateway: ApplicationContext["gateway"]) {
     navigate: vi.fn(),
     preload: vi.fn(async () => undefined),
   } as unknown as ApplicationContext;
-  const source = { context, runtimeConfig, channels };
+  const source = { context, runtimeConfig, channels, router };
   sources.push(source);
   return source;
 }

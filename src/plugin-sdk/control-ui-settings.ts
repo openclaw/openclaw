@@ -22,10 +22,18 @@ export type ControlUiSettingsSnapshot = {
 
 type Content = string | HTMLElement;
 type SectionProps = { title: string; content: HTMLElement };
-type RowProps = { title: string; description?: Content; control?: Content };
+/**
+ * What a row is. `setting` names the setting the row draws, so a link to
+ * `/settings/<page>#<setting>` opens the page and marks the row. It must be an ID the
+ * manifest declares for this view in `controlUi.settingsViews[].settings`; a declared
+ * `<prefix>.*` key covers each item, such as `plugin.example.feed.news`. The host throws for
+ * any other ID. `info` marks a row that shows a fact, a status or an action instead.
+ */
+type RowIdentity = { setting?: string; info?: true };
+type RowProps = RowIdentity & { title: string; description?: Content; control?: Content };
 type StatusProps = { kind: "ok" | "warn" | "danger" | "accent" | "muted"; label: string };
 type ValueProps = { value: string | number; mono?: boolean };
-type NavProps = { title: string; onClick: () => void };
+type NavProps = RowIdentity & { title: string; onClick: () => void };
 type PetProps = {
   seed: string;
   sleeping?: boolean;

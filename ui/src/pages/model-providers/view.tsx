@@ -22,6 +22,7 @@ import {
   ModelProviderIcon,
   useProviderDisplayLabel,
 } from "../../lib/reactive/provider-presentation.tsx";
+import { createSettingsTargetId } from "../../lib/reactive/settings-target-arrival.ts";
 import type { JSX } from "../../types/solid-elements.js";
 import "../../styles/model-providers.css";
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
@@ -128,7 +129,7 @@ function AddProvider(props: ModelProvidersViewProps) {
 
 function renderProviderNoticeRow(text: string, detail?: string) {
   return (
-    <div class="settings-row" role="alert">
+    <div data-settings-info class="settings-row" role="alert">
       <div class="settings-row__text">
         <span class="settings-row__desc provider-usage__error">{text}</span>
         <Show when={detail && detail !== text}>
@@ -255,7 +256,9 @@ export function ModelProviders(props: ModelProvidersViewProps) {
                 props.providerUsageStalled)
             }
           >
-            <ProviderAccess {...props} />
+            <div id={MODEL_SETTINGS_TARGET_IDS.providers}>
+              <ProviderAccess {...props} />
+            </div>
           </Show>
           {props.installedAgents}
           <Show when={hasDefaults() && defaultsBelow()}>{defaults()}</Show>
@@ -273,6 +276,7 @@ export function ModelProviders(props: ModelProvidersViewProps) {
 }
 
 function ProviderAccess(props: ModelProvidersViewProps) {
+  const targetId = createSettingsTargetId();
   // Local draft: typing filters here without a page update. Only a different
   // deep-linked provider from the route re-derives it; the memo drops equal
   // values from page revalidation.
@@ -364,7 +368,13 @@ function ProviderAccess(props: ModelProvidersViewProps) {
           <SettingsGroup carapace>
             <ul class="provider-list">
               <For each={connected()} keyed={(card) => card.id}>
-                {(card) => <ProviderRow {...props} card={card()} />}
+                {(card) => (
+                  <ProviderRow
+                    {...props}
+                    card={card()}
+                    revealOrder={targetId() === `modelProviders.profileOrder.${card().id}`}
+                  />
+                )}
               </For>
             </ul>
           </SettingsGroup>

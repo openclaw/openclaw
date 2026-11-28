@@ -79,7 +79,7 @@ function hasKeyRow(card: ModelProviderCard, showProfiles: boolean): boolean {
 
 function CredentialRow(props: { title: string; detail?: string; action?: JSX.Element }) {
   return (
-    <div class="model-providers__profile model-providers__credentials">
+    <div class="model-providers__profile model-providers__credentials" data-settings-info>
       <div class="model-providers__profile-copy">
         <strong>{props.title}</strong>
         <Show when={props.detail}>
@@ -525,7 +525,24 @@ function credentialLine(card: ModelProviderCard): string | undefined {
  * identity on one line and one status word that only changes when something needs a look.
  * Open, it lists credentials, then what they allow, then the provider's actions.
  */
-export function ProviderRow(props: ProviderRowProps) {
+/** One provider in the list. Connected or not, a link to `providers.<id>` lands on it. */
+function ProviderListItem(props: {
+  card: ModelProviderCard;
+  class: JSX.HTMLAttributes<HTMLLIElement>["class"];
+  children: JSX.Element;
+}) {
+  return (
+    <li
+      id={`providers.${props.card.id}`}
+      class={["provider-row model-providers__row", props.class]}
+      data-provider-id={props.card.id}
+    >
+      {props.children}
+    </li>
+  );
+}
+
+export function ProviderRow(props: ProviderRowProps & { revealOrder?: boolean }) {
   let summary: HTMLButtonElement | undefined;
   const card = () => props.card;
   const message = () => props.messages[`key:${card().id}`] ?? props.messages[card().id];
@@ -555,7 +572,9 @@ export function ProviderRow(props: ProviderRowProps) {
     (hasProviderUsageDetails(card().usage) || (accountScoped() && card().usage?.plan))
       ? card().usage
       : undefined;
-  const [expanded, setExpanded] = createSignal<boolean>();
+  const [expanded, setExpanded] = createSignal<boolean | undefined>(
+    (previous) => props.revealOrder || previous,
+  );
   // Work in progress and broken credentials start open; a click always wins.
   const startsOpen = () =>
     keyEditorOpen(props) ||
@@ -574,10 +593,7 @@ export function ProviderRow(props: ProviderRowProps) {
   // Open, the credential rows below name the account, so the summary doesn't.
   const credential = () => (open() ? undefined : credentialLine(card()));
   return (
-    <li
-      class={["provider-row model-providers__row", { "provider-row--open": open() }]}
-      data-provider-id={card().id}
-    >
+    <ProviderListItem card={card()} class={{ "provider-row--open": open() }}>
       <button
         type="button"
         class="provider-row__summary model-providers__head"
@@ -645,7 +661,7 @@ export function ProviderRow(props: ProviderRowProps) {
           <ProviderActions {...props} />
         </div>
       </Show>
-    </li>
+    </ProviderListItem>
   );
 }
 
@@ -663,7 +679,7 @@ export function UnconnectedProviderRow(props: ProviderRowProps) {
               : t("modelProviders.models", { count: String(card().modelCount) }),
         });
   return (
-    <li class="provider-row provider-row--quiet model-providers__row" data-provider-id={card().id}>
+    <ProviderListItem card={card()} class="provider-row--quiet">
       <div class="provider-row__summary model-providers__head">
         <ProviderBrandIcon
           provider={card().id}
@@ -680,6 +696,6 @@ export function UnconnectedProviderRow(props: ProviderRowProps) {
       </div>
       <KeyEditor {...props} />
       {renderMutationMessage(message())}
-    </li>
+    </ProviderListItem>
   );
 }

@@ -38,6 +38,7 @@ export function ProfileAttribution(props: {
           }
         >
           <SettingsToggleRow
+            setting="profile.gitCoauthor"
             title={t("profilePage.identity.gitCoauthor")}
             description={
               <span class="settings-row__text">
@@ -78,6 +79,7 @@ export function ProfileAttribution(props: {
             onChange={(enabled) => void props.onSave({ kind: "git-coauthor", enabled })}
           />
           <SettingsToggleRow
+            setting="profile.prAttribution"
             title={t("profilePage.identity.prAttribution")}
             description={
               <>
@@ -97,7 +99,7 @@ export function ProfileAttribution(props: {
             onChange={(enabled) => void props.onSave({ kind: "pr-attribution", enabled })}
           />
           <Show when={props.getView().attributionError}>
-            <div class="settings-row identity-error" role="alert">
+            <div class="settings-row identity-error" role="alert" data-settings-info>
               <span class="settings-row__desc">{props.getView().attributionError}</span>
             </div>
           </Show>

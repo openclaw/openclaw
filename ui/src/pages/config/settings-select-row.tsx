@@ -1,18 +1,22 @@
 import type { JSX } from "@solidjs/web";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
-import { SettingsRow } from "../../components/solid/settings-ui.tsx";
+import { SettingsRow, type SettingsRowIdentity } from "../../components/solid/settings-ui.tsx";
 
-export function SettingsSelectRow<T extends string>(props: {
-  title: string;
-  value: T;
-  options: ReadonlyArray<{ value: T; label: string }>;
-  onChange: (value: string) => void;
-  description?: JSX.Element;
-  disabled?: boolean;
-  nested?: boolean;
-}) {
+export function SettingsSelectRow<T extends string>(
+  props: SettingsRowIdentity & {
+    title: string;
+    value: T;
+    options: ReadonlyArray<{ value: T; label: string }>;
+    onChange: (value: string) => void;
+    description?: JSX.Element;
+    disabled?: boolean;
+    nested?: boolean;
+  },
+) {
   return (
     <SettingsRow
+      setting={props.setting}
+      info={props.info}
       title={props.title}
       description={props.description}
       nested={props.nested}

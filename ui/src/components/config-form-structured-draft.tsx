@@ -92,7 +92,10 @@ export function ConfigStructuredDraft(
         onRemove: (path) => patchDraft(path, undefined),
       }))}
       <Show when={draft().error}>
-        <div class="settings-row settings-row--stacked cfg-structured-draft__error">
+        <div
+          class="settings-row settings-row--stacked cfg-structured-draft__error"
+          data-settings-info
+        >
           <div class="settings-row__control">
             <span
               id={configFieldId(props.params.path, "structured-draft-error")}

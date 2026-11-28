@@ -65,7 +65,11 @@ async function prepareBundledSettingsControlUi(repoRoot: string): Promise<void> 
     const manifest = JSON.parse(
       await fs.readFile(path.join(rootDir, "openclaw.plugin.json"), "utf8"),
     );
-    const declaration = normalizeManifestControlUi(manifest.controlUi, manifest.channels);
+    const declaration = normalizeManifestControlUi(
+      manifest.controlUi,
+      manifest.channels,
+      manifest.id,
+    );
     if (!declaration.ok) {
       throw new Error(`Invalid Control UI declaration for ${entry.id}: ${declaration.error}`);
     }

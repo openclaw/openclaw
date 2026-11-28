@@ -7,6 +7,7 @@ import {
   currentConfigObject,
 } from "../lib/config/config-state-model.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { SettingsTargetArrival } from "../lib/reactive/settings-target-arrival.ts";
 import {
   SettingsSaveIndicator,
   type SettingsSaveIndicatorProps,
@@ -95,10 +96,18 @@ function useSaveIndicatorProps(host: () => ShellViewHost) {
   });
 }
 
-/** Floats over the page at every width, so a phone sees it with the drawer closed. */
-export function ShellSettingsSaveStatus(props: { host: ShellViewHost }) {
+/** Both kinds of feedback follow the Settings page, even when the sidebar is closed. */
+export function ShellSettingsFeedback(props: { host: ShellViewHost }) {
   const indicator = useSaveIndicatorProps(() => props.host);
-  return <SettingsSaveIndicator {...indicator()} />;
+  return (
+    <>
+      <SettingsTargetArrival
+        router={props.host.context!.router}
+        host={() => props.host.routeOutlet}
+      />
+      <SettingsSaveIndicator {...indicator()} />
+    </>
+  );
 }
 
 /** Prepare Settings-only state after its existing lazy renderer has loaded. */

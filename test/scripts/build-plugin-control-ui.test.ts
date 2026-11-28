@@ -70,7 +70,13 @@ it("serializes concurrent Settings builders with checkout artifact writers", asy
     controlUi: {
       entry: "dist/control-ui/source/index.js",
       activation: "settings-only",
-      settingsViews: [{ section: "memory", panel: "overview" }],
+      settingsViews: [
+        {
+          section: "memory",
+          panel: "overview",
+          settings: { "plugin.fixture.label": { label: "Label" } },
+        },
+      ],
     },
   });
   plugin.write("index.ts", "export {};");
@@ -114,7 +120,13 @@ it("serializes concurrent Settings builders with checkout artifact writers", asy
   }
   const distribution = fixtureFiles(files.file("dist/extensions/fixture"));
   const manifest = JSON.parse(distribution.read("openclaw.plugin.json"));
-  expect(manifest.controlUi.settingsViews).toEqual([{ section: "memory", panel: "overview" }]);
+  expect(manifest.controlUi.settingsViews).toEqual([
+    {
+      section: "memory",
+      panel: "overview",
+      settings: { "plugin.fixture.label": { label: "Label" } },
+    },
+  ]);
   expect(distribution.read(manifest.controlUi.entry)).toContain("Fixture");
   expect(
     files.read("dist/extensions/node_modules/openclaw/plugin-sdk/provider-usage.js"),

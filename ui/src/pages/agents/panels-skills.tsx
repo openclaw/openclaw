@@ -240,6 +240,7 @@ function AgentSkillsContent(
         }
       >
         <SettingsRow
+          info
           title={t("agents.skillsPanel.filter")}
           description={
             inventoryReady()
@@ -281,9 +282,16 @@ function AgentSkillsContent(
                         const enabled = () =>
                           learned() || !usingAllowlist() || allowSet().has(skill().name);
                         return (
-                          <div class="settings-row agent-skill-row">
+                          <div
+                            id={`agent.skills.${skill().name}`}
+                            class="settings-row agent-skill-row"
+                          >
                             <label class="agent-skill-row__heading">
-                              <span class="settings-row__title" title={skill().name}>
+                              <span
+                                id={`agent.skills.${skill().name}-title`}
+                                class="settings-row__title"
+                                title={skill().name}
+                              >
                                 {skill().emoji ? `${skill().emoji}\u00a0` : ""}
                                 {skill().name}
                               </span>

@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, Match, Show, Switch } from "solid-js";
 import { objectFormOfUnion } from "../lib/config-form-utils.ts";
+import { configSettingId } from "../lib/config-setting-id.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { resolveStructuredDraftInitialValue } from "./config-form-structured-draft.ts";
 import { ConfigStructuredDraft } from "./config-form-structured-draft.tsx";
@@ -206,6 +207,7 @@ export function ConfigNode(props: { params: ConfigNodeRenderParams }): JSX.Eleme
       <Match when={unsupported()}>
         <FieldRow
           label={meta().label}
+          path={params().path}
           showLabel
           control={undefined}
           unsupported={t("configForm.unsupportedNode")}
@@ -249,6 +251,7 @@ function ResolvedNode(props: {
       fallback={
         <FieldRow
           label={field().label}
+          path={props.params.path}
           showLabel
           control={undefined}
           unsupported={t("configForm.unsupportedType", {
@@ -430,6 +433,7 @@ function BooleanNode(props: { params: ConfigNodeRenderParams }): JSX.Element {
       </Match>
       <Match when={props.params.showLabel !== false}>
         <SettingsToggleRow
+          setting={configSettingId(props.params.path)}
           title={
             <>
               {configLabelInContext(meta().label, props.params.contextLabel)}

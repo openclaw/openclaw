@@ -207,7 +207,7 @@ export function AgentOverview(
           </>
         }
       >
-        <div class="settings-row settings-row--stacked">
+        <div id="agent.identity" class="settings-row settings-row--stacked">
           <div class="agent-identity-editor">
             <button
               ref={(element) => (avatarTrigger = element)}
@@ -345,12 +345,14 @@ export function AgentOverview(
           when={params.panelAccess.files === "available"}
           fallback={
             <SettingsRow
+              info
               title={t("agents.context.workspace")}
               control={<SettingsValue mono value={context().workspace} />}
             />
           }
         >
           <SettingsNavRow
+            info
             title={t("agents.context.workspace")}
             description={<span class="agent-overview__workspace">{context().workspace}</span>}
             onClick={() => params.onSelectPanel("files")}
@@ -360,12 +362,14 @@ export function AgentOverview(
           when={params.panelAccess.skills === "available"}
           fallback={
             <SettingsRow
+              info
               title={t("agents.context.skillsFilter")}
               control={<SettingsValue value={context().skillsLabel} />}
             />
           }
         >
           <SettingsNavRow
+            info
             title={t("agents.context.skillsFilter")}
             control={<SettingsValue value={context().skillsLabel} />}
             onClick={() => params.onSelectPanel("skills")}
@@ -373,6 +377,7 @@ export function AgentOverview(
         </Show>
         <Show when={context().runtime !== "-"}>
           <SettingsRow
+            info
             title={t("agents.context.runtime")}
             control={<SettingsValue mono value={context().runtime} />}
           />

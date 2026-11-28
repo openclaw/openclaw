@@ -9,6 +9,7 @@ import { Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
 import { RefreshButton } from "../../../components/solid/refresh-button.tsx";
 import { SettingsSelect } from "../../../components/solid/settings-select.tsx";
 import {
+  type SettingIdentifier,
   SettingsEmpty,
   SettingsGroup,
   SettingsLoadingSkeleton,
@@ -96,6 +97,7 @@ function DreamingControls(props: DreamingProps) {
   return (
     <SettingsGroup>
       <SettingsToggleRow
+        setting="agentsPage.dreaming"
         title={t("dreaming.header.toggle")}
         description={
           <span class="dreams-controls__status">
@@ -119,7 +121,7 @@ function DreamingControls(props: DreamingProps) {
           />
         }
       />
-      <div class="settings-row dreams-controls__phases-row">
+      <div data-settings-info class="settings-row dreams-controls__phases-row">
         <div class="settings-row__text">
           <span class="settings-row__title">{t("dreaming.phase.title")}</span>
         </div>
@@ -253,7 +255,9 @@ function DiaryPager(props: {
           value={String(props.selectedPage)}
           options={props.entries.map((entry, index) => ({
             value: String(index),
-            label: entry.date ? formatDiaryDate(entry.date) : String(props.entries.length - index),
+            label: entry.date
+              ? formatCompactDateTime(entry.date, "if-different")
+              : String(props.entries.length - index),
           }))}
           onChange={(event) => props.onSelect(Number(event.currentTarget.value))}
         />
@@ -274,23 +278,6 @@ function DiaryPager(props: {
       </Show>
     </div>
   );
-}
-
-/** The select's room is small on a phone, and a diary date reads fine shortened. */
-function formatDiaryDate(date: string): string {
-  const parsed = parseDateStringTimestampMs(date);
-  if (parsed === undefined) {
-    return date;
-  }
-  const entry = new Date(parsed);
-  return entry.toLocaleString([], {
-    month: "short",
-    day: "numeric",
-    // Most entries are recent; the year only earns its width when it differs.
-    ...(entry.getFullYear() === new Date().getFullYear() ? {} : { year: "numeric" as const }),
-    hour: "numeric",
-    minute: "2-digit",
-  });
 }
 
 function DreamDiaryContent(props: {
@@ -375,6 +362,7 @@ function DreamingDiarySection(props: DreamingProps) {
 }
 
 function ReviewRow(props: {
+  setting: SettingIdentifier;
   owner: DreamingProps;
   panel: DreamingReviewPanel;
   title: string;
@@ -388,6 +376,7 @@ function ReviewRow(props: {
     <>
       <button
         type="button"
+        id={props.setting}
         class="settings-row settings-row--nav dreams-review__row"
         aria-expanded={open() ? "true" : "false"}
         aria-controls={panelId()}
@@ -521,6 +510,7 @@ function DreamingReview(props: DreamingProps) {
     >
       <DreamingRead on={props.selectedAgentId} fallback={<SettingsLoadingSkeleton rows={3} />}>
         <ReviewRow
+          setting="agentsPage.dreamingWaiting"
           owner={props}
           panel="waiting"
           title={t("dreaming.advanced.shortTermTitle")}
@@ -560,6 +550,7 @@ function DreamingReview(props: DreamingProps) {
           />
         </ReviewRow>
         <ReviewRow
+          setting="agentsPage.dreamingPromotions"
           owner={props}
           panel="promotions"
           title={t("dreaming.advanced.promotedTitle")}
@@ -584,6 +575,7 @@ function DreamingReview(props: DreamingProps) {
           />
         </ReviewRow>
         <ReviewRow
+          setting="agentsPage.dreamingDailyLog"
           owner={props}
           panel="dailyLog"
           title={t("dreaming.advanced.stagedTitle")}
@@ -623,6 +615,7 @@ function DreamingReview(props: DreamingProps) {
         when={props.memoryWikiEnabled}
         fallback={
           <SettingsRow
+            info
             title={t("dreaming.wiki.unavailable")}
             description={
               <>
@@ -646,6 +639,7 @@ function DreamingReview(props: DreamingProps) {
         }
       >
         <ReviewRow
+          setting="agentsPage.dreamingInsights"
           owner={props}
           panel="insights"
           title={t("dreaming.wiki.insightsTab")}
@@ -663,6 +657,7 @@ function DreamingReview(props: DreamingProps) {
           </DreamingRead>
         </ReviewRow>
         <ReviewRow
+          setting="agentsPage.dreamingWiki"
           owner={props}
           panel="wiki"
           title={t("dreaming.wiki.wikiTab")}

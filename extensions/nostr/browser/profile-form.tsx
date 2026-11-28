@@ -100,9 +100,13 @@ export function createNostrProfileForm(t: Translator) {
       );
 
       return (
-        <div class="settings-row settings-row--stacked">
+        <div class="settings-row settings-row--stacked" id={`plugin.nostr.profile.${field}`}>
           <div class="settings-row__text">
-            <label class="settings-row__title" for={inputId}>
+            <label
+              class="settings-row__title"
+              id={`plugin.nostr.profile.${field}-title`}
+              for={inputId}
+            >
               {t(`channels.nostr.${labelKey}`)}
             </label>
             {help() ? (
@@ -124,6 +128,7 @@ export function createNostrProfileForm(t: Translator) {
     return (
       <>
         <SettingsRow
+          info
           title={t("channels.nostr.editProfile")}
           description={
             <>
@@ -137,7 +142,7 @@ export function createNostrProfileForm(t: Translator) {
           </div>
         ) : undefined}
         {params.state.success ? (
-          <div class="settings-row" role="status">
+          <div class="settings-row" role="status" data-settings-info>
             <div class="settings-row__text">
               <span class="settings-row__desc">{params.state.success}</span>
             </div>
@@ -145,6 +150,7 @@ export function createNostrProfileForm(t: Translator) {
         ) : undefined}
         {params.state.values.picture ? (
           <SettingsRow
+            info
             title={t("channels.nostr.profilePicturePreview")}
             control={
               <img
@@ -169,12 +175,12 @@ export function createNostrProfileForm(t: Translator) {
         {BASIC_FIELDS.map(renderField)}
         {params.state.showAdvanced ? (
           <>
-            <SettingsRow title={t("channels.nostr.advanced")} />
+            <SettingsRow info title={t("channels.nostr.advanced")} />
             {ADVANCED_FIELDS.map(renderField)}
           </>
         ) : undefined}
 
-        <div class="settings-row settings-row--stacked">
+        <div class="settings-row settings-row--stacked" data-settings-info>
           <div class="settings-row__text">
             {isDirty() ? (
               <span class="settings-row__desc">{t("common.unsavedChanges")}</span>

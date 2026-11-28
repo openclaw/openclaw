@@ -95,6 +95,11 @@ export function CloudWorkerSnapshotPolicy() {
         <For each={["refreshAfter", "retainUnused"] as const}>
           {(key) => (
             <SettingsRow
+              setting={
+                key === "refreshAfter"
+                  ? "cloudWorkersPage.warmImages.refreshAfter"
+                  : "cloudWorkersPage.warmImages.retainUnused"
+              }
               title={t(`cloudWorkersPage.snapshots.${key}`)}
               control={
                 <input
@@ -110,6 +115,7 @@ export function CloudWorkerSnapshotPolicy() {
           )}
         </For>
         <SettingsSelectRow
+          setting="cloudWorkersPage.warmImages.keepPrevious"
           title={t("cloudWorkersPage.snapshots.keepPrevious")}
           value={values().keepPrevious}
           disabled={!canSave()}
@@ -120,6 +126,7 @@ export function CloudWorkerSnapshotPolicy() {
           ]}
         />
         <SettingsRow
+          info
           title=""
           control={
             <button

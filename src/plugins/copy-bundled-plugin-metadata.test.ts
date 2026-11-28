@@ -116,6 +116,8 @@ describe("copyBundledPluginMetadata", () => {
 
       const declaration = normalizeManifestControlUi(
         readBundledManifest(repoRoot, "panel-fixture").controlUi,
+        [],
+        "panel-fixture",
       );
       if (!declaration.ok || !declaration.value) {
         throw new Error("Bundled Control UI declaration is missing");
@@ -131,7 +133,14 @@ describe("copyBundledPluginMetadata", () => {
       const controlUi = {
         entry: "dist/control-ui/fixture/index.js",
         activation: "settings-only",
-        settingsViews: [{ section: "channels", panel: "detail", channelId: "custom" }],
+        settingsViews: [
+          {
+            section: "channels",
+            panel: "detail",
+            channelId: "custom",
+            settings: { "channels.custom.enabled": { label: "Enabled" } },
+          },
+        ],
       };
       const { repoRoot, pluginDir } = fixture("profile-fixture", {
         channels: ["custom"],

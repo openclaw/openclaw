@@ -16,6 +16,7 @@ import { shellEscapeBackslash } from "../../../src/shared/shell-quote.js";
 import type { ToolsEffectiveResult } from "../api/types.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { registerMcpManagementEnglish } from "../i18n/locales/en-mcp-management.ts";
+import { configSettingId } from "../lib/config-setting-id.ts";
 import { resolveEditableSnapshotConfig } from "../lib/config/config-state-model.ts";
 import {
   resolveReadMcpServerRuntime,
@@ -260,6 +261,7 @@ function McpServerRow(props: {
   onSignIn: () => void;
   onRemove: () => void;
 }) {
+  const enabledId = () => configSettingId(["mcp", "servers", props.server.name, "enabled"]);
   // Preview the requested configuration, never tool status or sign-in eligibility.
   const [requested, setRequested] = createOptimistic<boolean | null>(null);
   const checked = () => requested() ?? props.server.enabled;
@@ -280,7 +282,7 @@ function McpServerRow(props: {
       ]}
       data-mcp-name={props.server.name}
     >
-      <div class="mcp-server-row__head">
+      <div class="mcp-server-row__head" id={enabledId()}>
         <button
           type="button"
           class="mcp-server-row__summary"
@@ -288,7 +290,9 @@ function McpServerRow(props: {
           aria-controls={detailId()}
           onClick={() => props.onToggleOpen()}
         >
-          <span class="mcp-server-row__name">{props.server.name}</span>
+          <span class="mcp-server-row__name" id={`${enabledId()}-title`}>
+            {props.server.name}
+          </span>
           <span class="mcp-server-row__status">
             <RowStatus server={props.server} runtime={props.runtime} />
           </span>

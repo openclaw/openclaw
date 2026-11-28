@@ -2,7 +2,11 @@ import type { RouteLocation } from "@openclaw/uirouter";
 import { INTERNAL_MEMORY_PATH_PARAM, pathForRoute } from "../../app-route-paths.ts";
 import type { AgentSelectionCapability } from "../../app/agent-selection.ts";
 
-export const MODEL_SETTINGS_TARGET_IDS = { behavior: "settings-model-behavior" } as const;
+// Blocks on the Models page that older links and settings search name.
+export const MODEL_SETTINGS_TARGET_IDS = {
+  behavior: "settings-model-behavior",
+  providers: "settings-model-providers",
+} as const;
 
 export const APPEARANCE_SETTINGS_TARGET_IDS = {
   language: "settings-language",
@@ -69,12 +73,12 @@ export function configRouteData(location: RouteLocation) {
   const pathname = searchParams.get(INTERNAL_MEMORY_PATH_PARAM) ?? location.pathname;
   searchParams.delete(INTERNAL_MEMORY_PATH_PARAM);
   const search = searchParams.toString();
-  const section = searchParams.get("section")?.trim() || null;
   return {
     pathname,
     search: search ? `?${search}` : "",
     hash: location.hash,
-    section,
+    // A link to one setting omits both; the config page resolves them from its setting ID.
+    section: searchParams.get("section")?.trim() || null,
     advanced: searchParams.get("advanced") === "1",
     /** Raw `?tab=`; curated hub pages normalize it against their own tab set. */
     tab: searchParams.get("tab")?.trim() || null,

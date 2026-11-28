@@ -69,6 +69,7 @@ function SecretRow(props: ConnectionProps & { authMode: GatewayAuthMode | undefi
         : "connection.access.secretHint";
   return (
     <SettingsRow
+      setting="local.token"
       title={t("connection.access.secret")}
       description={t(hintKey())}
       stackedOnNarrow
@@ -221,7 +222,7 @@ function ConnectionActions(props: ConnectionProps & { connected: boolean }) {
           ? t("connection.access.applyReconnect")
           : t(props.lastError ? "connection.access.retry" : "common.connect");
   return (
-    <div class="settings-row connection-actions">
+    <div class="settings-row connection-actions" data-settings-info>
       <div class="settings-row__text">
         <span class="settings-row__desc" role="status">
           {props.dirty && !reloadRequired() ? t("connection.access.unsavedHint") : undefined}
@@ -258,6 +259,7 @@ function BrowserSection(props: ConnectionProps) {
   return (
     <SettingsSection title={t("connection.browser.title")}>
       <SettingsRow
+        setting="local.sessionKey"
         title={t("connection.access.sessionKey")}
         description={t("connection.access.sessionKeyHint")}
         control={
@@ -295,7 +297,7 @@ function BrowserSection(props: ConnectionProps) {
         }
       />
       <Show when={props.canForgetDevice}>
-        <div class="settings-row connection-forget">
+        <div class="settings-row connection-forget" id="connection.forgetDevice">
           <div class="settings-row__text">
             <span class="settings-row__title">{t("connection.browser.savedSignIn")}</span>
           </div>
@@ -337,6 +339,7 @@ export function ConnectionView(props: ConnectionProps) {
     <SettingsPage>
       <SettingsSection title={t("connection.access.title")}>
         <SettingsRow
+          info
           role="status"
           title={
             <SettingsStatus
@@ -354,6 +357,7 @@ export function ConnectionView(props: ConnectionProps) {
         />
         <Show when={!remoteIngress}>
           <SettingsRow
+            setting="local.gatewayUrl"
             title={t("connection.access.gatewayUrl")}
             description={t("connection.access.gatewayUrlHint")}
             control={
@@ -379,6 +383,7 @@ export function ConnectionView(props: ConnectionProps) {
             fallback={<SecretRow {...props} authMode={draftAuthMode()} />}
           >
             <SettingsRow
+              info
               title={t("connection.access.secret")}
               description={t("connection.access.trustedProxy")}
               control={
@@ -543,6 +548,7 @@ function SystemSection(props: ConnectionProps & { pending: boolean }) {
         <Show when={info() || props.pending}>
           <SettingsSection title={t("quickSettings.system.gatewayHost")}>
             <SettingsRow
+              info
               title={
                 <span class="config-host__name" title={hostTitle() ?? ""}>
                   <Show when={info()} fallback={<Placeholder />}>

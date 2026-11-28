@@ -42,7 +42,7 @@ export function createProfileCard(
     lastError?: string | null;
   }) {
     return (
-      <div class="settings-row">
+      <div class="settings-row" data-settings-info>
         <div class="settings-row__text">
           <span class="settings-row__title">{props.title}</span>
           <span class="settings-row__desc">
@@ -138,6 +138,7 @@ export function createProfileCard(
       return (
         <>
           <SettingsRow
+            setting="plugin.nostr.profile"
             title={t("channels.nostr.profile")}
             description={
               !state().snapshot.canAdmin

@@ -110,6 +110,7 @@ function AgentGitHubRow(props: {
   return (
     <div data-github-connection="agent" data-agent-id={props.agent.id}>
       <SettingsRow
+        setting={`profile.github.agents.${props.agent.id}`}
         title={name()}
         description={meta(
           <GitHubHealth identity={effective()} request={view()} />,
@@ -155,6 +156,7 @@ function AgentGitHubRow(props: {
       <Show when={props.setupOpen || view().authorizationActive}>
         <div class="settings-subrows" data-github-setup>
           <SettingsRow
+            info
             title={t("githubConnections.agentSetupTitle", { agent: name() })}
             description={t("githubConnections.agentSetupHint", { agent: name() })}
           />
@@ -163,7 +165,7 @@ function AgentGitHubRow(props: {
             saveLabel={t("githubConnections.saveForAgent", { agent: name() })}
           />
           <Show when={!view().busy && !view().authorizationActive}>
-            <div class="settings-row settings-row--actions">
+            <div class="settings-row settings-row--actions" data-settings-info>
               <div class="settings-row__control">
                 <button class="btn btn--sm" onClick={closeSetup}>
                   {t("common.close")}
@@ -402,6 +404,7 @@ export function GitHubConnections() {
             view().account?.state !== "disconnected" &&
             view().canRead ? (
               <SettingsRow
+                info
                 title={t("githubConnections.disconnectMine")}
                 description={t("githubConnections.disconnectDescription")}
                 control={
@@ -417,7 +420,7 @@ export function GitHubConnections() {
                 }
               />
             ) : undefined}
-            <div class="settings-row">
+            <div class="settings-row" data-settings-info>
               <span class="settings-row__desc">
                 {t(
                   target === "personal"
@@ -501,6 +504,7 @@ export function GitHubConnections() {
         >
           <div data-github-connection="personal">
             <SettingsRow
+              setting="profile.github.mine"
               title={t("githubConnections.mine")}
               description={meta(
                 view().profileId && !view().account ? (
@@ -558,6 +562,7 @@ export function GitHubConnections() {
         >
           <div data-github-connection="system">
             <SettingsDetailsRow
+              setting="profile.github.shared"
               detailsLabel={t("githubConnections.details")}
               hasDetails={Boolean(view().systemIdentity)}
               title={t("githubConnections.system")}

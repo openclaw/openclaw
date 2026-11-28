@@ -162,6 +162,7 @@ export function SessionObserverSettings(props: { config: ConfigProps }) {
           <Show when={props.config.configLoaded || props.config.loading}>
             <div class="settings-group">
               <SettingsToggleRow
+                setting="gateway.controlUi.sessionObserver"
                 title={t("configView.sessionObserver.toggle")}
                 description={t("configView.sessionObserver.toggleHint")}
                 checked={presentation().values.enabled}
@@ -265,6 +266,7 @@ function SessionObserverModelPicker(props: {
 
   return (
     <SettingsRow
+      setting="appearance.sessionObserverModel"
       title={t("configView.sessionObserver.modelPicker")}
       description={
         <>

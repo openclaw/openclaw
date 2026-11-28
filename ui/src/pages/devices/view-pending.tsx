@@ -88,7 +88,7 @@ function PendingRow(props: {
   children: JSX.Element;
 }) {
   return (
-    <div class="settings-row device-entry device-entry--pending">
+    <div class="settings-row device-entry device-entry--pending" data-settings-info>
       <div class="settings-row__text">
         <span class="settings-row__title">{props.name}</span>
         <MetaLine parts={props.note} />

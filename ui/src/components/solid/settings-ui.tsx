@@ -1,8 +1,11 @@
 import type { JSX } from "@solidjs/web";
 import { children, For, onSettled, Show } from "solid-js";
+import type { ControlUiSettingId } from "../../../../src/shared/control-ui-settings/index.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
+import type { ConfigSettingPath } from "../../lib/config-setting-id.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import type { PluginSettingId } from "../../plugins/plugin-setting-id.ts";
 import { Icon } from "./icon.tsx";
 import type { SettingsSegmentedProps, SettingsToggleControl } from "./settings-ui.types.ts";
 import { Switch } from "./switch.tsx";
@@ -42,7 +45,24 @@ export function RetryAction(props: {
   );
 }
 
-type SettingsRowProps = {
+/**
+ * A hand-built row's ID from the shared list, a config path from the generic form, or an ID a
+ * plugin's manifest declares for its Settings view.
+ */
+export type SettingIdentifier = ControlUiSettingId | ConfigSettingPath | PluginSettingId;
+
+/**
+ * Every row on a Settings page says what it is; `scripts/check-control-ui-setting-ids.mts`
+ * enforces it there. Rows elsewhere, such as chat menus, may leave both unset.
+ */
+export type SettingsRowIdentity = {
+  /** The setting the row edits. A link to it opens the page and marks the row. */
+  setting?: SettingIdentifier;
+  /** The row shows a fact, a status or an action, not a setting. */
+  info?: true;
+};
+
+type SettingsRowProps = SettingsRowIdentity & {
   title: JSX.Element;
   description?: JSX.Element;
   control?: JSX.Element;
@@ -250,9 +270,12 @@ export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status
           "oc-settings-row-stacked": props.carapace && props.stacked,
         },
       ]}
+      id={props.setting}
+      data-settings-info={props.info ? "" : undefined}
       role={props.role}
     >
       <SettingsRowText
+        id={props.setting && `${props.setting}-title`}
         title={props.title}
         description={props.description}
         carapace={props.carapace}
@@ -281,8 +304,18 @@ export function SettingsNavRow(
   props: Omit<SettingsRowProps, "stacked" | "stackedOnNarrow"> & { onClick: () => void },
 ) {
   return (
-    <button type="button" class="settings-row settings-row--nav" onClick={() => props.onClick()}>
-      <SettingsRowText title={props.title} description={props.description} />
+    <button
+      type="button"
+      class="settings-row settings-row--nav"
+      id={props.setting}
+      data-settings-info={props.info ? "" : undefined}
+      onClick={() => props.onClick()}
+    >
+      <SettingsRowText
+        id={props.setting && `${props.setting}-title`}
+        title={props.title}
+        description={props.description}
+      />
       <div class="settings-row__control">
         {props.control}
         <span class="settings-row__chevron">
@@ -294,20 +327,24 @@ export function SettingsNavRow(
 }
 
 export function SettingsToggleRow(
-  props: SettingsToggleControl & {
-    icon?: JSX.Element;
-    title: JSX.Element;
-    ariaLabel?: JSX.Element;
-    description?: JSX.Element;
-    /** Secondary actions beside the switch, such as opening related settings. */
-    actions?: JSX.Element;
-    controlClass?: string;
-  },
+  props: SettingsToggleControl &
+    SettingsRowIdentity & {
+      icon?: JSX.Element;
+      title: JSX.Element;
+      ariaLabel?: JSX.Element;
+      description?: JSX.Element;
+      /** Secondary actions beside the switch, such as opening related settings. */
+      actions?: JSX.Element;
+      controlClass?: string;
+    },
 ) {
-  const titleId = nextSettingsRadioName();
+  const generatedTitleId = nextSettingsRadioName();
+  const titleId = () => (props.setting ? `${props.setting}-title` : generatedTitleId);
   let input: HTMLInputElement | undefined;
   return (
     <div
+      id={props.setting}
+      data-settings-info={props.info ? "" : undefined}
       class="settings-row settings-row--toggle"
       onClick={(event) => {
         // Links, buttons, and fields own their clicks; plain row areas toggle the input.
@@ -324,7 +361,7 @@ export function SettingsToggleRow(
       }}
     >
       {props.icon}
-      <SettingsRowText id={titleId} title={props.title} description={props.description} />
+      <SettingsRowText id={titleId()} title={props.title} description={props.description} />
       <div class={["settings-row__control", props.controlClass]}>
         {props.actions}
         <Switch
@@ -332,7 +369,7 @@ export function SettingsToggleRow(
           ariaLabel={undefined}
           inputRef={(element) => (input = element)}
           label={props.ariaLabel}
-          ariaLabelledBy={props.ariaLabel == null ? titleId : undefined}
+          ariaLabelledBy={props.ariaLabel == null ? titleId() : undefined}
         />
       </div>
     </div>

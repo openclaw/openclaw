@@ -642,6 +642,26 @@ Settings routes that use schema-backed deep links accept `?section=<section>`,
 `?advanced=1`, and `#<setting-id>`. These values select content within the page;
 they do not change the route identity.
 
+A setting ID is the setting's config path, such as
+`/settings/infrastructure#gateway.publicOrigin`. The link opens the section and the
+advanced group that hold the setting, scrolls the setting to the middle of the page,
+marks its row, and moves keyboard focus to the row. The mark stays until you click
+or press a key. Opening the link changes no setting and no saved preference. With
+reduced motion, the page jumps to the setting and the mark does not animate. When
+the config does not define the setting's parent yet, the link lands on the nearest
+enclosing setting.
+
+Models and Agents rows take the same form:
+`/settings/model-providers#agents.defaults.model.fallbacks` opens the default
+fallback model, and `/settings/agents/<agent-id>#agent.model.fallbacks` opens one
+agent's fallbacks.
+
+Settings that plugins draw use the IDs their manifests declare.
+`/settings/channels?channel=<channel-id>` opens that channel's detail, so
+`/settings/channels?channel=whatsapp#plugin.whatsapp.linkedPhone` opens WhatsApp and
+marks the linked phone, and `/settings/memory#plugin.memory-core.dreamingPhase.deep`
+marks the deep dreaming phase.
+
 Links to Settings sections that moved to another page replace the old URL with
 the current destination while keeping the setting anchor. Back returns to the
 page before the link, and Forward returns to the current destination.

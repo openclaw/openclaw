@@ -36,6 +36,7 @@ import type {
   ControlUiContributions,
   ControlUiPluginCapability,
   ControlUiRegistration,
+  LoadedSettingsView,
 } from "./control-ui-capability.ts";
 
 export type ControlUiPluginOwner = {
@@ -117,11 +118,11 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   loadSettingsView(
     placement: ControlUiSettingsView["placement"],
     signal: AbortSignal,
-  ): Promise<{ view: ControlUiSettingsView; signal: AbortSignal; dispose: () => void }>;
+  ): Promise<LoadedSettingsView<ControlUiSettingsView>>;
   loadSettingsView(
     placement: ControlUiChannelSettingsView["placement"],
     signal: AbortSignal,
-  ): Promise<{ view: ControlUiChannelSettingsView; signal: AbortSignal; dispose: () => void }>;
+  ): Promise<LoadedSettingsView<ControlUiChannelSettingsView>>;
   async loadSettingsView(placement: ControlUiSettingsPlacement, signal: AbortSignal) {
     const { loadPackagedSettingsView } = await import("./control-ui-settings-view.ts");
     if (this.disposed) {

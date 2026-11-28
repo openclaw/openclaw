@@ -168,27 +168,28 @@ function VoiceWriteStatus(props: {
   );
 }
 
-function VoiceToggleRow(props: VoiceControlProps & { setting: VoiceToggle }) {
+function VoiceToggleRow(props: VoiceControlProps & { toggle: VoiceToggle }) {
   const voice = () => props.snapshot.voice;
   const edit = createVoiceEdit(
     props,
-    () => `voice.${props.setting}`,
-    () => voice()[props.setting] ?? false,
+    () => `voice.${props.toggle}`,
+    () => voice()[props.toggle] ?? false,
   );
   return (
     <>
       <SettingsToggleRow
-        title={t(`configPage.deviceTalk.${props.setting}`)}
+        setting={`device.voice.${props.toggle}`}
+        title={t(`configPage.deviceTalk.${props.toggle}`)}
         checked={edit.value()}
-        disabled={props.setting === "wakeEnabled" && !voice().supported && !voice().wakeEnabled}
+        disabled={props.toggle === "wakeEnabled" && !voice().supported && !voice().wakeEnabled}
         description={
-          props.setting === "wakeEnabled" && !voice().supported
+          props.toggle === "wakeEnabled" && !voice().supported
             ? t(
                 props.snapshot.device.platform === "macos"
                   ? "configPage.deviceTalk.unsupported"
                   : "configPage.deviceTalk.unsupportedDevice",
               )
-            : props.setting === "realtimeRelayEnabled"
+            : props.toggle === "realtimeRelayEnabled"
               ? t("configPage.deviceTalk.realtimeRelayHint")
               : undefined
         }
@@ -224,6 +225,7 @@ function VoiceMicrophoneRow(props: VoiceControlProps) {
   return (
     <>
       <SettingsSelectRow
+        setting="device.voice.microphone"
         title={t("configPage.deviceTalk.microphone")}
         value={edit.value() ?? ""}
         options={options()}
@@ -262,7 +264,7 @@ export function NativeVoiceControls(props: {
                     snapshot={props.snapshot}
                     isCurrent={isCurrent}
                     presentationRetired={props.presentationRetired}
-                    setting={key()}
+                    toggle={key()}
                   />
                 </Show>
               )}

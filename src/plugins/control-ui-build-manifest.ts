@@ -14,6 +14,7 @@ export function loadPluginControlUiDeclaration(params: {
   rootDir: string;
   controlUi: unknown;
   channels?: unknown;
+  pluginId: unknown;
   rejectHardlinks: boolean;
   rootRealPath?: string;
 }): ReturnType<typeof normalizeManifestControlUi> {
@@ -23,7 +24,7 @@ export function loadPluginControlUiDeclaration(params: {
     !pluginCacheLstatSync(path.join(params.rootDir, "package.json"))
   ) {
     // Prebuilt packages publish the declaration in their required root manifest.
-    return normalizeManifestControlUi(params.controlUi, params.channels);
+    return normalizeManifestControlUi(params.controlUi, params.channels, params.pluginId);
   }
   const packageFile = readPluginCacheFile({ ...params, relativePath: "package.json" });
   if (!packageFile.ok) {
@@ -35,7 +36,7 @@ export function loadPluginControlUiDeclaration(params: {
   }
   try {
     if (!controlUiSource(packageManifest.value)) {
-      return normalizeManifestControlUi(params.controlUi, params.channels);
+      return normalizeManifestControlUi(params.controlUi, params.channels, params.pluginId);
     }
   } catch (error) {
     return err(String(error));
@@ -54,5 +55,5 @@ export function loadPluginControlUiDeclaration(params: {
   if (!parsed.ok || !isRecord(parsed.value) || parsed.value.controlUi === undefined) {
     return err("generated Control UI manifest must contain controlUi");
   }
-  return normalizeManifestControlUi(parsed.value.controlUi, params.channels);
+  return normalizeManifestControlUi(parsed.value.controlUi, params.channels, params.pluginId);
 }

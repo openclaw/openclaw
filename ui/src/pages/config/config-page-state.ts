@@ -36,11 +36,10 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
-import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { createAppearanceCatalogs } from "./appearance-catalogs.ts";
 import { createConfigPageModels } from "./config-page-models.ts";
 import { createConfigPagePreferences } from "./config-page-preferences.ts";
-import { isAppearanceDataTarget, loadConfigPageReads } from "./config-page-reads.ts";
+import { hasConfigPageDisplay, isAppearanceDataTarget } from "./config-page-reads.ts";
 import {
   configSectionKeysForPage,
   configSelectionFromSearch,
@@ -77,7 +76,6 @@ const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
 export function createConfigPage(
   context: ApplicationContext,
   route: () => { pageId: ConfigPageId; routeData: ConfigRouteData | null },
-  host: () => HTMLElement,
 ) {
   const agents = projectOwner(context.agents, (owner) => owner.state);
   const identities = projectOwner(context.agentIdentity, (owner) => owner);
@@ -102,7 +100,6 @@ export function createConfigPage(
   const schema = createMemo(() => visibleConfigSchema(rawSchema(), openclawIdEnabled()));
   const invalidate = () => {
     publish((value) => value + 1);
-    onSettled(afterCommit);
   };
   const [presentation, setPresentation] = createStore<{
     formModes: Partial<Record<ConfigPageId, View.ConfigFormMode>>;
@@ -170,8 +167,6 @@ export function createConfigPage(
   const countdown = useVisiblePoll(1_000, invalidate);
   let routeInitialized = false;
   let normalizedMemoryLocation = "";
-  let targetBlockId: string | null = null;
-  let scrollFrame: number | null = null;
 
   function nowMs() {
     revision();
@@ -251,11 +246,7 @@ export function createConfigPage(
     setPresentation((draft) => {
       draft.selections[pageId] = selection;
     });
-    if (scrollFrame !== null) {
-      cancelAnimationFrame(scrollFrame);
-      scrollFrame = null;
-    }
-    targetBlockId =
+    const targetBlockId =
       routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
     appearanceDataRequested ||= pageId === "appearance" && isAppearanceDataTarget(targetBlockId);
     synchronize();
@@ -343,22 +334,6 @@ export function createConfigPage(
     invalidate();
   }
 
-  function afterCommit() {
-    if (!connected || !targetBlockId || scrollFrame !== null) {
-      return;
-    }
-    scrollFrame = requestAnimationFrame(() => {
-      scrollFrame = null;
-      // Settings routes share one live page; keep the document's ID lookup scoped to it.
-      const target = targetBlockId ? host().ownerDocument.getElementById(targetBlockId) : null;
-      if (!target || !host().contains(target)) {
-        return;
-      }
-      target.scrollIntoView?.({ behavior: resolveScrollBehavior(), block: "start" });
-      targetBlockId = null;
-    });
-  }
-
   function synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
     const sourceChanged = runtimeConfig !== runtimeConfigSource;
     if (sourceChanged) {
@@ -370,11 +345,23 @@ export function createConfigPage(
       resetConfigViewState();
     }
     const selection = presentation.selections[pageId] ?? defaultConfigSelection(pageId);
-    loadConfigPageReads(runtimeConfig, pageId, selection.activeSection, {
-      data: appearanceDataRequested,
-      importer: appearanceImportRequested,
-      sourceChanged,
-    });
+    const config = runtimeConfig.state;
+    const displayReady = hasConfigPageDisplay(runtimeConfig, pageId, selection.activeSection);
+    if (
+      (!displayReady || appearanceDataRequested || appearanceImportRequested) &&
+      (sourceChanged ||
+        (!config.configSnapshot && !config.configLoading && !currentConfigRead(config)))
+    ) {
+      void runtimeConfig.ensureLoaded().catch(() => undefined);
+    }
+    if (
+      pageId !== "updates" &&
+      (!displayReady || appearanceDataRequested) &&
+      !config.configSchema &&
+      !runtimeConfig.schemaRead
+    ) {
+      void runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
+    }
   }
 
   function resetConfigViewState() {
@@ -706,10 +693,6 @@ export function createConfigPage(
       mediaDeviceOwner.retire();
       countdown.stop();
       abortRequests();
-      if (scrollFrame !== null) {
-        cancelAnimationFrame(scrollFrame);
-        scrollFrame = null;
-      }
       runtimeConfigSource = null;
       resetConfigViewState();
     };

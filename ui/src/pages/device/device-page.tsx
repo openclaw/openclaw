@@ -10,11 +10,7 @@ import {
   Show,
 } from "solid-js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
-import type {
-  NativeDeviceSettingsCapability,
-  NativeDeviceSettingsSnapshot,
-  SettingKey,
-} from "../../app/native-device-settings.ts";
+import type { NativeDeviceSettingsSnapshot, SettingKey } from "../../app/native-device-settings.ts";
 import { NativeChromeSetup } from "../../components/native-chrome-setup.tsx";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import {
@@ -37,42 +33,21 @@ import { projectNativeDeviceSettings } from "../../lib/reactive/application-nati
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
+import {
+  pendingCookieSyncEdits,
+  retainCookieSyncEdits,
+  settleCookieSyncEdit,
+} from "./cookie-sync-edits.ts";
 import { LaunchAtLoginSetting } from "./launch-at-login-setting.tsx";
 import "./device.css";
 
 registerEnglishCatalog(registerAppsEnglish);
 registerEnglishCatalog(registerSettingsEnglish);
-type CookieSyncEdits = {
-  domains: string[] | null;
-  targetProfile: { value: string; sent: boolean } | null;
-};
 
-const pendingCookieSyncEdits = new WeakMap<NativeDeviceSettingsCapability, CookieSyncEdits>();
-
-function retainCookieSyncEdits(capability: NativeDeviceSettingsCapability): CookieSyncEdits {
-  let edits = pendingCookieSyncEdits.get(capability);
-  if (!edits) {
-    edits = { domains: null, targetProfile: null };
-    pendingCookieSyncEdits.set(capability, edits);
-  }
-  return edits;
-}
-
-function settleCookieSyncEdit(
-  capability: NativeDeviceSettingsCapability,
-  key: keyof CookieSyncEdits,
-  edit: CookieSyncEdits[keyof CookieSyncEdits],
-) {
-  const edits = pendingCookieSyncEdits.get(capability);
-  if (!edits || edits[key] !== edit) {
-    return;
-  }
-  // Completion belongs to this exact edit, including Cancel and native normalization.
-  // A newer edit can have the same value and must survive the older reply.
-  edits[key] = null;
-  if (edits.domains === null && edits.targetProfile === null) {
-    pendingCookieSyncEdits.delete(capability);
-  }
+/** A device setting's ID is `device.` followed by the native key it names. */
+function nativeSettingKey<Key extends SettingKey>(setting: `device.${Key}`): Key {
+  // SAFETY: the template type guarantees the rest of the ID is the native key.
+  return setting.slice("device.".length) as Key;
 }
 
 export function DevicePage() {
@@ -164,7 +139,7 @@ export function DevicePage() {
   }
 
   function Toggle(props: {
-    setting: SettingKey;
+    setting: `device.${SettingKey}`;
     checked: boolean | undefined;
     label: string;
     description?: string;
@@ -173,26 +148,28 @@ export function DevicePage() {
     return (
       <Show when={props.checked !== undefined}>
         <SettingsToggleRow
+          setting={props.setting}
           title={t(`configPage.deviceSettings.${props.label}`)}
           description={props.description}
           checked={props.checked ?? false}
           disabled={props.disabled}
-          onChange={(value) => void capability?.set(props.setting, value)}
+          onChange={(value) => void capability?.set(nativeSettingKey(props.setting), value)}
         />
       </Show>
     );
   }
   function Select(props: {
-    setting: "app.appearance" | "app.iconStyle" | "capabilities.computerControlProvider";
+    setting: `device.${"app.appearance" | "app.iconStyle" | "capabilities.computerControlProvider"}`;
     value: string;
     options: Array<{ id: string; name: string; disabled?: boolean }>;
     description?: string;
     disabled?: boolean;
   }) {
     const title = () =>
-      t(`configPage.deviceSettings.${props.setting.slice(props.setting.indexOf(".") + 1)}`);
+      t(`configPage.deviceSettings.${props.setting.slice(props.setting.lastIndexOf(".") + 1)}`);
     return (
       <SettingsRow
+        setting={props.setting}
         title={title()}
         description={props.description}
         control={
@@ -206,7 +183,9 @@ export function DevicePage() {
               disabled: option.disabled,
             }))}
             disabled={props.disabled}
-            onChange={(event) => void capability?.set(props.setting, event.currentTarget.value)}
+            onChange={(event) =>
+              void capability?.set(nativeSettingKey(props.setting), event.currentTarget.value)
+            }
           />
         }
       />
@@ -216,6 +195,7 @@ export function DevicePage() {
     return (
       <Show when={props.app.keepGatewayRunning !== undefined && capability}>
         <SettingsToggleRow
+          setting="device.app.keepGatewayRunning"
           title={t("configPage.deviceSettings.keepGatewayRunning")}
           description={
             <>
@@ -267,6 +247,7 @@ export function DevicePage() {
       <>
         <SettingsSection title={t("configPage.deviceSettings.chromeExtension")}>
           <SettingsRow
+            setting="device.chromeExtensionSetup"
             title={t("configPage.deviceSettings.chromeExtensionSetup")}
             stacked
             control={
@@ -290,6 +271,7 @@ export function DevicePage() {
           <SettingsSection title={t("configPage.deviceSettings.browser")}>
             <Show when={props.browser.importAvailable}>
               <SettingsRow
+                setting="device.browserImport"
                 title={t("configPage.deviceSettings.browserImport")}
                 description={t("configPage.deviceSettings.browserImportHint")}
                 control={
@@ -305,6 +287,7 @@ export function DevicePage() {
             </Show>
             <Show when={sync() && !sync()?.available}>
               <SettingsRow
+                info
                 title={t("configPage.deviceSettings.cookieSync")}
                 description={t("configPage.deviceSettings.cookieSyncUnavailable")}
               />
@@ -323,12 +306,13 @@ export function DevicePage() {
             }
           >
             <Toggle
-              setting="browser.cookieSync.enabled"
+              setting="device.browser.cookieSync.enabled"
               checked={sync()?.enabled}
               label="cookieSyncEnabled"
               description={t("configPage.deviceSettings.cookieSyncHint")}
             />
             <SettingsRow
+              setting="device.browser.cookieSync.domains"
               title={t("configPage.deviceSettings.domains")}
               description={t("configPage.deviceSettings.domainsHint")}
               stacked
@@ -378,6 +362,7 @@ export function DevicePage() {
               }
             />
             <SettingsRow
+              setting="device.browser.cookieSync.targetProfile"
               title={t("configPage.deviceSettings.targetProfile")}
               description={t("configPage.deviceSettings.targetProfileHint")}
               control={
@@ -394,6 +379,7 @@ export function DevicePage() {
               }
             />
             <SettingsRow
+              info
               title={t("configPage.deviceSettings.syncStatus")}
               description={sync()?.detail ?? undefined}
               control={
@@ -420,14 +406,14 @@ export function DevicePage() {
         <Show when={Boolean(props.snapshot.app)}>
           <SettingsSection title={t("configPage.deviceSettings.app")}>
             <Toggle
-              setting="app.nativeExperienceEnabled"
+              setting="device.app.nativeExperienceEnabled"
               checked={props.snapshot.app!.nativeExperienceEnabled}
               label="nativeExperience"
               description={t("configPage.deviceSettings.nativeExperienceHint")}
             />
             <Show when={props.snapshot.app!.appearance !== undefined}>
               <Select
-                setting="app.appearance"
+                setting="device.app.appearance"
                 value={props.snapshot.app!.appearance ?? "system"}
                 options={["system", "light", "dark"].map((value) => ({
                   id: value,
@@ -436,20 +422,20 @@ export function DevicePage() {
               />
             </Show>
             <Toggle
-              setting="app.notificationsEnabled"
+              setting="device.app.notificationsEnabled"
               checked={props.snapshot.app!.notificationsEnabled}
               label="notificationsEnabled"
               description={t("configPage.deviceSettings.notificationsEnabledHint")}
             />
             <Toggle
-              setting="app.showDockIcon"
+              setting="device.app.showDockIcon"
               checked={props.snapshot.app!.showDockIcon}
               label="showDockIcon"
               description={t("configPage.deviceSettings.showDockIconHint")}
             />
             <Show when={Boolean(props.snapshot.app!.iconStyle)}>
               <Select
-                setting="app.iconStyle"
+                setting="device.app.iconStyle"
                 value={props.snapshot.app!.iconStyle!.selectedId}
                 options={props.snapshot.app!.iconStyle!.available}
                 description={t("configPage.deviceSettings.iconStyleHint")}
@@ -457,7 +443,7 @@ export function DevicePage() {
               />
             </Show>
             <Toggle
-              setting="app.iconAnimationsEnabled"
+              setting="device.app.iconAnimationsEnabled"
               checked={props.snapshot.app!.iconAnimationsEnabled}
               label="iconAnimations"
               description={t("configPage.deviceSettings.iconAnimationsHint")}
@@ -465,13 +451,14 @@ export function DevicePage() {
             <LaunchAtLoginSetting app={props.snapshot.app!} />
             <GatewayHosting app={props.snapshot.app!} />
             <Toggle
-              setting="app.quickChatEnabled"
+              setting="device.app.quickChatEnabled"
               checked={props.snapshot.app!.quickChatEnabled}
               label="quickChat"
               description={t("configPage.deviceSettings.quickChatHint")}
             />
             <Show when={props.snapshot.app!.quickChatShortcut !== undefined}>
               <SettingsRow
+                setting="device.app.quickChatShortcut"
                 title={t("configPage.deviceSettings.quickChatShortcut")}
                 control={
                   <>
@@ -497,19 +484,19 @@ export function DevicePage() {
         <Show when={Boolean(props.snapshot.capabilities)}>
           <SettingsSection title={t("configPage.deviceSettings.capabilities")}>
             <Toggle
-              setting="capabilities.canvasEnabled"
+              setting="device.capabilities.canvasEnabled"
               checked={props.snapshot.capabilities!.canvasEnabled}
               label="canvas"
               description={t("configPage.deviceSettings.canvasHint")}
             />
             <Toggle
-              setting="capabilities.cameraEnabled"
+              setting="device.capabilities.cameraEnabled"
               checked={props.snapshot.capabilities!.cameraEnabled}
               label="camera"
               description={t("configPage.deviceSettings.cameraHint")}
             />
             <Toggle
-              setting="capabilities.keepAwakeEnabled"
+              setting="device.capabilities.keepAwakeEnabled"
               checked={props.snapshot.capabilities!.keepAwakeEnabled}
               label="keepAwake"
               description={t(
@@ -520,20 +507,20 @@ export function DevicePage() {
             />
             <Show when={props.snapshot.capabilities!.healthSummaryAvailable}>
               <Toggle
-                setting="capabilities.healthSummaryEnabled"
+                setting="device.capabilities.healthSummaryEnabled"
                 checked={props.snapshot.capabilities!.healthSummaryEnabled}
                 label="healthSummary"
                 description={t("configPage.deviceSettings.healthSummaryHint")}
               />
             </Show>
             <Toggle
-              setting="capabilities.computerControlEnabled"
+              setting="device.capabilities.computerControlEnabled"
               checked={props.snapshot.capabilities!.computerControlEnabled}
               label="computerControl"
               description={t("configPage.deviceSettings.computerControlHint")}
             />
             <Toggle
-              setting="capabilities.desktopSharingEnabled"
+              setting="device.capabilities.desktopSharingEnabled"
               checked={props.snapshot.capabilities!.desktopSharingEnabled}
               label="desktopSharing"
               description={t(
@@ -544,6 +531,7 @@ export function DevicePage() {
             />
             <Show when={Boolean(props.snapshot.desktopSharing)}>
               <SettingsRow
+                info
                 title={t("configPage.deviceSettings.desktopSharingStatus")}
                 description={props.snapshot.desktopSharing!.detail}
                 control={
@@ -563,13 +551,14 @@ export function DevicePage() {
               />
             </Show>
             <Toggle
-              setting="capabilities.unattendedDesktopEnabled"
+              setting="device.capabilities.unattendedDesktopEnabled"
               checked={props.snapshot.capabilities!.unattendedDesktopEnabled}
               label="unattendedDesktop"
               description={t("configPage.deviceSettings.unattendedDesktopHint")}
             />
             <Show when={Boolean(props.snapshot.desktopAvailability)}>
               <SettingsRow
+                info
                 title={t("configPage.deviceSettings.desktopAvailability")}
                 control={
                   <SettingsStatus
@@ -588,7 +577,7 @@ export function DevicePage() {
               }
             >
               <Select
-                setting="capabilities.computerControlProvider"
+                setting="device.capabilities.computerControlProvider"
                 value={props.snapshot.capabilities!.computerControlProvider ?? "peekaboo"}
                 options={[
                   { id: "peekaboo", name: t("configPage.deviceSettings.peekaboo") },
@@ -605,7 +594,7 @@ export function DevicePage() {
               />
             </Show>
             <Toggle
-              setting="capabilities.peekabooBridgeEnabled"
+              setting="device.capabilities.peekabooBridgeEnabled"
               checked={props.snapshot.capabilities!.peekabooBridgeEnabled}
               label="peekabooBridge"
               description={t("configPage.deviceSettings.peekabooBridgeHint")}
@@ -619,12 +608,13 @@ export function DevicePage() {
         <Show when={props.snapshot.app?.debugPaneEnabled !== undefined}>
           <SettingsSection title={t("configPage.deviceSettings.developer")}>
             <Toggle
-              setting="app.debugPaneEnabled"
+              setting="device.app.debugPaneEnabled"
               checked={props.snapshot.app?.debugPaneEnabled}
               label="debugTools"
             />
             <Show when={props.snapshot.app?.debugPaneEnabled}>
               <SettingsRow
+                setting="device.debugWindow"
                 title={t("configPage.deviceSettings.debugWindow")}
                 control={
                   <button type="button" class="btn" onClick={() => capability?.openPanel("debug")}>
@@ -643,6 +633,7 @@ export function DevicePage() {
             >
               {(panel) => (
                 <SettingsRow
+                  setting={`device.panels.${panel()}`}
                   title={t(`configPage.deviceSettings.panels.${panel()}`)}
                   control={
                     <button

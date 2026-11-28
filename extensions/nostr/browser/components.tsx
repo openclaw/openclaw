@@ -4,6 +4,10 @@ import { children, Show } from "solid-js";
 
 // Plugin-owned native markup consumes the host's existing Settings stylesheet.
 export function SettingsRow(props: {
+  /** A setting ID declared in openclaw.plugin.json; a link to it marks this row. */
+  setting?: string;
+  /** The row shows a fact, a status or an action, not a setting. */
+  info?: true;
   title: JSX.Element;
   description?: JSX.Element;
   control?: JSX.Element;
@@ -11,9 +15,16 @@ export function SettingsRow(props: {
 }) {
   const control = children(() => props.control);
   return (
-    <div class="settings-row" role={props.role}>
+    <div
+      class="settings-row"
+      id={props.setting}
+      data-settings-info={props.info ? "" : undefined}
+      role={props.role}
+    >
       <div class="settings-row__text">
-        <span class="settings-row__title">{props.title}</span>
+        <span class="settings-row__title" id={props.setting && `${props.setting}-title`}>
+          {props.title}
+        </span>
         <Show when={props.description}>
           <span class="settings-row__desc">{props.description}</span>
         </Show>

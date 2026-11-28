@@ -269,7 +269,8 @@ it.each([
 
 it("passes live preferences to the shared renderer without enabling disabled placement", async () => {
   const { range, preview } = await mount({ ...disabledPlacement, visibility: 0 });
-  activate(range);
+  // Hold the preview open while the shared renderer loads at nonzero visibility.
+  activate(range, "drag");
   await preview.updateComplete;
   expect(preview.preferenceOverride?.visibility).toBe(0);
   expect(preview.querySelector(".session-background__image")).toBeNull();
@@ -280,6 +281,7 @@ it("passes live preferences to the shared renderer without enabling disabled pla
   await preview.updateComplete;
   expect(preview.preferenceOverride).toMatchObject({ ...disabledPlacement, visibility: 0.8 });
   expect(range.getAttribute("aria-valuetext")).toBe("80%");
+  await vi.dynamicImportSettled();
   await waitForSolid(() => {
     expect(preview.querySelector(".session-background__image")).not.toBeNull();
   });

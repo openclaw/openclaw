@@ -195,7 +195,7 @@ export function ChannelAccount(params: { title: JSX.Element; account: ChannelAcc
       .filter(Boolean)
       .join(" · ");
   return (
-    <div class="settings-row">
+    <div class="settings-row" data-settings-info>
       <div class="settings-row__text">
         <span class="settings-row__title">{params.title}</span>
         <span class="settings-row__desc">{factLine()}</span>

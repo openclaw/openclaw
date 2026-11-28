@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { main as runControllerGuard } from "./check-control-ui-controllers.mts";
+import { main as runSettingIdCheck } from "./check-control-ui-setting-ids.mts";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
@@ -37,6 +38,9 @@ await runWithFailedTrailer("lint", async () => {
     controllerArgs.push("--base", process.env.CHECKOUT_BASE_SHA, "--no-merge-base");
   }
   if (collect(runControllerGuard(process.cwd(), controllerArgs))) {
+    return;
+  }
+  if (collect(runSettingIdCheck(process.cwd(), []))) {
     return;
   }
   const tsxPath = resolveRepoToolBinPath("tsx");

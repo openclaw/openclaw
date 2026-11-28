@@ -144,6 +144,7 @@ export function TabIconRow(props: TabIconViewProps) {
   return (
     <div id={APPEARANCE_SETTINGS_TARGET_IDS.tabIcon} class="settings-tab-icon">
       <SettingsRow
+        setting="local.tabIcon"
         title={t("configView.appearance.tabIcon.title")}
         description={description()}
         stacked={lobsters().length > 0}

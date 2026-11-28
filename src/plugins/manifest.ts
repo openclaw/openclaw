@@ -521,6 +521,7 @@ export function loadPluginManifest(
     rootDir,
     controlUi: raw.controlUi,
     channels,
+    pluginId: id,
     rejectHardlinks,
     rootRealPath,
   });

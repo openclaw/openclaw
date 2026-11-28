@@ -300,3 +300,34 @@ describe("ChannelsPage save against a file changed elsewhere", () => {
     },
   );
 });
+
+describe("ChannelsPage channel links", () => {
+  it("opens the detail a ?channel= link names, on arrival and while the page is open", async () => {
+    const source = createContext(createGateway(["operator.admin", "operator.read"]));
+    source.channels.state.channelsSnapshot = channelSnapshot({
+      channelOrder: ["telegram", "discord"],
+      channelLabels: { telegram: "Telegram", discord: "Discord" },
+    });
+    const { router } = source;
+    await router.navigateLocation(
+      { pathname: "/channels", search: "?channel=telegram", hash: "" },
+      source.context,
+    );
+    const page = mountPage(source.context);
+    await settle();
+    expect(text(page, ".channels-detail .oc-dialog__title, .channels-detail h2")).toContain(
+      "Telegram",
+    );
+    findButton(page, ".channels-detail .oc-dialog__close").click();
+    await settle();
+    expect(page.querySelector(".channels-detail")).toBeNull();
+    await router.navigateLocation(
+      { pathname: "/channels", search: "?channel=telegram", hash: "#channels.telegram.token" },
+      source.context,
+    );
+    await settle();
+    expect(text(page, ".channels-detail .oc-dialog__title, .channels-detail h2")).toContain(
+      "Telegram",
+    );
+  });
+});

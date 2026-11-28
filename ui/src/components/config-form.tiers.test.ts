@@ -86,6 +86,27 @@ describe("splitConfigSchemaByTier", () => {
     expect(split.advanced).toBeNull();
   });
 
+  it("keeps a choice of object shapes whole so it appears in one tier", () => {
+    const account = (extra: string) => ({
+      type: "object",
+      properties: { name: { type: "string" }, [extra]: { type: "string" } },
+    });
+    const split = splitConfigSchemaByTier({
+      path: ["channels"],
+      schema: {
+        type: "object",
+        properties: { twitch: { anyOf: [account("token"), account("accounts")] } },
+      },
+      hints: {
+        "channels.twitch.name": { advanced: false },
+        "channels.twitch.token": { advanced: true },
+        "channels.twitch.accounts": { advanced: true },
+      },
+    });
+    expect(split.common?.properties?.twitch?.anyOf).toHaveLength(2);
+    expect(split.advanced).toBeNull();
+  });
+
   it("keeps a list of objects whole so its Add appears once", () => {
     const entry = {
       type: "object",

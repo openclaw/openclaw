@@ -496,6 +496,7 @@ export function SearchPage() {
                       }
                     >
                       <SettingsToggleRow
+                        setting="tools.web.search.enabled"
                         title={t("searchPage.enabled")}
                         description={t("searchPage.enabledHint")}
                         checked={enabled()}
@@ -505,6 +506,7 @@ export function SearchPage() {
                         }}
                       />
                       <SettingsSelectRow
+                        setting="tools.web.search.provider"
                         title={t("searchPage.provider")}
                         description={t("searchPage.automaticHint")}
                         value={configuredProvider()}
@@ -534,6 +536,7 @@ export function SearchPage() {
                       }
                     >
                       <SettingsSelectRow
+                        setting="search.agent"
                         title={t("searchPage.agent")}
                         value={selectionProjection.read().state.selectedId ?? ""}
                         options={agentOptions()}
@@ -541,6 +544,7 @@ export function SearchPage() {
                         disabled={!gateway.connected}
                       />
                       <SettingsRow
+                        setting="search.model"
                         title={t("searchPage.model")}
                         description={current().model.runtimeLabel}
                         control={
@@ -557,6 +561,7 @@ export function SearchPage() {
                         }
                       />
                       <SettingsRow
+                        info
                         title={current().route.label}
                         description={current().route.reason}
                         control={
@@ -578,6 +583,7 @@ export function SearchPage() {
                       >
                         <Show when={canTestHere()}>
                           <SettingsRow
+                            setting="search.testQuery"
                             title={t("searchPage.query")}
                             description={
                               <Show when={queryTooLong()}>
@@ -618,6 +624,7 @@ export function SearchPage() {
                             }
                           />
                           <SettingsRow
+                            info
                             title={<TestOutcome part="status" />}
                             description={<TestOutcome part="detail" />}
                             control={
@@ -647,6 +654,7 @@ export function SearchPage() {
                         </Show>
                         <Show when={canTestInChat()}>
                           <SettingsNavRow
+                            info
                             title={t("searchPage.testInChat")}
                             description={t("searchPage.testInChatHint")}
                             onClick={() => {
@@ -694,6 +702,7 @@ export function SearchPage() {
                         )}
                       </For>
                       <SettingsNavRow
+                        setting="search.moreProviders"
                         title={t("searchPage.moreProviders")}
                         description={t("searchPage.moreProvidersHint")}
                         onClick={() => context.navigate("plugins")}

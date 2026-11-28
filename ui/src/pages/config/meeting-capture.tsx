@@ -268,6 +268,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
         >
           <>
             <SettingsRow
+              setting="communications.meetingSourceProvider"
               title={t("meetingCapture.fields.providerId")}
               control={
                 <SettingsSelect
@@ -292,6 +293,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
             <For each={fields()}>
               {(key) => (
                 <SettingsRow
+                  setting={`communications.meetingSourceField.${key}`}
                   title={t(`meetingCapture.fields.${key}`)}
                   description={
                     key === "sessionId"
@@ -327,6 +329,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
               )}
             </For>
             <SettingsRow
+              info
               title={t("meetingCapture.locatorsHint")}
               control={
                 <>
@@ -365,6 +368,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
     return (
       <>
         <SettingsRow
+          info
           title={t("meetingCapture.observedState")}
           description={t("meetingCapture.stateHint")}
           control={
@@ -381,6 +385,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
           }
         />
         <SettingsRow
+          info
           title={t("meetingCapture.latestTranscript")}
           description={
             saved()
@@ -401,6 +406,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
         />
         {saved() ? (
           <SettingsRow
+            info
             title={t("meetingCapture.lastUtterance")}
             control={<SettingsValue value={lastUtteranceLabel()} />}
           />
@@ -423,6 +429,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
           };
           return (
             <SettingsRow
+              setting={`communications.meetingSources.${index}`}
               title={title()}
               description={[
                 provider()?.name,
@@ -479,6 +486,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
           >
             <>
               <SettingsToggleRow
+                setting="transcripts.enabled"
                 title={t("meetingCapture.enabled")}
                 description={t("meetingCapture.enabledHint")}
                 checked={transcriptConfig()?.enabled !== false}
@@ -490,12 +498,14 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                 }}
               />
               <SettingsNavRow
+                setting="communications.transcriptLibrary"
                 title={t("transcripts.library")}
                 description={t("meetingCapture.libraryHint")}
                 onClick={() => context.navigate("meetings")}
               />
               <CaptureSummary status={knownCaptureStatus()} />
               <SettingsRow
+                info
                 title={t("meetingCapture.health")}
                 control={
                   <button
@@ -576,6 +586,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                   <For each={knownCaptureStatus()?.configuredSources ?? []} keyed={false}>
                     {(item) => (
                       <SettingsRow
+                        info
                         title={item().title ?? item().source.providerId}
                         description={[
                           ...TRANSCRIPT_SOURCE_LOCATOR_FIELDS.map((key) => item().source[key]),
@@ -617,6 +628,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
       </SettingsPage>
       <div class="settings-page">
         <SettingsDisclosure
+          setting="communications.meetingCaptureAdvanced"
           sections
           title={t("meetingCapture.advancedSettings")}
           open={props.advancedExpanded}

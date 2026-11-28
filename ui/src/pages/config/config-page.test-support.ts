@@ -240,11 +240,10 @@ export function mountConfigPageState(
   const host = document.createElement("openclaw-config-page");
   let state!: ReturnType<typeof createConfigPage>;
   const view = mountSolid(() => {
-    state = createConfigPage(
-      context,
-      () => ({ pageId: route().pageId ?? "advanced", routeData: route().routeData ?? null }),
-      () => host,
-    );
+    state = createConfigPage(context, () => ({
+      pageId: route().pageId ?? "advanced",
+      routeData: route().routeData ?? null,
+    }));
     return host;
   });
   flush();

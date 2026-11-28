@@ -90,6 +90,7 @@ function InstalledRows(
             return (
               <article
                 class="settings-row settings-row--nav plugins-settings-row oc-settings-row"
+                id={`plugins.entries.${plugin().id}`}
                 data-plugin-id={plugin().id}
                 onClick={(event: Event) => {
                   const target = event.target;

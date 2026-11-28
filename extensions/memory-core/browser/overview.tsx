@@ -213,6 +213,7 @@ export function createMemoryOverview(
           <Show when={sharedDetails()}>
             {(details) => (
               <SettingsRow
+                setting="plugin.memory-core.dreamingSchedule"
                 title={t("memoryPage.overview.schedule.sweep")}
                 description={
                   <span>
@@ -225,6 +226,7 @@ export function createMemoryOverview(
           <For each={phases()} keyed={(entry) => entry.id}>
             {(entry) => (
               <SettingsRow
+                setting={`plugin.memory-core.dreamingPhase.${entry().id}`}
                 title={t(`memoryPage.dreaming.phases.${entry().id}.title`)}
                 description={sharedDetails() ? undefined : entry().details}
                 control={
@@ -243,7 +245,11 @@ export function createMemoryOverview(
             )}
           </For>
           <Show when={!sharedDetails()}>
-            <SettingsRow title={t("memoryPage.overview.schedule.guide")} control={<GuideLink />} />
+            <SettingsRow
+              info
+              title={t("memoryPage.overview.schedule.guide")}
+              control={<GuideLink />}
+            />
           </Show>
         </>
       </SettingsSection>
@@ -268,6 +274,7 @@ export function createMemoryOverview(
       <SettingsSection title={t("memoryPage.overview.activity.title")}>
         <>
           <SettingsRow
+            info
             title={t("memoryPage.overview.activity.promoted")}
             control={
               <SettingsValue
@@ -279,10 +286,12 @@ export function createMemoryOverview(
             }
           />
           <SettingsRow
+            info
             title={t("memoryPage.overview.activity.shortTermCount")}
             control={<SettingsValue value={props.dreaming.shortTermCount} />}
           />
           <SettingsRow
+            info
             title={t("memoryPage.overview.activity.phaseHitCount")}
             control={
               <SettingsValue
@@ -316,12 +325,14 @@ export function createMemoryOverview(
     return (
       <SettingsRows>
         <SettingsRow
+          info
           title={t("memoryPage.overview.health.provider")}
           control={
             <SettingsValue mono={true} value={props.payload.provider ?? t("common.unknown")} />
           }
         />
         <SettingsRow
+          info
           title={t("memoryPage.overview.health.embeddings")}
           description={
             props.payload.embedding.ok
@@ -353,6 +364,7 @@ export function createMemoryOverview(
         />
         {props.payload.embeddingRuntime ? (
           <SettingsRow
+            info
             title={t("memoryPage.overview.health.runtime")}
             description={props.payload.embeddingRuntime.loadError}
             control={

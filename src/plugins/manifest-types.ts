@@ -331,8 +331,19 @@ export type PluginManifestControlUi = {
   panelIcon?: string;
   /** Omission retains ordinary runtime activation. */
   activation?: "settings-only";
-  settingsViews?: import("../../packages/gateway-protocol/src/plugin-control-ui-settings.js").ControlUiSettingsPlacement[];
+  settingsViews?: PluginManifestControlUiSettingsView[];
 };
+
+/** A host-owned Settings placement and the settings its packaged view draws. */
+export type PluginManifestControlUiSettingsView =
+  import("../../packages/gateway-protocol/src/plugin-control-ui-settings.js").ControlUiSettingsPlacement & {
+    /**
+     * Every setting ID the view draws, with the row's English title. IDs continue
+     * `channels.<owned channel>.`, `plugins.entries.<plugin id>.` or the UI-only
+     * `plugin.<plugin id>.`; a key ending in `.*` names one row per item.
+     */
+    settings: Readonly<Record<string, { readonly label: string }>>;
+  };
 
 export type PluginManifestMcpServer = Record<string, unknown>;
 

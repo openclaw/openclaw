@@ -397,7 +397,10 @@ function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
     return verdictStatus(verdict(), isPending(props.view.readClawHubVerdicts));
   };
   return (
-    <div class="settings-row plugins-item plugins-item--clickable skill-inventory-row">
+    <div
+      class="settings-row plugins-item plugins-item--clickable skill-inventory-row"
+      id={`skills.entries.${props.skill.skillKey}`}
+    >
       <SkillTile emoji={props.skill.emoji} />
       <button
         type="button"

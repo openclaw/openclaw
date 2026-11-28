@@ -227,12 +227,13 @@ export function RoleEditor(props: {
           fallback={<SettingsEmpty message={t("rolesPage.peopleEmpty")} />}
         >
           <For each={people()}>
-            {(profile) => <SettingsRow title={<RolePerson profile={profile} />} />}
+            {(profile) => <SettingsRow info title={<RolePerson profile={profile} />} />}
           </For>
         </Show>
       </SettingsSection>
       <SettingsSection title={t("rolesPage.sessionsHeading")}>
         <SettingsRow
+          setting="role.sessions.others"
           title={t("rolesPage.others")}
           description={
             <>
@@ -266,6 +267,7 @@ export function RoleEditor(props: {
           }
         />
         <SettingsToggleRow
+          setting="role.sandbox"
           title={t("rolesPage.sandbox")}
           description={
             <>
@@ -288,6 +290,7 @@ export function RoleEditor(props: {
           }
         />
         <SettingsRow
+          setting="role.agents"
           title={t("rolesPage.agents")}
           description={
             <>
@@ -351,6 +354,7 @@ export function RoleEditor(props: {
           fallback={<SettingsEmpty message={t("rolesPage.invitedUnused")} />}
         >
           <SettingsRow
+            setting="role.sessions.maxInvitedAccess"
             title={t("rolesPage.maxInvitedAccess")}
             description={
               <>
@@ -375,6 +379,7 @@ export function RoleEditor(props: {
           />
           <Show when={view().sessions.maxInvitedAccess === "send"}>
             <SettingsRow
+              setting="role.sessions.invitedPermission"
               title={t("rolesPage.invitedPermission")}
               description={
                 <>
@@ -416,6 +421,7 @@ export function RoleEditor(props: {
               }
             />
             <SettingsRow
+              setting="role.sessions.invitedTools"
               title={t("rolesPage.tools")}
               description={t("rolesPage.toolsDescription", { count: String(tools().length) })}
               stacked
@@ -500,6 +506,7 @@ export function RoleEditor(props: {
         <For each={ROLE_SCOPES}>
           {([scope, key]) => (
             <label
+              id={`role.scopes.${key}`}
               class={[
                 "settings-row",
                 "roles-scope",
@@ -517,7 +524,7 @@ export function RoleEditor(props: {
                 }}
               />
               <span class="settings-row__text">
-                <span class="settings-row__title">
+                <span class="settings-row__title" id={`role.scopes.${key}-title`}>
                   {t("rolesScopes." + key + ".label")} <RawId>{scope}</RawId>
                 </span>
                 <span class="settings-row__desc">{t("rolesScopes." + key + ".description")}</span>
@@ -533,6 +540,7 @@ export function RoleEditor(props: {
       </SettingsSection>
       <SettingsSection title={t("rolesPage.removeHeading")}>
         <SettingsRow
+          info
           title={t("rolesPage.deleteRole")}
           description={
             isDefault()

@@ -20,10 +20,9 @@ import type { ControlUiPluginDistribution } from "../src/plugins/control-ui-dist
 
 /** Consume only the completed canonical distribution, never source manifests or live plugins. */
 export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set<string>): Plugin {
-  const inventoryModule = normalizePath(
-    path.join(repoRoot, "ui/src/plugins/control-ui-distribution.ts"),
-  );
+  const pluginsDir = normalizePath(path.join(repoRoot, "ui/src/plugins"));
   let source = "";
+  let settingsSource = "";
   let serving = false;
   let base = "/";
   const servedAssets = new Map<string, PluginControlUiAsset>();
@@ -76,7 +75,11 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
                   "utf8",
                 ),
               );
-              const declaration = normalizeManifestControlUi(manifest.controlUi, manifest.channels);
+              const declaration = normalizeManifestControlUi(
+                manifest.controlUi,
+                manifest.channels,
+                manifest.id,
+              );
               if (!declaration.ok) {
                 throw new Error(
                   `Invalid Control UI declaration for ${entry.id}: ${declaration.error}`,
@@ -94,6 +97,7 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         : [];
       const captured = new Set<string>();
       const modules: string[] = [];
+      const settingsModules: string[] = [];
       const consume = (file: string) => {
         this.addWatchFile(file);
         inputs.add(file);
@@ -109,7 +113,7 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         if (!isRecord(manifest) || !pluginId) {
           throw new Error(`Invalid packaged plugin manifest for ${id}: missing plugin id`);
         }
-        const result = normalizeManifestControlUi(manifest.controlUi, manifest.channels);
+        const result = normalizeManifestControlUi(manifest.controlUi, manifest.channels, pluginId);
         if (!result.ok) {
           throw new Error(`Invalid packaged plugin manifest for ${id}: ${result.error}`);
         }
@@ -176,9 +180,16 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
           revision,
           bundledDistribution: { packageName: pkg.name, packageVersion: pkg.version },
         };
-        modules.push(
-          `{...${JSON.stringify({ ...metadata, activation: controlUi.activation, settingsViews: controlUi.settingsViews })},entry:${urls.get(build.entryName)},styles:[${build.styles.map((name) => urls.get(name)).join(",")}],imports:[]}`,
-        );
+        const assets = `entry:${urls.get(build.entryName)},styles:[${build.styles.map((name) => urls.get(name)).join(",")}]`;
+        // The Gateway never advertises Settings-only owners for activation.
+        if (controlUi.activation !== "settings-only") {
+          modules.push(`{...${JSON.stringify(metadata)},${assets},imports:[]}`);
+        }
+        if (controlUi.settingsViews?.length) {
+          settingsModules.push(
+            `{pluginId:${JSON.stringify(pluginId)},${assets},settingsViews:${JSON.stringify(controlUi.settingsViews)}}`,
+          );
+        }
         captured.add(id);
       }
       for (const id of promised) {
@@ -189,11 +200,19 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         }
       }
       source = `export const controlUiPluginDistributions = [${modules.join(",")}];`;
+      settingsSource = `export const controlUiSettingsDistributions = [${settingsModules.join(",")}];`;
     },
     transform: {
-      filter: { id: /\/ui\/src\/plugins\/control-ui-distribution\.ts(?:\?.*)?$/ },
+      filter: { id: /\/ui\/src\/plugins\/control-ui-(?:settings-)?distribution\.ts(?:\?.*)?$/ },
       handler(_code, id) {
-        return id.split("?")[0] === inventoryModule ? { code: source, map: null } : null;
+        switch (id.split("?")[0]) {
+          case `${pluginsDir}/control-ui-distribution.ts`:
+            return { code: source, map: null };
+          case `${pluginsDir}/control-ui-settings-distribution.ts`:
+            return { code: settingsSource, map: null };
+          default:
+            return null;
+        }
       },
     },
   };

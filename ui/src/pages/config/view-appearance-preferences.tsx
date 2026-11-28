@@ -12,6 +12,7 @@ import {
   SettingsRow,
   SettingsSegmented,
   SettingsToggleRow,
+  type SettingIdentifier,
 } from "../../components/solid/settings-ui.tsx";
 import { SUPPORTED_LOCALES, type Locale } from "../../i18n/index.ts";
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
@@ -63,6 +64,7 @@ export function LanguageRow(props: ConfigProps) {
   return (
     <div id={APPEARANCE_SETTINGS_TARGET_IDS.language}>
       <SettingsRow
+        setting="local.locale"
         title={t("quickSettings.language")}
         control={
           <Picker
@@ -86,7 +88,11 @@ export function LanguageRow(props: ConfigProps) {
     </div>
   );
 }
-function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "camera" }) {
+function MediaDeviceField(props: {
+  config: ConfigProps;
+  kind: "microphone" | "camera";
+  setting: SettingIdentifier;
+}) {
   const state = createMemo(() => props.config[props.kind]);
   const title = createMemo(() => t(`chat.composer.${props.kind}Input`));
   const onSelect = () =>
@@ -150,6 +156,7 @@ function MediaDeviceField(props: { config: ConfigProps; kind: "microphone" | "ca
   return (
     <Show when={state() && onSelect()}>
       <SettingsRow
+        setting={props.setting}
         title={title()}
         description={
           <>
@@ -242,6 +249,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
       <SettingsSectionHeader title={t("configView.chatPrefs.title")} />
       <div class="settings-group">
         <SettingsRow
+          setting="local.chatSendShortcut"
           title={t("chat.sendShortcut")}
           description={
             <>
@@ -276,6 +284,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
           }
         />
         <SettingsRow
+          setting="local.chatFollowUpMode"
           title={t("chat.followUpMode")}
           description={
             <span class="settings-follow-up-status">
@@ -319,6 +328,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
           }
         />
         <SettingsRow
+          setting="local.chatMessageMaxWidth"
           title={t("configView.chatPrefs.messageWidth")}
           description={t("configView.chatPrefs.messageWidthHint")}
           control={
@@ -349,18 +359,19 @@ export function ChatPreferencesSection(props: ConfigProps) {
         />
         <LocalToggleRow
           config={props}
-          setting="chatShowTaskProgress"
+          preference="chatShowTaskProgress"
           title={t("configView.chatPrefs.showTaskProgress")}
           hint={t("configView.chatPrefs.showTaskProgressHint")}
         />
         <LocalToggleRow
           config={props}
-          setting="chatCollapseTaskProgress"
+          preference="chatCollapseTaskProgress"
           title={t("configView.chatPrefs.collapseTaskProgress")}
           hint={t("configView.chatPrefs.collapseTaskProgressHint")}
           disabled={!props.chatShowTaskProgress}
         />
         <SettingsRow
+          setting="local.catalogOpenTarget"
           title={t("chat.catalogOpenTarget")}
           stackedOnNarrow={true}
           control={
@@ -380,6 +391,7 @@ export function ChatPreferencesSection(props: ConfigProps) {
           }
         />
         <SettingsToggleRow
+          setting="local.openLinksExternally"
           title={t("configView.chatPrefs.openLinksExternally")}
           description={t("configView.chatPrefs.openLinksExternallyHint")}
           checked={props.openLinksExternally}
@@ -398,11 +410,15 @@ export function MediaDevicesSection(props: ConfigProps) {
     <section id={APPEARANCE_SETTINGS_TARGET_IDS.devices} class="settings-section">
       <SettingsSectionHeader title={t("configView.chatPrefs.devices")} />
       <div class="settings-group">
-        <MediaDeviceField config={props} kind="microphone" />
-        <MediaDeviceField config={props} kind="camera" />
+        <MediaDeviceField
+          config={props}
+          kind="microphone"
+          setting="local.realtimeTalkInputDeviceId"
+        />
+        <MediaDeviceField config={props} kind="camera" setting="local.realtimeTalkVideoDeviceId" />
         <LocalToggleRow
           config={props}
-          setting="composerHoldToRecord"
+          preference="composerHoldToRecord"
           title={t("chat.composer.holdToRecordSetting")}
           hint={t("chat.composer.holdToRecordSettingDescription")}
         />
@@ -429,13 +445,13 @@ export function SidebarPreferencesSection(
       <div class="settings-group">
         <LocalToggleRow
           config={props}
-          setting="sidebarLiveActivity"
+          preference="sidebarLiveActivity"
           title={t("configView.sidebarPrefs.liveActivity")}
           hint={t("configView.sidebarPrefs.liveActivityHint")}
         />
         <LocalToggleRow
           config={props}
-          setting="sessionDeleteConfirm"
+          preference="sessionDeleteConfirm"
           title={t("configView.sidebarPrefs.deleteConfirm")}
           hint={t("configView.sidebarPrefs.deleteConfirmHint")}
         />
@@ -450,6 +466,7 @@ export function SidebarPreferencesSection(
             <For each={hiddenCatalogIds()}>
               {(catalogId) => (
                 <SettingsRow
+                  setting={`appearance.hiddenSessionSections.${catalogId}`}
                   title={
                     <Errored fallback={(_error) => <>{catalogId}</>}>
                       <Loading on={catalogLabelsScope()} fallback={catalogId}>

@@ -65,11 +65,7 @@ describe("ConfigPage cold reads", () => {
       hash: "",
     });
     const initial = createRoot((dispose) => {
-      const state = createConfigPage(
-        context,
-        () => ({ pageId: "appearance", routeData }),
-        () => document.body,
-      );
+      const state = createConfigPage(context, () => ({ pageId: "appearance", routeData }));
       return { dispose, config: state.configProps() };
     });
     try {

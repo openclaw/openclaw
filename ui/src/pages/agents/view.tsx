@@ -199,6 +199,7 @@ export function Agents(props: AgentsProps) {
     <Show when={props.access.settings.reads.config}>
       <div class="settings-group">
         <SettingsNavRow
+          setting="agentsPage.defaults"
           title={t("agents.defaults.title")}
           description={t("agents.defaults.description")}
           onClick={props.onOpenAgentDefaults}
@@ -389,11 +390,13 @@ export function Agents(props: AgentsProps) {
                             <Match when={visiblePanel() === "memory"}>
                               <div class="settings-group agent-memory-import-row">
                                 <SettingsNavRow
+                                  setting="agentsPage.memorySettings"
                                   title={t("tabs.memory")}
                                   description={t("subtitles.memory")}
                                   onClick={() => props.onOpenMemorySettings?.()}
                                 />
                                 <SettingsNavRow
+                                  setting="agentsPage.memoryImport"
                                   title={t("tabs.memoryImport")}
                                   description={t("subtitles.memoryImport")}
                                   onClick={() => props.onOpenMemoryImport?.()}

@@ -1107,6 +1107,7 @@ export function resolveAugmentedPluginNpmManifest(params: PluginPackageParams) {
       rootDir: packageDir,
       controlUi: manifest.controlUi,
       channels: manifest.channels,
+      pluginId: manifest.id,
       rejectHardlinks: false,
     }),
   );

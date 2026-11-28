@@ -6,10 +6,11 @@ import type { FastMode, ModelCatalogEntry } from "../../api/types.ts";
 import { isChatFastModeProviderSupported } from "../../lib/chat/model-select-state.ts";
 import { thinkingLevelLabel } from "../../lib/chat/thinking-level-label.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createSettingsTargetReveal } from "../../lib/reactive/settings-target-arrival.ts";
 import { DecisionModelPicker, type DecisionModelPickerParams } from "./decision-model-picker.tsx";
 import { Icon } from "./icon.tsx";
 import { ModelPicker, type ModelPickerOption, type ModelPickerParams } from "./model-picker.tsx";
-import { SettingsRow, SettingsSegmented } from "./settings-ui.tsx";
+import { SettingsRow, SettingsSegmented, type SettingIdentifier } from "./settings-ui.tsx";
 import "./model-settings-rows.css";
 
 function HelpTitle(params: {
@@ -57,6 +58,7 @@ type Behavior<Value> = {
 function BehaviorSetting<Value extends string>(
   props: {
     field: "thinking" | "fastMode";
+    setting: SettingIdentifier;
     prefix: string;
     defaultHelp: string;
     options: { value: Value; label: string; disabled?: boolean }[];
@@ -64,6 +66,7 @@ function BehaviorSetting<Value extends string>(
 ) {
   return (
     <SettingsRow
+      setting={props.setting}
       title={
         <HelpTitle
           title={t(`quickSettings.model.${props.field}`)}
@@ -130,7 +133,7 @@ export type FallbackSetting = {
   onOpen?: () => void;
   onChange: (model: string | null) => void;
 };
-function FallbackModel(props: FallbackSetting & { label: string }) {
+function FallbackModel(props: FallbackSetting & { label: string; setting: SettingIdentifier }) {
   const [editing, setEditing] = createSignal(false);
   const options = createMemo(() => [
     ...(props.inherit ? [{ value: INHERIT_FALLBACK, label: props.inherit.label }] : []),
@@ -145,6 +148,7 @@ function FallbackModel(props: FallbackSetting & { label: string }) {
   ]);
   return (
     <SettingsRow
+      setting={props.setting}
       title={props.label}
       description={
         props.fallbacks.length > 1 || props.chainEditor ? (
@@ -228,12 +232,16 @@ export function ModelSettingsRows(props: {
   );
   const speeds = createMemo(() => speedOptions(props.model, speed()));
   // Start expanded for authored advanced choices. Clearing the last one keeps its row in place.
+  const reveal = createSettingsTargetReveal(
+    agent() ? "agentsPage.moreModels" : "modelProviders.moreSettings",
+  );
   const [moreOpen, setMoreOpen] = createSignal<boolean>(
-    (open) => open === true || props.hasAdvanced,
+    (open) => open === true || reveal() || props.hasAdvanced,
   );
   return (
     <div class="model-providers__defaults">
       <SettingsRow
+        setting={agent() ? "agent.model.primary" : "agents.defaults.model.primary"}
         title={t("modelProviders.defaults.primary")}
         description={props.primaryDescription}
         control={
@@ -241,6 +249,7 @@ export function ModelSettingsRows(props: {
         }
       />
       <BehaviorSetting
+        setting={agent() ? "agent.thinkingDefault" : "agents.defaults.thinkingDefault"}
         {...props.thinking}
         field="thinking"
         prefix={props.scope}
@@ -252,6 +261,7 @@ export function ModelSettingsRows(props: {
         )}
       />
       <BehaviorSetting
+        setting={agent() ? "agent.fastModeDefault" : "agents.defaults.fastModeDefault"}
         {...props.speed}
         field="fastMode"
         prefix={props.scope}
@@ -274,6 +284,7 @@ export function ModelSettingsRows(props: {
         type="button"
         class="settings-row settings-row--nav settings-details-toggle"
         aria-expanded={moreOpen() ? "true" : "false"}
+        id={agent() ? "agentsPage.moreModels" : "modelProviders.moreSettings"}
         data-models-more-settings
         onClick={() => setMoreOpen(!moreOpen())}
       >
@@ -288,8 +299,13 @@ export function ModelSettingsRows(props: {
       </button>
 
       <Show when={moreOpen()}>
-        <FallbackModel {...props.fallback} label={t("modelProviders.defaults.fallback")} />
+        <FallbackModel
+          setting={agent() ? "agent.model.fallbacks" : "agents.defaults.model.fallbacks"}
+          {...props.fallback}
+          label={t("modelProviders.defaults.fallback")}
+        />
         <SettingsRow
+          setting={agent() ? "agent.subagents.model" : "agents.defaults.subagents.model"}
           title={
             <HelpTitle
               title={t("modelProviders.defaults.subagent")}
@@ -318,6 +334,7 @@ export function ModelSettingsRows(props: {
           }
         />
         <SettingsRow
+          setting={agent() ? "agent.utilityModel.primary" : "agents.defaults.utilityModel.primary"}
           title={
             <HelpTitle
               title={t("modelProviders.defaults.utility")}
@@ -339,10 +356,14 @@ export function ModelSettingsRows(props: {
           }
         />
         <FallbackModel
+          setting={
+            agent() ? "agent.utilityModel.fallbacks" : "agents.defaults.utilityModel.fallbacks"
+          }
           {...props.utilityFallback}
           label={t("modelProviders.defaults.utilityFallback")}
         />
         <SettingsRow
+          setting={agent() ? "agent.decisionModel" : "agents.defaults.decisionModel"}
           title={
             <HelpTitle
               title={t("chat.modelControls.decisionLabel")}

@@ -275,6 +275,7 @@ it.each(["cross-origin", "authenticated HTTP", "pending import"])(
   async (scenario) => {
     const distribution = {
       pluginId: "workboard",
+      name: "Workboard",
       revision: "same-bytes",
       bundledDistribution: { packageName: "@openclaw/workboard", packageVersion: "1.0.0" },
       entry: new URL("/assets/plugins/workboard/same-bytes/index.js", location.href).href,
@@ -284,7 +285,6 @@ it.each(["cross-origin", "authenticated HTTP", "pending import"])(
     packaged.push(distribution);
     let descriptor: PluginsControlUiCatalog["plugins"][number] = {
       ...distribution,
-      name: "Workboard",
       entryUrl: "/untrusted-gateway-path.js",
     };
     const pending = createDeferred();

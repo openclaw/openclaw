@@ -274,6 +274,7 @@ export function SessionStorageSettings(props: SettingsProps) {
     return (
       <>
         <SettingsRow
+          info
           title={t("configView.sessionStorage.transcripts")}
           description={t("configView.sessionStorage.transcriptCounts", {
             hot: String(totals().transcripts - totals().cold),
@@ -282,25 +283,33 @@ export function SessionStorageSettings(props: SettingsProps) {
           control={<SettingsValue value={String(totals().transcripts)} />}
         />
         <SettingsRow
+          info
           title={t("configView.sessionStorage.database")}
           description={t("configView.sessionStorage.walSize", { size: storageSize(totals().wal) })}
           control={<SettingsValue value={storageSize(totals().database)} />}
         />
         <SettingsRow
+          info
           title={t("configView.sessionStorage.archives")}
           stackedOnNarrow
           control={<SettingsValue value={storageSize(totals().archives)} />}
         />
         <SettingsRow
+          info
           title={t("configView.sessionStorage.embeddedArchives")}
           description={t("configView.sessionStorage.embeddedArchivesHint")}
           control={<SettingsValue value={storageSize(totals().embedded)} />}
         />
         {inventoryProps.status.agents.length > 1 ? (
-          <SettingsDisclosure quiet title={t("configView.sessionStorage.byAgent")}>
+          <SettingsDisclosure
+            setting="aiAgents.sessionStorageByAgent"
+            quiet
+            title={t("configView.sessionStorage.byAgent")}
+          >
             <For each={inventoryProps.status.agents} keyed={(agent) => agent.agentId}>
               {(agent) => (
                 <SettingsRow
+                  info
                   title={agent().agentId}
                   description={t("configView.sessionStorage.agentCounts", {
                     hot: String(agent().hotTranscripts),
@@ -316,6 +325,7 @@ export function SessionStorageSettings(props: SettingsProps) {
           </SettingsDisclosure>
         ) : undefined}
         <SettingsRow
+          info
           title={t("configView.sessionStorage.worker")}
           description={
             inventoryProps.status.maintenance.running
@@ -423,6 +433,7 @@ export function SessionStorageSettings(props: SettingsProps) {
           <SettingsSection title={t("configView.sessionStorage.automatic")}>
             <>
               <SettingsToggleRow
+                setting="session.maintenance.coldStorage.enabled"
                 title={t("configView.sessionStorage.enabled")}
                 description={t("configView.sessionStorage.enabledHint")}
                 checked={storageConfig().enabled}
@@ -437,6 +448,7 @@ export function SessionStorageSettings(props: SettingsProps) {
                 }}
               />
               <SettingsRow
+                setting="session.maintenance.coldStorage.afterDays"
                 title={t("configView.sessionStorage.afterDays")}
                 description={t("configView.sessionStorage.afterDaysHint")}
                 control={
@@ -464,6 +476,7 @@ export function SessionStorageSettings(props: SettingsProps) {
                 }
               />
               <SettingsRow
+                setting="aiAgents.sessionStorageRunNow"
                 title={t("configView.sessionStorage.runNow")}
                 description={t("configView.sessionStorage.runHint")}
                 control={
@@ -521,6 +534,7 @@ export function SessionStorageSettings(props: SettingsProps) {
       </SettingsPage>
       <div class="settings-page">
         <SettingsDisclosure
+          setting="aiAgents.sessionStorageAdvanced"
           sections
           title={t("configView.sessionStorage.advanced")}
           open={props.advancedExpanded}

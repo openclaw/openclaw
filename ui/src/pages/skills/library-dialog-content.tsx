@@ -124,6 +124,7 @@ export function LibraryEditor(props: { library: SkillLibraryModel; feedback: JSX
       </p>
       <Show when={entry()}>
         <SettingsDisclosure
+          info
           quiet
           class="skill-library-details"
           title={t("skillLibrary.technicalDetails")}

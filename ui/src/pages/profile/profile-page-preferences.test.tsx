@@ -130,7 +130,8 @@ it.each([
 const prAttributionLabel = "Add OpenClaw attribution to pull requests";
 function attributionToggle(page: ParentNode) {
   return [...page.querySelectorAll<HTMLInputElement>('input[role="switch"]')].find((input) => {
-    const label = page.querySelector("#" + input.getAttribute("aria-labelledby"));
+    // Setting IDs contain dots, so name the label by attribute rather than as a CSS ID.
+    const label = page.querySelector(`[id="${input.getAttribute("aria-labelledby")}"]`);
     return label?.textContent === prAttributionLabel;
   });
 }

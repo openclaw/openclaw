@@ -208,6 +208,7 @@ export function LabsPage() {
       <>
         {props.feature.id === "decisionAssistance" && !decisionPreferenceKnown() ? (
           <SettingsRow
+            info
             title={props.feature.title()}
             description={
               <>
@@ -233,6 +234,21 @@ export function LabsPage() {
           />
         ) : (
           <SettingsToggleRow
+            setting={
+              props.feature.id === "decisionAssistance"
+                ? "agents.defaults.experimental.decisionAssistance"
+                : props.feature.id === "usageRankedToolIndex"
+                  ? "agents.defaults.experimental.usageRankedToolIndex"
+                  : props.feature.id === "composerPredictions"
+                    ? "gateway.controlUi.experimental.composerPredictions.enabled"
+                    : props.feature.id === "chatBubbles"
+                      ? "gateway.controlUi.experimental.chatBubbles"
+                      : props.feature.id === "hostDesktop"
+                        ? "desktop.host.enabled"
+                        : props.feature.id === "openclawId"
+                          ? "gateway.openclawId.enabled"
+                          : "cloudWorkers.desktop"
+            }
             title={props.feature.title()}
             checked={checked()}
             disabled={
@@ -256,6 +272,7 @@ export function LabsPage() {
         )}
         {props.feature.id === "composerPredictions" ? (
           <SettingsSelectRow
+            setting="gateway.controlUi.experimental.composerPredictions.model"
             nested
             title={t("labsPage.composerPredictions.model")}
             description={t("labsPage.composerPredictions.modelDescription")}
@@ -300,6 +317,7 @@ export function LabsPage() {
             >
               {(warning) => (
                 <SettingsRow
+                  info
                   role="status"
                   title={t("labsPage.openclawId.title")}
                   description={warning.message}
@@ -310,6 +328,7 @@ export function LabsPage() {
               <Errored
                 fallback={(error) => (
                   <SettingsRow
+                    info
                     role="alert"
                     title={t("labsPage.saveErrorTitle")}
                     description={<ErrorDetails error={error()} />}
