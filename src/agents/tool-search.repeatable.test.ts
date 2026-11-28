@@ -40,7 +40,7 @@ const familyFactories: Record<string, () => AnyAgentTool> = {
   sessions_spawn: () => createSessionsSpawnTool({ config: {} }),
   subagents: () => createSubagentsTool(),
 };
-const delegationFamily = CORE_TOOL_DEFINITIONS.filter(
+const delegationFamily: string[] = CORE_TOOL_DEFINITIONS.filter(
   (tool) => tool.catalogFamily === "delegation",
 ).map((tool) => tool.id);
 
@@ -72,7 +72,11 @@ function surface(
     tools: [
       ...createToolSearchTools(ctx),
       createReadTool("/tmp/repeatable"),
-      ...members.map((name) => ({ ...familyFactories[name](), execute: record(name) })),
+      // The family test asserts every member has a factory.
+      ...members.flatMap((name) => {
+        const create = familyFactories[name];
+        return create ? [{ ...create(), execute: record(name) }] : [];
+      }),
       lookup,
     ],
   });
