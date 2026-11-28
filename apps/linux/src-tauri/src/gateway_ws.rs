@@ -51,6 +51,8 @@ const COMMAND_TIMEOUT: Duration = Duration::from_secs(35);
 const SUSPEND_REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const DRIVER_TICK: Duration = Duration::from_secs(1);
 const MAX_RECONNECT_DELAY: Duration = Duration::from_secs(30);
+const MIN_RETRY_AFTER_DELAY: Duration = Duration::from_secs(1);
+const MAX_RETRY_AFTER_DELAY: Duration = Duration::from_secs(60);
 const PAIRING_REQUIRED_DETAIL_CODE: &str = "PAIRING_REQUIRED";
 const AUTH_TOKEN_MISSING_DETAIL_CODE: &str = "AUTH_TOKEN_MISSING";
 const AUTH_PASSWORD_MISSING_DETAIL_CODE: &str = "AUTH_PASSWORD_MISSING";
@@ -338,6 +340,7 @@ struct RequestFailure {
     disconnect: bool,
     connect_details: ConnectErrorDetails,
     connect_state: Option<GatewayConnectionState>,
+    retry_after: Option<Duration>,
 }
 
 impl RequestFailure {
@@ -347,6 +350,7 @@ impl RequestFailure {
             disconnect: true,
             connect_details: ConnectErrorDetails::default(),
             connect_state: None,
+            retry_after: None,
         }
     }
 
@@ -363,6 +367,7 @@ impl RequestFailure {
             disconnect: false,
             connect_details: ConnectErrorDetails::from_value(details),
             connect_state: None,
+            retry_after: None,
         }
     }
 
@@ -375,8 +380,21 @@ impl RequestFailure {
     fn from_shared(error: SharedClientError) -> Self {
         match error {
             SharedClientError::Gateway {
-                message, details, ..
-            } => Self::method_with_details(message, details.as_ref()),
+                message,
+                details,
+                retryable,
+                retry_after_ms,
+                ..
+            } => {
+                let mut failure = Self::method_with_details(message, details.as_ref());
+                failure.retry_after = retry_after_ms
+                    .filter(|ms| *ms > 0 && retryable == Some(true))
+                    .map(|ms| {
+                        Duration::from_millis(ms)
+                            .clamp(MIN_RETRY_AFTER_DELAY, MAX_RETRY_AFTER_DELAY)
+                    });
+                failure
+            }
             SharedClientError::DispatchRejected(message) => {
                 Self::method_with_details(message, None)
             }
@@ -387,6 +405,13 @@ impl RequestFailure {
             error => Self::transport(error.to_string()),
         }
     }
+}
+
+fn reconnect_delay(attempt: u32, failure: Option<&RequestFailure>) -> Duration {
+    if let Some(delay) = failure.and_then(|failure| failure.retry_after) {
+        return delay;
+    }
+    shared_reconnect_backoff(attempt, MAX_RECONNECT_DELAY)
 }
 
 fn decode_response<T: DeserializeOwned>(method: &str, payload: Value) -> Result<T, RequestFailure> {
@@ -1113,7 +1138,7 @@ impl GatewayClient {
             if !self.driver_has_demand(&app) {
                 continue;
             }
-            let delay = shared_reconnect_backoff(reconnect_attempt, MAX_RECONNECT_DELAY);
+            let delay = reconnect_delay(reconnect_attempt, failure);
             tokio::select! {
                 _ = tokio::time::sleep(delay) => {}
                 command = receiver.recv() => {
@@ -4250,6 +4275,254 @@ esac
         assert_eq!(
             serde_json::to_value(result).expect("serialized chat send result"),
             json!({ "sessionKey": "global", "agentId": "work", "runId": "run-1", "status": "started", "gatewayGeneration": 1 })
+        );
+    }
+
+    #[test]
+    fn reconnect_delay_honors_bounded_retry_after_hints() {
+        let sleeping = RequestFailure::from_shared(SharedClientError::Gateway {
+            method: "connect".to_string(),
+            code: "UNAVAILABLE".to_string(),
+            message: "sleeping".to_string(),
+            details: None,
+            retryable: Some(true),
+            retry_after_ms: Some(25_000),
+        });
+        assert_eq!(reconnect_delay(1, Some(&sleeping)), Duration::from_secs(25));
+
+        let waking = RequestFailure::from_shared(SharedClientError::Gateway {
+            method: "connect".to_string(),
+            code: "UNAVAILABLE".to_string(),
+            message: "starting".to_string(),
+            details: None,
+            retryable: Some(true),
+            retry_after_ms: Some(3_000),
+        });
+        assert_eq!(reconnect_delay(6, Some(&waking)), Duration::from_secs(3));
+
+        let too_long = RequestFailure::from_shared(SharedClientError::Gateway {
+            method: "connect".to_string(),
+            code: "UNAVAILABLE".to_string(),
+            message: "capped".to_string(),
+            details: None,
+            retryable: Some(true),
+            retry_after_ms: Some(300_000),
+        });
+        assert_eq!(reconnect_delay(1, Some(&too_long)), Duration::from_secs(60));
+
+        let too_short = RequestFailure::from_shared(SharedClientError::Gateway {
+            method: "connect".to_string(),
+            code: "UNAVAILABLE".to_string(),
+            message: "minimum".to_string(),
+            details: None,
+            retryable: Some(true),
+            retry_after_ms: Some(50),
+        });
+        assert_eq!(reconnect_delay(1, Some(&too_short)), Duration::from_secs(1));
+
+        let zero_hint = RequestFailure::from_shared(SharedClientError::Gateway {
+            method: "connect".to_string(),
+            code: "UNAVAILABLE".to_string(),
+            message: "no delay".to_string(),
+            details: None,
+            retryable: Some(true),
+            retry_after_ms: Some(0),
+        });
+        assert_eq!(reconnect_delay(3, Some(&zero_hint)), Duration::from_secs(4));
+
+        let non_retryable = RequestFailure::from_shared(SharedClientError::Gateway {
+            method: "connect".to_string(),
+            code: "INVALID_REQUEST".to_string(),
+            message: "not retryable".to_string(),
+            details: None,
+            retryable: Some(false),
+            retry_after_ms: Some(25_000),
+        });
+        assert_eq!(
+            reconnect_delay(1, Some(&non_retryable)),
+            Duration::from_secs(1)
+        );
+
+        let unmarked = RequestFailure::from_shared(SharedClientError::Gateway {
+            method: "connect".to_string(),
+            code: "UNAVAILABLE".to_string(),
+            message: "retryable omitted".to_string(),
+            details: None,
+            retryable: None,
+            retry_after_ms: Some(25_000),
+        });
+        assert_eq!(reconnect_delay(1, Some(&unmarked)), Duration::from_secs(1));
+
+        let plain = RequestFailure::transport("socket closed");
+        assert_eq!(reconnect_delay(1, Some(&plain)), Duration::from_secs(1));
+        assert_eq!(reconnect_delay(3, Some(&plain)), Duration::from_secs(4));
+    }
+
+    #[tokio::test]
+    async fn connect_refusal_retry_after_wire_hint_paces_reconnect_delay() {
+        let directory = std::env::temp_dir().join(format!(
+            "openclaw-linux-retry-after-wire-{}",
+            Uuid::new_v4()
+        ));
+        std::fs::create_dir(&directory).expect("create identity dir");
+        let store = GatewayDeviceIdentityStore::load_or_create(directory.join("identity.json"))
+            .expect("create identity");
+        let identity = store.identity();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind gateway fixture");
+        let url = format!("ws://{}", listener.local_addr().unwrap());
+
+        let server = tokio::spawn(async move {
+            // Attempt 1: send connect.challenge, then refuse connect with retryable retryAfterMs.
+            let (stream1, _) = listener.accept().await.expect("accept attempt 1");
+            let mut socket1 = tokio_tungstenite::accept_async(stream1)
+                .await
+                .expect("accept ws 1");
+            socket1
+                .send(Message::Text(
+                    json!({
+                        "type": "event",
+                        "event": "connect.challenge",
+                        "payload": { "nonce": "retry-after-nonce-1", "ts": 1_800_000_000_000_u64 },
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("send challenge 1");
+            let Some(Ok(Message::Text(text1))) = socket1.next().await else {
+                panic!("expected connect request frame 1");
+            };
+            let frame1: Value = serde_json::from_str(&text1).expect("parse connect frame 1");
+            assert_eq!(frame1["method"], "connect");
+            let refused_at = Instant::now();
+            socket1
+                .send(Message::Text(
+                    json!({
+                        "type": "res",
+                        "id": frame1["id"],
+                        "ok": false,
+                        "error": {
+                            "code": "UNAVAILABLE",
+                            "message": "gateway starting; retry shortly",
+                            "retryable": true,
+                            "retryAfterMs": 3000,
+                        },
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("send connect refusal");
+            drop(socket1);
+
+            // Attempt 2: accept reconnect, measure real elapsed interval, and complete hello-ok.
+            let (stream2, _) = listener.accept().await.expect("accept attempt 2");
+            let elapsed = refused_at.elapsed();
+            let mut socket2 = tokio_tungstenite::accept_async(stream2)
+                .await
+                .expect("accept ws 2");
+            socket2
+                .send(Message::Text(
+                    json!({
+                        "type": "event",
+                        "event": "connect.challenge",
+                        "payload": { "nonce": "retry-after-nonce-2", "ts": 1_800_000_003_000_u64 },
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("send challenge 2");
+            let Some(Ok(Message::Text(text2))) = socket2.next().await else {
+                panic!("expected connect request frame 2");
+            };
+            let frame2: Value = serde_json::from_str(&text2).expect("parse connect frame 2");
+            assert_eq!(frame2["method"], "connect");
+            socket2
+                .send(Message::Text(
+                    json!({
+                        "type": "res",
+                        "id": frame2["id"],
+                        "ok": true,
+                        "payload": {
+                            "type": "hello-ok",
+                            "protocol": PROTOCOL_VERSION,
+                            "features": { "methods": ["agents.list"] },
+                            "auth": {},
+                            "policy": { "tickIntervalMs": 30_000 },
+                        },
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .expect("send hello-ok");
+            elapsed
+        });
+
+        let make_config = || {
+            SharedGatewayClientConfig::new(&url)
+                .expect("shared config")
+                .connect_timeout(CONNECT_TIMEOUT)
+                .challenge_timeout(HANDSHAKE_TIMEOUT)
+                .request_timeout(REQUEST_TIMEOUT)
+                .write_timeout(REQUEST_TIMEOUT)
+        };
+        let auth = GatewayAuth::None;
+        let error = match SharedGatewayClient::connect(make_config(), {
+            let identity = identity.clone();
+            let auth = auth.clone();
+            move |challenge| {
+                let identity = identity.clone();
+                let auth = auth.clone();
+                async move {
+                    connect_params(
+                        &identity,
+                        &auth,
+                        &challenge.nonce,
+                        challenge.issued_at_ms,
+                        true,
+                    )
+                }
+            }
+        })
+        .await
+        {
+            Ok(_) => panic!("expected retryable connect refusal"),
+            Err(error) => error,
+        };
+
+        let failure = RequestFailure::from_shared(error);
+        let delay = reconnect_delay(1, Some(&failure));
+        assert_eq!(delay, Duration::from_secs(3));
+        assert_eq!(reconnect_delay(6, Some(&failure)), Duration::from_secs(3));
+        tokio::time::sleep(delay).await;
+
+        let session = SharedGatewayClient::connect(make_config(), move |challenge| {
+            let identity = identity.clone();
+            let auth = auth.clone();
+            async move {
+                connect_params(
+                    &identity,
+                    &auth,
+                    &challenge.nonce,
+                    challenge.issued_at_ms,
+                    true,
+                )
+            }
+        })
+        .await
+        .expect("reconnect succeeded after retryAfterMs wait");
+        let elapsed = server.await.expect("server completed");
+        let _ = std::fs::remove_dir_all(&directory);
+
+        assert_eq!(session.hello()["type"], "hello-ok");
+        assert!(
+            elapsed >= Duration::from_millis(2_900),
+            "expected >=2900ms wait before attempt 2, observed {}ms",
+            elapsed.as_millis()
         );
     }
 }
