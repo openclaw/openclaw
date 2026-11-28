@@ -15,6 +15,9 @@ export function resolveSpeechTextLimit(config: unknown): number {
 }
 
 /** Browser playback only; the Gateway owns provider selection and synthesis. */
+/** A streamed speech segment; aborting its signal withdraws it if it has not started playing. */
+export type SpeechSegment = string | { text: string; signal?: AbortSignal };
+
 export class GatewaySpeechPlayback {
   private generation = 0;
   private finish: (() => void) | undefined;
@@ -89,7 +92,7 @@ export class GatewaySpeechPlayback {
 
   async speak(
     client: GatewayBrowserClient,
-    text: string,
+    text: string | ReadableStream<SpeechSegment>,
     method: "tts.speak" | "talk.speak" = "tts.speak",
     isCurrent: () => boolean = () => true,
     maxTextLength = DEFAULT_MAX_TEXT_LENGTH,
@@ -97,31 +100,88 @@ export class GatewaySpeechPlayback {
     this.cancelPlayback();
     const audio = this.prepare(client);
     const generation = this.generation;
+    const controller = new AbortController();
     const cancelled = new Promise<undefined>((resolve) => {
-      this.cancel = () => resolve(undefined);
+      this.cancel = () => {
+        controller.abort();
+        resolve(undefined);
+      };
     });
+    const reader = typeof text === "string" ? undefined : text.getReader();
     try {
       const { chunkText } = await import("../../../packages/markdown-core/src/chunk-text.js");
-      for (const textChunk of chunkText(text, maxTextLength)) {
-        if (generation !== this.generation || !isCurrent()) {
-          return;
+      const chunks: Array<{ text: string; signal?: AbortSignal }> =
+        typeof text === "string"
+          ? chunkText(text, maxTextLength).map((chunk) => ({ text: chunk }))
+          : [];
+      const current = () => generation === this.generation && isCurrent();
+      const synthesizeNext = async () => {
+        while (current()) {
+          const chunk = chunks.shift();
+          if (chunk !== undefined) {
+            if (chunk.signal?.aborted) {
+              continue; // The producer withdrew this segment.
+            }
+            const params = { text: chunk.text };
+            const signal = chunk.signal
+              ? AbortSignal.any([controller.signal, chunk.signal])
+              : controller.signal;
+            try {
+              const result = await (reader
+                ? client.request<TtsSpeakResult>(method, params, { signal })
+                : client.request<TtsSpeakResult>(method, params));
+              return { result, signal: chunk.signal };
+            } catch (error) {
+              if (chunk.signal?.aborted && !controller.signal.aborted) {
+                continue;
+              }
+              throw error;
+            }
+          }
+          const next = reader && (await Promise.race([reader.read(), cancelled]));
+          if (!next || next.done) {
+            return undefined;
+          }
+          const segment = typeof next.value === "string" ? { text: next.value } : next.value;
+          for (const part of chunkText(segment.text, maxTextLength)) {
+            chunks.push({ text: part, signal: segment.signal });
+          }
         }
-        const response = await Promise.race([
-          client
-            .request<TtsSpeakResult>(method, { text: textChunk })
-            .then((result) => ({ result })),
-          cancelled,
-        ]);
+        return undefined;
+      };
+      let pending = synthesizeNext();
+      while (current()) {
+        const response = await Promise.race([pending, cancelled]);
         if (!response) {
           return;
         }
         await Promise.race([this.ready, cancelled]);
-        if (generation !== this.generation || !isCurrent()) {
+        if (!current()) {
           return;
         }
-        await this.play(audio, response.result);
+        if (response.signal?.aborted) {
+          // The producer withdrew this clip while it waited behind the one playing.
+          pending = synthesizeNext();
+          void pending.catch(() => undefined);
+          continue;
+        }
+        const playing = this.play(audio, response.result);
+        if (reader) {
+          pending = synthesizeNext();
+          // A prefetched result can reject before the current clip finishes.
+          void pending.catch(() => undefined);
+        }
+        await playing;
+        if (!reader && current()) {
+          pending = synthesizeNext();
+        }
       }
     } finally {
+      controller.abort();
+      if (reader) {
+        // Unblock an outstanding read without cancelling the producer's stream.
+        reader.releaseLock();
+      }
       if (generation === this.generation) {
         this.cancel = undefined;
       }

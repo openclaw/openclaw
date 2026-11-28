@@ -26,6 +26,7 @@ const tracks: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
 const audios: FakeAudio[] = [];
 const states: ChatRealtimeState[] = [];
 let speechStarted = createDeferred();
+const createSpeechObjectUrl = vi.fn(() => "blob:synthetic-speech");
 const sessionKey = "agent:local:main";
 const transcript = "Tell me something local";
 const config = (provider?: string) => ({
@@ -74,6 +75,7 @@ class FakeAudio extends EventTarget {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  createSpeechObjectUrl.mockClear();
   speechStarted = createDeferred();
   processors.length = tracks.length = audios.length = 0;
   vi.stubGlobal("localStorage", createStorageMock());
@@ -91,7 +93,7 @@ beforeEach(() => {
   vi.stubGlobal(
     "URL",
     class extends URL {
-      static override createObjectURL = vi.fn(() => "blob:synthetic-speech");
+      static override createObjectURL = createSpeechObjectUrl;
       static override revokeObjectURL = vi.fn();
     },
   );
@@ -285,9 +287,10 @@ it.each([
     h.answer("The local model answered.");
     await h.speech.promise;
     await speechStarted.promise;
-    expect(h.request).toHaveBeenCalledWith(provider ? "talk.speak" : "tts.speak", {
-      text: "The local model answered.",
-    });
+    expect(h.request.mock.calls.map(([method, params]) => [method, params])).toContainEqual([
+      provider ? "talk.speak" : "tts.speak",
+      { text: "The local model answered." },
+    ]);
     expect(audios).toHaveLength(1);
     expect(tracks).toHaveLength(1);
     expectDefined(audios[0], "speech playback").dispatchEvent(new Event("ended"));
@@ -296,6 +299,147 @@ it.each([
     await h.state.toggleRealtimeTalk();
   },
 );
+
+it("withdraws prefetched speech the final reply corrects", async () => {
+  const h = harness();
+  await h.state.toggleRealtimeTalk();
+  const sent = observeSend(h);
+  h.utterance();
+  await sent;
+  h.emit("chat", {
+    runId: h.getRunId(),
+    state: "delta",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "Opening sentence. The answer is 41. Working" }],
+    },
+  });
+  await speechStarted.promise;
+  h.answer("Opening sentence. The answer is 42. Here is why.");
+  await vi.advanceTimersByTimeAsync(0);
+  const audio = expectDefined(audios[0], "speech playback");
+  for (let i = 0; i < 3; i++) {
+    audio.dispatchEvent(new Event("ended"));
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  expect(
+    h.request.mock.calls.filter(([method]) => method === "tts.speak").map(([, params]) => params),
+  ).toEqual([
+    { text: "Opening sentence." },
+    { text: "The answer is 41." },
+    { text: "The answer is 42." },
+    { text: "Here is why." },
+  ]);
+  // The prefetched "41" clip was requested but never played: three clips, not four.
+  expect(audio.play).toHaveBeenCalledTimes(4); // unlock clip + three spoken clips
+  await h.nextCapture.promise;
+});
+
+it("keeps a fenced code block in one speech request", async () => {
+  const h = harness();
+  await h.state.toggleRealtimeTalk();
+  const sent = observeSend(h);
+  h.utterance();
+  await sent;
+  const fence = '```js\nconsole.log("Hello.");\nconsole.log("World.");\n```';
+  h.emit("chat", {
+    runId: h.getRunId(),
+    state: "delta",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: `Here is the code.\n\n${fence}\n\nThat prints` }],
+    },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  const spoken = () =>
+    h.request.mock.calls.filter(([method]) => method === "tts.speak").map(([, params]) => params);
+  // Playback holds one clip ahead: the opening sentence and the whole code block.
+  expect(spoken()).toEqual([{ text: "Here is the code." }, { text: fence }]);
+  await speechStarted.promise;
+  h.answer(`Here is the code.\n\n${fence}\n\nThat prints both lines.`);
+  await vi.advanceTimersByTimeAsync(0);
+  const audio = expectDefined(audios[0], "speech playback");
+  for (let i = 0; i < 3; i++) {
+    audio.dispatchEvent(new Event("ended"));
+    await vi.advanceTimersByTimeAsync(0);
+  }
+  expect(spoken()).toEqual([
+    { text: "Here is the code." },
+    { text: fence },
+    { text: "That prints both lines." },
+  ]);
+  await h.nextCapture.promise;
+});
+
+it("starts speaking before the final chat event and prefetches one clip", async () => {
+  const h = harness();
+  await h.state.toggleRealtimeTalk();
+  const sent = observeSend(h);
+  h.utterance();
+  await sent;
+  const runId = h.getRunId();
+  h.emit("chat", {
+    runId,
+    state: "delta",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "First sentence. Second sentence. Third" }],
+    },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  const spoken = () =>
+    h.request.mock.calls.filter(([method]) => method === "tts.speak").map(([, params]) => params);
+  expect(spoken()).toEqual([{ text: "First sentence." }, { text: "Second sentence." }]);
+  await speechStarted.promise;
+  h.answer("First sentence. Second sentence. Third sentence.");
+  await vi.advanceTimersByTimeAsync(0);
+  expect(spoken()).toHaveLength(2);
+  const audio = expectDefined(audios[0], "speech playback");
+  audio.dispatchEvent(new Event("ended"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(spoken()).toEqual([
+    { text: "First sentence." },
+    { text: "Second sentence." },
+    { text: "Third sentence." },
+  ]);
+  expect(tracks).toHaveLength(1);
+  audio.dispatchEvent(new Event("ended"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(tracks).toHaveLength(1);
+  audio.dispatchEvent(new Event("ended"));
+  await h.nextCapture.promise;
+});
+
+it("Stop aborts the pending split Talk speech request and discards late audio", async () => {
+  const h = harness();
+  const release = createDeferred();
+  h.intercept("tts.speak", async (next) => {
+    await release.promise;
+    return next();
+  });
+  await h.state.toggleRealtimeTalk();
+  const sent = observeSend(h);
+  h.utterance();
+  await sent;
+  h.emit("chat", {
+    runId: h.getRunId(),
+    state: "delta",
+    message: { role: "assistant", content: [{ type: "text", text: "First sentence. Second" }] },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  const request = expectDefined(
+    h.request.mock.calls.find(([method]) => method === "tts.speak"),
+    "pending speech request",
+  );
+  const signal = expectDefined(request[2]?.signal, "speech cancellation signal");
+  expect(signal.aborted).toBe(false);
+  await h.state.toggleRealtimeTalk();
+  expect(signal.aborted).toBe(true);
+  release.resolve();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(createSpeechObjectUrl).not.toHaveBeenCalled();
+  expect(tracks).toHaveLength(1);
+});
 
 it("stopping during the model response aborts the owned run and ignores late output", async () => {
   const h = harness();
@@ -429,7 +573,10 @@ it.each(["started", "text before", "empty before", "text after"])(
       await speechStarted.promise;
       expect(h.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
     }
-    expect(h.request).toHaveBeenCalledWith("tts.speak", { text: "Already answered." });
+    expect(h.request.mock.calls.map(([method, params]) => [method, params])).toContainEqual([
+      "tts.speak",
+      { text: "Already answered." },
+    ]);
   },
 );
 
