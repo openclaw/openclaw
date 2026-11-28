@@ -23,7 +23,7 @@ import {
 type Delivery = Parameters<typeof enqueue>[0];
 function agentTurn(
   messageId: string,
-  overrides: Partial<Extract<Delivery, { kind: "agentTurn" }>> = {},
+  overrides: Partial<Extract<Delivery, { kind: "agentTurn" }>>,
 ): Extract<Delivery, { kind: "agentTurn" }> {
   return {
     kind: "agentTurn",
@@ -33,7 +33,7 @@ function agentTurn(
     ...overrides,
   };
 }
-function systemEvent(idempotencyKey: string, permanent = false): Delivery {
+function systemEvent(idempotencyKey: string, permanent: boolean): Delivery {
   return {
     kind: "systemEvent",
     sessionKey: "agent:main:main",
