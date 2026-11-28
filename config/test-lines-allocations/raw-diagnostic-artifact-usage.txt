@@ -1,0 +1,2 @@
+# Cover the shipped raw-diagnostic request path for the JSONL usage estimate: retained window vs superseded archive, and per-call snapshot precedence.
+87
