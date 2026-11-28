@@ -535,6 +535,9 @@ struct RootSearchScreen: View {
             }
             .padding(.horizontal, 4)
         }
+        .defaultScrollAnchor(.center, for: .alignment)
+        .scrollEdgeEffectStyle(.soft, for: .horizontal)
+        .clipShape(Capsule())
         .glassEffect(.regular, in: Capsule())
         .padding(.horizontal, 10)
         .padding(.bottom, 4)
