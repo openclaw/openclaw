@@ -41,7 +41,7 @@ import {
 import { consumeTurn } from "./src/events.js";
 import { MusePool, openMuseSession } from "./src/runtime.js";
 import { museTurnUsage } from "./src/usage.js";
-import { MuseCatalogReader } from "./src/verify-setup.js";
+import { CATALOG_TIMEOUT_MS, MuseCatalogReader } from "./src/verify-setup.js";
 
 type MuseInputPart = Parameters<Session["sendUserTurn"]>[0]["input"][number];
 
@@ -197,7 +197,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
           ? "allowAll"
           : "promptUnmatched";
       params.hostCapabilities.prepareContinuationRetryCount?.({ cwd: workspace });
-      const lease = await pool.acquire(workspace, apiKey, readOnly);
+      const lease = await pool.acquire(workspace, apiKey, readOnly, params.abortSignal);
       const { runtime } = lease;
       const compatibility = JSON.stringify([
         workspace,
@@ -648,7 +648,7 @@ export function createMuseAgentHarness(options: MuseHarnessOptions): AgentHarnes
       catalogs.delete(params.agentDir);
       const request = catalogReader.read({
         config: params.config,
-        signal: AbortSignal.any([catalogAbort.signal, AbortSignal.timeout(30_000)]),
+        signal: AbortSignal.any([catalogAbort.signal, AbortSignal.timeout(CATALOG_TIMEOUT_MS)]),
         assertCurrent: () => {
           if (disposed) {
             throw new Error("Muse harness has been disposed.");

@@ -1,7 +1,10 @@
 import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
-import { MusePool, type MuseRuntime } from "./runtime.js";
+import { MUSE_STARTUP_TIMEOUT_MS, MusePool, type MuseRuntime } from "./runtime.js";
+
+// A catalog read may start a host, so its deadline must outlast host startup.
+export const CATALOG_TIMEOUT_MS = MUSE_STARTUP_TIMEOUT_MS + 30_000;
 
 type AgentHarnessSetupVerificationContext = Parameters<NonNullable<AgentHarness["verifySetup"]>>[0];
 
