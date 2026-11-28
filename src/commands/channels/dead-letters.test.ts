@@ -68,6 +68,35 @@ describe("channel dead-letter commands", () => {
     });
   });
 
+  it.each([
+    { channel: " Telegram ", channelId: "telegram" },
+    { channel: "IMSG", channelId: "imessage" },
+    { channel: "teams", channelId: "msteams" },
+    { channel: "custom-Ingress", channelId: "custom-Ingress" },
+  ])(
+    "resolves channel selector $channel for inspection and replay",
+    async ({ channel, channelId }) => {
+      await withFailedEvent({ channelId, accountId: "ops" }, async (queue) => {
+        await channelsDeadLettersListCommand({ channel, account: "ops", json: true });
+        expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith({
+          channelId,
+          accountId: "ops",
+          deadLetters: [expect.objectContaining({ id: "event-1", reason: "handler-error" })],
+        });
+
+        await channelsDeadLettersResubmitCommand("event-1", {
+          channel,
+          account: "ops",
+          json: true,
+        });
+        expect(await queue.claimNext({ ownerId: "replay-worker" })).toMatchObject({
+          id: "event-1",
+          payload: { text: "recover me" },
+        });
+      });
+    },
+  );
+
   it.each(
     [
       { channel: "telegram", account: "" },

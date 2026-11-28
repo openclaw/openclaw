@@ -1,6 +1,7 @@
 import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
+import { normalizeChatChannelId } from "../../channels/registry.js";
 import { throwExpectedCliError } from "../../cli/expected-cli-error.js";
 import { parseLogsPositiveInt } from "../../cli/logs-cli.options.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.js";
@@ -23,7 +24,7 @@ function resolveScope(options: ChannelsDeadLettersOptions) {
   if (!accountId) {
     throwExpectedCliError("--account must not be blank");
   }
-  return { channelId, accountId };
+  return { channelId: normalizeChatChannelId(channelId) ?? channelId, accountId };
 }
 
 export async function channelsDeadLettersListCommand(
