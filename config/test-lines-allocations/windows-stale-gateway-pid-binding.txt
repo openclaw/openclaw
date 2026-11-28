@@ -1,0 +1,4 @@
+# Production-cleanup Windows PID identity regression: four controlled cases.
+# Net new test lines against 36207738b52899684138b74ccaf62a6b22326c53: 90.
+# Existing stable/foreign/lease/protected controls are reused; no shared scalar change.
+90
