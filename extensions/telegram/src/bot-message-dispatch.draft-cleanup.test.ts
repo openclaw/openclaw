@@ -1,6 +1,6 @@
-import type { TelegramDispatchTurn as Turn } from "./bot-message-dispatch.types.js";
-import { cleanupDrafts, ingestDraftLaneSegments } from "./bot-message-dispatch-draft.js";
 import { describe, expect, it, vi } from "vitest";
+import { cleanupDrafts, ingestDraftLaneSegments } from "./bot-message-dispatch-draft.js";
+import type { TelegramDispatchTurn as Turn } from "./bot-message-dispatch.types.js";
 
 type RetainedPage = { messageId: number; text: string };
 
@@ -87,7 +87,9 @@ describe("cleanupDrafts suppressed-final reclamation", () => {
     });
     await cleanupDrafts(turn, false);
     expect(deleteMessage).not.toHaveBeenCalled();
-    expect(turn.answerLane.retainedPromptContextPages).toEqual([{ messageId: 3364, text: "delivered page" }]);
+    expect(turn.answerLane.retainedPromptContextPages).toEqual([
+      { messageId: 3364, text: "delivered page" },
+    ]);
     expect(cleanup).toHaveBeenCalled();
   });
 
