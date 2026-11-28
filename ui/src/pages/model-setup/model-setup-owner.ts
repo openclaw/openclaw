@@ -573,6 +573,7 @@ export function createModelSetup(
           void detect();
         }
       },
+      onVerify: (): void => void firstRun.verify(),
       onActivateCandidate: (candidate: SystemAgentSetupDetectResult["candidates"][number]): void =>
         void activate(
           candidateActivation(candidate),

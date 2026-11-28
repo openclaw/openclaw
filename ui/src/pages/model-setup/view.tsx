@@ -435,32 +435,43 @@ function ActivationNotices(props: ModelSetupViewProps) {
 /** First-run additions above the Models catalog; nothing renders until there is something to act on. */
 function FirstRunSummary(props: ModelSetupViewProps) {
   const result = () => (props.page.phase === "ready" ? props.page.result : undefined);
-  // After "Stay in settings", a verified model still offers the onboarding handoff.
-  const verifiedModel = () => {
-    const ready = result();
-    return ready?.setupComplete && props.activation.phase !== "success"
-      ? ready.configuredModel
-      : undefined;
-  };
+  // A configured model is verified on request; once it answers, first run hands off to onboarding.
+  const configuredModel = () =>
+    props.activation.phase !== "success" ? result()?.configuredModel : undefined;
   return (
     <>
       {/* The open discovery dialog shows these notices beside the action that caused them. */}
       <Show when={!props.discoveryOpen}>
         <ActivationNotices {...props} />
       </Show>
-      <Show when={verifiedModel()}>
+      <Show when={configuredModel()}>
         {(model) => (
           <SettingsSection title={t("modelSetup.success.configuredModel")}>
             <SettingsRow
               title={model()}
               control={
-                <button
-                  type="button"
-                  class="btn btn--sm primary"
-                  onClick={() => props.onOpenChat()}
-                >
-                  {t("modelSetup.success.continueSetup")}
-                </button>
+                result()?.setupComplete ? (
+                  <button
+                    type="button"
+                    class="btn btn--sm primary"
+                    onClick={() => props.onOpenChat()}
+                  >
+                    {t("modelSetup.success.continueSetup")}
+                  </button>
+                ) : props.canVerify ? (
+                  <button
+                    type="button"
+                    class="btn btn--sm"
+                    disabled={props.actionsDisabled || props.detecting === true}
+                    onClick={() => props.onVerify()}
+                  >
+                    {t(
+                      props.verify.phase === "failed"
+                        ? "modelSetup.verify.retry"
+                        : "modelSetup.verify.button",
+                    )}
+                  </button>
+                ) : undefined
               }
             />
           </SettingsSection>

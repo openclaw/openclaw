@@ -749,4 +749,21 @@ describe("renderModelSetup", () => {
     ).toHaveLength(1);
     expect(freshSuccess.textContent).not.toContain("Open Chat");
   });
+
+  it("lets first run verify an already configured model before continuing", () => {
+    const onVerify = vi.fn();
+    const container = mount({
+      ...firstRunProps(),
+      page: { phase: "ready", result: { ...ready, setupComplete: false } },
+      onVerify,
+    });
+    const buttons = [...container.querySelectorAll("button")].map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(buttons).not.toContain("Continue setup");
+    [...container.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "Check model")!
+      .click();
+    expect(onVerify).toHaveBeenCalledOnce();
+  });
 });

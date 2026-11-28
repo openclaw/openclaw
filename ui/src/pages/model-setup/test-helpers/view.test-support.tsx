@@ -75,6 +75,7 @@ export function props(overrides: Partial<ViewProps> = {}): ViewProps {
     discoveryOpen: true,
     iconUrls: {},
     onDetect: vi.fn(),
+    onVerify: vi.fn(),
     onActivateCandidate: vi.fn(),
     onStartAuth: vi.fn(),
     onStartPrepare: vi.fn(),

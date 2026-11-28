@@ -25,6 +25,8 @@ const enModelSetup = {
       useCurrent: "Verify & use selected model",
     },
     verify: {
+      button: "Check model",
+      retry: "Try again",
       checkingButton: "Checking…",
       providerUnavailable: "{provider} isn’t responding.",
     },
