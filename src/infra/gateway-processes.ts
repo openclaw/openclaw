@@ -5,7 +5,7 @@ import { readGatewayOwnerLease, readGatewayOwnerLeaseAsync } from "./gateway-own
 import type { GatewayOwnerLeaseIdentity } from "./gateway-owner-lease.types.js";
 import { classifyOpenClawArgv } from "./gateway-process-argv.js";
 import { findGatewayPidsOnPortSync as findUnixGatewayPidsOnPortSync } from "./restart-stale-pids.js";
-import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker-context.js";
 import { readWindowsListeningPidsOnPortSync } from "./windows-port-pids.js";
 
 // Verify argv or current recorded ownership before signaling or reporting

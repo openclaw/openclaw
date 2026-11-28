@@ -30,11 +30,13 @@ import type {
   WorkboardCardStatsAggregate,
   WorkboardKeyedStore,
   WorkboardOwnerClaimResult,
+  WorkboardOwnerSlot,
   WorkboardPersistence,
   WorkboardSubscriptionStore,
 } from "./persistence-types.js";
 import {
   blobToBase64,
+  findCardIdsByPrefix,
   jsonValue,
   loadCardChildRows,
   numberValue,
@@ -117,8 +119,7 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
     key: string,
     value: PersistedWorkboardCard,
     expectedUpdatedAt: number,
-    ownerId: string,
-    now: number,
+    { ownerId, now, limit }: WorkboardOwnerSlot,
   ): WorkboardOwnerClaimResult {
     return runSqliteImmediateTransactionSync(this.db, () => {
       const query = getNodeSqliteKysely<WorkboardCardDatabase>(this.db);
@@ -147,6 +148,7 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
             eb.and([eb("claim_json", "is not", null), eb("status", "!=", "done")]),
           ]),
         );
+      let ownerActive = 0;
       for (const row of iterateSqliteQuerySync(this.db, candidates)) {
         const card = {
           // SAFETY: insertCard persists WorkboardCard.status; this keeps readCard's required-string boundary.
@@ -161,7 +163,11 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
               }
             : undefined,
         };
-        if (workboardCardConsumesOwnerSlot(card, now) && workboardCardSlotOwner(card) === ownerId) {
+        if (
+          workboardCardConsumesOwnerSlot(card, now) &&
+          workboardCardSlotOwner(card) === ownerId &&
+          ++ownerActive >= limit
+        ) {
           return "owner_busy";
         }
       }
@@ -342,6 +348,10 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
       key: requiredString(row, "id"),
       value: { version: 1, card: readCard(this.db, row, preloaded) },
     }));
+  }
+
+  findCardIdsByPrefix(prefix: string): string[] {
+    return findCardIdsByPrefix(this.db, prefix);
   }
 
   listCardStatuses(ids: readonly string[]): Array<{ id: string; status: string }> {

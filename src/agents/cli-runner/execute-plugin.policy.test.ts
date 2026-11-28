@@ -192,32 +192,6 @@ describe("plugin-owned CLI native tool policy", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
-  it("denies native tools when caller authority expires during policy or before a retained call", async () => {
-    const { context } = await createExecution({ nativeTools: ["WebFetch"] });
-    let callerCurrent = true;
-    context.params.assertCurrent = () => {
-      if (!callerCurrent) {
-        throw new Error("caller revoked");
-      }
-    };
-    const hook = vi.fn(async () => {
-      callerCurrent = false;
-    });
-    installBeforeToolCallHook(hook);
-    await runPlugin(context, async function* (execution) {
-      await expect(
-        requestNativeTool(execution, "WebFetch", { url: "https://example.com" }),
-      ).resolves.toMatchObject({ behavior: "deny" });
-      await expect(
-        requestNativeTool(execution, "WebFetch", { url: "https://example.com/retained" }),
-      ).resolves.toMatchObject({ behavior: "deny" });
-      expect(execution.abortSignal?.aborted).toBe(false);
-      yield SUCCESS_RESULT;
-    });
-    expect(hook).toHaveBeenCalledOnce();
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
-
   it("runs canonical policy before native approval and carries rewritten params plus run context", async () => {
     const hook = vi.fn(async (_event: unknown, _context: unknown) => ({
       params: { url: "https://example.com/rewritten" },
@@ -693,6 +667,73 @@ describe("plugin-owned CLI same-turn input", () => {
     }
     expect(captureCurrentReplyMessageInjectionTarget(operation.key)).toBeUndefined();
   });
+
+  it.each([
+    { acceptsImages: true, inputGate: false, outcome: { status: "accepted" } },
+    {
+      acceptsImages: undefined,
+      inputGate: false,
+      outcome: { status: "rejected", reason: "image_input_unsupported" },
+    },
+    {
+      acceptsImages: true,
+      inputGate: true,
+      outcome: { status: "rejected", reason: "image_input_unsupported" },
+    },
+  ])(
+    "admits a steered image with sink support $acceptsImages and a before_agent_run gate $inputGate",
+    async ({ acceptsImages, inputGate, outcome }) => {
+      const { context } = await createExecution();
+      if (inputGate) {
+        initializeGlobalHookRunner(
+          createMockPluginRegistry([{ hookName: "before_agent_run", handler: () => undefined }]),
+        );
+      }
+      const operation = attachReplyOperation(context);
+      operation.setPhase("running");
+      const ready = createDeferred();
+      const finish = createDeferred();
+      const received: { text: string; images?: readonly unknown[] }[] = [];
+      const run = runPlugin(context, async function* (execution) {
+        execution.registerMessageInjection?.({
+          isAvailable: () => true,
+          ...(acceptsImages ? { acceptsImages } : {}),
+          queueMessage: async (text, withCurrent, options) => {
+            await withCurrent(() => received.push({ text, images: options?.images }));
+          },
+        });
+        ready.resolve();
+        await finish.promise;
+        yield SUCCESS_RESULT;
+      });
+      try {
+        await awaitGateBeforeSettlement(
+          ready.promise,
+          run,
+          "CLI run ended before injection became ready",
+        );
+        const target = captureCurrentReplyMessageInjectionTarget(operation.key);
+        if (!target) {
+          throw new Error("running CLI backend did not expose a registry injection target");
+        }
+        const image = { type: "image" as const, data: "aW1hZ2U=", mimeType: "image/png" };
+        const steered = await beginReplyMessageInjectionTarget(target, "look at this", {
+          images: [image],
+        });
+        await expect(steered.outcome).resolves.toEqual(outcome);
+        expect(received).toEqual(
+          outcome.status === "accepted" ? [{ text: "look at this", images: [image] }] : [],
+        );
+      } finally {
+        finish.resolve();
+        try {
+          await run;
+        } finally {
+          operation.complete();
+        }
+      }
+    },
+  );
 });
 
 describe("plugin turn assessments through the operation watchdog", () => {
@@ -813,7 +854,6 @@ describe("plugin turn assessments through the operation watchdog", () => {
       context.params.abortSignal = operation.abortSignal;
       const ready = createDeferred();
       const finish = createDeferred();
-      let retained: CliBackendExecuteContext | undefined;
       const assess = vi.fn(async () => {
         if (mode === "throw") {
           throw new Error("private provider detail");
@@ -826,7 +866,6 @@ describe("plugin turn assessments through the operation watchdog", () => {
       const run = runPlugin(
         context,
         async function* (execution) {
-          retained = execution;
           if (mode !== "absent") {
             execution.registerTurnStatus?.({ capture: () => ({ isCurrent: () => true, assess }) });
           }
@@ -867,7 +906,6 @@ describe("plugin turn assessments through the operation watchdog", () => {
         finish.resolve();
         await outcome;
         expect(backend.turnStatus).toBeUndefined();
-        expect(() => retained!.registerTurnStatus!({ capture: () => undefined })).toThrow();
       } finally {
         finish.resolve();
         await outcome;

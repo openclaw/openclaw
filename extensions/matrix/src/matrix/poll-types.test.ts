@@ -11,10 +11,7 @@ const parsedPoll = {
   question: "Lunch?",
   kind: "m.poll.disclosed" as const,
   maxSelections: 1,
-  answers: [
-    { id: "a1", text: "Pizza" },
-    { id: "a2", text: "Sushi" },
-  ],
+  answers: ["Pizza", "Sushi"].map((text, index) => ({ id: `a${index + 1}`, text })),
 };
 
 const vote = (
@@ -64,6 +61,7 @@ it("keeps well-formed answers when other entries are malformed", () => {
       answers: [
         null,
         { id: "a1", "m.text": "Yes" },
+        { id: "", "m.text": "dropped" },
         { id: 42, "m.text": "dropped" },
         { id: "bad-text", "m.text": 42 },
       ],
@@ -80,18 +78,23 @@ it("buildPollStartContent: preserves the requested multiselect cap instead of wi
     maxSelections: 2,
   });
 
-  expect(content["m.poll.start"]?.max_selections).toBe(2);
-  expect(content["m.poll.start"]?.kind).toBe("m.poll.undisclosed");
+  expect(content["org.matrix.msc3381.poll.start"]).toMatchObject({
+    max_selections: 2,
+    kind: "org.matrix.msc3381.poll.undisclosed",
+    question: { "org.matrix.msc1767.text": "Lunch?" },
+    answers: [
+      { id: "answer1", "org.matrix.msc1767.text": "Pizza" },
+      { id: "answer2", "org.matrix.msc1767.text": "Sushi" },
+      { id: "answer3", "org.matrix.msc1767.text": "Tacos" },
+    ],
+  });
   expect(content["m.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
   expect(content["org.matrix.msc1767.text"]).toBe("Lunch?\n1. Pizza\n2. Sushi\n3. Tacos");
 });
 
 it("poll relation parsing: extracts poll relation targets", () => {
-  expect(
-    resolvePollReferenceEventId({
-      "m.relates_to": { rel_type: "m.reference", event_id: "$poll" },
-    }),
-  ).toBe("$poll");
+  const relation = { rel_type: "m.reference", event_id: "$poll" };
+  expect(resolvePollReferenceEventId({ "m.relates_to": relation })).toBe("$poll");
 });
 
 it("counts only the latest valid response from each sender", () => {
@@ -108,6 +111,44 @@ it("counts only the latest valid response from each sender", () => {
 
   expect(summary?.entries).toEqual(parsedPoll.answers.map((answer) => ({ ...answer, votes: 1 })));
   expect(summary?.totalVotes).toBe(2);
+});
+
+it.each([
+  { name: "an opaque ID with no trimmed match", second: "b ", latest: ["b "] },
+  {
+    name: "canonical IDs with a one-selection cap",
+    second: "answer2",
+    latest: ["answer2", "answer1"],
+  },
+])("counts one voter's latest choice for $name", ({ second, latest }) => {
+  const summary = buildPollResultsSummary({
+    sender: "@alice:example.org",
+    poll: {
+      ...parsedPoll,
+      answers: [
+        { id: "answer1", text: "Pizza" },
+        { id: second, text: "Sushi" },
+      ],
+    },
+    relationEvents: [vote("@bob:example.org", 2, latest), vote("@bob:example.org", 1, ["answer1"])],
+  });
+
+  expect(summary.entries.map((answer) => answer.votes)).toEqual([0, 1]);
+  expect(summary.totalVotes).toBe(1);
+});
+
+it("validates the whole ballot before capping and deduplicating choices", () => {
+  const summary = buildPollResultsSummary({
+    sender: "@alice:example.org",
+    poll: { ...parsedPoll, maxSelections: 2 },
+    relationEvents: [
+      vote("@bob:example.org", 1, ["a1", "a1", "a2"]),
+      vote("@carol:example.org", 2, ["a2", "a2", "missing"]),
+    ],
+  });
+
+  expect(summary.entries.map((entry) => entry.votes)).toEqual([1, 0]);
+  expect(summary.totalVotes).toBe(1);
 });
 
 it.each([
@@ -142,17 +183,13 @@ it.each([
 });
 
 it("formats disclosed poll results with vote totals", () => {
-  const text = formatPollResultsAsText({
-    question: "Lunch?",
-    kind: "m.poll.disclosed",
-    entries: [
-      { id: "a1", text: "Pizza", votes: 1 },
-      { id: "a2", text: "Sushi", votes: 0 },
-    ],
+  const formatted = formatPollResultsAsText({
+    ...parsedPoll,
+    entries: parsedPoll.answers.map(({ id, text }, index) => ({ id, text, votes: 1 - index })),
     totalVotes: 1,
     closed: false,
   });
 
-  expect(text).toContain("1. Pizza (1 vote)");
-  expect(text).toContain("Total voters: 1");
+  expect(formatted).toContain("1. Pizza (1 vote)");
+  expect(formatted).toContain("Total voters: 1");
 });

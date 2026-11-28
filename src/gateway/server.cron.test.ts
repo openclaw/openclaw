@@ -8,7 +8,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi 
 import type WebSocket from "ws";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import * as sessionEventDelivery from "../auto-reply/reply/session-event-delivery.js";
+import * as routedReplies from "../auto-reply/reply/route-reply.js";
 import { resetConfigRuntimeState } from "../config/config.js";
 import type * as CronDelivery from "../cron/delivery.js";
 import { readCronRunRecordsForTests } from "../cron/run-history.test-support.js";
@@ -32,6 +32,7 @@ import {
   expectEnqueuedRunPayload,
   installCronSystemEventConsumer,
   makeCronJob,
+  runCronJobAndWaitForFailureAlert,
   runCronJobAndWaitForFinished,
   waitForCronEvent,
 } from "./server-cron.events.test-support.js";
@@ -874,39 +875,14 @@ describe("gateway server cron", () => {
     expect(JSON.stringify(directCall.body)).not.toContain("ABCD-1234");
   }, 45_000);
 
-  test("persists settled failure-alert outcomes for cron get and list", async () => {
+  test("persists settled failure-alert outcomes for cron get and list", async ({ signal }) => {
     // Delivery persistence is independent of cold fallback-session creation and runtime preparation.
     testState.sessionStorePath = path.join(caseDir, "sessions.json");
     await writeSessionStore({
       entries: { main: { sessionId: "cron-failure-alert-session", updatedAt: Date.now() } },
     });
-    const { request, add, run } = await startCronClient();
+    const { request, add, ws } = await startCronClient();
     await prepareGatewayReplyRuntimeForTest({ force: true });
-
-    const expectOutcome = async (jobId: string, expected: Record<string, unknown>) => {
-      await vi.waitFor(async () => {
-        const getResult = await request("cron.get", { id: jobId });
-        expect(getResult.payload).toMatchObject(expected);
-        for (const compact of [false, true]) {
-          const listResult = await request("cron.list", {
-            compact,
-            includeDeliveryPreviews: false,
-          });
-          const listed = rows(listResult, "jobs").find((job) => job.id === jobId);
-          expect(listed).toMatchObject(expected);
-        }
-      });
-    };
-    const runFailureAlert = async (name: string, failureAlert: Record<string, unknown>) => {
-      cronIsolatedRun.mockResolvedValueOnce({ status: "error", error: "job failed" });
-      const jobId = await add(name, {
-        sessionTarget: "isolated",
-        delivery: { mode: "none" },
-        failureAlert: { after: 1, ...failureAlert },
-      });
-      await run(jobId);
-      return jobId;
-    };
 
     for (const outcome of ["delivered", "failed", "unreached"] as const) {
       const error = outcome === "failed" ? "alert transport rejected" : "adapter_returned_no_send";
@@ -918,20 +894,37 @@ describe("gateway server cron", () => {
           return { status: "suppressed", reason: "adapter_returned_no_send" };
         });
       }
-      const jobId = await runFailureAlert(
-        `${outcome} failure alert`,
-        outcome === "unreached"
-          ? { mode: "announce", channel: "telegram", to: "123" }
-          : { mode: "webhook", to: `https://example.invalid/${outcome}-failure-alert` },
-      );
-      await expectOutcome(jobId, {
+      cronIsolatedRun.mockResolvedValueOnce({ status: "error", error: "job failed" });
+      const jobId = await add(`${outcome} failure alert`, {
+        sessionTarget: "isolated",
+        delivery: { mode: "none" },
+        failureAlert:
+          outcome === "unreached"
+            ? { after: 1, mode: "announce", channel: "telegram", to: "123" }
+            : { after: 1, mode: "webhook", to: `https://example.invalid/${outcome}-failure-alert` },
+      });
+      await runCronJobAndWaitForFailureAlert(ws, jobId, {
+        fallback: outcome !== "delivered",
+        signal,
+      });
+      const expected = {
         lastFailureNotificationDelivered: outcome === "delivered",
         lastFailureNotificationDeliveryStatus:
           outcome === "delivered" ? "delivered" : "not-delivered",
         ...(outcome === "delivered"
           ? {}
           : { lastFailureNotificationDeliveryError: expect.stringContaining(error) }),
-      });
+      };
+      const getResult = await request("cron.get", { id: jobId });
+      expect(getResult.payload).toMatchObject(expected);
+      for (const compact of [false, true]) {
+        const listResult = await request("cron.list", {
+          compact,
+          includeDeliveryPreviews: false,
+        });
+        const listed = rows(listResult, "jobs").find((job) => job.id === jobId);
+        expect(listed).toMatchObject(expected);
+      }
     }
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   }, 45_000);
@@ -991,7 +984,7 @@ describe("gateway server cron", () => {
   registerCronRepairCases(() => caseDir, startCronClient, sendCronAnnouncePayloadStrictMock);
 
   test.for(["success", "error"] as const)(
-    "keeps owner-topic repair pending through retries until the agent turn settles with %s",
+    "sends an owner-topic failure notice once while the same failure repeats (turn %s)",
     { timeout: 45_000 },
     async (outcome, { signal }) => {
       testState.cronEnabled = true;
@@ -1036,7 +1029,7 @@ describe("gateway server cron", () => {
       const repairTurnStarted = createDeferred();
       const finishRepairTurn = createDeferred();
       // A repair's runtime error stays out of the owner chat; the next alert escalates.
-      const chatDelivery = vi.spyOn(sessionEventDelivery, "prepareSessionEventDelivery");
+      const chatDelivery = vi.spyOn(routedReplies, "routePreparedReply");
       const repairTurn = installCronRepairTurn(async () => {
         repairTurnStarted.resolve();
         await finishRepairTurn.promise;
@@ -1073,13 +1066,12 @@ describe("gateway server cron", () => {
           BodyForAgent: expect.stringContaining("Automation repair request from the scheduler"),
         });
 
-        // Dispatch acceptance is not repair completion: a retry while the turn is held
-        // cannot verify its changes or consume the incident's one escalation.
+        // The same failure while the owner turn works is not raised again.
         await run(jobId);
         const pending = await request("cron.get", { id: jobId });
         expect(pending.ok).toBe(true);
         expect(pending.payload).toMatchObject({
-          state: { lastFailureNotificationDeliveryStatus: "not-requested" },
+          state: { consecutiveErrors: 3, lastFailureNotificationDeliveryStatus: "not-requested" },
         });
         expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
         expect(gatewayReplyMock).toHaveBeenCalledOnce();
@@ -1087,18 +1079,12 @@ describe("gateway server cron", () => {
       } finally {
         finishRepairTurn.resolve();
       }
-      await vi.waitFor(async () => {
-        const stored = await loadCronStore(path.join(caseDir, "cron", "jobs.json"));
-        const repair = stored.jobs.find((job) => job.id === jobId)?.state.failureAlertIncident
-          ?.repair;
-        expect(repair?.settledAtMs).toEqual(expect.any(Number));
-      });
       expect(chatDelivery).not.toHaveBeenCalled();
       chatDelivery.mockRestore();
+      // The owner turn was the user's notice: the same failure stays quiet until its daily reminder.
       await run(jobId);
-      await vi.waitFor(() => expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce());
-      await run(jobId);
-      expect(sendCronAnnouncePayloadStrictMock).toHaveBeenCalledOnce();
+      expect(sendCronAnnouncePayloadStrictMock).not.toHaveBeenCalled();
+      expect(gatewayReplyMock).toHaveBeenCalledOnce();
     },
   );
 });

@@ -5,8 +5,6 @@ import { githubTargetUrl } from "./targets.js";
 export function githubChangeMetadata(
   additions?: number,
   deletions?: number,
-  files?: number,
-  comments?: number,
 ): NonNullable<ControlUiLinkReaderPreview["metadata"]> {
   const metadata: NonNullable<ControlUiLinkReaderPreview["metadata"]> = [];
   if (additions !== undefined) {
@@ -14,12 +12,6 @@ export function githubChangeMetadata(
   }
   if (deletions !== undefined) {
     metadata.push({ label: "Deletions", value: "−" + deletions, tone: "negative" });
-  }
-  if (files !== undefined) {
-    metadata.push({ label: "Files", value: String(files) });
-  }
-  if (comments !== undefined) {
-    metadata.push({ label: "Comments", value: String(comments) });
   }
   return metadata;
 }

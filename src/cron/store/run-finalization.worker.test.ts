@@ -501,7 +501,7 @@ it("keeps checks beyond three queued in due order, off the run slots", async () 
     const fired = first.launches[1]!.runReceipt;
     const fire = () =>
       executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
-        type: "cron.settleConditionCheck",
+        type: "cron.reconcileRunSlot",
         input: { storeKey, jobId: fired.jobId, receiptId: fired.receiptId },
       });
     // A fired condition waits for a run slot, and frees its check for the earliest waiter; it
@@ -540,7 +540,7 @@ it("gives freed run slots to fired conditions and queued runs in due order", asy
     const watch = (await queue.read()).jobs.find((job) => job.id === "watch")!;
     const fire = () =>
       executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
-        type: "cron.settleConditionCheck",
+        type: "cron.reconcileRunSlot",
         input: { storeKey, jobId: watch.id, receiptId: watch.state.runningReceiptId! },
       });
     expect(await fire()).toMatchObject({ runSlot: false });

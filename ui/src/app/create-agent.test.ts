@@ -5,6 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import { locationForRoute, routePageSpec, type RouteId } from "../app-route-paths.ts";
+import { i18n } from "../i18n/index.ts";
 import { agentCreationRejection } from "../lib/agents/creation.test-support.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import {
@@ -193,6 +194,9 @@ describe("application agent creation", () => {
     const avatar = "data:image/webp;base64,Ym90";
     const { context, request, roster, settledNavigation } = await fixture();
 
+    const previousLocale = i18n.getRequestedLocale();
+    onTestFinished(() => i18n.setLocale(previousLocale));
+    await i18n.setLocale("pt-BR");
     await createApplicationAgent(context, { name: "Scout", avatar });
     await settledNavigation();
 
@@ -203,6 +207,7 @@ describe("application agent creation", () => {
       agentId: agent?.id,
       name: "Scout",
       onboarding: true,
+      locale: "pt-BR",
       avatar,
     });
   });

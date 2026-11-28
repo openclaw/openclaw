@@ -14,11 +14,10 @@ import {
   type NodePairingGeneration,
 } from "./device-pairing-identity.js";
 import { requestDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
+import { mergeDevicePairingRoles, normalizeDevicePairingRole } from "./device-pairing-roles.js";
 import {
   loadDevicePairingStateForMutation,
-  mergeDevicePairingRoles,
   mergeDevicePairingScopes,
-  normalizeDevicePairingRole,
   preserveDeviceRoleScopes,
   resolvePairingRequestExpiry,
   resolveRequestedDeviceRoles,

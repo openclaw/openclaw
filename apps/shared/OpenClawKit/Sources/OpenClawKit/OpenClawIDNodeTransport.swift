@@ -54,7 +54,7 @@ public protocol OpenClawIDNodeStream: Sendable {
     func stop(code: Int64) async
 }
 
-public enum OpenClawIDNodeTransportError: Error, Sendable, Equatable {
+public enum OpenClawIDNodeTransportError: LocalizedError, Sendable, Equatable {
     case malformedFrame
     case oversizedFrame
     case truncatedFrame
@@ -67,6 +67,25 @@ public enum OpenClawIDNodeTransportError: Error, Sendable, Equatable {
     case deadline
     case wrongRoute
     case nodeRoleRequired
+
+    public var errorDescription: String? {
+        switch self {
+        case .removed:
+            "This device no longer has access to the claw. Sign in to connect again."
+        case .closed:
+            "The connection to the claw closed. Reconnecting…"
+        case .deadline:
+            "The connection to the claw timed out. Check that it is online and try again."
+        case let .upgradeRejected(status):
+            "The claw declined the connection (HTTP \(status))."
+        case .webSocketClosed:
+            "The claw closed the connection. Try connecting again."
+        case .wrongRoute, .nodeRoleRequired:
+            "This connection cannot be used for the requested claw operation."
+        case .malformedFrame, .oversizedFrame, .truncatedFrame, .invalidHead, .unsupportedOpcode:
+            "The claw sent an invalid tunnel response. Try connecting again."
+        }
+    }
 }
 
 /// The platform adapter binds with Minimal, a single selected relay and this keep-alive.

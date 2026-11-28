@@ -127,6 +127,10 @@ categories:
 dependencies:
   manifests:
     - "**/*package.json"
+  release-manifests:
+    - "package.json"
+    - "packages/{ai,gateway-client,gateway-protocol}/package.json"
+    - "extensions/*/package.json"
   lockfiles:
     - "**/*package-lock.json"
     - "**/*pnpm-lock.yaml"

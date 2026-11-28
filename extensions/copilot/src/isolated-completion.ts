@@ -1,14 +1,19 @@
 import { resolve } from "node:path";
-import type { CopilotSession, SessionConfig } from "@github/copilot-sdk";
-import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { CopilotSession, MessageOptions, SessionConfig } from "@github/copilot-sdk";
+import type {
+  AgentHarness,
+  AgentHarnessSideQuestionRequest,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { tokenFingerprint } from "./auth-bridge.js";
 import { createCopilotByokProxy } from "./byok-proxy.js";
 import { buildAssistantMessage } from "./event-bridge-transcript.js";
+import { resolveCopilotSessionModel } from "./model-selection.js";
 import { createCopilotAbortError } from "./prompt-error.js";
 import { resolveCopilotProvider } from "./provider-bridge.js";
 import type { CopilotClientPool, PooledClient } from "./runtime.js";
 import { createCopilotIsolatedSessionRestrictions } from "./session-restrictions.js";
+import { normalizeCopilotUsage } from "./usage-bridge.js";
 
 type AgentHarnessIsolatedCompletion = NonNullable<AgentHarness["runIsolatedCompletionV2"]>;
 type AgentHarnessIsolatedCompletionParams = Parameters<AgentHarnessIsolatedCompletion>[0];
@@ -114,6 +119,10 @@ async function awaitWithinCompletionBoundary<T>(params: {
 export async function runCopilotIsolatedCompletion(
   params: AgentHarnessIsolatedCompletionParams,
   getPool: () => Promise<CopilotClientPool>,
+  message?: AgentHarnessSideQuestionRequest,
+  prepareRequest?: (
+    request: AgentHarnessSideQuestionRequest,
+  ) => Promise<AgentHarnessSideQuestionRequest>,
 ): Promise<AgentHarnessIsolatedCompletionResult> {
   const reasoningEffort = resolveReasoningEffort(params.thinkLevel);
   if (params.thinkLevel !== undefined && reasoningEffort === undefined) {
@@ -132,6 +141,7 @@ export async function runCopilotIsolatedCompletion(
   }
   const authorization = params.authorization;
   const { auth, model } = authorization;
+  const sessionModel = resolveCopilotSessionModel(model, params);
   const apiKey = auth.apiKey?.trim();
   if (!apiKey) {
     throw new Error("[copilot] isolated completion requires the prepared credential");
@@ -174,6 +184,8 @@ export async function runCopilotIsolatedCompletion(
     authorization.sourceAuthFingerprint?.trim() || tokenFingerprint(apiKey);
   let handle: PooledClient | undefined;
   let session: IsolatedSession | undefined;
+  let unsubscribeUsage: (() => void) | undefined;
+  let usage: ReturnType<typeof normalizeCopilotUsage>;
   try {
     const acquiredHandle = await awaitWithinCompletionBoundary({
       boundary,
@@ -199,7 +211,7 @@ export async function runCopilotIsolatedCompletion(
     handle = acquiredHandle;
     const sessionConfig: SessionConfig = {
       ...createCopilotIsolatedSessionRestrictions(),
-      model: model.id,
+      ...sessionModel,
       ...(githubAuth ? { gitHubToken: apiKey } : {}),
       ...(sessionProvider.provider ? { provider: sessionProvider.provider } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -215,12 +227,41 @@ export async function runCopilotIsolatedCompletion(
       },
     });
     session = createdSession;
+    unsubscribeUsage = createdSession.on("assistant.usage", (event) => {
+      if (event.agentId !== undefined) {
+        return;
+      }
+      usage = normalizeCopilotUsage(event.data);
+    });
+    await awaitWithinCompletionBoundary({
+      boundary,
+      start: () => createdSession.rpc.remote.disable(),
+    });
+    let request = message ?? { prompt: params.prompt };
+    if (prepareRequest) {
+      request = await awaitWithinCompletionBoundary({
+        boundary,
+        start: () => prepareRequest(request),
+      });
+    }
+    const attachments: MessageOptions["attachments"] = request.images?.map((image) => ({
+      type: "blob",
+      data: image.data,
+      mimeType: image.mimeType,
+      ...(image.displayName !== undefined ? { displayName: image.displayName } : {}),
+    }));
     const requestHeaders = sessionProvider.provider?.headers;
     const event = await awaitWithinCompletionBoundary({
       boundary,
       start: (remainingMs) =>
         createdSession.sendAndWait(
-          { prompt: params.prompt, ...(requestHeaders ? { requestHeaders } : {}) },
+          {
+            prompt: [request.prependContext, request.prompt, request.appendContext]
+              .filter((part): part is string => part !== undefined)
+              .join("\n\n"),
+            ...(attachments?.length ? { attachments } : {}),
+            ...(requestHeaders ? { requestHeaders } : {}),
+          },
           remainingMs,
         ),
       onBoundary: () => {
@@ -236,9 +277,11 @@ export async function runCopilotIsolatedCompletion(
         event,
         modelRef: model,
         now: Date.now,
+        usage,
       }),
     };
   } finally {
+    unsubscribeUsage?.();
     // Teardown starts independently and remains strongly referenced, but never
     // extends the operation deadline when an SDK cleanup call wedges.
     if (session) {

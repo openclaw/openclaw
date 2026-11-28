@@ -16,6 +16,7 @@ import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-termi
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { ProjectCloneError } from "../../projects/project-clone-runtime.js";
 import {
   getRpcSourceIdentity,
   getRpcSourceLifecycleGeneration,
@@ -150,11 +151,13 @@ function resolveDesktopChatSendErrorNotice(error: unknown): string | undefined {
   }
   const storageFailure = classifyGatewayStorageFailure(error);
   const notice =
-    storageFailure === "SQLITE_BUSY" || storageFailure === "SQLITE_LOCKED"
-      ? "The request was interrupted because OpenClaw storage is busy."
-      : (resolveChatSendStorageErrorMessage(error) ??
-        renderAgentHarnessPreflightUserMessage(error, { audience: "desktop" }) ??
-        renderFailoverCodeUserCopy(describeFailoverError(error).code));
+    error instanceof ProjectCloneError
+      ? error.message
+      : storageFailure === "SQLITE_BUSY" || storageFailure === "SQLITE_LOCKED"
+        ? "The request was interrupted because OpenClaw storage is busy."
+        : (resolveChatSendStorageErrorMessage(error) ??
+          renderAgentHarnessPreflightUserMessage(error, { audience: "desktop" }) ??
+          renderFailoverCodeUserCopy(describeFailoverError(error).code));
   // Desktop notices state the failure, without the following recovery advice.
   return notice?.split(/(?<=[.!?])\s+|\r?\n/u, 1)[0];
 }
@@ -461,6 +464,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
         endedAt: Date.now(),
         error: errorMessage,
         errorKind,
+        notice: err instanceof ProjectCloneError ? err.message : undefined,
         desktopNotice,
         sessionId: getRpcSourceIdentity(activeRunAbort.entry).sessionId,
         lifecycleRevision:
@@ -577,9 +581,11 @@ export function createChatSendDispatchErrorLifecycle(params: {
    * failure before any runtime lifecycle exists. Record it as this run's durable
    * terminal so history and other clients show the outcome, not only the live broadcast.
    */
+  let unstartedNotice: string | undefined;
   let unstartedDesktopNotice: string | undefined;
   const captureUnstartedFailure = (error: unknown): never => {
     // Source completion flattens this error before delivering the unstarted terminal.
+    unstartedNotice = error instanceof ProjectCloneError ? error.message : undefined;
     unstartedDesktopNotice = resolveDesktopChatSendErrorNotice(error);
     throw error;
   };
@@ -594,7 +600,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
       endedAt: Date.now(),
       ...failure,
       errorKind: resolveStateContentionPresentation(failure.error)?.errorKind,
-      notice: failure.notice,
+      notice: failure.notice ?? unstartedNotice,
       desktopNotice: unstartedDesktopNotice,
       sessionId: getRpcSourceIdentity(activeRunAbort.entry).sessionId,
       lifecycleRevision:

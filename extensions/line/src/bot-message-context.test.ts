@@ -363,6 +363,11 @@ describe("buildLineMessageContext", () => {
       postback: { data: "line.action=volume_up&line.device=Living%20Room" },
       expected: "line action volume_up device Living Room",
     },
+    {
+      name: "agent button",
+      postback: { data: "::pick:a line.action=volume_up" },
+      expected: "callback_data: pick:a line.action=volume_up",
+    },
   ];
 
   it.each(postbackSelectionCases)(

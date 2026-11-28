@@ -92,17 +92,11 @@ export class VisitorAccessService {
   authorize(
     emails: readonly string[],
     githubAccountIds: readonly number[] = [],
-  ): PluginGatewayAccessAuthority {
-    const authority = this.readAuthority(emails, undefined, githubAccountIds);
-    if (!authority) {
-      throw new VisitorAccessError(
-        "An active visitor invitation is required. Ask a maintainer to invite or renew access.",
-      );
-    }
-    return authority;
+  ): PluginGatewayAccessAuthority | undefined {
+    return this.readAuthority(emails, undefined, githubAccountIds);
   }
 
-  /** Unlike admission, an unavailable grant map must leave durable requests pending. */
+  /** An unavailable grant map must leave durable requests pending. */
   resume(
     emails: readonly string[],
     grantId: string,

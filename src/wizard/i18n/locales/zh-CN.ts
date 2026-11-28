@@ -333,10 +333,11 @@ export const zh_CN = {
       quickstartDashboard: "仪表板：{url}",
       quickstartForeground: "网关正在前台运行。按 Ctrl+C 停止。",
       quickstartBackground: "如需以后让网关在后台持续运行，请运行：{command}",
-      quickstartReopen: "运行 openclaw 打开 TUI，或运行 openclaw dashboard 重新打开网页仪表板。",
+      quickstartReopen:
+        "运行 {tuiCommand} 打开 TUI，或运行 {dashboardCommand} 重新打开网页仪表板。",
       quickstartBrowserUnavailable: "浏览器交接未完成。网关仍在运行；准备好后请打开仪表板。",
       quickstartGatewayPending:
-        "网关尚不可达。请保持此终端打开，并运行 openclaw gateway status 检查启动状态。",
+        "网关尚不可达。请保持此终端打开，并运行 {statusCommand} 检查启动状态。",
       accessFullHint: "我会查找这台机器上的 AI 应用和密钥；由你选择要测试的连接。",
       accessFullLabel: "完全访问 — 自动发现一切",
       accessGuardedHint: "查找前我会先征求你的同意，你也可以手动配置。",
@@ -396,7 +397,7 @@ export const zh_CN = {
       nextSteps:
         "工作区：{workspace}\n添加频道：`openclaw channels add`\n更喜欢聊天？运行 `openclaw setup`，然后说 `connect telegram`（或 `connect slack`）。\n打开 dashboard：`openclaw dashboard`\n稍后聊天：`openclaw`",
       nextStepsWithoutAi:
-        "工作区：{workspace}\n稍后添加 AI：重新运行 `openclaw onboard`\n连接 AI 后添加频道：`openclaw channels add`\n打开 dashboard：`openclaw dashboard`",
+        "工作区：{workspace}\n稍后添加 AI：重新运行 `{onboardCommand}`\n连接 AI 后添加频道：`{channelsCommand}`\n打开 dashboard：`{dashboardCommand}`",
       nextStepsTitle: "下一步",
       noInferenceOptions:
         "尚无可用的推理选项。请先登录 Claude Code 或 Codex，或配置 API 密钥提供商，然后重新运行引导。",
@@ -1095,6 +1096,8 @@ export const zh_CN = {
     channelsPrimer: {
       approveWith: "批准配对：{command}",
       docs: "文档：{link}",
+      credentialStorage:
+        "直接输入受支持的凭据会将其保存到共享密钥库。Gateway 运行时，从 CLI 执行此操作需要本地 Gateway 管理员权限。如果没有该权限，请在频道支持的情况下使用现有的密钥引用，或先停止 Gateway 再输入凭据。",
       inboundSafety: "入站 DM 安全默认使用配对：未知发送者会先获得配对码。",
       multiUserDm:
         '多用户 DM 请隔离会话：{command}（多账号频道也可用 "per-account-channel-peer"）。',

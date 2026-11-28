@@ -15,6 +15,22 @@ If the source changes during acquisition, reconcile/refetch rather than silently
 combining versions. Finish acquisition before publication; a saved summary or
 the first page of a transcript is not a complete original.
 
+## Structured transcript originals
+
+When the existing authorized source route provides structured originals, prefer
+them to generated notes: [label-only summaries can lose speaker identity](https://github.com/openclaw/openclaw/blob/89cfd41d0cbd2545d06ffe2fcb18b52f703d9274/src/transcripts/summary.ts#L60-L66).
+Native transcript JSONL uses nested `speaker.id` and `speaker.label`; reader
+JSONL uses `speakerId` and `speakerLabel`. Preserve supplied IDs, labels, order
+and the provider/account/capture scope from the source metadata. An ID is not a
+global person identifier ([speakers](speakers.md)).
+
+Use only originals available to this caller; a summary or filesystem path does
+not grant archive access. Retain bytes through the existing
+[attachment contract](sources.md), then read the retained evidence as needed.
+Do not widen permissions to obtain IDs. A complete label-only transcript follows
+the normal path; missing IDs alone do not block ingestion. Summary-only input
+still does not establish complete ingestion.
+
 ## Granola through the Granola plugin (MCP)
 
 Prefer this when the Granola plugin is installed and connected: its tools are

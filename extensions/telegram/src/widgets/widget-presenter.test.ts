@@ -144,19 +144,44 @@ describe("Telegram widget presenter", () => {
     expect(editTelegramWidgetState).toHaveBeenCalledWith(expect.objectContaining({ state: "" }));
   });
 
-  it("matches only private chats outside topics, and only with widgets enabled", () => {
+  it("matches private chats and their forum topics only with widgets enabled", () => {
     const match = (context: Parameters<Presenter["availability"]>[0]) =>
       registerPresenter().match?.(context);
     expect(match(dm)).toBe(true);
     expect(match({ ...dm, currentChannelId: "telegram:-100123" })).toBe(false);
     expect(match({ ...dm, messageChannel: "discord" })).toBe(false);
-    // Taps come back without a thread, so topics never get widgets.
-    expect(match({ ...dm, currentMessagingTarget: "telegram:111:topic:77" })).toBe(false);
-    expect(match({ ...dm, deliveryContext: { threadId: "77" } })).toBe(false);
+    expect(match({ ...dm, currentMessagingTarget: "telegram:111:topic:77" })).toBe(true);
+    expect(match({ ...dm, deliveryContext: { threadId: "77" } })).toBe(true);
+    expect(match({ ...dm, currentMessagingTarget: "telegram:111:direct-topic:77" })).toBe(false);
+    expect(match({ ...dm, deliveryContext: { threadId: "invalid" } })).toBe(false);
+    expect(match({ ...dm, deliveryContext: { threadId: "9007199254740992" } })).toBe(false);
+    expect(
+      match({
+        ...dm,
+        currentMessagingTarget: "telegram:111:topic:77",
+        deliveryContext: { threadId: "88" },
+      }),
+    ).toBe(false);
     config = widgetsConfig();
     expect(match(dm)).toBe(false);
     config = widgetsConfig(false);
     expect(match(dm)).toBe(false);
+  });
+
+  it.each([
+    { ...dm, currentMessagingTarget: "telegram:111:topic:77" },
+    { ...dm, deliveryContext: { threadId: "77" } },
+  ])("delivers a private-topic widget to the current thread", async (context) => {
+    const result = await registerPresenter().present({
+      document: { kind: "html", html: "", source: SOURCE },
+      title: "Vote",
+      name: "vote",
+      context,
+    });
+    expect(result).toMatchObject({ ok: true });
+    expect(sendTelegramWidget).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "111:topic:77" }),
+    );
   });
 
   it("sends raw widget code as a new message outside a tap turn", async () => {

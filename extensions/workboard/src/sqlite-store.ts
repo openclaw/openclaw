@@ -116,6 +116,7 @@ export function createWorkboardSqliteStores(options: {
       lookup: bindOperation("cards.lookup"),
       delete: bindOperation("cards.delete", true),
       entries: bindOperation("cards.entries"),
+      findCardIdsByPrefix: bindOperation("cards.findCardIdsByPrefix"),
       listCardStatuses: bindOperation("cards.listCardStatuses"),
       listBoardAggregates: bindOperation("cards.listBoardAggregates"),
       listStatsAggregates: bindOperation("cards.listStatsAggregates"),

@@ -22,6 +22,7 @@ import {
   currentOwnerDevicePrincipal,
   openclawIdSubjectRolePolicy,
 } from "../openclaw-id/tunnel-principal.js";
+import { operatorRoleSubject } from "../operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
 import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
@@ -115,6 +116,7 @@ export async function prepareUserModelAccountAction(
         assignment ? assignment.role : actorIdentity.role,
         context.getRuntimeConfig(),
         actorIdentity.githubLogin ?? null,
+        operatorRoleSubject(actorIdentity),
       ),
     );
     const grants = [client?.connect.scopes ?? [], ...(role ? [role.scopes] : [])];
@@ -190,7 +192,7 @@ export async function prepareSessionModelAccountAccess(
       throw new ModelAccountConnectAuthorityError();
     }
     const assertCurrent = composeSessionSourceAssertion(
-      [requestAuthority.assertCurrent, operatorAuthority.assertCurrent, caller?.assertCurrent],
+      [requestAuthority.assertCurrent, caller?.assertCurrent],
       (assertSources) => {
         try {
           assertAdmittedRunOperatorAuthority(operatorAuthority);

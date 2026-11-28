@@ -137,6 +137,65 @@ async function waitForConfigPatch(
 }
 
 suite.define(() => {
+  it("does not report missing cloud profiles while their config is pending", async () => {
+    await suite.withPage(editorPageOptions, async ({ page }) => {
+      const config = profilesConfig({ "build-fleet": configuredCloudWorkerProfile() });
+      const gateway = await workerGateway(page, "ready", config, {
+        heldMethods: ["config.get"],
+        methodResponses: {
+          "environments.list": {
+            environments: [],
+            profiles: [{ id: "build-fleet", providerId: "crabbox" }],
+          },
+        },
+      });
+      await page.goto(new URL("settings/cloud-workers", suite.server.baseUrl).href);
+      await gateway.waitForRequest("config.get");
+      await page.locator(".settings-disclosure > summary").click();
+      await page
+        .getByRole("button", { name: "Add profile", exact: true })
+        .waitFor({ state: "hidden" });
+      const falseEmpty = await page
+        .getByText("No cloud device profiles yet.", { exact: true })
+        .count();
+      await gateway.resolveDeferred("config.get", configResponse(config, "ready"));
+      await page.getByRole("button", { name: "Edit: build-fleet", exact: true }).waitFor();
+      expect(falseEmpty).toBe(0);
+    });
+  });
+
+  it("shows a failed cloud profile read instead of empty guidance and retries to a real empty result", async () => {
+    await suite.withPage(editorPageOptions, async ({ page }) => {
+      const gateway = await workerGateway(page, "empty", {}, { heldMethods: ["config.get"] });
+      await page.goto(new URL("settings/cloud-workers", suite.server.baseUrl).href);
+      await gateway.waitForRequest("config.get");
+      await page.locator(".settings-disclosure > summary").click();
+      await gateway.rejectDeferred("config.get", {
+        message: "Cloud profile configuration could not be read",
+      });
+      await expect
+        .poll(() => evaluateControlUiContext(page, (app) => app.runtimeConfig.state.lastError))
+        .toContain("Cloud profile configuration could not be read");
+      const surface = page.locator("openclaw-cloud-workers-page");
+      expect(
+        await surface.getByText("No cloud device profiles yet.", { exact: true }).count(),
+      ).toBe(0);
+      const error = surface
+        .getByRole("alert")
+        .filter({ hasText: "Cloud profile configuration could not be read" });
+      await error.waitFor();
+      const reads = await gateway.deferNext("config.get");
+      await error.getByRole("button", { name: "Retry", exact: true }).click();
+      await gateway.waitForRequest("config.get", { after: reads });
+      await gateway.resolveDeferred("config.get", configResponse({}, "empty"));
+      await surface.getByText("No cloud device profiles yet.", { exact: true }).waitFor();
+      expect(await error.count()).toBe(0);
+      expect(
+        await surface.getByRole("button", { name: "Add profile", exact: true }).isEnabled(),
+      ).toBe(true);
+    });
+  });
+
   it("adds and edits advanced machine profiles while refreshing live availability", async () => {
     await suite.withPage(editorPageOptions, async ({ page }) => {
       const gateway = await workerGateway(page, "initial");
@@ -377,6 +436,29 @@ suite.define(() => {
       await publishProfiles(gateway, { "reconnect-proof": savedProfile }, "retry-saved");
       await page.getByText("Profile saved", { exact: true }).waitFor();
       await expect.poll(() => page.getByLabel("Profile ID").count()).toBe(0);
+    });
+  });
+
+  it("leaves a held profile save without waiting for its reply", async () => {
+    await suite.withPage(editorPageOptions, async ({ page }) => {
+      const gateway = await workerGateway(
+        page,
+        "route-initial",
+        profilesConfig({ pending: configuredCloudWorkerProfile() }),
+      );
+      await page.goto(`${suite.server.baseUrl}settings/cloud-workers`);
+      await page.locator(".settings-disclosure > summary").click();
+      await exactButton(page, "Edit: pending").click();
+      await gateway.deferNext("config.patch");
+      await exactButton(page, "Save").click();
+      await gateway.waitForRequest("config.patch");
+      await expect.poll(() => page.getByLabel("Crabbox backend").isDisabled()).toBe(true);
+      await evaluateControlUiContext(page, (app) => app.navigate("appearance"));
+      await page.locator("openclaw-cloud-workers-page").waitFor({ state: "detached" });
+      expect(new URL(page.url()).pathname).toBe("/settings/appearance");
+      await publishProfiles(gateway, { pending: configuredCloudWorkerProfile() }, "route-saved");
+      expect(await gateway.getRequests("config.patch")).toHaveLength(1);
+      expect(await page.getByText("Profile saved", { exact: true }).count()).toBe(0);
     });
   });
 

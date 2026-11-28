@@ -11,6 +11,7 @@ import { withTimeout } from "../infra/fs-safe.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import {
   findBundledPluginSourceInMap,
   resolveBundledPluginSources,
@@ -51,15 +52,10 @@ import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-err
 import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { invalidatePluginRuntimeDiscoveryAfterConfigMutation } from "../plugins/registry-refresh.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { VERSION } from "../version.js";
 import { t } from "../wizard/i18n/index.js";
 import { createPluginCapabilityConsentPrompter } from "../wizard/plugin-capability-consent.js";
-import {
-  WizardCancelledError,
-  WizardNavigationError,
-  type WizardPrompter,
-} from "../wizard/prompts.js";
+import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
 import type {
   OnboardingPluginInstallEntry,
   OnboardingPluginInstallOptions,
@@ -248,9 +244,15 @@ function resolveBundledLocalPath(params: {
 }
 
 async function reportPluginInstallTimeout(
-  params: Pick<OnboardingPluginInstallParams, "cfg" | "entry" | "prompter" | "runtime">,
+  params: Pick<
+    OnboardingPluginInstallOptions,
+    "cfg" | "entry" | "prompter" | "runtime" | "failureOutput"
+  >,
   spec: string,
 ): Promise<OnboardingPluginInstallResult> {
+  if (params.failureOutput === "caller") {
+    return incompletePluginInstall(params.cfg, params.entry.pluginId, "timed_out");
+  }
   const safeSpec = sanitizeTerminalText(spec);
   await params.prompter.note(
     [
@@ -280,13 +282,17 @@ function summarizeInstallError(message: string): string {
 
 const ONBOARDING_PLUGIN_INSTALL_ERROR_MAX_CHARS = 12_000;
 
-function formatInstallErrorDetail(message: string): string {
-  const cleaned = message
+function formatInstallErrorDetail(
+  message: string,
+  params: Pick<OnboardingPluginInstallOptions, "failureOutput">,
+): string {
+  const sanitized = message
     .replace(/\r\n?/g, "\n")
     .split("\n")
     .map((line) => sanitizeTerminalText(line))
     .join("\n")
     .trim();
+  const cleaned = redactCallerInstallOutput(sanitized, params);
   if (cleaned.length <= ONBOARDING_PLUGIN_INSTALL_ERROR_MAX_CHARS) {
     return cleaned;
   }
@@ -295,11 +301,14 @@ function formatInstallErrorDetail(message: string): string {
 }
 
 async function notePluginInstallFailure(
-  prompter: WizardPrompter,
+  params: Pick<OnboardingPluginInstallOptions, "prompter" | "failureOutput">,
   spec: string,
   error: string,
 ): Promise<void> {
-  await prompter.note(
+  if (params.failureOutput === "caller") {
+    return;
+  }
+  await params.prompter.note(
     [
       t("wizard.plugins.installFailed", {
         spec: sanitizeTerminalText(spec),
@@ -316,7 +325,10 @@ function isTimeoutError(error: unknown): boolean {
 }
 
 async function finishOnboardingPluginInstall(
-  params: Pick<OnboardingPluginInstallParams, "cfg" | "entry" | "prompter" | "runtime">,
+  params: Pick<
+    OnboardingPluginInstallOptions,
+    "cfg" | "entry" | "prompter" | "runtime" | "failureOutput"
+  >,
   options: {
     pluginId: string;
     install?: Parameters<typeof recordPluginInstall>[1];
@@ -325,15 +337,22 @@ async function finishOnboardingPluginInstall(
 ): Promise<OnboardingPluginInstallResult> {
   const enableResult = enableExplicitlySelectedPluginInConfig(params.cfg, options.pluginId);
   if (!enableResult.enabled) {
-    const safeLabel = sanitizeTerminalText(params.entry.label);
     const reason = enableResult.reason ?? "plugin disabled";
+    const detail = `${sanitizeTerminalText(options.pluginId)} is disabled (${reason}).`;
+    if (params.failureOutput === "caller") {
+      return incompletePluginInstall(
+        enableResult.config,
+        options.pluginId,
+        "failed",
+        formatInstallErrorDetail(`Plugin ${detail}`, params),
+      );
+    }
+    const safeLabel = sanitizeTerminalText(params.entry.label);
     await params.prompter.note(
       t("wizard.plugins.enableFailed", { plugin: safeLabel, reason }),
       t("wizard.plugins.installTitle"),
     );
-    params.runtime.error?.(
-      `Plugin install failed: ${sanitizeTerminalText(options.pluginId)} is disabled (${reason}).`,
-    );
+    params.runtime.error?.(`Plugin install failed: ${detail}`);
     return incompletePluginInstall(enableResult.config, options.pluginId, "failed");
   }
   const cfg = options.install
@@ -349,7 +368,20 @@ async function finishOnboardingPluginInstall(
   return { cfg, installed: true, pluginId: options.pluginId, status: "installed" };
 }
 
-function logInstallWarning(runtime: RuntimeEnv, message: string, preserveLineBreaks = false): void {
+function redactCallerInstallOutput(
+  message: string,
+  params: Pick<OnboardingPluginInstallOptions, "failureOutput">,
+): string {
+  return params.failureOutput === "caller"
+    ? redactSensitiveText(message, { mode: "tools" })
+    : message;
+}
+
+function logInstallWarning(
+  params: OnboardingPluginInstallParams,
+  message: string,
+  preserveLineBreaks = false,
+): void {
   const sanitized = (preserveLineBreaks ? message.split("\n") : [message])
     .map((line) => sanitizeTerminalText(line))
     .join("\n")
@@ -357,18 +389,20 @@ function logInstallWarning(runtime: RuntimeEnv, message: string, preserveLineBre
   if (!sanitized) {
     return;
   }
-  runtime.log?.(`${sanitized}\n`);
+  params.runtime.log?.(`${redactCallerInstallOutput(sanitized, params)}\n`);
 }
 
-function startPluginInstallProgress(prompter: WizardPrompter, safeLabel: string) {
-  const progress = prompter.progress(t("wizard.plugins.installingPlugin", { plugin: safeLabel }));
+function startPluginInstallProgress(params: RemoteInstallParams, safeLabel: string) {
+  const progress = params.prompter.progress(
+    t("wizard.plugins.installingPlugin", { plugin: safeLabel }),
+  );
   progress.update(t("wizard.plugins.preparingInstall"));
   return {
     progress,
     updateProgress: (message: string) => {
       const sanitized = sanitizeTerminalText(message).trim();
       if (sanitized) {
-        progress.update(sanitized);
+        progress.update(redactCallerInstallOutput(sanitized, params));
       }
     },
   };
@@ -415,10 +449,11 @@ async function installPluginWithProgress(
     beforePersistentEffect: params.beforePersistentEffect,
   });
   const safeLabel = sanitizeTerminalText(params.entry.label);
-  const { progress, updateProgress } = startPluginInstallProgress(params.prompter, safeLabel);
+  const { progress, updateProgress } = startPluginInstallProgress(params, safeLabel);
+  const callerReportsFailure = params.failureOutput === "caller";
   let renderedTrustWarning = false;
   const renderTrustWarning = (message: string) => {
-    logInstallWarning(params.runtime, message, true);
+    logInstallWarning(params, message, true);
     renderedTrustWarning = true;
   };
   const installOptions = () => ({
@@ -443,7 +478,7 @@ async function installPluginWithProgress(
             return;
           }
         }
-        logInstallWarning(params.runtime, message);
+        logInstallWarning(params, message);
       },
     },
   });
@@ -479,18 +514,25 @@ async function installPluginWithProgress(
       });
     }
     progress.stop(
-      t(result.ok ? "wizard.plugins.installedPlugin" : "wizard.plugins.installFailedShort", {
-        plugin: safeLabel,
-      }),
+      !result.ok && callerReportsFailure
+        ? undefined
+        : t(result.ok ? "wizard.plugins.installedPlugin" : "wizard.plugins.installFailedShort", {
+            plugin: safeLabel,
+          }),
     );
     consent.rethrowCallbackError();
     return { status: "completed", result, capabilityConsent };
   } catch (error) {
     const timedOut = source.kind !== "clawhub" && isTimeoutError(error);
     progress.stop(
-      t(timedOut ? "wizard.plugins.installTimedOutShort" : "wizard.plugins.installFailedShort", {
-        plugin: safeLabel,
-      }),
+      callerReportsFailure
+        ? undefined
+        : t(
+            timedOut ? "wizard.plugins.installTimedOutShort" : "wizard.plugins.installFailedShort",
+            {
+              plugin: safeLabel,
+            },
+          ),
     );
     consent.rethrowCallbackError();
     if (timedOut) {
@@ -517,7 +559,7 @@ async function installPluginFromOverride(
     override: PluginInstallOverride;
   },
 ): Promise<OnboardingPluginInstallResult> {
-  const { entry, prompter, runtime } = params;
+  const { entry, runtime } = params;
   runtime.log?.(
     `Using plugin install override for ${sanitizeTerminalText(entry.pluginId)} from ${PLUGIN_INSTALL_OVERRIDES_ENV} (${ALLOW_PLUGIN_INSTALL_OVERRIDES_ENV}=1).`,
   );
@@ -539,9 +581,11 @@ async function installPluginFromOverride(
 
   const { result } = installOutcome;
   if (!result.ok) {
-    const errorDetail = formatInstallErrorDetail(result.error);
-    await notePluginInstallFailure(prompter, displaySpec, result.error);
-    runtime.error?.(`Plugin install failed: ${summarizeInstallError(result.error)}`);
+    await notePluginInstallFailure(params, displaySpec, result.error);
+    if (params.failureOutput !== "caller") {
+      runtime.error?.(`Plugin install failed: ${summarizeInstallError(result.error)}`);
+    }
+    const errorDetail = formatInstallErrorDetail(result.error, params);
     return incompletePluginInstall(params.cfg, entry.pluginId, "failed", errorDetail);
   }
 
@@ -705,56 +749,51 @@ export async function ensureOnboardingPluginInstalled(
     const installLocal = async (selectedPath: string): Promise<OnboardingPluginInstallResult> => {
       const cfg = params.cfg;
       const installEntry = params.entry;
-      const installPrompter = params.prompter;
-      const installRuntime = params.runtime;
       const installWorkspaceDir = params.workspaceDir;
       const beforePersistentEffect = params.beforePersistentEffect;
       const consent = capturePluginCapabilityConsentHandlerErrors(onCapabilityConsent);
       try {
-        return await finishOnboardingPluginInstall(
-          { cfg, entry: installEntry, prompter: installPrompter, runtime: installRuntime },
-          {
-            pluginId: installEntry.pluginId,
-            prepareConfig: async (enabledConfig) => {
-              // Bundled sources already belong to the release; linked artifacts still require review.
-              if (pathsReferToSameDirectory(selectedPath, bundledLocalPath)) {
-                return enabledConfig;
-              }
-              const capabilityConsent = await prepareManagedPluginArtifactConsentHandler({
-                config: cfg,
-                source: "path",
-                spec: npmSpec ?? selectedPath,
-                onCapabilityConsent: consent.onCapabilityConsent,
-                beforePersistentEffect,
-              });
-              await capabilityConsent.onBeforePluginArtifactCommit({
+        return await finishOnboardingPluginInstall(params, {
+          pluginId: installEntry.pluginId,
+          prepareConfig: async (enabledConfig) => {
+            // Bundled sources already belong to the release; linked artifacts still require review.
+            if (pathsReferToSameDirectory(selectedPath, bundledLocalPath)) {
+              return enabledConfig;
+            }
+            const capabilityConsent = await prepareManagedPluginArtifactConsentHandler({
+              config: cfg,
+              source: "path",
+              spec: npmSpec ?? selectedPath,
+              onCapabilityConsent: consent.onCapabilityConsent,
+              beforePersistentEffect,
+            });
+            await capabilityConsent.onBeforePluginArtifactCommit({
+              pluginId: installEntry.pluginId,
+              stagedArtifactDir: selectedPath,
+              mode: "install",
+            });
+            const sourcePath = formatPortableLocalPath(selectedPath, installWorkspaceDir);
+            return recordPluginInstall(
+              addPluginLoadPath(enabledConfig, selectedPath),
+              capabilityConsent.applyAcceptedSurface(installEntry.pluginId, {
                 pluginId: installEntry.pluginId,
-                stagedArtifactDir: selectedPath,
-                mode: "install",
-              });
-              const sourcePath = formatPortableLocalPath(selectedPath, installWorkspaceDir);
-              return recordPluginInstall(
-                addPluginLoadPath(enabledConfig, selectedPath),
-                capabilityConsent.applyAcceptedSurface(installEntry.pluginId, {
-                  pluginId: installEntry.pluginId,
-                  source: "path",
-                  installPath: selectedPath,
-                  ...(sourcePath ? { sourcePath } : {}),
-                  ...(npmSpec ? { spec: npmSpec } : {}),
-                }),
-              );
-            },
+                source: "path",
+                installPath: selectedPath,
+                ...(sourcePath ? { sourcePath } : {}),
+                ...(npmSpec ? { spec: npmSpec } : {}),
+              }),
+            );
           },
-        );
+        });
       } catch (error) {
         consent.rethrowCallbackError();
         const detail = error instanceof Error ? error.message : String(error);
-        await notePluginInstallFailure(installPrompter, selectedPath, detail);
+        await notePluginInstallFailure(params, selectedPath, detail);
         return incompletePluginInstall(
           cfg,
           installEntry.pluginId,
           "failed",
-          formatInstallErrorDetail(detail),
+          formatInstallErrorDetail(detail, params),
         );
       }
     };
@@ -793,12 +832,12 @@ export async function ensureOnboardingPluginInstalled(
         if (!(error instanceof NpmChannelResolutionError)) {
           throw error;
         }
-        await notePluginInstallFailure(prompter, npmSpec, error.message);
+        await notePluginInstallFailure(params, npmSpec, error.message);
         return incompletePluginInstall(
           next,
           entry.pluginId,
           "failed",
-          formatInstallErrorDetail(error.message),
+          formatInstallErrorDetail(error.message, params),
         );
       }
     }
@@ -861,7 +900,7 @@ export async function ensureOnboardingPluginInstalled(
               ...buildNpmResolutionInstallFields(result.npmResolution),
             };
       return await finishOnboardingPluginInstall(
-        { cfg: next, entry, prompter, runtime },
+        { ...params, cfg: next },
         {
           pluginId: result.pluginId,
           install: capabilityConsent.applyAcceptedSurface(result.pluginId, {
@@ -871,7 +910,7 @@ export async function ensureOnboardingPluginInstalled(
         },
       );
     }
-    await notePluginInstallFailure(prompter, installedSource.spec, result.error);
+    await notePluginInstallFailure(params, installedSource.spec, result.error);
     if (localPath && isUnavailablePluginSource(installedSource.source, result)) {
       const fallback = await prompter.confirm({
         message: t("wizard.plugins.useLocalPluginPathInstead", {
@@ -883,12 +922,14 @@ export async function ensureOnboardingPluginInstalled(
         return await installLocal(localPath);
       }
     }
-    runtime.error?.(`Plugin install failed: ${summarizeInstallError(result.error)}`);
+    if (params.failureOutput !== "caller") {
+      runtime.error?.(`Plugin install failed: ${summarizeInstallError(result.error)}`);
+    }
     return incompletePluginInstall(
       next,
       entry.pluginId,
       "failed",
-      formatInstallErrorDetail(result.error),
+      formatInstallErrorDetail(result.error, params),
     );
   });
 }

@@ -1,12 +1,17 @@
+import { resolveReplyFailureSummary } from "../../auto-reply/reply/agent-runner-failure-reply.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { classifyGatewayStaleInstall } from "../../gateway/stale-install.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatErrorMessageForDisplay } from "../../infra/error-diagnostics.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { AgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
+import { resolveCompactionRecoveryLifecycleError } from "../compaction-recovery-lifecycle-error.js";
 import type { EmbeddedAgentRunEntryTerminal } from "../embedded-agent-runner/run-entry.js";
+import { isFailoverError } from "../failover-error.js";
 import { isContextOverflowErrorFromTables } from "../failover/context-overflow-tables.js";
 import { getFailoverErrorCode } from "../failover/error.js";
+import { resolveReplyFailoverFacts } from "../failover/request-error-facts.js";
 import { renderFailoverCodeUserCopy } from "../failover/user-copy.js";
 import {
   AGENT_RUN_SUPERSEDED_STOP_REASON,
@@ -24,6 +29,19 @@ const formatLifecycleError = (error: unknown): string => {
     ? staleInstall.error.message
     : formatErrorMessageForDisplay(error, renderFailoverCodeUserCopy(getFailoverErrorCode(error)));
 };
+
+/** chat.send's capacity copy (rate limit, overload, billing) as the session's failure notice. */
+export function resolveAgentRunFailureNotice(error: unknown, config?: OpenClawConfig) {
+  const message = formatErrorMessage(error);
+  const summary = resolveReplyFailureSummary({
+    error,
+    message,
+    facts: resolveReplyFailoverFacts(error, message, config),
+    attempts: isFailoverError(error) ? error.attempts : undefined,
+    config,
+  });
+  return summary ? { errorNotice: summary.text } : {};
+}
 
 function resolveTerminalLogLevel(
   outcome: AgentRunTerminalOutcome,
@@ -45,22 +63,8 @@ export function createAgentCommandLifecycle(params: {
   state: AgentAttemptLifecycleState;
 }) {
   let lifecycleFinishingEmitted = false;
-  const resolveCompactionRecoveryError = (runResult: AgentAttemptResult) => {
-    // A precheck's tentative overflow event precedes recovery. Its failure
-    // must not hide the authoritative result of that recovery.
-    if (
-      runResult.meta.error?.kind !== "compaction_failure" ||
-      !params.state.lifecycleError ||
-      !isContextOverflowErrorFromTables(params.state.lifecycleError)
-    ) {
-      return undefined;
-    }
-    return (
-      runResult.meta.finalAssistantVisibleText?.trim() ||
-      runResult.meta.error.message.trim() ||
-      "Auto-compaction failed. Try again or run /compact."
-    );
-  };
+  const resolveCompactionRecoveryError = (runResult: AgentAttemptResult) =>
+    resolveCompactionRecoveryLifecycleError(runResult, params.state.lifecycleError);
   const shouldReplaceLifecycleErrorObservation = (runResult: AgentAttemptResult) => {
     const compactionRecoveryError = resolveCompactionRecoveryError(runResult);
     return (

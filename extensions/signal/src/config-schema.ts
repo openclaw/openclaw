@@ -5,6 +5,7 @@ import {
   buildChannelAccountSchemaParts,
   buildGroupEntrySchema,
   ChannelDeliveryStreamingConfigSchema,
+  ChannelImplicitMentionsSchema,
   ChannelSendReadReceiptsSchema,
   ExecutableTokenSchema,
   ReplyToModeSchema,
@@ -42,6 +43,14 @@ const signalChannelConfigUiHints = {
   "accounts.*.defaultTo": { presentation: "phone-number" },
   "accounts.*.groupAllowFrom.*": { presentation: "phone-number" },
   "accounts.*.reactionAllowlist.*": { presentation: "phone-number" },
+  "implicitMentions.quotedBot": {
+    label: "Activate on Signal Quote Replies",
+    help: "Count replies quoting a confirmed OpenClaw send in the same Signal group as mentions for the default account (off by default).",
+  },
+  "accounts.*.implicitMentions.quotedBot": {
+    label: "Activate on Signal Quote Replies",
+    help: "Count replies quoting a confirmed OpenClaw send in the same Signal group as mentions for this account (off by default).",
+  },
   transport: {
     label: "Signal Transport",
     help: "Account-owned native process or external endpoint configuration. Named accounts do not inherit this value.",
@@ -155,6 +164,7 @@ const DirectGroupReplyToModeByChatTypeSchema = z
 const SignalGroupEntrySchema = buildGroupEntrySchema(
   {
     ingest: z.boolean().optional(),
+    includeOtherMembersHistoryImages: z.boolean().optional(),
   },
   { omit: ["skills", "enabled", "allowFrom", "systemPrompt"] },
 );
@@ -177,6 +187,7 @@ const SignalAccountSchemaBase = z
     sendReadReceipts: ChannelSendReadReceiptsSchema,
     aliases: z.record(z.string(), z.string()).optional(),
     groups: SignalGroupsSchema,
+    implicitMentions: ChannelImplicitMentionsSchema.pick({ quotedBot: true }).optional(),
     replyToModeByChatType: DirectGroupReplyToModeByChatTypeSchema.optional(),
     ...buildChannelReactionShape({
       notificationModes: ["off", "own", "all", "allowlist"],

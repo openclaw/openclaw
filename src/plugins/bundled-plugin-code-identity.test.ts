@@ -39,9 +39,7 @@ const record = {
 
 async function builtPackage() {
   const root = await fs.realpath(await roots.make("package"));
-  await fs.mkdir(path.join(root, "dist"), { recursive: true });
   const buildInfoPath = path.join(root, "dist", "build-info.json");
-  await fs.writeFile(buildInfoPath, JSON.stringify(record));
   const plugin = async (...segments: string[]) => {
     const rootDir = path.join(root, ...segments);
     await fs.mkdir(rootDir, { recursive: true });

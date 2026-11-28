@@ -122,6 +122,12 @@ it("updates a mounted inline invocation without rendering the pane or disturbing
   const state = pane.state;
   state.settings = { ...state.settings, chatInlineCommands: false, chatShowToolCalls: true };
   const runtime = getPaneTestRuntime(pane);
+  let publishedPositionSettled = pane.transcript.isPositionSettled;
+  onTestFinished(
+    pane.transcript.subscribe(() => {
+      publishedPositionSettled = pane.transcript.isPositionSettled;
+    }),
+  );
   // Native virtualization measures newly mounted rows over successive frames.
   const settleViewport = async () => {
     for (let frame = 0; frame < 4; frame++) {
@@ -166,11 +172,15 @@ it("updates a mounted inline invocation without rendering the pane or disturbing
   emit("lifecycle", { phase: "start" });
   start("first", "printf first-command");
   output("First stdout line.");
+  // The first live event loads its dispatcher; measure publication after that import settles.
+  await vi.dynamicImportSettled();
   await expect.poll(() => state.chatToolMessages.length).toBe(1);
   await expect.poll(() => state.toolStreamSyncTimer).toBeNull();
   expect(JSON.stringify(state.chatToolMessages)).not.toContain("First stdout line.");
   // No new stdout follows the toggle: admission must recover the quiet command.
   setInline(true);
+  // The first enable loads the inline renderer before requesting live tool output.
+  await vi.dynamicImportSettled();
   await expect.poll(() => state.chatSessionMessageSubscription?.includeLiveToolOutput).toBe(true);
   await expect(chatHistoryRequests(state).subscriptionReady).resolves.toBe(true);
   const recovery = chatHistoryRequests(state).historyLoad;
@@ -197,10 +207,10 @@ it("updates a mounted inline invocation without rendering the pane or disturbing
   disclosureRow.click();
   await expect.poll(() => disclosureRow.getAttribute("aria-expanded")).toBe("true");
   // Finish the lazy expanded-body/catalog load before measuring independent stdout work.
+  await vi.dynamicImportSettled();
   await expect
     .poll(() => pane.querySelector(".chat-tool-term__out code")?.textContent)
     .toBe("First stdout line.");
-  await vi.dynamicImportSettled();
   await pane.updateComplete;
   disclosureRow.click();
   await expect.poll(() => disclosureRow.getAttribute("aria-expanded")).toBe("false");
@@ -310,6 +320,12 @@ it("updates a mounted inline invocation without rendering the pane or disturbing
   // before measuring the independent stdout update below.
   await expect(chatHistoryRequests(state).subscriptionReady).resolves.toBe(true);
   await pane.updateComplete;
+  const activity = expectDefined(
+    pane.querySelector<HTMLButtonElement>(".chat-activity-group__summary"),
+    "grouped activity disclosure",
+  );
+  activity.click();
+  await expect.poll(() => activity.getAttribute("aria-expanded")).toBe("true");
   const disclosure = expectDefined(
     pane.querySelector<HTMLButtonElement>(".chat-tool-row"),
     "grouped command disclosure",
@@ -387,6 +403,10 @@ it("updates a mounted inline invocation without rendering the pane or disturbing
   // The new invocation also adds a measured row; settle its viewport before stdout-only work.
   await settleViewport();
   await expect.poll(() => pane.transcript.isPositionSettled).toBe(true);
+  await pane.updateComplete;
+  // Initial placement can settle before its public notification reaches the pane.
+  // Observe that notification before measuring subsequent output-only updates.
+  await expect.poll(() => publishedPositionSettled).toBe(true);
   await pane.updateComplete;
   const commandRows = Array.from(pane.querySelectorAll(".chat-tool-row"));
   const commandPreviews = Array.from(pane.querySelectorAll(".chat-command-trail__preview pre"));

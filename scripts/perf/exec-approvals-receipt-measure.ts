@@ -27,6 +27,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ExecApprovalsFile } from "../../src/infra/exec-approvals-core.js";
 import { captureSqliteWorkerCommitReceipt } from "../../src/infra/sqlite-worker-operation-settlement.js";
 import type { WorkerWriteOperationContext } from "../../src/state/worker-operation-registry.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -149,7 +150,7 @@ try {
     owner.service();
   } finally {
     Atomics.wait = wait;
-    owner.finish();
+    await owner.finish();
   }
 } finally {
   await state.closeOpenClawStateDatabaseAsync();
@@ -196,12 +197,7 @@ try {
   });
   observer.observe({ entryTypes: ["gc"] });
   if (values.allocation) {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 32768,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 32768);
   }
   const hostLoad = loadavg();
   const cpu = process.threadCpuUsage();

@@ -66,7 +66,7 @@ extension OpenClawChatComposer {
                         .disabled(mode == .full && !self.viewModel.composerCapabilityCatalog.canSelectFullPermission)
                 }
                 if !self.viewModel.composerCapabilityCatalog.canSelectFullPermission {
-                    Text("Full permission requires operator.admin access.")
+                    Text("You don’t have permission to turn on Full access.")
                         .font(OpenClawChatTypography.caption)
                 }
             } label: {
@@ -74,6 +74,8 @@ extension OpenClawChatComposer {
                     .frame(
                         width: CleanChatComposerMetrics.controlTouchSize,
                         height: CleanChatComposerMetrics.controlTouchSize)
+                    // A full touch target that takes the gap after it, so no neighbor's target overlaps it.
+                    .frame(width: CleanChatComposerMetrics.controlTouchSize, alignment: .leading)
                     .contentShape(Rectangle())
             }
             .menuIndicator(.hidden)

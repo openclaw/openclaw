@@ -4,7 +4,6 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import * as announceDelivery from "../../agents/subagents/announce/subagent-announce-delivery.js";
-import { sourceOwnerChangedResult } from "../../agents/subagents/announce/subagent-announce-dispatch.js";
 import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
 import {
   getSubagentRunByRunId,
@@ -505,12 +504,11 @@ describe("gateway agent completed-child delivery", () => {
               await release.promise;
             }
             if (params.isSourceSessionEffectsAllowed?.() === false) {
-              return sourceOwnerChangedResult();
+              return { delivered: false, path: "none", reason: "source_owner_changed" };
             }
             handoffs.push(params);
             return {
               delivered: true,
-              disposition: "delivered",
               path: "direct",
               deliveredAt: Date.now(),
             };

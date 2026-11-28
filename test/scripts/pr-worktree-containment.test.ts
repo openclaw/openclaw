@@ -17,6 +17,10 @@ import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  gitPathShimShellPrelude,
+  resolveGitOutsideFixtures,
+} from "./git-path-shim.test-support.js";
 import { createIndependentPrFixtureEnv } from "./pr-wrapper.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -798,13 +802,12 @@ describePosix("scripts/pr worktree containment", () => {
     const tools = join(fixture.root, "tools");
     const commandLog = join(fixture.root, "git-commands.log");
     mkdirSync(tools);
-    const realGit = spawnSync("bash", ["-c", "command -v git"], {
-      encoding: "utf8",
-    }).stdout.trim();
+    const realGit = resolveGitOutsideFixtures();
     writeFileSync(
       join(tools, "git"),
       [
         "#!/usr/bin/env bash",
+        gitPathShimShellPrelude(),
         'printf "%s\\n" "$1" >> "$GIT_COMMAND_LOG"',
         'if [ "${1:-}" = ls-files ] && [ "${3:-}" = --ignored ]; then',
         '  printf "ignored-query\\n" >> "$GIT_COMMAND_LOG"',

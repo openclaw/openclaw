@@ -23,6 +23,7 @@ import type {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { resolveEmbeddingProviderIndexIdentity } from "./embeddings.js";
 import type { MemoryIndexDatabase } from "./manager-database-context.js";
+import type { MemoryEmbeddingCacheRetireFence } from "./manager-embedding-cache-retire.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import {
   resolveMemoryPrimaryProviderRequest,
@@ -232,6 +233,26 @@ export abstract class MemoryManagerSyncBase {
   protected sessionAgentBusy = false;
   protected sessionBackgroundIndexing = false;
   protected syncIsBackground = false;
+  protected backgroundEmbeddingController?: AbortController;
+
+  protected setSyncBackground(background = false): void {
+    this.syncIsBackground = background;
+    this.backgroundEmbeddingController = background ? new AbortController() : undefined;
+  }
+
+  protected beginClosing(): void {
+    this.closing = true;
+    // Stop unclaimed background I/O before close joins its provider and database leases.
+    this.backgroundEmbeddingController?.abort(new Error("Memory index manager is closing"));
+  }
+
+  protected joinIndexSync(sync: Promise<void>, background = false): Promise<void> {
+    // A foreground caller adopts each publication it waits for, including a newer watch pass.
+    if (!background) {
+      this.backgroundEmbeddingController = undefined;
+    }
+    return sync;
+  }
   protected abstract readonly reindexProgress: MemoryReindexProgress | undefined;
 
   protected shouldYieldSessionIndexing(): boolean {
@@ -258,6 +279,9 @@ export abstract class MemoryManagerSyncBase {
   ): Promise<T>;
   protected abstract getIndexConcurrency(): number;
   protected abstract pruneEmbeddingCacheIfNeeded(recount?: boolean): Promise<void>;
+  protected abstract retirePublishedEmbeddingCacheRows(
+    fence: MemoryEmbeddingCacheRetireFence,
+  ): Promise<void>;
   protected abstract resetProviderInitializationForRetry(): void;
   protected abstract assertRequiredProviderAvailable(operation: "search" | "sync"): void;
   protected abstract indexFile(entry: MemoryIndexEntry, source: MemorySource): Promise<void>;

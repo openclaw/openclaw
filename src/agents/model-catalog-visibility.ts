@@ -220,9 +220,10 @@ export async function prepareLogicalVisibleModelCatalog(
         ).entry;
         // A selected native runtime owns its opaque model; a donor label does not.
         if (
-          !state.nativeRuntime &&
-          suppression({ provider: row.provider, id: row.id, api: row.api, baseUrl: row.baseUrl })
-            ?.retirement
+          row.inference?.chat === false ||
+          (!state.nativeRuntime &&
+            suppression({ provider: row.provider, id: row.id, api: row.api, baseUrl: row.baseUrl })
+              ?.retirement)
         ) {
           return [];
         }
@@ -296,14 +297,17 @@ export async function prepareLogicalVisibleModelCatalog(
       );
     });
     // Selected physical routes must lead dedupe so sibling metadata cannot win.
-    // Deprecated/disabled rows stay selectable; configured and current refs remain picker-visible.
+    // Deprecated, disabled and unlikely-chat rows stay selectable by ref and in the "all"
+    // view; configured and current refs remain picker-visible.
     return publish(
       projectEntries([...preferred, ...kept, ...retained, ...routeBacked]).filter(
         (entry) =>
           (params.view === "configured" ||
             policy.allows({ provider: entry.provider, model: entry.id })) &&
           (publicationKeyOf(entry) === retainedKey ||
-            (entry.status !== "deprecated" && entry.status !== "disabled") ||
+            (entry.status !== "deprecated" &&
+              entry.status !== "disabled" &&
+              entry.inference?.chatEvidence !== "unlikely") ||
             configuredKeys.has(publicationKeyOf(entry))),
       ),
     );

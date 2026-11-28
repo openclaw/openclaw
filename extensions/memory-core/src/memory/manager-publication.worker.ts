@@ -44,6 +44,10 @@ import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
 import { publishMemoryDatabaseTables } from "./manager-db-kernel.js";
 import {
+  retirePublishedMemoryEmbeddingCacheRows,
+  type MemoryEmbeddingCacheRetireCursor,
+} from "./manager-embedding-cache-retire.js";
+import {
   clearMemoryEmbeddingCacheIdentities,
   countMemoryEmbeddingCache,
   pruneMemoryEmbeddingCache,
@@ -52,6 +56,7 @@ import {
 } from "./manager-embedding-cache.js";
 import {
   upgradeMemoryIndexProviderKey,
+  writeMemoryEmbeddingRefusal,
   writeMemoryIndexMetadata,
 } from "./manager-index-metadata.js";
 import { readMemoryIndex } from "./manager-index-read.js";
@@ -180,7 +185,10 @@ export function bindSqliteWorkerBackend(
   context: {
     databasePath: string;
     database: EngineConnection;
-    admitSearchExtensions?: (definitions: Readonly<Record<string, SearchSchema>>) => void;
+    admitSearchExtensions?: (
+      definitions: Readonly<Record<string, SearchSchema>>,
+      options?: { rebuild: true },
+    ) => void;
     admit(stage: "transaction" | "commit"): void;
   },
 ) {
@@ -471,6 +479,11 @@ function createPublicationBackend(
       if (command.type === "index.writeMetadata") {
         return withFacts(writeSingleStatement(() => writeMemoryIndexMetadata(db, command.input)));
       }
+      if (command.type === "index.writeEmbeddingRefusal") {
+        return withFacts(
+          writeSingleStatement(() => writeMemoryEmbeddingRefusal(db, command.input)),
+        );
+      }
       if (command.type === "source.refresh") {
         return withFacts(
           write(() => {
@@ -514,6 +527,15 @@ function createPublicationBackend(
           recount ? maxEntries : undefined,
         );
         return result.ok ? { ...result, value: exceedsCap } : result;
+      }
+      if (command.type === "cache.retire") {
+        let next: MemoryEmbeddingCacheRetireCursor | null = null;
+        const result = writeCache((size) => {
+          const page = retirePublishedMemoryEmbeddingCacheRows(db, command.input);
+          next = page.next ?? null;
+          return { ...size, size: size.size - page.removed };
+        });
+        return result.ok ? { ...result, value: next } : result;
       }
       if (command.type === "cache.clear") {
         return writeCache((size) => ({
@@ -669,7 +691,7 @@ function createPublicationBackend(
         if (staged?.kind !== "source") {
           throw new Error("Memory publication input was not started");
         }
-        header = staged.header;
+        header = { ...staged.header, verifiedFile: command.input.verifiedFile };
         rows = readStagedRows<MemorySourceIndexRow>(staged);
       }
       let facts: ReturnType<typeof readMemoryDatabaseFacts> | undefined;

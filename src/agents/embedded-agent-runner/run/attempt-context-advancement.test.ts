@@ -227,9 +227,9 @@ describe("context advancement through embedded attempt guards", () => {
           prompt: promptText,
           availableTools: new Set(["read_fixture"]),
         });
-        // 8192 context - 1024 explicit reserve - 479 nominal tokens for the system,
+        // 8192 context - 1024 explicit reserve - 472 nominal tokens for the system,
         // tool schema and pending exchange.
-        expect(assemble.mock.calls[1]?.[0].tokenBudget).toBe(6689);
+        expect(assemble.mock.calls[1]?.[0].tokenBudget).toBe(6696);
         expect(commitTurn).not.toHaveBeenCalled();
         expect(remembered).toEqual([]);
         expect(guards.getAfterTurnCheckpoint()).toBeNull();

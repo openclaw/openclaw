@@ -289,6 +289,8 @@ function buildAnthropicForwardCompatModel(
     id: trimmedModelId,
     name: trimmedModelId,
     provider,
+    // These rows are created by the native owner, whose catalog declares one developer.
+    family: manifest.modelCatalog.providers.anthropic.family,
     ...(compat ? { compat } : {}),
     ...(manifestModel?.contextWindows
       ? {
@@ -622,8 +624,12 @@ export function buildAnthropicProvider(): ProviderPlugin {
       (!isAnthropicMandatoryClaude5Model(modelId) ||
         normalizeLowercaseStringOrEmpty(provider) === PROVIDER_ID),
     resolveReasoningOutputMode: () => "native",
-    classifyFailoverReason: ({ code, errorType }) =>
-      classifyAnthropicFailoverDescriptor(errorType) ?? classifyAnthropicFailoverDescriptor(code),
+    // Funding refusals arrive as HTTP 429 rate_limit_error; only error.details.error_code tells them apart.
+    classifyFailoverReason: ({ code, errorType, errorMessage }) =>
+      /"error_code"\s*:\s*"credits_required"/.test(errorMessage)
+        ? "billing"
+        : (classifyAnthropicFailoverDescriptor(errorType) ??
+          classifyAnthropicFailoverDescriptor(code)),
     resolveThinkingProfile,
     wrapStreamFn: (ctx) => {
       const loadStream = createLazyRuntimeSurface(loadStreamRuntime, (runtime) =>

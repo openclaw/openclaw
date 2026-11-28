@@ -1,6 +1,5 @@
 import childProcess from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, expect, vi } from "vitest";
 import {
@@ -10,6 +9,7 @@ import {
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
+import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import { isSqliteSnapshotStagingMode } from "../infra/sqlite-readonly-worker-protocol.js";
 import * as tempRoot from "../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
@@ -58,7 +58,6 @@ export function setupDoctorAdmissionFixture() {
       directories.cleanup();
     } finally {
       vi.restoreAllMocks();
-      syncBuiltinESMExports();
       vi.unstubAllEnvs();
     }
   });
@@ -77,7 +76,6 @@ export function setupDoctorAdmissionFixture() {
       import fs from 'node:fs';
       import path from 'node:path';
       import sqlite from 'node:sqlite';
-      import { syncBuiltinESMExports } from 'node:module';
       import { fileURLToPath } from 'node:url';
       if (process.versions.bun) {
         const { ensureSqliteLibrarySelected } = await import(${JSON.stringify(new URL("../infra/bun-sqlite-library.js", import.meta.url).href)});
@@ -100,7 +98,6 @@ export function setupDoctorAdmissionFixture() {
           return Reflect.construct(target, args, newTarget);
         }
       });
-      syncBuiltinESMExports();
       // A wrong but disposable path must be refused before SQLite creates it.
       assert.throws(() => new sqlite.DatabaseSync(${JSON.stringify(refused)}),
         /Handoff must use the task-private database/);
@@ -110,12 +107,14 @@ export function setupDoctorAdmissionFixture() {
       native.close();
       fs.writeFileSync(path.join(root, 'sqlite-open-guard-' + process.pid + '.json'),
         JSON.stringify({ pid: process.pid, entry: process.argv[1], databasePath: expected }));
-      process.on('message', (message) => {
-        if (message && typeof message === 'object' && Array.isArray(message.args)) {
-          fs.appendFileSync(path.join(root, 'sqlite-readonly-requests-' + process.pid + '.jsonl'),
-            JSON.stringify(message.args) + '\\n');
-        }
-      });
+      if (process.argv[2] === ${JSON.stringify(SQLITE_READONLY_CHILD_ARG)}) {
+        process.on('message', (message) => {
+          if (message && typeof message === 'object' && Array.isArray(message.args)) {
+            fs.appendFileSync(path.join(root, 'sqlite-readonly-requests-' + process.pid + '.jsonl'),
+              JSON.stringify(message.args) + '\\n');
+          }
+        });
+      }
     `,
     );
     const childEnv = withRuntimePreload(
@@ -127,13 +126,12 @@ export function setupDoctorAdmissionFixture() {
     vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(root);
     expect(binding.assertPath(resolveManagedUpdateLeaseDatabasePath())).toBe(binding.databasePath);
     // Compiled runtime modules use native builtin exports, outside Vitest's facade.
-    // Observe the actual functions and synchronize ESM bindings; calls stay real.
+    // Observe the shared builtin object; calls stay real.
     const spawns = [
       vi.spyOn(childProcess, "spawnSync"),
       vi.spyOn(childProcess, "spawn"),
       vi.spyOn(childProcess, "execFile"),
     ];
-    syncBuiltinESMExports();
     const env = { OPENCLAW_STATE_DIR: root, OPENCLAW_TEST_FAST: "1" };
     const run = createUpdateRun({ trigger: "cli" }, { env });
     finishUpdateRun(run.runId, { status: "succeeded" }, { env });
@@ -173,7 +171,7 @@ export function setupDoctorAdmissionFixture() {
           if (call[0] !== process.execPath || !Array.isArray(args)) {
             continue;
           }
-          const marker = args.indexOf("--openclaw-sqlite-readonly-child");
+          const marker = args.indexOf(SQLITE_READONLY_CHILD_ARG);
           if (marker < 1) {
             continue;
           }

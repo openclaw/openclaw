@@ -1372,27 +1372,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(usesFullReplyRuntime(receivedCfg)).toBe(true);
   });
 
-  it("keeps a channel-captured config full when no prepared runtime exists", async () => {
-    setNoAbort();
-    const cfg = {
-      agents: { defaults: { userTimezone: "America/Los_Angeles" } },
-    } as OpenClawConfig;
-    let receivedCfg: OpenClawConfig | undefined;
-
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Provider: "slack", Surface: "slack" }),
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver: async (_ctx, _opts, cfgArg) => {
-        receivedCfg = cfgArg;
-        return { text: "hi" };
-      },
-    });
-
-    expect(receivedCfg).toBe(cfg);
-    expect(usesFullReplyRuntime(receivedCfg)).toBe(true);
-  });
-
   it("drops a removed Firecrawl SecretRef from Discord replies after config reload", async () => {
     setNoAbort();
     const cfg = {

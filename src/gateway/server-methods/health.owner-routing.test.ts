@@ -115,7 +115,7 @@ describe("Gateway status owner routing", () => {
       });
       const readHealth = createHealthReader(snapshot, undefined, getReadiness);
       await readHealth();
-      using access = vi.spyOn(fsp, "access");
+      using stat = vi.spyOn(fsp, "stat");
       let synchronousRuntimeCalls;
       let response;
       {
@@ -123,7 +123,7 @@ describe("Gateway status owner routing", () => {
         response = await readHealth();
         synchronousRuntimeCalls = filesystem
           .stacks()
-          .filter(({ stack }) => stack.includes("child-runtime-viability"));
+          .filter(({ stack }) => stack.includes("child-runtime-viability."));
       }
       expect(response).toHaveBeenCalledOnce();
       expect(response.mock.calls[0]).toMatchObject([
@@ -134,7 +134,7 @@ describe("Gateway status owner routing", () => {
       ]);
       expect(snapshot).not.toHaveProperty("childRuntime");
       expect(synchronousRuntimeCalls).toEqual([]);
-      expect(access.mock.calls.filter(([file]) => file === process.execPath)).toHaveLength(1);
+      expect(stat.mock.calls.filter(([file]) => file === process.execPath)).toHaveLength(1);
 
       const execPath = path.join(stateDir, "removed-runtime");
       await fsp.writeFile(execPath, "synthetic runtime", { mode: 0o700 });
@@ -152,7 +152,7 @@ describe("Gateway status owner routing", () => {
         { cached: true },
       ]);
       expect(JSON.stringify(unavailable.mock.calls[0]?.[1])).not.toContain(execPath);
-      expect(access.mock.calls.filter(([file]) => file === execPath)).toHaveLength(1);
+      expect(stat.mock.calls.filter(([file]) => file === execPath)).toHaveLength(1);
     });
   });
 

@@ -4,6 +4,7 @@ import type {
   captureAgentHarnessCompletionCustody,
   createAgentHarnessCompletionEventSink,
   deliverAgentHarnessCompletion,
+  registerAgentHarnessCompletion,
 } from "openclaw/plugin-sdk/agent-harness-completion";
 import type {
   AgentHarness,
@@ -248,11 +249,7 @@ export type ChildState = NativeSubagentAssignment & {
   fallbackCompletion?: RecoveredCompletion;
   pendingCompletion?: RecoveredCompletion;
   subscriptionClosed?: true;
-  nativeCompletionDelivered: boolean;
-  completionDeliveryAbandoned?: true;
-  completionDeliveryAttempt: number;
-  completionDeliveryTimer?: ReturnType<typeof setTimeout>;
-  deliveryOwnerKey?: string;
+  completionDelivery?: ReturnType<typeof registerAgentHarnessCompletion<RecoveredCompletion>>;
   settledWithoutCompletion: boolean;
   releaseDirectChild?: () => void;
   directOwner?: ParentOwner;

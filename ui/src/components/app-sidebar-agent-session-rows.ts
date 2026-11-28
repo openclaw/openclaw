@@ -27,6 +27,7 @@ import {
 } from "./app-sidebar-session-parent.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import {
+  type SidebarSavedPinTime,
   SIDEBAR_SESSION_NO_ATTENTION,
   summarizeSidebarSessionAttention,
   type SidebarRecentSession,
@@ -42,6 +43,7 @@ type AgentSessionRowsHost = {
   selectedAgentMainSessionKey(agentId: string): string;
   readonly sessionsShowCron: boolean;
   readonly sessionsShowSystem: boolean;
+  readonly gatewayTimeForSavedPin: SidebarSavedPinTime;
   readonly sessionsStatusFilter: SidebarSessionStatusFilter;
   readonly sessionInvolvingMeFilterActive: boolean;
 };
@@ -94,7 +96,9 @@ export function projectSidebarAgentSessionRows({
     sourceRows: (grouped ? result : host.sessionData.resultForAgent(selected))?.sessions ?? [],
     selectedAgentId: selected,
     statusFilter: host.sessionsStatusFilter,
+    showSystem: host.sessionsShowSystem,
     now: Date.now(),
+    gatewayTimeForSavedPin: host.gatewayTimeForSavedPin,
     deletionState: (key, agentId) =>
       host.sessionDataContext?.sessions.deletionState(
         key,
@@ -285,7 +289,12 @@ export function projectSidebarSessionReference({
 }: {
   host: Pick<
     AgentSessionRowsHost,
-    "sessionDataContext" | "sessionData" | "sessionsStatusFilter" | "selectedAgentMainSessionKey"
+    | "sessionDataContext"
+    | "sessionData"
+    | "gatewayTimeForSavedPin"
+    | "sessionsStatusFilter"
+    | "sessionsShowSystem"
+    | "selectedAgentMainSessionKey"
   >;
   row: GatewaySessionRow;
   agentId: string;
@@ -302,7 +311,9 @@ export function projectSidebarSessionReference({
       (result !== undefined ? result : host.sessionData.resultForAgent(agentId))?.sessions ?? [],
     selectedAgentId: agentId,
     statusFilter: host.sessionsStatusFilter,
+    showSystem: host.sessionsShowSystem,
     now: Date.now(),
+    gatewayTimeForSavedPin: host.gatewayTimeForSavedPin,
     deletionState: (key, owner) => host.sessionDataContext?.sessions.deletionState(key, owner),
     archiveVisibility: (key) => host.sessionDataContext?.sessions.archiveVisibility(key),
   });

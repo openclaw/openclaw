@@ -57,9 +57,12 @@ enum DashboardFailurePage {
         title: String, message: String, detail: String?, url: URL?, primaryButton: String? = nil) -> String
     {
         let primaryButton = primaryButton ?? """
-        <button type="button" class="primary"
-          onclick="window.webkit.messageHandlers.openclawGateways
-            .postMessage({type:'reload'})">\(self.htmlEscape(String(localized: "Reload")))</button>
+        <button type="button" class="primary" id="dashboard-reload"
+          onclick="if (this.getAttribute('aria-disabled') !== 'true') {
+            window.webkit.messageHandlers.openclawGateways.postMessage({type:'reload'});
+          }"><span>\(self.htmlEscape(String(localized: "Reload")))</span></button>
+        <span id="dashboard-reload-status" role="status"
+          data-label="\(self.htmlEscape(String(localized: "Connecting…")))"></span>
         """
         let connectionTitle = self.htmlEscape(String(localized: "Connection Settings…"))
         let detailHTML = detail.map { "<p class=\"detail\">\(self.htmlEscape($0))</p>" } ?? ""
@@ -93,6 +96,51 @@ enum DashboardFailurePage {
           </main>
         </body>
         </html>
+        """
+    }
+
+    static func reloadProgressScript(isReloading: Bool) -> String {
+        """
+        (() => {
+          if (location.href !== 'about:blank') return;
+          const button = document.getElementById('dashboard-reload');
+          if (!button) return;
+          const busy = \(isReloading);
+          button.setAttribute('aria-busy', busy);
+          button.setAttribute('aria-disabled', busy);
+          const status = document.getElementById('dashboard-reload-status');
+          status.textContent = busy ? status.dataset.label : '';
+        })()
+        """
+    }
+
+    static func html(removal: MacOpenClawIDRemoval, now: Date = Date()) -> String {
+        """
+        <!doctype html>
+        <html><head><meta charset="utf-8"><style>
+        \(self.styles)
+        :root { --primary: #0067df; --primary-hover: #005bc8; --primary-active: #004fae; --focus-ring: #007aff; }
+        main { width: min(900px, calc(100vw - 72px)); padding: 32px; text-align: center;
+          background: transparent; border: 0; box-shadow: none; }
+        h1 { font-size: 28px; margin-top: 24px; }
+        p { line-height: 1.5; }
+        .device { width: 64px; height: 64px; color: #8e8e93; }
+        .actions { flex-direction: column; margin-top: 32px; gap: 10px; }
+        @media (prefers-color-scheme: light) { body { background: #fff; } }
+        </style></head><body><main>
+        <svg class="device" viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="3"
+          aria-hidden="true"><rect x="8" y="8" width="46" height="34" rx="4"/>
+          <path d="M3 49h39"/><circle cx="49" cy="43" r="12"/><path d="M42 43h14"/></svg>
+        <h1>\(self.htmlEscape(removal.title))</h1>
+        <p>\(self.htmlEscape(removal.dashboardMessage(now: now)))</p>
+        <div class="actions">
+          <button class="primary" onclick="window.webkit.messageHandlers.openclawGateways
+            .postMessage({type:'openclaw-id-sign-in'})">Sign in with OpenClaw ID…</button>
+          <button class="settings" onclick="window.webkit.messageHandlers.openclawDeviceSettings
+            .postMessage({type:'open',panel:'connection'})">Set up a different connection</button>
+          <button onclick="window.webkit.messageHandlers.openclawGateways
+            .postMessage({type:'close-recovery'})">Close</button>
+        </div></main></body></html>
         """
     }
 
@@ -193,6 +241,35 @@ enum DashboardFailurePage {
     button.primary { background: var(--primary); border-color: transparent; color: #fff; }
     button.primary:hover { background: var(--primary-hover); }
     button.primary:active { background: var(--primary-active); }
+    #dashboard-reload[aria-busy="true"] {
+      position: relative;
+      background: var(--primary);
+      cursor: progress;
+    }
+    #dashboard-reload[aria-busy="true"] span { opacity: 0; }
+    #dashboard-reload[aria-busy="true"]::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      margin: auto;
+      width: 16px;
+      height: 16px;
+      border: 2px solid rgba(255,255,255,.36);
+      border-top-color: currentColor;
+      border-radius: 50%;
+      animation: dashboard-reload-spin .75s linear infinite;
+    }
+    @keyframes dashboard-reload-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) {
+      #dashboard-reload[aria-busy="true"]::after { animation: none; }
+    }
+    #dashboard-reload-status {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+    }
     button.settings { background: transparent; border-color: transparent; }
     button.settings:hover { background: var(--button-background); }
     button.settings:active { background: var(--button-active); }

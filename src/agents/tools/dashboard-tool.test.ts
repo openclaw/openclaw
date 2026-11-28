@@ -98,6 +98,9 @@ it("declares dashboard actions without overriding widget placement", () => {
   expect(tool.requiredClientCaps).toBeUndefined();
   expect(tool.description).toContain("stable names");
   expect(tool.description).toContain("sm=3x3");
+  expect(tool.description).toContain("not HTML authoring or browser side panels");
+  expect(tool.description).toContain("Use focus_tab with tabId for saved widgets");
+  expect(tool.description).toContain("Inspect widgets in their chat/dashboard frame");
   expect(directoryDescription).not.toMatch(/keep .*inline/i);
   expect(directoryDescription).toMatch(/widget_put.*plugin.*only/i);
   expect(tool.description).not.toMatch(/show_widget|widget_code|\bpin\b/);

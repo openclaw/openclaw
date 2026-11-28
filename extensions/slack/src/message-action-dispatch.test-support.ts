@@ -16,6 +16,7 @@ export function createDisabledSlackActions() {
     pins: false,
     memberInfo: false,
     emojiList: false,
+    channelInfo: false,
   };
 }
 

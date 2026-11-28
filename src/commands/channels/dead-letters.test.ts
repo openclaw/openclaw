@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
+import { ExpectedCliError } from "../../cli/expected-cli-error.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTestRuntime } from "../test-runtime-config-helpers.js";
@@ -18,9 +19,7 @@ async function withFailedEvent(
     const queue = createChannelIngressQueue<{ text: string }>(scope);
     await queue.enqueue("event-1", { text: "recover me" });
     const claim = await queue.claim("event-1", { ownerId: "worker" });
-    if (!claim) {
-      throw new Error("Expected a claimed ingress event");
-    }
+    assert(claim, "Expected a claimed ingress event");
     await queue.fail(claim, { reason: "handler-error", failedAt: 20 });
     await run(queue);
   });
@@ -31,16 +30,14 @@ describe("channel dead-letter commands", () => {
   beforeEach(() => {
     runtime.log.mockClear();
     vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log);
-    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) =>
-      runtime.log(JSON.stringify(value, null, 2)),
-    );
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
   });
   afterEach(() => vi.restoreAllMocks());
 
   it.each(["ops", undefined])("lists retained failures for account %s as JSON", async (account) => {
     await withFailedEvent({ channelId: "telegram", accountId: account }, async () => {
       await channelsDeadLettersListCommand({ channel: "telegram", account, json: true });
-      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+      expect(defaultRuntime.writeJson).toHaveBeenNthCalledWith(1, {
         channelId: "telegram",
         accountId: account ?? "default",
         deadLetters: [
@@ -62,9 +59,7 @@ describe("channel dead-letter commands", () => {
       );
       const replay = await queue.claimNext({ ownerId: "replay-worker" });
       expect(replay).toMatchObject({ id: "event-1", payload: { text: "recover me" } });
-      if (!replay) {
-        throw new Error("Expected a resubmitted ingress event");
-      }
+      assert(replay, "Expected a resubmitted ingress event");
       await queue.complete(replay, { completedAt: 40 });
 
       await expect(
@@ -74,19 +69,24 @@ describe("channel dead-letter commands", () => {
   });
 
   it.each(
-    ["", " \t "].flatMap((account) => [
-      { account, command: "list" },
-      { account, command: "resubmit" },
-    ]),
-  )("rejects blank --account '$account' at the $command boundary", async ({ account, command }) => {
+    [
+      { channel: "telegram", account: "" },
+      { channel: "telegram", account: " \t " },
+      { channel: " \t ", account: undefined },
+    ].flatMap((selectors) => ["list", "resubmit"].map((command) => ({ selectors, command }))),
+  )("rejects blank selectors at the $command boundary", async ({ selectors, command }) => {
     await withOpenClawTestState(stateOptions, async () => {
-      const options = { channel: "telegram", account, json: true };
+      const options = { ...selectors, json: true };
       const action =
         command === "list"
           ? channelsDeadLettersListCommand(options)
           : channelsDeadLettersResubmitCommand("event-1", options);
-      await expect(action).rejects.toThrow("--account must not be blank");
+      await expect(action).rejects.toThrow(ExpectedCliError);
+      await expect(action).rejects.toThrow(
+        selectors.channel?.trim() ? "--account must not be blank" : "--channel is required.",
+      );
       expect(runtime.log).not.toHaveBeenCalled();
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
     });
   });
 });

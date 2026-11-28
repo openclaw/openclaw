@@ -145,7 +145,7 @@ test.each(["subagent", "dashboard"])(
     subagentRuns.set(entry.runId, entry);
     const session = { sessionId: "child", updatedAt: 1 };
     const retained = buildSubagentRunReadIndexFromRuns({ runs: new Map(), now: 1 });
-    using display = vi.spyOn(retained, "getDisplaySubagentRun");
+    using display = vi.spyOn(retained, "getSessionDisplayFacts");
     using descendants = vi.spyOn(retained, "countActiveDescendantRuns");
     const read = () => {
       const controller = resolveSessionChildController(entry.childSessionKey, session);

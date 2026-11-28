@@ -125,11 +125,11 @@ portSuite("Logbook PostgreSQL port and exact backup", (client) => {
     expect(rows(file("backup/database.sqlite"), descriptor)).toEqual(snapshot);
     const anchorPath = file("restored-anchor.sqlite");
     const restored = await fixture.restore(manifest, anchorPath);
-    const { tables, allocations: restoredAllocations } = await fixture.inspect(
+    const { catalog: _catalog, ...restoredVerification } = await fixture.inspect(
       restored.namespace,
       true,
     );
-    expect({ tables, allocations: restoredAllocations }).toEqual(forward);
+    expect(restoredVerification).toEqual(forward);
     using anchor = openNodeSqliteDatabase(anchorPath);
     expect(anchor.prepare("SELECT * FROM openclaw_engine_anchor").get()).toEqual({
       engine: "postgres",

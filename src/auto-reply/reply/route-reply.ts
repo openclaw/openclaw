@@ -7,7 +7,6 @@ import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import { runAdmittingGatewayDelivery } from "../../channels/turn/admitting-gateway-delivery.js";
-import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -27,6 +26,7 @@ import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { isPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
+import type { ChatRef } from "../../sessions/chat-ref.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
@@ -61,7 +61,7 @@ type RouteReplyParams = {
   /** Session key for deriving agent identity defaults (multi-agent). */
   sessionKey?: string;
   /** Original session generation retained by durable delivery after producer settlement. */
-  sessionGeneration?: SessionDeliveryGeneration;
+  sessionGeneration?: ChatRef;
   /** Prepared owner for unscoped sessions; an agent-scoped target remains authoritative. */
   agentId?: string;
   /** Session key for policy resolution when native-command delivery targets a different session. */
@@ -380,6 +380,8 @@ async function routeReplyOperation(
             }
           : (assertGatewayCurrent ?? params.assertCurrent),
       ...(params.assertCurrent ? { deliveryRetryOwner: "caller" as const } : {}),
+      // Routed finals (exec completions, followups, session events) are agent finals too.
+      ...(params.replyKind === "final" ? { retryAmbiguousFinalText: true as const } : {}),
       ...(params.deliveryIntentId
         ? {
             deliveryIntentId: params.deliveryIntentId,

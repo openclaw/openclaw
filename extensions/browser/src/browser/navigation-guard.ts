@@ -56,6 +56,11 @@ export type BrowserNavigationPolicyOptions = {
   assertNavigationCurrent?: () => void;
   /** Operator's Control UI request opening a new tab; never set for agent or CLI callers. */
   allowOperatorPages?: true;
+  /**
+   * Policy without this invocation's grants. The tab keeps it for documents the
+   * page requests after the invocation ends.
+   */
+  standingSsrfPolicy?: SsrFPolicy;
 };
 
 /** Describes whether the browser itself is routing page traffic through a proxy. */
@@ -72,12 +77,13 @@ export function withBrowserNavigationPolicy(
   ssrfPolicy?: SsrFPolicy,
   opts?: Pick<
     BrowserNavigationPolicyOptions,
-    "browserProxyMode" | "assertNavigationCurrent" | "allowOperatorPages"
+    "browserProxyMode" | "assertNavigationCurrent" | "allowOperatorPages" | "standingSsrfPolicy"
   >,
 ): BrowserNavigationPolicyOptions {
   return {
     ...(ssrfPolicy ? { ssrfPolicy } : {}),
     ...(opts?.allowOperatorPages ? { allowOperatorPages: true } : {}),
+    ...(opts?.standingSsrfPolicy ? { standingSsrfPolicy: opts.standingSsrfPolicy } : {}),
     ...(opts?.assertNavigationCurrent
       ? { assertNavigationCurrent: opts.assertNavigationCurrent }
       : {}),

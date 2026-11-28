@@ -1,4 +1,4 @@
-/** Shared E2E mocks for directive behavior tests that exercise reply-agent dispatch. */
+/** Runtime isolation for direct directive-handler tests. */
 import { vi, type Mock } from "vitest";
 
 export const runEmbeddedAgentMock: Mock = vi.fn();
@@ -8,81 +8,9 @@ export const resolveCommandSecretRefsViaGatewayMock: Mock = vi.fn();
 export const clearSessionAuthProfileOverrideMock: Mock = vi.fn();
 export const resolveSessionAuthSelectionMock: Mock = vi.fn();
 
-function objectRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
-}
+export const runReplyAgentMock: Mock = vi.fn();
 
-function normalizeReplyAgentPayload(payload: Record<string, unknown>, params: unknown) {
-  const text = typeof payload.text === "string" ? payload.text : undefined;
-  if (!text) {
-    return payload;
-  }
-  const explicitReplyMatch = text.match(/\[\[\s*reply_to\s*:\s*([^\]]+?)\s*\]\]/i);
-  const explicitReplyToId = explicitReplyMatch?.[1]?.trim();
-  const replyToCurrentPattern = /\[\[\s*reply_to_current\s*\]\]/gi;
-  const hasReplyToCurrent = replyToCurrentPattern.test(text);
-  const currentMessageId = objectRecord(objectRecord(params)?.sessionCtx)?.MessageSid;
-  // Directive tests encode reply targets in text markers so mocked agents can stay lightweight.
-  const cleanedText = text
-    .replace(replyToCurrentPattern, "")
-    .replace(/\[\[\s*reply_to\s*:\s*([^\]]+?)\s*\]\]/gi, "")
-    .trim();
-
-  return {
-    ...payload,
-    text: cleanedText,
-    ...(explicitReplyToId
-      ? { replyToId: explicitReplyToId }
-      : hasReplyToCurrent && typeof currentMessageId === "string"
-        ? { replyToId: currentMessageId, replyToCurrent: true }
-        : {}),
-  };
-}
-
-async function runMockedReplyAgent(runParams: unknown, params: unknown) {
-  const result = await runEmbeddedAgentMock(runParams);
-  const payloadsRaw = objectRecord(result)?.payloads;
-  const payloads = Array.isArray(payloadsRaw)
-    ? payloadsRaw.flatMap((payload) => {
-        const record = objectRecord(payload);
-        return record ? [record] : [];
-      })
-    : [];
-  const normalized = payloads.map((payload) => normalizeReplyAgentPayload(payload, params));
-  if (normalized.length === 0) {
-    return undefined;
-  }
-  return normalized.length === 1 ? normalized[0] : normalized;
-}
-
-/** Runs the mocked reply agent using the follow-up run payload from directive tests. */
-export async function runDirectiveBehaviorReplyAgent(params: unknown) {
-  const runParams = objectRecord(objectRecord(params)?.followupRun)?.run ?? {};
-  return await runMockedReplyAgent(runParams, params);
-}
-
-export const runReplyAgentMock: Mock = vi.fn(runDirectiveBehaviorReplyAgent);
-
-/** Runs the mocked prepared-reply path with the resolved model and elevation settings. */
-export async function runDirectiveBehaviorPreparedReply(params: unknown) {
-  const input = objectRecord(params) ?? {};
-  const runParams = {
-    provider: input.provider,
-    model: input.model,
-    thinkLevel: input.resolvedThinkLevel,
-    reasoningLevel: input.resolvedReasoningLevel,
-    bashElevated: {
-      enabled: input.elevatedEnabled === true,
-      allowed: input.elevatedAllowed === true,
-      defaultLevel:
-        typeof input.resolvedElevatedLevel === "string" ? input.resolvedElevatedLevel : "off",
-      fullAccessAvailable: true,
-    },
-  };
-  return await runMockedReplyAgent(runParams, params);
-}
-
-export const runPreparedReplyMock: Mock = vi.fn(runDirectiveBehaviorPreparedReply);
+export const runPreparedReplyMock: Mock = vi.fn();
 
 vi.mock("../agents/embedded-agent.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/embedded-agent.js")>()),

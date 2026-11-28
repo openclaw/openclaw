@@ -106,6 +106,16 @@ extension OnboardingView {
                 {
                     self.selectLocalGateway()
                 }
+                if MacOpenClawIDFeature.isEnabled {
+                    self.connectionChoiceButton(
+                        title: "Sign in with OpenClaw ID",
+                        subtitle: "Use a claw you own, from anywhere. No VPN or token.",
+                        systemImage: "person.crop.circle",
+                        selected: false)
+                    {
+                        self.beginOpenClawIDSignIn()
+                    }
+                }
                 self.connectionChoiceButton(
                     title: "On another computer",
                     subtitle: "Connect this Mac to an OpenClaw that is already running somewhere else.",
@@ -133,22 +143,23 @@ extension OnboardingView {
             Text("How do you reach the computer it runs on?")
                 .foregroundStyle(.secondary)
             self.onboardingCard(spacing: 12, padding: 14) {
-                self.connectionChoiceButton(
-                    title: "Sign in with OpenClaw ID",
-                    subtitle: "Connect from anywhere. Native sign-in is not available in this build.",
-                    systemImage: "person.crop.circle",
-                    selected: false)
-                {
-                    self.openClawID.begin(.connect)
-                    self.showOpenClawID = true
-                }
-                self.connectionChoiceButton(
-                    title: "Use a node invitation",
-                    subtitle: "Add this Mac using an owner-created invitation. Chat access stays separate.",
-                    systemImage: "envelope",
-                    selected: false)
-                {
-                    self.beginNodeInvitation()
+                if MacOpenClawIDFeature.isEnabled {
+                    self.connectionChoiceButton(
+                        title: "Sign in with OpenClaw ID",
+                        subtitle: "Use a claw you own, from anywhere.",
+                        systemImage: "person.crop.circle",
+                        selected: false)
+                    {
+                        self.beginOpenClawIDSignIn()
+                    }
+                    self.connectionChoiceButton(
+                        title: "Use a node invitation",
+                        subtitle: "For a Mac without a person signed in: add it as a node only.",
+                        systemImage: "envelope",
+                        selected: false)
+                    {
+                        self.beginNodeInvitation()
+                    }
                 }
                 self.connectionChoiceButton(
                     title: "Nearby",
@@ -239,7 +250,6 @@ extension OnboardingView {
                 }
                 .buttonStyle(.link)
                 .font(.caption)
-                .help("Retry discovery (Bonjour + Tailscale DNS-SD).")
                 Spacer(minLength: 0)
             }
             .padding(.leading, 4)
@@ -808,6 +818,11 @@ extension OnboardingView {
                         title: "Configure later",
                         subtitle: "Pick Local or Remote in the Connection window whenever you’re ready.",
                         systemImage: "gearshape")
+                } else if self.selectedConnectionMode == .local, !MacOpenClawIDFeature.isEnabled {
+                    self.featureRow(
+                        title: "Running on this Mac",
+                        subtitle: "Private to this computer. It starts automatically.",
+                        systemImage: "checkmark.circle")
                 } else if self.selectedConnectionMode == .local {
                     self.featureRow(
                         title: "Reach it from anywhere",
@@ -832,15 +847,15 @@ extension OnboardingView {
                         systemImage: "bubble.left.and.bubble.right")
                     self.featureRow(
                         title: "Connect Discord, Slack, Telegram, WhatsApp, …",
-                        subtitle: "Open Dashboard → Settings → Channels to link channels and monitor status.",
+                        subtitle: "Open Settings → Channels to link channels and monitor status.",
                         systemImage: "link",
-                        buttonTitle: "Open Dashboard → Settings → Channels")
+                        buttonTitle: "Open Settings → Channels")
                     {
                         AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.channelsSettingsPath)
                     }
                     self.featureRow(
                         title: "Try Voice Wake",
-                        subtitle: "Enable Voice Wake in Dashboard → Settings → Talk for hands-free commands " +
+                        subtitle: "Enable Voice Wake in Settings → Talk for hands-free commands " +
                             "with a live transcript overlay.",
                         systemImage: "waveform.circle")
                     self.featureRow(
@@ -850,9 +865,9 @@ extension OnboardingView {
                         systemImage: "rectangle.inset.filled.and.person.filled")
                     self.featureRow(
                         title: "Give your agent more powers",
-                        subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Dashboard → Skills.",
+                        subtitle: "Enable optional skills (Peekaboo, oracle, camsnap, …) from Skills.",
                         systemImage: "sparkles",
-                        buttonTitle: "Open Dashboard → Skills")
+                        buttonTitle: "Open Skills")
                     {
                         AppNavigationActions.openPrimaryWebRoute(DashboardRouteMap.skillsPagePath)
                     }

@@ -4,9 +4,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-command-executor.js";
 import { withGatewayMaintenanceDrain } from "../cli/update-cli/update-command-service-drain.js";
-import { createConfigIO } from "../config/io.factory.js";
 import { withGatewayServiceOperationLock } from "../daemon/service-operation-lock.js";
-import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -21,7 +19,7 @@ import {
 import { updateImmutableInstallRecord } from "./package-update-activation-immutable.js";
 import { resolveImmutableRecoveryCommand } from "./package-update-activation-paths.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "./restart-budget.js";
-import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
+import { checkUpdateCandidate } from "./update-candidate-check.js";
 import { resolveUpdateFinalizationTimeoutMs } from "./update-finalization-budget.js";
 import {
   readImmutableSchemaContracts,
@@ -108,46 +106,25 @@ async function verifyGeneration(
   assertCurrent();
 }
 
-/** Same-schema activation never migrates or rewinds live databases. Doctor rehearses private copies. */
-async function rehearse(
+/** Same-schema activation never migrates or rewinds live databases; startup is verified live. */
+async function checkGeneration(
   record: ImmutableInstallRecord,
   root: string,
   service: ImmutableServiceObservation,
   options: Options,
   assertCurrent: () => void,
 ) {
-  const env = service.state.env;
-  const { sourceConfig: config } = await createConfigIO({
-    env,
-    configPath: record.descriptor.service.configPath,
-    observe: false,
-    pluginValidation: "skip",
-  }).readBestEffortConfigSnapshot();
-  assertCurrent();
-  const result = await validateUpdateCandidateCanary({
+  const result = await checkUpdateCandidate({
     root,
-    sourceBundledPlugins: {
-      packageRoot: record.descriptor.current.path,
-      directory: resolveBundledPluginsDir(env),
-    },
-    config,
+    env: service.state.env,
     stateDir: record.descriptor.service.stateDir,
-    env,
     nodeRunner: record.descriptor.runtime.path,
     timeoutMs: options.timeoutMs,
-    migrationPolicy: "startup-only",
-    assertCurrent,
-    onStep: () => options.onReceipt?.("immutable:canary-step"),
+    requireRuntime: true,
   });
   assertCurrent();
-  if (
-    result.status !== "ok" ||
-    result.phase !== "readiness" ||
-    result.steps.find((step) => step.name === "candidate-gateway-startup")?.exitCode !== 0
-  ) {
-    throw new Error(
-      "Immutable candidate canary did not verify Doctor, plugins, startup and readiness; current is unchanged.",
-    );
+  if (result.status !== "ok") {
+    throw new Error("Immutable candidate could not load its update runtime; current is unchanged.");
   }
 }
 
@@ -321,27 +298,7 @@ function activationOwner(
     verifyProtection(service);
     assertImmutableProtectionUnchanged(protection, protectionContext(service));
     save({ protection });
-    options.onReceipt?.("immutable:post-start-canary");
-    try {
-      await rehearse(record, record.descriptor.current.path, service, options, assertCurrent);
-    } catch (error) {
-      assertCurrent();
-      if (hasCommandProcessCleanupError(error)) {
-        throw error;
-      }
-      return pending("post-start-canary-unverified");
-    }
-    assertService(service);
-    const after = await observe();
-    if (
-      after.outcome !== "verified" ||
-      !after.service ||
-      after.verification?.bootId !== observed.verification.bootId ||
-      after.service.pid !== service.pid
-    ) {
-      return pending("post-start-generation-unverified");
-    }
-    return receipt(status, after.service, retire, after.verification);
+    return receipt(status, service, retire, observed.verification);
   };
   const stop = async (
     service: ImmutableServiceObservation,
@@ -424,9 +381,9 @@ function activationOwner(
       ...protectionContext(service),
     });
     verifyProtection(service);
-    // The predecessor rehearses these exact accepted bytes. A write during its
-    // awaited rehearsal cannot become a new trusted protection baseline.
-    await rehearse(record, operation().previous.path, service, options, assertCurrent);
+    // The predecessor's check reads these exact accepted bytes. A write during
+    // the awaited check cannot become a new trusted protection baseline.
+    await checkGeneration(record, operation().previous.path, service, options, assertCurrent);
     verifyProtection(service);
     assertImmutableProtectionUnchanged(protection, protectionContext(service));
     save({ protection, phase: "rollback-stopping" });
@@ -576,10 +533,10 @@ export async function activateImmutableUpdate(
         `Immutable activation requires matching admitted schema contracts; ${contracts.reasons.join(" ")} Previous Gateway remains running.`,
       );
     }
-    options.onReceipt?.("immutable:canary");
-    await rehearse(record, candidate.path, service, options, assertCurrent);
+    options.onReceipt?.("immutable:candidate-check");
+    await checkGeneration(record, candidate.path, service, options, assertCurrent);
     if (await fs.stat(path.join(candidate.path, "dist", "gateway-prewarm.js")).catch(() => null)) {
-      // Rehearsal stays isolated. Warm only final release paths, as the service user.
+      // Warm only final release paths, as the service user.
       assertCurrent();
       try {
         const result = await runCommandWithTimeout(

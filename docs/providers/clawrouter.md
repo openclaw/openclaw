@@ -71,6 +71,27 @@ you only need an issued ClawRouter key.
   </Step>
 </Steps>
 
+## Bedrock Converse
+
+The exact `aws-bedrock/amazon.nova-lite-v1:0` row can use the native Bedrock
+ConverseStream SDK when a current proxy-key catalog grants `llm.chat` and the
+`aws_bedrock.converse_stream` → `aws_bedrock.converse_eventstream` operation.
+This requires qualified router runtime support and an explicit model declaration;
+client support alone does not activate an offer or prove live AWS entitlement.
+Claude models, regional aliases and inference profiles do not inherit this qualification.
+
+Native transport uses `/v1/native/aws-bedrock/model/<encoded-model>/converse-stream`.
+Manifest transport uses its declared `/v1/proxy/aws-bedrock/<endpoint>` and wraps
+the **final AWS-serialized JSON** in `{ method, pathParams: { model }, query, body }`.
+The selected model owns the path. The SDK retains native message, tool and image
+serialization and EventStream decoding. The client accepts a complete bounded
+response; this is not an incremental-delivery guarantee.
+
+Both transports use only the selected ClawRouter key, recheck its fresh catalog,
+honor caller cancellation and disable SDK retries. AWS environment credentials,
+profiles and `AWS_BEDROCK_SKIP_AUTH` cannot change proxy authentication or destination.
+Direct Amazon Bedrock configuration keeps its existing behavior.
+
 ## Vercel native Messages
 
 The frozen `vercel-ai-gateway/anthropic/claude-sonnet-4.6` row uses OpenClaw's
@@ -457,7 +478,7 @@ different key or silently replacing the configured search provider.
 ## Image generation
 
 The bundled plugin also registers ClawRouter with the native image runtime,
-`image_generate` tool, and `openclaw infer image generate` CLI. Text-only requests
+`image_generate` tool, and `openclaw infer image generate` CLI. OpenAI text-only requests
 use `/v1/images/generations`; requests with reference images use the JSON
 `/v1/images/edits` route without changing the selected model. The ClawRouter
 deployment must support the requested route. Masks, variations, and streaming
@@ -500,6 +521,36 @@ downloads and private-network checks. Cancellation and the request deadline
 cover catalog lookup, generation, and result downloads. Prompt, image-count, and
 explicit size bounds come from that model’s current catalog generation limits;
 unknown limits do not authorize generation.
+
+### Native Google images
+
+The exact `google/gemini-3.1-flash-image` and `google/gemini-3-pro-image`
+identities require a fresh, same-key catalog offer from `google-gemini` with
+`image.generate`, request `google.image_generate` and response `google.image`.
+Native offers call `/v1/native/google-gemini/v1beta/models/{upstream}:generateContent`.
+Manifest offers call the advertised `image_generate` endpoint with
+`{ body, pathParams: { model: selectedUpstream } }`. No generic Chat route or
+unqualified Interactions operation substitutes for this contract.
+
+The actual image runtime shares Google's native request and image decoder with
+the direct provider. It accepts a prompt and at most five inline PNG/JPEG/WebP
+references, the frozen aspect ratios, and `1K`/`2K`/`4K` geometry.
+One call performs one generation; a four-image output bound is not a request for
+four images. Count overrides above one, HEIC/HEIF, provider-specific options,
+file references and remote assets are not supported by this qualified wrapper.
+
+Request and response JSON are each bounded to 8 MiB. Complete STOP output,
+explicit supported MIME types and valid image siblings are required; up to four
+outputs share a 4 MiB decoded limit. Cancellation remains active through EOF.
+The client neither follows generation redirects nor repeats a paid POST.
+Only the selected ClawRouter key is sent; native Google credentials and
+credential-header overrides are rejected.
+
+Catalog eligibility is required for every request; stale, foreign, revoked or
+unsupported offers fail before generation. Missing pricing stays unknown.
+ClawRouter's upstream-dollar hard-budget guard and explicit policy-fixed billing
+remain distinct. Client support does not activate the source-owned declaration
+or certify Worker integration; those require the matching runtime and snapshot.
 
 ## Native Gradium speech
 
@@ -613,6 +664,14 @@ with another available model. An explicit chat model pin still prevents silent
 model switching; a cron job's own model and fallback list remain independent of
 that pin. Router-key authentication failures and router budget denials retain
 their normal credential cooldown behavior.
+
+ClawRouter owns account rotation and per-model capacity, so a ClawRouter failure
+classified as a rate limit or overload never puts the ClawRouter key into a local
+cooldown, even with a day-long `Retry-After`. Other ClawRouter models stay
+selectable, and the limited model stays eligible: a later request for it asks
+ClawRouter again. A `429` that reports a billing or budget denial still cools
+down the key. A rate-limit cooldown that an earlier release stored for the key
+stops blocking requests after the update.
 
 `invalid_request_error` alone does not identify the cause: Anthropic also uses it
 for exhausted upstream credits. Check the bounded, credential-redacted

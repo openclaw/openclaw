@@ -20,7 +20,14 @@ vi.mock("../lib/nodes/index.ts", async (importOriginal) => ({
   signDevicePayload: vi.fn(async () => "signature"),
 }));
 
-const started = { requestId: "request-1", code: "ABCDEFGH", expiresAtMs: Date.now() + 600_000 };
+// The issuing Gateway puts its profile in the code, so a bare `openclaw pair` reaches it.
+const issued = { command: "openclaw pair work:ABCD-EFGH" };
+const started = {
+  requestId: "request-1",
+  code: "ABCDEFGH",
+  command: issued.command,
+  expiresAtMs: Date.now() + 600_000,
+};
 const approved = {
   status: "approved",
   deviceToken: "device-token",
@@ -89,8 +96,8 @@ async function mountWaitingGate(lastError = "", code: string | null = null) {
   expect(element.querySelector("#login-gate-url")).toBeNull();
   element.querySelector<HTMLButtonElement>(".login-gate__browser-pair-get")!.click();
   await settle();
-  expect(element.querySelector(".login-gate__browser-pair-code")?.textContent).toContain(
-    "ABCD-EFGH",
+  expect(element.querySelector(".login-gate__command--hero")?.textContent).toContain(
+    "work:ABCD-EFGH",
   );
   return { element, collect, onBrowserPaired, onConnect, approve: hold.resolve };
 }
@@ -150,6 +157,9 @@ describe("browser pairing", () => {
     expect(gate.element.textContent).toContain("Run on the Gateway host");
     expect(gate.element.textContent).toContain("administrator access");
     expect(gate.element.textContent).toContain("not a guest invitation");
+    expect(gate.element.querySelector(".login-gate__command--hero code")?.textContent).toBe(
+      "openclaw pair work:ABCD-EFGH",
+    );
   });
 
   it("shows reconnecting until a pending reply restores waiting without a new request", async () => {
@@ -164,14 +174,12 @@ describe("browser pairing", () => {
     await settle();
     expect(pair.onState).toHaveBeenLastCalledWith({
       kind: "reconnecting",
-      code: "ABCD-EFGH",
-      browserId: "01234567",
+      ...issued,
     });
     await vi.advanceTimersByTimeAsync(2_100);
     expect(pair.onState).toHaveBeenLastCalledWith({
       kind: "waiting",
-      code: "ABCD-EFGH",
-      browserId: "01234567",
+      ...issued,
     });
     await vi.advanceTimersByTimeAsync(2_100);
     expect(pair.onApproved).toHaveBeenCalledWith(gatewayUrl);
@@ -209,8 +217,7 @@ describe("browser pairing", () => {
     await vi.advanceTimersByTimeAsync(10_001);
     expect(pair.onState).toHaveBeenLastCalledWith({
       kind: "reconnecting",
-      code: "ABCD-EFGH",
-      browserId: "01234567",
+      ...issued,
     });
     await vi.advanceTimersByTimeAsync(2_100);
     expect(pair.onApproved).toHaveBeenCalledWith(gatewayUrl);
@@ -222,7 +229,7 @@ describe("browser pairing", () => {
     const gate = await mountWaitingGate();
     gate.element.props = { ...gate.element.props, gatewayUrl: `${gatewayUrl}/replaced` };
     await expectRetired(gate);
-    expect(gate.element.querySelector(".login-gate__browser-pair-code")).toBeNull();
+    expect(gate.element.querySelector(".login-gate__command--hero")).toBeNull();
   });
 
   it.each([
@@ -254,8 +261,7 @@ describe("browser pairing", () => {
     await pair.start("ws://gateway.example");
     expect(pair.onState).toHaveBeenLastCalledWith({
       kind: "waiting",
-      code: "ABCD-EFGH",
-      browserId: "01234567",
+      ...issued,
     });
     await vi.advanceTimersByTimeAsync(4_100);
     expect(pair.onApproved).toHaveBeenCalledWith("ws://gateway.example");
@@ -299,8 +305,7 @@ describe("browser pairing", () => {
     await settle();
     expect(pair.onState).toHaveBeenLastCalledWith({
       kind: "cancelling",
-      code: "ABCD-EFGH",
-      browserId: "01234567",
+      ...issued,
     });
     const cancellationRequest = fetchMock.mock.calls[2];
     if (!cancellationRequest) {
@@ -319,8 +324,7 @@ describe("browser pairing", () => {
     expect(pair.onApproved).not.toHaveBeenCalled();
     expect(pair.onState).toHaveBeenLastCalledWith({
       kind: "cancelling",
-      code: "ABCD-EFGH",
-      browserId: "01234567",
+      ...issued,
     });
     withdrawal.resolve(json({ status: "cancelled" }));
     await cancelling;
@@ -342,8 +346,7 @@ describe("browser pairing", () => {
     await pair.cancel();
     expect(pair.onState).toHaveBeenLastCalledWith({
       kind: "cancelFailed",
-      code: "ABCD-EFGH",
-      browserId: "01234567",
+      ...issued,
     });
     await vi.advanceTimersByTimeAsync(12_000);
     expect(fetchMock).toHaveBeenCalledTimes(3);
@@ -370,7 +373,7 @@ describe("browser pairing", () => {
     cancel?.click();
     await settle();
     expect(gate.element.textContent).toContain("Withdrawing the request");
-    expect(gate.element.querySelector(".login-gate__browser-pair-code")).not.toBeNull();
+    expect(gate.element.querySelector(".login-gate__command--hero")).not.toBeNull();
     withdrawal.reject(new Error("offline"));
     await settle();
     expect(gate.element.textContent).toContain("Could not confirm cancellation");
@@ -382,7 +385,7 @@ describe("browser pairing", () => {
     retry?.click();
     await settle();
     expect(gate.element.textContent).toContain("Pairing request withdrawn");
-    expect(gate.element.querySelector(".login-gate__browser-pair-code")).toBeNull();
+    expect(gate.element.querySelector(".login-gate__command--hero")).toBeNull();
     gate.approve();
     await settle();
     expect(gate.onBrowserPaired).not.toHaveBeenCalled();
@@ -440,7 +443,7 @@ describe("browser pairing", () => {
     await settle();
     expect(element.textContent).toContain("This Gateway requires a verified identity");
     expect(element.textContent).toContain("normal identity-aware sign-in");
-    expect(element.querySelector(".login-gate__browser-pair-code")).toBeNull();
+    expect(element.querySelector(".login-gate__command--hero")).toBeNull();
     await vi.advanceTimersByTimeAsync(12_000);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

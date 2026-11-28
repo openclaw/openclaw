@@ -233,6 +233,7 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
 
       const model = normalizeOptionalString(req.model) ?? DEFAULT_MODEL;
       const imageConfig = buildImageConfig(req, model);
+      const aspectRatio = normalizeOptionalString(req.aspectRatio);
       const count = resolveIntegerOption(req.count, 1, { min: 1, max: MAX_IMAGE_RESULTS });
       const canonicalBaseUrl = normalizeOpenRouterBaseUrl(baseUrl);
       const inputReferences = (req.inputImages ?? []).map((image) => ({
@@ -244,7 +245,9 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
             model,
             prompt: req.prompt,
             n: 1,
-            ...(imageConfig.aspect_ratio ? { aspect_ratio: imageConfig.aspect_ratio } : {}),
+            // Every dedicated-endpoint model takes aspect_ratio. Resolution stays Gemini-only:
+            // edits infer it from the reference image, and models reject tiers outside their set.
+            ...(aspectRatio ? { aspect_ratio: aspectRatio } : {}),
             ...(imageConfig.image_size ? { resolution: imageConfig.image_size } : {}),
             ...(inputReferences.length > 0 ? { input_references: inputReferences } : {}),
           }

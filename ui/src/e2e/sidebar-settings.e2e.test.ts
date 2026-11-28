@@ -66,7 +66,10 @@ suite.define(() => {
 
     await openNewSession();
     if (testCase.collapseSidebar) {
-      await page.locator('[data-navigation-view][aria-pressed="true"]').click();
+      await page
+        .locator("openclaw-app-sidebar")
+        .getByRole("button", { name: "Collapse sidebar", exact: true })
+        .click();
       await page.locator(".shell--nav-collapsed").waitFor();
     }
     const chatInbox = page.locator(".sidebar-rail__bottom .sidebar-issues-button");

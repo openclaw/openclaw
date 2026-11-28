@@ -17,6 +17,7 @@ import {
   type CdpEndpointPin,
 } from "./cdp.helpers.js";
 import { getChromeWebSocketEndpoint } from "./chrome.js";
+import { isExtensionRelayCdpUrl } from "./config.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
 import type { BrowserEngineId } from "./engines/types.js";
 import { BrowserTabNotFoundError } from "./errors.js";
@@ -44,7 +45,7 @@ import { prepareMeetPlaybackObservation } from "./pw-session-meet-playback.js";
 import {
   isConnectionScopedTargetId,
   markConnectionScopedBrowser,
-  pageTargetInfo,
+  pageTargetId,
 } from "./pw-session-page-target.js";
 import {
   bindRoleRefsTarget,
@@ -428,6 +429,9 @@ export async function connectBrowser(
                 lookup,
                 resolveWebSocketUrl,
                 ...(engine ? { engine } : {}),
+                // An owned relay drives the user's own browser; the discovered
+                // WebSocket URL drops the relay credential, so check the profile URL.
+                noDefaults: isExtensionRelayCdpUrl(normalized),
               });
             }),
           );
@@ -463,7 +467,7 @@ export async function connectBrowser(
         browser.on("disconnected", onDisconnected);
         const engineAdapter = resolveBrowserEngine(engine);
         if (engineAdapter.descriptor.sessionScope === "connection") {
-          markConnectionScopedBrowser(browser);
+          markConnectionScopedBrowser(browser, engineAdapter.closePageClosesConnection === true);
         }
         // Relay connections drive the user's visible Chrome, which shows its own dialogs.
         const headless =
@@ -534,7 +538,7 @@ async function getAccessiblePages(opts: {
         return { page, targetId: null };
       }
       ensurePageState(page);
-      const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
+      const targetId = await pageTargetId(page).catch(() => null);
       return { page, targetId };
     }),
   );

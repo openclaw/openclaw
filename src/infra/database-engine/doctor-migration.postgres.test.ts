@@ -47,10 +47,13 @@ import { createUpdateDatabaseBackupWithFixtureTransport } from "./backup-capture
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 import type { StoreSchema } from "./contract.js";
+import {
+  readAgentCatalog,
+  readAgentReferenceCatalog,
+} from "./doctor-migration.postgres.test-support.js";
 import { openEngineStore } from "./open.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
 import type { PortDescriptor } from "./port-descriptor.js";
-import { postgresCatalogQuery, readPostgresCatalog } from "./postgres-catalog.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 import { assertRepositoryDiskMigration } from "./repository-disk-migration.test-support.js";
 import { statePortProvider } from "./state-port.js";
@@ -144,12 +147,6 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     });
   }
 
-  // Fingerprints include namespace-qualified definitions; compare catalogs after relocation.
-  const readAgentCatalog = async (schema: string) =>
-    readPostgresCatalog((await rows(postgresCatalogQuery(schema, true)))[0].catalog)
-      .map((fact) => JSON.stringify(fact).replaceAll(schema, "fixture_namespace"))
-      .toSorted();
-
   beforeAll(async () => {
     const worker = await vi.importActual<typeof StateReadWorker>(
       "../../state/openclaw-state-read-worker.js",
@@ -217,7 +214,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
       }
     });
     namespaces.add(targetNamespace);
-    targetAgentCatalog = await readAgentCatalog(targetNamespace);
+    targetAgentCatalog = await readAgentReferenceCatalog(client, targetNamespace);
   });
 
   afterAll(async () => {
@@ -948,7 +945,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
           closeOpenClawStateDatabaseForTest();
           expect(await readAgent()).toEqual([{ value_json: '"after"' }]);
           expect(admit(candidate, agentPath)?.version).toBe(candidate.version);
-          expect(await readAgentCatalog(agentNamespace)).toEqual(targetAgentCatalog);
+          expect(await readAgentCatalog(client, agentNamespace)).toEqual(targetAgentCatalog);
           expect(await readAllocation()).toEqual([{ last_value: "72", is_called: true }]);
           expect(await readNavigationFunction()).toEqual([
             { proisstrict: true, proconfig: ["search_path=pg_catalog"] },

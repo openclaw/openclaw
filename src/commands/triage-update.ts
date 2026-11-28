@@ -1,8 +1,13 @@
 // Preserve one failed update as bounded diagnostics across the updater's fresh CLI handoff.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { z } from "zod";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { resolveStateDir } from "../config/paths.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { UpdateDoctorLintFindingSchema } from "../infra/update-doctor-lint-schema.js";
 import { normalizeUpdateDoctorLintFindings } from "../infra/update-doctor-lint.js";
 import { normalizeUpdateFailureFacts } from "../infra/update-failure-facts.js";
@@ -40,6 +45,7 @@ const createUpdateFailureSchema = <T extends z.ZodRawShape>(stepFields: T) =>
               exitCode: z.number().int().nullable(),
               stdoutTail: z.string().nullish(),
               stderrTail: z.string().nullish(),
+              sqliteContentionCallSite: z.string().optional(),
               failureFacts: z.array(UpdateFailureFactSchema).max(5).optional(),
               termination: z.enum(["exit", "timeout", "no-output-timeout", "signal"]).optional(),
               advisory: z
@@ -322,13 +328,16 @@ export function sanitizeTriageUpdateFailure(
     : undefined;
   takePluginErrors(pluginWarnings?.slice(0, -1), true, warnings);
   const failedSteps = result.steps.filter(isFailedUpdateStep);
-  const latest = new Set(failedSteps.slice(-3));
+  // Recovery steps fail after the first failure; keep the step that started them.
+  const trigger = failedSteps.length > 1 ? failedSteps[0] : undefined;
+  const latest = new Set([...(trigger ? [trigger] : []), ...failedSteps.slice(-2)]);
   const retained = new Set(
     result.steps.filter(
       (step) => latest.has(step) || (preserveFindings && step.doctorLintFindings !== undefined),
     ),
   );
   omittedDetails += failedSteps.filter((step) => !retained.has(step)).length;
+  const retainedSteps = Array.from(retained);
   const sanitized = {
     ...(error ? { error } : {}),
     result: {
@@ -369,6 +378,17 @@ export function sanitizeTriageUpdateFailure(
           format === "artifact" && step.doctorLintFindings
             ? lintReceipt(step)
             : text(step.stderrTail, 384, "ends"),
+        // Extract before whitespace folding; keep the error and first 12 frames in
+        // a separate 1 KiB JSON budget, including across artifact/prompt rereads.
+        sqliteContentionCallSite: isFailedUpdateStep(step)
+          ? text(
+              step.sqliteContentionCallSite ??
+                step.stderrTail?.match(
+                  /SQLite contention call site:\r?\n[^\r\n]*(?:\r?\n[ \t]+at[^\r\n]*){0,12}/u,
+                )?.[0],
+              1024,
+            )
+          : undefined,
         stdoutTail: text(step.stdoutTail, 160, "tail"),
         failureFacts: step.failureFacts?.length
           ? normalizeUpdateFailureFacts(step.failureFacts, redaction.env)
@@ -386,15 +406,22 @@ export function sanitizeTriageUpdateFailure(
     omittedDetails,
   };
   // Fit whole records, retaining the latest failed step and at least one plugin cause.
+  // The triggering failure goes last among older records.
   // Field caps reserve room for these plus identity and restart safety even after JSON escaping.
   if (format === "inventory" && preserveFindings) {
     return sanitized;
   }
   const maxBytes =
     format === "artifact" ? UPDATE_FAILURE_MAX_BYTES - 1 : UPDATE_FAILURE_PROMPT_MAX_BYTES;
+  const recordOf = (step: (typeof result.steps)[number] | undefined) =>
+    step ? sanitized.result.steps[retainedSteps.indexOf(step)] : undefined;
+  const latestRecord = recordOf(failedSteps.at(-1));
+  const protectedRecords = new Set([recordOf(trigger), latestRecord]);
   while (Buffer.byteLength(JSON.stringify(sanitized)) > maxBytes) {
-    if (sanitized.result.steps.length > 1) {
-      sanitized.result.steps.shift();
+    const steps = sanitized.result.steps;
+    if (steps.length > 1) {
+      const older = steps.findIndex((step) => !protectedRecords.has(step));
+      steps.splice(older === -1 ? steps.findIndex((step) => step !== latestRecord) : older, 1);
     } else if (removePluginDetails.length > 1) {
       removePluginDetails.pop()?.();
     } else if ((sanitized.result.steps[0]?.failureFacts?.length ?? 0) > 1) {
@@ -430,6 +457,69 @@ export async function readTriageUpdateFailure(
   } finally {
     await file.close();
   }
+}
+
+async function writeTriageText(
+  filePath: string,
+  content: string,
+  assertCurrent?: () => void,
+): Promise<void> {
+  await replaceFileAtomic({
+    allowDrvfsRenameRecovery: true,
+    filePath,
+    content,
+    mode: 0o600,
+    dirMode: 0o700,
+    copyFallbackOnPermissionError: true,
+    syncTempFile: true,
+    syncParentDir: true,
+    assertBeforeMutation: assertCurrent,
+  });
+}
+
+function updateDiagnosticArtifactName(kind: "lint" | "failure", id: string = randomUUID()): string {
+  // Shipped support redactors must not mistake a numeric UUID tail for an account ID.
+  return `openclaw-update-${kind}-${id.replaceAll("-", "_")}.json`;
+}
+
+async function writeUpdateFailureLintArtifact(
+  inventory: TriageUpdateFailure,
+  directory: string,
+  assertCurrent?: () => void,
+): Promise<string> {
+  const outputPath = path.join(directory, updateDiagnosticArtifactName("lint"));
+  await writeTriageText(outputPath, `${JSON.stringify(inventory)}\n`, assertCurrent);
+  return outputPath;
+}
+
+/** Preserve captured failure diagnostics for triage and its printed retry commands. */
+export async function writeTriageUpdateFailure(
+  failure: TriageUpdateFailure,
+  options: { env?: NodeJS.ProcessEnv; outputPath?: string; assertCurrent?: () => void } = {},
+): Promise<string> {
+  options.assertCurrent?.();
+  const env = options.env ?? process.env;
+  const stateDir = resolveStateDir(env);
+  const outputPath =
+    options.outputPath ??
+    path.join(stateDir, "logs", "support", updateDiagnosticArtifactName("failure"));
+  const inventory = sanitizeTriageUpdateFailure(failure, { env, stateDir }, "inventory");
+  let detail: string | undefined;
+  if ("result" in inventory && inventory.result.steps.some((step) => step.doctorLintFindings)) {
+    detail = await writeUpdateFailureLintArtifact(
+      inventory,
+      path.dirname(outputPath),
+      options.assertCurrent,
+    ).then(
+      (inventoryPath) => `Complete Doctor lint inventory: ${inventoryPath}`,
+      (error: unknown) =>
+        `Complete Doctor lint inventory unavailable: ${formatErrorMessage(error)}`,
+    );
+  }
+  options.assertCurrent?.();
+  const sanitized = sanitizeTriageUpdateFailure(inventory, { env, stateDir }, "artifact", detail);
+  await writeTriageText(outputPath, `${JSON.stringify(sanitized)}\n`, options.assertCurrent);
+  return outputPath;
 }
 
 export async function readPendingTriageUpdateFailure(

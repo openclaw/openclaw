@@ -1,9 +1,14 @@
 import type { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import type { MemoryDatabaseAdmission } from "./manager-database-admission.js";
 import type {
+  MemoryEmbeddingCacheRetireCursor,
+  MemoryEmbeddingCacheRetirement,
+} from "./manager-embedding-cache-retire.js";
+import type {
   loadMemoryEmbeddingCache,
   MemoryEmbeddingCacheEvictionPreference,
 } from "./manager-embedding-cache.js";
+import type { MemoryEmbeddingRefusal } from "./manager-embedding-refusal.js";
 import type { MemoryRebuildEmbeddingQuery } from "./manager-rebuild-embeddings.js";
 import type { MemoryIndexMeta, MemoryIndexProviderIdentity } from "./manager-reindex-state.js";
 import type { MemoryDatabaseFacts } from "./manager-retrieval-read.js";
@@ -82,6 +87,10 @@ export type MemoryPublicationOperations = {
     output: MemoryPublicationResult<boolean>;
   };
   "index.writeMetadata": { input: MemoryIndexMeta; output: MemoryPublicationResult<void> };
+  "index.writeEmbeddingRefusal": {
+    input: MemoryEmbeddingRefusal | null;
+    output: MemoryPublicationResult<void>;
+  };
   "schema.admit": {
     input: Pick<
       Parameters<typeof ensureMemoryIndexSchema>[0],
@@ -122,6 +131,11 @@ export type MemoryPublicationOperations = {
     };
     output: MemoryPublicationResult<boolean>;
   };
+  "cache.retire": {
+    input: MemoryEmbeddingCacheRetirement;
+    /** The next page cursor, or null once the fenced rows are exhausted. */
+    output: MemoryPublicationResult<MemoryEmbeddingCacheRetireCursor | null>;
+  };
   "cache.stage.start": {
     input: { header: MemoryEmbeddingCacheHeader };
     output: void;
@@ -151,7 +165,10 @@ export type MemoryPublicationOperations = {
   };
   "stage.discard": { input: undefined; output: void };
   "source.replace": {
-    input: { state: MemoryPublicationState };
+    input: {
+      state: MemoryPublicationState;
+      verifiedFile?: MemorySourceIndexHeader["verifiedFile"];
+    };
     output: MemoryPublicationResult<boolean>;
   };
   "source.replace.group": {

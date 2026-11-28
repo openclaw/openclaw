@@ -816,6 +816,9 @@ final class NodeAppModel {
     let chatPresentation = IOSChatViewModelOwner()
     var agentAvatarImages: [String: UIImage] = [:]
     var loadedAgentAvatarRequest: IOSAgentAvatarRequest?
+    /// `agent.identity.get` results by agent id for `agentIdentitiesOwnerID`'s Gateway.
+    var agentIdentities: [String: IOSResolvedAgentIdentity] = [:]
+    var agentIdentitiesOwnerID: String?
     /// Request admission only; the connection controller owns the later handoff.
     var isGatewayPickerRequestInFlight = false
 
@@ -924,6 +927,22 @@ final class NodeAppModel {
               GatewayStableIdentifier.matches(cache.gatewayID, gatewayID)
         else { return }
         await cache.storeSessions(sessions, agentID: agentID)
+    }
+
+    func localChatCacheUsage() async throws -> OpenClawClientDatabases.GatewayCacheUsage {
+        try await self.requireChatCacheDatabases().gatewayCacheUsage()
+    }
+
+    func clearLocalChatCache() async throws -> OpenClawClientDatabases.GatewayCacheUsage {
+        try await self.requireChatCacheDatabases().clearGatewayCache()
+    }
+
+    private func requireChatCacheDatabases() throws -> OpenClawClientDatabases {
+        if self.clientDatabases == nil {
+            self.clientDatabases = Self.makeClientDatabases()
+        }
+        guard let clientDatabases else { throw CocoaError(.fileReadUnknown) }
+        return clientDatabases
     }
 
     /// Delete one forgotten gateway's cache and durable state, or both
@@ -1308,15 +1327,9 @@ final class NodeAppModel {
             self.isBackgrounded = false
             // Permission prompts and Settings changes return through activation.
             self.refreshMediaAuthorizationSnapshot()
-            if self.clientDatabases == nil {
-                // Recovery must run even after forgetting the final gateway;
-                // no chat facade may remain to initialize the container.
-                self.clientDatabases = Self.makeClientDatabases()
-            }
-            let registeredGatewayIDs = GatewaySettingsStore.loadGatewayRegistry().entries.map(\.stableID)
-            self.clientDatabases?.resolvePendingGatewayRemovals(
-                registeredGatewayIDs: registeredGatewayIDs)
             if let clientDatabases {
+                let registeredGatewayIDs = GatewaySettingsStore.loadGatewayRegistry().entries.map(\.stableID)
+                clientDatabases.resolvePendingGatewayRemovals(registeredGatewayIDs: registeredGatewayIDs)
                 let recoveredGatewayIDs = self.quarantinedChatOfflineGatewayIDs.filter {
                     !clientDatabases.hasPendingGatewayRemoval(gatewayID: $0.rawValue)
                 }
@@ -1324,9 +1337,13 @@ final class NodeAppModel {
                     self.quarantinedChatOfflineGatewayIDs.subtract(recoveredGatewayIDs)
                     self.chatTranscriptCacheGeneration &+= 1
                 }
+                clientDatabases.retryLegacyImport(registeredGatewayIDs: registeredGatewayIDs)
+            } else {
+                // Opening the owner already resolves removals before importing legacy state.
+                // Do not repeat that recovery (and its registry read) in this activation.
+                // Still open after forgetting the final gateway: no chat facade may remain.
+                self.clientDatabases = Self.makeClientDatabases()
             }
-            self.clientDatabases?.retryLegacyImport(
-                registeredGatewayIDs: registeredGatewayIDs)
             self.endBackgroundConnectionGracePeriod(reason: "scene_foreground")
             self.clearBackgroundReconnectSuppression(reason: "scene_foreground")
             var shouldStartGatewayHealthMonitor = self.operatorConnected
@@ -2507,7 +2524,7 @@ final class NodeAppModel {
         case OpenClawCameraCommand.list.rawValue:
             let devices = await camera.listDevices()
             struct Payload: Codable {
-                var devices: [CameraController.CameraDeviceInfo]
+                var devices: [OpenClawCameraDeviceInfo]
             }
             return try Self.successfulInvokeResponse(req, payload: Payload(devices: devices))
         case OpenClawCameraCommand.snap.rawValue:
@@ -3424,8 +3441,15 @@ extension NodeAppModel {
             defaultAgentID: self.gatewayDefaultAgentId)
     }
 
+    /// Chat speaks as the agent's resolved identity (`agent.identity.get`), like web
+    /// `assistantIdentity.name` (ui/src/app/assistant-identity.ts:41-58); the roster name
+    /// or id labels it until that identity arrives.
     var chatAgentName: String {
-        self.agentDisplayName(for: self.chatAgentId)
+        self.chatAgentDisplayName(for: self.chatAgentId)
+    }
+
+    func chatAgentDisplayName(for agentID: String) -> String {
+        self.agentIdentityName(for: agentID) ?? self.agentDisplayName(for: agentID)
     }
 
     var chatAgentAvatarURL: String? {
@@ -4907,9 +4931,11 @@ extension NodeAppModel {
             error: error,
             preserving: self.operatorGatewayProblem ?? self.nodeGatewayProblem)
             ?? GatewayConnectionProblem.unmapped(error)
+        let url = self.activeGatewayConnectConfig?.url
         return GatewayConnectionIssue.addingEndpointGuidance(
             to: problem,
-            host: self.activeGatewayConnectConfig?.url.host)
+            host: url?.host,
+            port: url.map { $0.port ?? ($0.scheme == "wss" ? 443 : 80) })
     }
 
     private func resetNodeGatewayLoopStatusIfCurrent(routeGeneration: UInt64, stableID: String) {

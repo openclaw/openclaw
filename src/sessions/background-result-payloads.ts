@@ -38,15 +38,16 @@ export type BackgroundPayloadsCommit =
   | { ok: true; skipped?: boolean; diagnostics?: string }
   | { ok: false; reason: string };
 
-/** Inputs for committing delivered payloads into one conversation generation. */
+/** Inputs for committing delivered payloads into one conversation. */
 export type BackgroundPayloadsCommitParams = {
   agentId: string;
   sessionKey: string;
-  expectedGeneration: { sessionId: string; lifecycleRevision: string | undefined };
   /** The payloads that were shown; the stored row is their transcript projection. */
   payloads: readonly ReplyPayload[];
   idempotencyKey: string;
   provenance?: BackgroundSessionResultProvenance;
+  /** See `commitBackgroundResultToSession`. */
+  displayOnly?: true;
   config: OpenClawConfig;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -74,7 +75,6 @@ export async function commitBackgroundPayloadsToSession(
     return await commitBackgroundResultToSession({
       agentId: params.agentId,
       sessionKey: params.sessionKey,
-      expectedGeneration: params.expectedGeneration,
       text,
       prepareDisplayContent: async () => {
         preparedContent = await buildResultDisplayContent({
@@ -89,6 +89,7 @@ export async function commitBackgroundPayloadsToSession(
       },
       idempotencyKey: params.idempotencyKey,
       provenance: params.provenance,
+      displayOnly: params.displayOnly,
       config: params.config,
       signal: params.signal,
       assertCurrent: params.assertCurrent,

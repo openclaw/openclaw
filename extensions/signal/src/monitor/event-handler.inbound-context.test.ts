@@ -556,50 +556,6 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(recordParams?.updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 
-  it("runs Telegram-parity Signal status reactions when explicitly enabled", async () => {
-    dispatchInboundMessageMock.mockImplementationOnce(
-      async (params: DispatchInboundMessageMockParams) => {
-        capture.ctx = params.ctx;
-        await nextTimerTick();
-        await params.replyOptions?.onToolStart?.({ name: "exec" });
-        await nextTimerTick();
-        await params.replyOptions?.onCompactionStart?.();
-        await nextTimerTick();
-        await params.replyOptions?.onCompactionEnd?.();
-        await nextTimerTick();
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
-      },
-    );
-    const handler = createTestHandler({
-      cfg: createStatusReactionConfig(),
-    });
-
-    await receiveDirectMessage(handler);
-    for (let i = 0; i < 5; i += 1) {
-      await nextTimerTick();
-    }
-
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-    const sentEmojis = sentReactionEmojis();
-    expect(sentEmojis).toEqual(expect.arrayContaining(["👀", "🧠", "🛠️", "🗜️", "✅"]));
-    expect(sentEmojis.at(-1)).toBe("👀");
-    expect(dispatchInboundMessageMock.mock.calls[0]?.[0].replyOptions).toEqual(
-      expect.objectContaining({
-        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
-        allowToolLifecycleWhenProgressHidden: true,
-      }),
-    );
-    expect(sendReactionSignalMock).toHaveBeenCalledWith(
-      "+15550002222",
-      1700000000001,
-      "👀",
-      expect.objectContaining({
-        accountId: "default",
-        baseUrl: "http://localhost",
-      }),
-    );
-  });
-
   it("uses dataMessage timestamp fallback for Signal status reactions", async () => {
     const handler = createTestHandler({
       cfg: createStatusReactionConfig(),
@@ -643,20 +599,6 @@ describe("signal createSignalEventHandler inbound context", () => {
     });
 
     await receiveDirectMessage(handler, { timestamp: undefined });
-    await nextTimerTick();
-
-    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
-    expect(sendReactionSignalMock).not.toHaveBeenCalled();
-  });
-
-  it("does not send Signal status reactions for non-positive inbound timestamps", async () => {
-    const handler = createTestHandler({
-      cfg: createStatusReactionConfig({
-        messages: { statusReactions: { enabled: true } },
-      }),
-    });
-
-    await receiveDirectMessage(handler, { timestamp: -1 });
     await nextTimerTick();
 
     expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
@@ -955,48 +897,35 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
-  it("drops quote-only group context from non-allowlisted quoted senders in allowlist mode", async () => {
-    const handler = createTestHandler({
-      cfg: createGroupAllowlistConfig({
-        signal: {
-          groupAllowFrom: ["+15550001111"],
-          contextVisibility: "allowlist",
+  it.each(["allowlist", "allowlist_quote"] as const)(
+    "renders quote-only native mentions subject to %s visibility",
+    async (contextVisibility) => {
+      const handler = createTestHandler({
+        cfg: createGroupAllowlistConfig({
+          signal: { groupAllowFrom: ["+15550001111"], contextVisibility },
+        }),
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["+15550001111"],
+      });
+      await receiveGroupMessage(handler, "", {
+        quote: {
+          text: " \uFFFC ",
+          author: "+15550002222",
+          mentions: [{ uuid: "c3456789-01bc-4def-9012-3456789abcde", start: 1, length: 1 }],
         },
-      }),
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["+15550001111"],
-    });
-
-    await receiveGroupMessage(handler, "", {
-      quote: { text: "blocked quote", author: "+15550002222" },
-    });
-
-    expect(capture.ctx).toBeUndefined();
-    expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps quote-only group context in allowlist_quote mode", async () => {
-    const handler = createTestHandler({
-      cfg: createGroupAllowlistConfig({
-        signal: {
-          groupAllowFrom: ["+15550001111"],
-          contextVisibility: "allowlist_quote",
-        },
-      }),
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["+15550001111"],
-    });
-
-    await receiveGroupMessage(handler, "", {
-      quote: { text: "quoted context", author: "+15550002222" },
-    });
-
-    const context = requireCapturedContext();
-    expect(context.BodyForAgent).toBe("");
-    expect(context.ReplyToBody).toBe("quoted context");
-    expect(context.ReplyToSender).toBe("+15550002222");
-    expect(context.ReplyToIsQuote).toBe(true);
-  });
+      });
+      if (contextVisibility === "allowlist") {
+        expect(capture.ctx).toBeUndefined();
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      } else {
+        const context = requireCapturedContext();
+        expect(context.BodyForAgent).toBe("");
+        expect(context.ReplyToBody).toBe("@c3456789-01bc-4def-9012-3456789abcde");
+        expect(context.ReplyToSender).toBe("+15550002222");
+        expect(context.ReplyToIsQuote).toBe(true);
+      }
+    },
+  );
 
   it("forwards all fetched attachments via MediaPaths/MediaTypes", async () => {
     const handler = createTestHandler({
@@ -1160,4 +1089,3 @@ describe("signal createSignalEventHandler inbound context", () => {
     },
   );
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

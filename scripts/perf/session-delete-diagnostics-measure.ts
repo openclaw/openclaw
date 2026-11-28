@@ -13,6 +13,7 @@ import { loadavg } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { observeConnection } from "../../src/infra/database-engine/observation.js";
 import { runSqliteImmediateTransactionSync } from "../../src/infra/sqlite-transaction.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 assert(globalThis.gc, "Run with --expose-gc");
 const db = observeConnection(new DatabaseSync(":memory:"));
@@ -63,12 +64,7 @@ function sampledBytes(node: HeapProfiler.SamplingHeapProfileNode): number {
 async function allocation(label: string, enabled: boolean) {
   globalThis.gc!();
   const inspector = new Session();
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 4096);
   for (let index = 0; index < iterations; index++) {
     run(enabled);
   }

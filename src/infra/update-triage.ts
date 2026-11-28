@@ -10,7 +10,7 @@ import {
   stripGatewayServiceMarkerEnv,
   withOwnedManagedUpdateEnv,
 } from "../cli/update-cli/update-command-service-env.js";
-import type { TriageUpdateFailure } from "../commands/triage-update.js";
+import { writeTriageUpdateFailure, type TriageUpdateFailure } from "../commands/triage-update.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { scrubDoctorErrorMessage } from "../flows/doctor-error-message.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
@@ -21,7 +21,6 @@ import { resolveOsHomeDir } from "./home-dir.js";
 import { installationTargetEnv, resolveInstallationTarget } from "./installation-target-context.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
-import { writeTriageUpdateFailure } from "./update-failure-report-artifact.js";
 
 export type UpdateTriageTarget = {
   root?: string;

@@ -19,7 +19,17 @@ const boundary = vi.hoisted(() => ({
     params.assertCurrent();
     const prepared = await params.prepare([]);
     params.assertCurrent();
-    return { entry: prepared?.next ?? null, wrote: prepared?.next !== undefined };
+    return {
+      entry: prepared?.next ?? null,
+      // Maintenance is mocked below; this fact only selects its environment handoff.
+      writtenSource: prepared?.next
+        ? {
+            kind: "file",
+            physicalIdentity: "synthetic-file",
+            nativeLocation: params.database.path,
+          }
+        : undefined,
+    };
   }),
   maintain: vi.fn(),
   history: vi.fn(),
@@ -85,7 +95,6 @@ vi.mock("./session-accessor.sqlite-scope.js", async (importOriginal) => ({
   runExclusiveSqliteSessionWrite: boundary.queue,
 }));
 vi.mock("./session-accessor.sqlite-status.js", () => ({}));
-vi.mock("./session-canonical-key.js", () => ({ assertCanonicalSessionKeyWrite() {} }));
 vi.mock("./session-entry-lineage.js", () => ({}));
 // mock-isolation: Observe captured worker inputs without starting persistence on synthetic paths.
 vi.mock("./session-entry-patch.js", () => ({ patchSessionEntryInWorker: boundary.worker }));

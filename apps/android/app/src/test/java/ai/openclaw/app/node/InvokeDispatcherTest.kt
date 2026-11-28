@@ -1,6 +1,6 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.gateway.testDeviceIdentityStore
 import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
@@ -377,26 +377,26 @@ private class InvokeDispatcherFakeTalkHandler : TalkHandler {
   val params = mutableListOf<String?>()
   var failure: Throwable? = null
 
-  override suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult {
+  override suspend fun handlePttStart(paramsJson: String?): InvokeResult {
     calls.add("start")
     params.add(paramsJson)
     failure?.let { throw it }
-    return GatewaySession.InvokeResult.ok("""{"captureId":"start"}""")
+    return InvokeResult.ok("""{"captureId":"start"}""")
   }
 
-  override suspend fun handlePttStop(paramsJson: String?): GatewaySession.InvokeResult {
+  override suspend fun handlePttStop(paramsJson: String?): InvokeResult {
     calls.add("stop")
-    return GatewaySession.InvokeResult.ok("""{"status":"stop"}""")
+    return InvokeResult.ok("""{"status":"stop"}""")
   }
 
-  override suspend fun handlePttCancel(paramsJson: String?): GatewaySession.InvokeResult {
+  override suspend fun handlePttCancel(paramsJson: String?): InvokeResult {
     calls.add("cancel")
-    return GatewaySession.InvokeResult.ok("""{"status":"cancel"}""")
+    return InvokeResult.ok("""{"status":"cancel"}""")
   }
 
-  override suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult {
+  override suspend fun handlePttOnce(paramsJson: String?): InvokeResult {
     calls.add("once")
-    return GatewaySession.InvokeResult.ok("""{"status":"once"}""")
+    return InvokeResult.ok("""{"status":"once"}""")
   }
 }
 

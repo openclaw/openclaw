@@ -6,14 +6,49 @@ import { readSessionIdentitySnapshot } from "./session-accessor.sqlite-entry-sto
 import { mutateSqliteSessionAtMessageInTransaction } from "./session-accessor.sqlite-message-cut.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import {
+  inPlaceSessionMessageCutPreflightNeedsWrite,
+  refuseInPlaceSessionMessageCutInDatabase,
+} from "./session-message-cut-in-place.kernel.js";
 import type {
   SessionMessageCutCandidate,
   SessionMessageCutCommit,
   SessionMessageCutIntent,
+  SessionMessageCutPreflight,
 } from "./session-message-cut.types.js";
 import { runSessionNativeBindingTransaction } from "./session-native-binding.worker.js";
 import type { SessionForkMessageCutCommit } from "./session-parent-fork.types.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
+
+/**
+ * Indexed precheck for an in-place cut, before its local workspace is retired.
+ *
+ * The commit transaction revalidates the same preconditions through the same
+ * reader, so this read only avoids retiring custody for a cut that must refuse.
+ * A lagging active-path projection would make that answer untrustworthy, so it
+ * is reconciled through its owner inside a write transaction first.
+ */
+export function preflightSessionMessageCut(
+  input: SessionMessageCutPreflight,
+  context: AgentWorkerOperationContext,
+) {
+  const refuse = (database: OpenClawAgentDatabase) =>
+    refuseInPlaceSessionMessageCutInDatabase(
+      database,
+      input.sessionId,
+      input.entry,
+      input.intent,
+      input.sourceRepositoryWorkspaceId,
+    );
+  const database = context.open();
+  return inPlaceSessionMessageCutPreflightNeedsWrite(database, input.sessionId)
+    ? context.writeTransaction(
+        "session.transcript.message-cut-preflight",
+        "Session history navigation",
+        refuse,
+      )
+    : refuse(database);
+}
 
 export function commitSessionForkMessageCut(
   input: SessionForkMessageCutCommit,
