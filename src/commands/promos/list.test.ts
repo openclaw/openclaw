@@ -51,12 +51,14 @@ it.each([false, true])("returns promotions as JSON (unavailable: %s)", async (is
 });
 
 it.each([
-  { remainingMs: 60 * 60 * 1_000, label: "ends today" },
+  { remainingMs: -1, label: "ended" },
+  { remainingMs: 75 * 60 * 1_000, label: "1h 15m left" },
   { remainingMs: 25 * 60 * 60 * 1_000, label: "1 day left" },
-])("reports $label", async ({ remainingMs, label }) => {
-  mocks.fetchClawHubPromotions.mockResolvedValue([
-    { ...promotion, endsAt: Date.now() + remainingMs },
-  ]);
+])("reports $label when listing just before midnight", async ({ remainingMs, label }) => {
+  const now = new Date(2026, 0, 15, 23, 30).getTime();
+  using clock = vi.spyOn(Date, "now");
+  clock.mockReturnValue(now);
+  mocks.fetchClawHubPromotions.mockResolvedValue([{ ...promotion, endsAt: now + remainingMs }]);
   await promosListCommand({}, runtime);
   expect(lines()[0]).toContain(`(${label})`);
 });

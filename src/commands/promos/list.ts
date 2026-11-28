@@ -2,6 +2,7 @@ import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-t
 import { formatCliCommand } from "../../cli/command-format.js";
 import { ClawHubRequestError } from "../../infra/clawhub-client.js";
 import { fetchClawHubPromotions, type ClawHubPromotion } from "../../infra/clawhub-promotions.js";
+import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 
 export async function promosListCommand(opts: { json?: boolean }, runtime: RuntimeEnv) {
@@ -33,10 +34,15 @@ export async function promosListCommand(opts: { json?: boolean }, runtime: Runti
   for (const promotion of promotions) {
     const sponsor = promotion.sponsor ? ` — ${safe(promotion.sponsor)}` : "";
     const title = safe(promotion.title);
-    const daysLeft = Math.max(0, Math.floor((promotion.endsAt - Date.now()) / 86_400_000));
-    const windowEnd =
-      daysLeft === 0 ? "ends today" : daysLeft === 1 ? "1 day left" : `${daysLeft} days left`;
-    runtime.log(`${title}${sponsor} (${windowEnd})`);
+    const remainingMs = promotion.endsAt - Date.now();
+    const daysLeft = Math.floor(remainingMs / 86_400_000);
+    const timeLeft =
+      daysLeft < 1
+        ? formatDurationCompact(remainingMs, { spaced: true })
+        : daysLeft === 1
+          ? "1 day"
+          : `${daysLeft} days`;
+    runtime.log(`${title}${sponsor} (${timeLeft ? `${timeLeft} left` : "ended"})`);
     runtime.log(`  ${safe(promotion.blurb)}`);
     for (const model of promotion.models) {
       const alias = model.alias ? ` (${safe(model.alias)})` : "";
