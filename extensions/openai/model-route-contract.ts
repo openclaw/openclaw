@@ -15,6 +15,7 @@ export const OPENAI_GPT_6_MODEL_IDS = [
   "gpt-6-sol",
   "gpt-6-luna",
   OPENAI_GPT_61_SOL_MODEL_ID,
+  "gpt-6.1-terra",
 ] as const;
 export const OPENAI_GPT_56_MODEL_ID = "gpt-5.6";
 export const OPENAI_GPT_56_SOL_MODEL_ID = "gpt-5.6-sol";
