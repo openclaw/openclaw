@@ -38,6 +38,7 @@ function buildContextEngineMaintenanceRuntimeContext(
       authProfileId: normalizeOptionalString(params.runtimeContext?.authProfileId),
       contextEnginePluginId: resolveContextEngineOwnerPluginId(params.contextEngine),
       purpose: `context-engine.${params.reason}.maintenance`,
+      abortSignal: params.abortSignal,
     }),
     ...(params.sessionTarget ? { sessionTarget: params.sessionTarget } : {}),
     ...(params.allowDeferredCompactionExecution ? { allowDeferredCompactionExecution: true } : {}),
