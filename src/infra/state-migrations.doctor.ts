@@ -2370,6 +2370,7 @@ async function executeLegacyStateMigrations(
       agentDatabaseTargets,
       agentDatabaseMigrationDiscovery,
       integrityCheck: params.integrityCheck,
+      reuseCleanCloseIntegrity: params.reuseCleanCloseIntegrity,
       inspectedSessionEntryPaths: params.inspectedSessionEntryPaths,
       orphanSessionStores: overrides?.orphanSessionStores,
       pluginSessionStoreAgentIds:
@@ -2405,7 +2406,6 @@ async function executeLegacyStateMigrations(
       },
     });
   const buildDetectedMigrationSteps = (migrationDetection: LegacyStateDetection) => {
-    const hasCustomAgentDir = hasCustomAgentDirOverride(env);
     const discoveredSessionStores =
       preparedSessionStores ??
       inspectOrphanSessionStoreEndpoints({
@@ -2434,7 +2434,7 @@ async function executeLegacyStateMigrations(
       })),
       legacySessionStoreEndpoints: discoveredSessionStores.endpoints,
       legacySessionStoreRefusal,
-      skipAgentScopedMigrations: hasCustomAgentDir,
+      skipAgentScopedMigrations: hasCustomAgentDirOverride(env),
       pluginStateMigrationInventory,
       legacySessionSurfaces,
       beforeWorkspaceStateMigration: params.beforeWorkspaceStateMigration,

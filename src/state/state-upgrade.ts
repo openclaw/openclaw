@@ -307,6 +307,7 @@ export async function upgradeStateDirectory(params: {
                 // File imports retain their existing Doctor owner, not a subprocess or copy.
                 if (legacyWork) {
                   const legacy = await autoMigrateLegacyState({
+                    reuseCleanCloseIntegrity: true,
                     cfg: config,
                     env,
                     doctorOnlyStateMigrations: true,

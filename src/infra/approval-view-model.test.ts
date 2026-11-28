@@ -5,9 +5,7 @@ import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
 const approvalRequestBase = { id: "approval-id", createdAtMs: 1, expiresAtMs: 2 };
-function pluginRequest(
-  request: Partial<PluginApprovalRequest["request"]> = {},
-): PluginApprovalRequest {
+function pluginRequest(request: Partial<PluginApprovalRequest["request"]>): PluginApprovalRequest {
   return {
     ...approvalRequestBase,
     id: "plugin-approval",

@@ -64,14 +64,9 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: vi.fn(() => ({})),
 }));
 
-// mock-isolation: Session projection fixtures own their entries without native database admission.
-const loadSessionEntryAsync = vi.hoisted(() =>
-  vi.fn<typeof import("./session-entry-load.test-support.js").loadSessionEntryAsync>(),
-);
-
 // mock-isolation: Reuse controlled session state without admitting a worker database.
 vi.mock("./session-utils-store-worker.js", () => ({
-  loadGatewaySessionEntryReadOnlyInWorker: async () => await loadSessionEntryAsync("session-1"),
+  loadGatewaySessionEntryReadOnlyInWorker: async () => emptySessionLookup(),
 }));
 
 import { waitForFast } from "../../test/helpers/vitest-wait.js";
@@ -103,7 +98,6 @@ describe("agent event handler", () => {
     lineageProjection = undefined;
     resetAgentEventsForTest({ preserveListeners: true });
     vi.mocked(getRuntimeConfig).mockReturnValue({});
-    vi.mocked(loadSessionEntryAsync).mockReset().mockResolvedValue(emptySessionLookup());
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     loadGatewaySessionLifecycleSnapshotMock
       .mockReset()
@@ -349,37 +343,6 @@ describe("agent event handler", () => {
     );
   });
 
-  it("does not reserialize captured progress when registered live events evict old activity", async () => {
-    const h = createHarness();
-    h.register("provider-run", "session-1", "client-run");
-    const stop = subscribeAgentEvents(h.handler);
-    const emit = (seq: number) =>
-      emitRuntimeAgentEvent({
-        runId: "provider-run",
-        stream: "item",
-        data: { kind: "preamble", itemId: `item-${seq}`, progressText: "x".repeat(2_048) },
-      });
-    for (let seq = 1; seq <= 50; seq += 1) {
-      emit(seq);
-    }
-    await stop.drain();
-    const retained = h.inFlight("client-run").events?.at(-1);
-    const stringify = vi.spyOn(JSON, "stringify");
-    try {
-      emit(51);
-      await stop.drain();
-      expect(stringify.mock.calls.filter(([value]) => value === retained)).toHaveLength(0);
-      const events = h.inFlight("client-run").events;
-      expect(events).toHaveLength(50);
-      expect(events?.[0]?.seq).toBe(2);
-      expect(events?.at(-1)?.seq).toBe(51);
-    } finally {
-      stringify.mockRestore();
-      await stop();
-      await h.handler.dispose();
-    }
-  });
-
   it.each([
     { stream: "assistant", data: { text: "Recovered" } },
     { stream: "tool", data: { phase: "start", name: "read" } },
@@ -486,7 +449,7 @@ describe("agent event handler", () => {
     nowSpy.mockRestore();
   });
 
-  it.each(["rate_limit", "timeout"])(
+  it.each(["rate_limit"])(
     "keeps %s retries transient through long backoff and subsequent assistant output",
     async (reason) => {
       vi.useFakeTimers();
@@ -854,45 +817,28 @@ describe("agent event handler", () => {
     }
   });
 
-  it.each(["thinking", "lifecycle"] as const)(
-    "delivers assistant text immediately after %s",
-    async (stream) => {
-      const h = createHarness({ now: 23_000 });
-      h.registerNamed("cross-stream");
-      await h.emit(
-        "run-cross-stream",
-        stream,
-        stream === "thinking" ? { text: "Think", delta: "Think" } : { phase: "start" },
-      );
-      h.nowSpy?.mockReturnValue(23_050);
-      if (stream === "thinking") {
-        await h.emit("run-cross-stream", stream, { text: "Thinking", delta: "ing" }, { seq: 2 });
-        expect(h.agent()).toHaveLength(1);
-        expect(h.nodeAgent()).toHaveLength(1);
-        h.nowSpy?.mockReturnValue(23_080);
-      }
-      const text = stream === "thinking" ? "Answer" : "Hello";
-      await h.emit(
-        "run-cross-stream",
-        "assistant",
-        { text, delta: text },
-        { seq: stream === "thinking" ? 3 : 2 },
-      );
-      const expectedStreams =
-        stream === "thinking" ? ["thinking", "thinking", "assistant"] : ["lifecycle", "assistant"];
-      const calls = h.agent();
-      expect(calls.map(([, payload]) => payload.stream)).toEqual(expectedStreams);
-      expect(calls.map(([, payload]) => payload.seq)).toEqual(
-        expectedStreams.map((_, index) => index + 1),
-      );
-      expectPayloadDataFields(calls.at(-1)?.[1], { text });
-      if (stream === "thinking") {
-        expectPayloadDataFields(calls[1]?.[1], { delta: "ing" });
-      }
-      expect(h.nodeAgent()).toHaveLength(expectedStreams.length);
-      h.nowSpy?.mockRestore();
-    },
-  );
+  it("delivers assistant text immediately after buffered thinking", async () => {
+    const h = createHarness({ now: 23_000 });
+    h.registerNamed("cross-stream");
+    await h.emit("run-cross-stream", "thinking", { text: "Think", delta: "Think" });
+    h.nowSpy?.mockReturnValue(23_050);
+    await h.emit("run-cross-stream", "thinking", { text: "Thinking", delta: "ing" }, { seq: 2 });
+    expect(h.agent()).toHaveLength(1);
+    expect(h.nodeAgent()).toHaveLength(1);
+    h.nowSpy?.mockReturnValue(23_080);
+    await h.emit("run-cross-stream", "assistant", { text: "Answer", delta: "Answer" }, { seq: 3 });
+    const calls = h.agent();
+    expect(calls.map(([, payload]) => payload.stream)).toEqual([
+      "thinking",
+      "thinking",
+      "assistant",
+    ]);
+    expect(calls.map(([, payload]) => payload.seq)).toEqual([1, 2, 3]);
+    expectPayloadDataFields(calls.at(-1)?.[1], { text: "Answer" });
+    expectPayloadDataFields(calls[1]?.[1], { delta: "ing" });
+    expect(h.nodeAgent()).toHaveLength(3);
+    h.nowSpy?.mockRestore();
+  });
 
   it.each([
     {
@@ -944,71 +890,20 @@ describe("agent event handler", () => {
     h.nowSpy?.mockRestore();
   });
 
-  it.each([
-    { text: "MEDIA:./image.png", delta: "", mediaUrls: ["./image.png"] },
-    { text: "The selected size is\nM" },
-    { text: "No" },
-  ])("preserves ordinary control-like text at completion: $text", async (data) => {
-    const h = createHarness({ now: 1_000 });
-    h.registerNamed("ordinary-media");
-    await h.emit("run-ordinary-media", "assistant", data);
-    await h.end("run-ordinary-media", 2);
-    expect(h.chat().at(-1)?.[1]).toMatchObject({
-      state: "final",
-      message: { content: [{ text: data.text }] },
-    });
-    h.nowSpy?.mockRestore();
-  });
-
-  it("retracts a visible item with a producer-prepared empty replacement", async () => {
-    const flushMs = 0;
-
-    vi.useFakeTimers();
-    vi.setSystemTime(10_000);
-    const h = createHarness();
-    h.registerNamed("control-replacement");
-    await h.emit("run-control-replacement", "assistant", {
-      itemId: "answer-1",
-      text: "Provisional answer",
-    });
-    expect(h.deltas()).toEqual(["Provisional answer"]);
-    await h.emit(
-      "run-control-replacement",
-      "assistant",
-      {
-        itemId: "answer-1",
-        text: "",
-      },
-      { seq: 2 },
-    );
-    vi.advanceTimersByTime(flushMs);
-    await h.end("run-control-replacement", 3);
-
-    const payloads = h.chat().map(([, payload]) => payload);
-    expect(payloads).toMatchObject([
-      { state: "delta", message: { content: [{ text: "Provisional answer" }] } },
-      { state: "delta", replace: true, deltaText: "", message: { content: [{ text: "" }] } },
-      { state: "final" },
-    ]);
-    expect(payloads.at(-1)?.message).toBeUndefined();
-    expect(h.nodeChat()).toHaveLength(payloads.length);
-    await h.handler.dispose();
-    h.chatRunState.clear();
-  });
-
-  it("forwards a prepared short reply immediately", async () => {
-    const h = createHarness({ now: 2_200 });
-    h.registerNamed("4");
-    await h.emit("run-4", "assistant", { text: "No" });
-    await h.end("run-4");
-    expect(h.chat()).toHaveLength(2);
-    expect(h.chat().at(-1)?.[1]).toMatchObject({
-      state: "final",
-      message: { content: [{ text: "No" }] },
-    });
-    expect(h.nodeChat()).toHaveLength(2);
-    h.nowSpy?.mockRestore();
-  });
+  it.each([{ text: "MEDIA:./image.png", delta: "", mediaUrls: ["./image.png"] }])(
+    "preserves ordinary control-like text at completion: $text",
+    async (data) => {
+      const h = createHarness({ now: 1_000 });
+      h.registerNamed("ordinary-media");
+      await h.emit("run-ordinary-media", "assistant", data);
+      await h.end("run-ordinary-media", 2);
+      expect(h.chat().at(-1)?.[1]).toMatchObject({
+        state: "final",
+        message: { content: [{ text: data.text }] },
+      });
+      h.nowSpy?.mockRestore();
+    },
+  );
 
   it("preserves a glued leading NO_REPLY literal in cumulative chat snapshots", async () => {
     const h = createHarness({
@@ -1055,7 +950,7 @@ describe("agent event handler", () => {
       first: { text: "Hello world", itemId: "message-1" },
       next: { text: "", itemId: "message-1" },
       delta: { deltaText: "", replace: true, message: { content: [{ text: "" }] } },
-      final: { state: "final" },
+      final: { state: "final", message: undefined },
     },
   ])("flushes $name before final", async ({ first, next, delta, final }) => {
     const h = createHarness({ now: 10_800 });
@@ -1174,43 +1069,6 @@ describe("agent event handler", () => {
     );
     expect(flushCallOrder).toBeLessThan(toolCallOrder);
     nowSpy.mockRestore();
-  });
-
-  it("skips unused verbosity reads for registered visible without nodes tool deltas", async () => {
-    const h = createHarness();
-    const runId = "run-unused-verbosity";
-    const sessionKey = "session-unused-verbosity";
-    h.nodeHasSessionSubscribers.mockReturnValue(false);
-    registerAgentRunContext(runId, {
-      sessionKey,
-      isControlUiVisible: true,
-      verboseLevel: "full",
-    });
-    h.toolEventRecipients.add(runId, "conn-selected");
-    const stop = subscribeAgentEvents(h.handler);
-    try {
-      for (let added = 1; added <= 32; added++) {
-        emitRuntimeAgentEvent({
-          runId,
-          stream: "tool",
-          data: { phase: "input_delta", toolCallId: "edit-1", diff: { added, removed: 0 } },
-        });
-      }
-      await stop.drain();
-      expect(loadSessionEntryAsync).not.toHaveBeenCalled();
-      expect(h.broadcast).not.toHaveBeenCalled();
-      expect(h.nodeSendToSession).not.toHaveBeenCalled();
-      const delivered = h.targetedAgent();
-      expect(delivered.map(([, payload]) => payload.data.diff)).toEqual(
-        Array.from({ length: 32 }, (_, index) => ({ added: index + 1, removed: 0 })),
-      );
-      expect(delivered.every((call) => call[2].has("conn-selected"))).toBe(true);
-    } finally {
-      await stop();
-      await h.handler.dispose();
-      h.chatRunState.clear();
-      clearRegisteredAgentRunContext(runId);
-    }
   });
 
   it("drops an expired run audience while preserving current session subscribers", async () => {

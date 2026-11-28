@@ -69,6 +69,25 @@ describe("fetchZaiUsage", () => {
     );
   });
 
+  it("reports credit-metered Coding Plan pools", async () => {
+    const result = await quota(
+      [
+        {
+          ...limit("CREDIT_LIMIT", 21, 3, 5, 1_795_872_076_958),
+          usage: 28_000,
+          currentValue: 5_969,
+        },
+        { ...limit("CREDIT_LIMIT", 32, 6, 1, 1_796_106_818_984), usage: 140_000 },
+      ],
+      { level: "max" },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.windows).toEqual([
+      window("Credits (5h)", 21, 1_795_872_076_958),
+      window("Credits (1w)", 32, 1_796_106_818_984),
+    ]);
+  });
+
   it.each([200, "200"])("reports string-encoded quota numbers with code %j", async (code) => {
     const result = await fetchUsage({
       success: true,

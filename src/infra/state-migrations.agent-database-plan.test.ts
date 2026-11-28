@@ -5,15 +5,23 @@ import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { MEDIA_ROWS_MIGRATION_META_KEY } from "../state/openclaw-agent-db-contract.js";
 import * as maintenanceLease from "../state/openclaw-agent-db-maintenance-lease.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { upgradeStateOnGatewayStart } from "../state/state-upgrade-startup.js";
 import { installDeletedAgentDatabaseFences } from "./agent-database-readers.js";
 import { listDirectoryTreeStrictSync } from "./directory-walk.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { compareValidSemver } from "./semver.js";
+import { readSqliteCleanCloseSeal } from "./sqlite-clean-close-seal.js";
+import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
 import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
+import * as integrityWorker from "./sqlite-integrity-worker.js";
 import { planAgentDatabaseMigration } from "./state-migrations.agent-database-plan.js";
 import { migrateLegacyMediaPersistence as migrate } from "./state-migrations.media-persistence.js";
 import {
@@ -113,6 +121,55 @@ it("plans a healthy database as none, and a Doctor rerun leaves it unleased and 
   expect(fileFacts(stateDir)).toEqual(before);
   expect(fileFacts(agentDir, true)).toEqual(agentFiles);
 });
+
+it.skipIf(alwaysWork.length > 0).each([true, false])(
+  "checks integrity during boot migration only if proof is missing (sealed: %s)",
+  async (sealed) => {
+    const { env, stateDir, databasePath } = await healthyInstall();
+    const maintenance = createOpenClawDatabaseMaintenanceScope({ sqliteIntegrityCheck: "full" });
+    try {
+      maintenance.run(() => openOpenClawAgentDatabase({ agentId: "main", env }));
+      closeOpenClawAgentDatabasesForTest();
+    } finally {
+      await maintenance.close();
+    }
+    closeOpenClawStateDatabaseForTest();
+    retireSqliteDatabaseAdmissionForPath(databasePath);
+    const sealPath = `${databasePath}.seal`;
+    expect(
+      readSqliteCleanCloseSeal(databasePath, fs.statSync(databasePath, { bigint: true })),
+    ).toBeDefined();
+    if (!sealed) {
+      fs.unlinkSync(sealPath);
+    }
+    const configPath = path.join(stateDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } }),
+    );
+    const legacy = path.join(stateDir, "tui", "last-session.json");
+    fs.mkdirSync(path.dirname(legacy));
+    fs.writeFileSync(
+      legacy,
+      JSON.stringify({
+        terminal: { sessionKey: "agent:main:tui-123", updatedAt: 100 },
+      }),
+    );
+
+    const check = vi.spyOn(integrityWorker, "assertSqliteIntegrityInWorker");
+    await upgradeStateOnGatewayStart({ ...env, OPENCLAW_CONFIG_PATH: configPath }, () => true);
+
+    expect(fs.existsSync(legacy)).toBe(false);
+    expect(check.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(
+      sealed ? 0 : 1,
+    );
+    if (sealed) {
+      expect(
+        readSqliteCleanCloseSeal(databasePath, fs.statSync(databasePath, { bigint: true })),
+      ).toBeDefined();
+    }
+  },
+);
 
 const archiveFile = (f: Fixture) =>
   path.join(f.stateDir, "agents/main/sessions/legacy.jsonl.deleted.2026-07-24T01-02-03.000Z");

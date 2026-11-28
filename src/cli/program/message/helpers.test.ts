@@ -153,7 +153,7 @@ function registerRootStopHook() {
   return rootStop;
 }
 
-function mockChannelExecutionModes(modes: Record<string, "gateway" | "local"> = {}) {
+function mockChannelExecutionModes(modes: Record<string, "gateway" | "local">) {
   getChannelPluginMock.mockImplementation((id: string) => ({
     actions: { resolveExecutionMode: () => modes[id] ?? "local" },
   }));

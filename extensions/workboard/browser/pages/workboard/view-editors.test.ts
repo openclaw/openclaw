@@ -668,7 +668,11 @@ describe("WorkboardView", () => {
       const card = createWorkboardCard({ title: "Original title", notes: "Original notes" });
       const current = { ...card, priority: "high" as const, updatedAt: 2 };
       const message =
-        operation === "conflict" ? "Card changed. Review and retry." : `${operation} unavailable`;
+        operation === "conflict" ? "Internal card-revision diagnostic" : `${operation} unavailable`;
+      const displayMessage =
+        operation === "conflict"
+          ? "The card changed while you were editing. Review the latest values before saving your edits."
+          : message;
       const error =
         operation === "conflict"
           ? new GatewayProtocolRequestError({
@@ -711,7 +715,7 @@ describe("WorkboardView", () => {
           .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
       };
       submit();
-      await waitForFast(() => expect(state.error).toContain(message));
+      await waitForFast(() => expect(state.error).toBe(displayMessage));
       renderView();
       expect(client.request).toHaveBeenCalledWith(method, expect.anything());
       const errorToast = toast(container.querySelector("[data-test-dialog]")!);
@@ -720,7 +724,7 @@ describe("WorkboardView", () => {
         errorToast?.querySelector<HTMLElement>('[role="alert"]'),
         '[role="alert"]',
       );
-      expect(alert.textContent).toContain(message);
+      expect(alert.textContent).toBe(displayMessage);
       expect(alert.closest('[inert], [aria-hidden="true"]')).toBeNull();
       expect(errorToast.closest('[inert], [aria-hidden="true"]')).toBeNull();
       expect(container.querySelector<HTMLInputElement>(".workboard-draft__title")?.value).toBe(
@@ -730,7 +734,6 @@ describe("WorkboardView", () => {
         "Unsaved notes",
       );
       if (operation === "conflict") {
-        expect(alert.textContent).toContain("Your unsaved edits remain in the form.");
         expect(
           container.querySelector<HTMLInputElement>('input[name="priority"]:checked')?.value,
         ).toBe("high");

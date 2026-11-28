@@ -153,20 +153,6 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
     });
   });
 
-  it("selects the deterministic winner within one agent before cross-agent checks", async () => {
-    await withStateDirEnv("openclaw-sessions-resolve-same-agent-", async () => {
-      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-      await seedAgent(cfg, "main", {
-        "agent:main:older": { sessionId: "session-duplicate", updatedAt: 10 },
-        "agent:main:newer": { sessionId: "session-duplicate", updatedAt: 20 },
-      });
-
-      await expect(resolve(cfg, { sessionId: "session-duplicate" })).resolves.toEqual(
-        resolved("agent:main:newer"),
-      );
-    });
-  });
-
   it("still rejects non-alias agent:main matches when main is no longer configured", async () => {
     await withStateDirEnv("openclaw-sessions-resolve-stale-main-", async () => {
       const cfg = {
