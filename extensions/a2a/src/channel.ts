@@ -307,23 +307,32 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
 
         try {
           const peerRequestTimes = new Map<string, number[]>();
+          const failedAuthTimes = new Map<string, number[]>();
 
-          function isRateLimited(peerName: string): boolean {
+          function consumeRateWindow(bucket: Map<string, number[]>, key: string): boolean {
             const maximum = a2aConfig.rateLimitPerMinute ?? DEFAULT_RATE_LIMIT_PER_MINUTE;
             if (maximum === 0) {
               return false;
             }
             const now = Date.now();
-            const requests = (peerRequestTimes.get(peerName) ?? []).filter(
+            const requests = (bucket.get(key) ?? []).filter(
               (timestamp) => now - timestamp < RATE_LIMIT_WINDOW_MS,
             );
             if (requests.length >= maximum) {
-              peerRequestTimes.set(peerName, requests);
+              bucket.set(key, requests);
               return true;
             }
             requests.push(now);
-            peerRequestTimes.set(peerName, requests);
+            bucket.set(key, requests);
             return false;
+          }
+
+          function isRateLimited(peerName: string): boolean {
+            return consumeRateWindow(peerRequestTimes, peerName);
+          }
+
+          function isAuthFailureLimited(remoteAddress: string): boolean {
+            return consumeRateWindow(failedAuthTimes, remoteAddress);
           }
 
           async function processRpcRequest(
@@ -475,6 +484,13 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
 
             const peerName = resolvePeerName(request, a2aConfig);
             if (!peerName) {
+              // The per-peer limiter only runs after a token matches, so a wrong
+              // bearer would otherwise be an unthrottled guess. Count failures
+              // by the socket address before telling the caller it was wrong.
+              if (isAuthFailureLimited(request.socket.remoteAddress ?? "unknown")) {
+                writeJsonResponse(response, 429, { error: "Too many authentication attempts" });
+                return true;
+              }
               writeJsonResponse(response, 401, {
                 error: "Unauthorized; configure channels.a2a.peers with a matching Bearer token",
               });
