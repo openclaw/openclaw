@@ -1456,6 +1456,11 @@ div.shell.shell--onboarding {
   box-shadow: 0 0 6px color-mix(in srgb, var(--warn) 48%, transparent);
 }
 
+.sidebar-session-group-attention--danger {
+  background: var(--danger);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--danger) 48%, transparent);
+}
+
 /* The wrapper keeps the shared presence dot outside the avatar's clipping.
    Self is excluded as an always-on signal. */
 .sidebar-session-group-toggle__person {
