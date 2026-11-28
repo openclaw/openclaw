@@ -1,6 +1,7 @@
 {
   "id": "vercel-ai-gateway",
   "categories": ["models"],
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "activation": {
     "onStartup": false
   },
@@ -12,6 +13,9 @@
       "hosts": ["ai-gateway.vercel.sh"]
     }
   ],
+  "contracts": {
+    "speechProviders": ["vercel-ai-gateway"]
+  },
   "modelCatalog": {
     "modelsDev": {
       "vercel-ai-gateway": "vercel"

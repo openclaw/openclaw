@@ -103,6 +103,7 @@ inbound media through their reply model; see the full provider list in
 | Runway            |       |   ✓   |       |     |     |                |                     |
 | SenseAudio        |       |       |       |     |  ✓  |                |                     |
 | Together          |       |   ✓   |       |     |     |                |                     |
+| Vercel AI Gateway |       |       |       |  ✓  |     |                |                     |
 | Volcengine        |       |       |       |  ✓  |     |                |                     |
 | Vydra             |   ✓   |   ✓   |       |  ✓  |     |                |                     |
 | xAI               |   ✓   |   ✓   |       |  ✓  |  ✓  |                |          ✓          |
