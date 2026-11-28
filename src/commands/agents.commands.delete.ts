@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { AgentsDeleteResult } from "../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import {
   AgentSharedStoreOwnerError,
@@ -5,6 +6,7 @@ import {
   isPathOwnedBySurvivingAgent,
   prepareAgentDeleteDatabases,
   readAgentDeleteDatabaseRegistry,
+  readRegisteredAgentDatabasePaths,
   resolveSurvivingDatabaseFilePaths,
 } from "../agents/agent-delete-databases.js";
 import {
@@ -75,6 +77,19 @@ type AgentsDeleteOptions = {
 
 type AgentDeleteRemovedPath = NonNullable<AgentsDeleteResult["removed"]>[number];
 type AgentDeleteFailedPath = NonNullable<AgentsDeleteResult["failed"]>[number];
+
+/** A retired agent's prompt names every path still on disk before anything moves to Trash. */
+function formatRetiredAgentDeletePrompt(agentId: string, paths: string[]): string {
+  const existing = [...new Set(paths)].filter((pathname) => fs.existsSync(pathname));
+  return existing.length === 0
+    ? `Agent "${agentId}" is not configured and none of its files were found on disk. Remove its database registration?`
+    : [
+        `Agent "${agentId}" is not configured, but these paths still exist and will be moved to Trash:`,
+        ...existing.map((pathname) => `  ${pathname}`),
+        `Delete agent "${agentId}" and its remaining files?`,
+      ].join("\n");
+}
+
 export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
   const failAgentsDelete = (message: string): void => {
     if (opts.json) {
@@ -112,15 +127,18 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
     runtime.log(`Normalized agent id to "${agentId}".`);
   }
   const configured = findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0;
+  // A retired agent (removed from config, still registered) is deleted like a configured one.
+  const retiredDatabasePaths = configured ? [] : await readRegisteredAgentDatabasePaths(agentId);
+  const retired = retiredDatabasePaths.length > 0;
   let existingJournal = configured ? undefined : await readAgentDeletionJournalAsync(agentId);
-  if (!configured && (!existingJournal || existingJournal.cleanupCompleted)) {
+  if (!configured && !retired && (!existingJournal || existingJournal.cleanupCompleted)) {
     failAgentsDelete(
       `Agent "${agentId}" not found. Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
     );
     return;
   }
-  const configuredAgentDir = configured ? resolveAgentDir(cfg, agentId) : undefined;
-  const safetyAgentDir = existingJournal?.agentDir ?? configuredAgentDir;
+  const currentAgentDir = configured || retired ? resolveAgentDir(cfg, agentId) : undefined;
+  const safetyAgentDir = existingJournal?.agentDir ?? currentAgentDir;
   if (!safetyAgentDir) {
     throw new Error(`Agent "${agentId}" deletion has no state directory.`);
   }
@@ -145,7 +163,7 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
     return;
   }
 
-  if (configured && agentId === tryResolveSoleAgentId(cfg)) {
+  if (agentId === tryResolveSoleAgentId(cfg)) {
     failAgentsDelete(`Agent "${agentId}" is the only configured agent and cannot be deleted.`);
     return;
   }
@@ -156,16 +174,18 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
     return;
   }
 
-  if (configured) {
+  if (configured || retired) {
     existingJournal = await readAgentDeletionJournalAsync(agentId);
     if (existingJournal?.cleanupCompleted) {
       existingJournal = undefined;
     }
   }
-  const agentDir = existingJournal?.agentDir ?? configuredAgentDir;
+  const agentDir = existingJournal?.agentDir ?? currentAgentDir;
   if (!agentDir) {
     throw new Error(`Agent "${agentId}" deletion has no state directory.`);
   }
+  const workspaceDir = existingJournal?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
+  const sessionsDir = existingJournal?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId);
 
   if (!opts.force) {
     if (!isTerminalInteractive()) {
@@ -174,7 +194,16 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
     }
     const prompter = createClackPrompter();
     const confirmed = await prompter.confirm({
-      message: `Delete agent "${agentId}" and prune workspace/state?`,
+      message: retired
+        ? formatRetiredAgentDeletePrompt(agentId, [
+            agentDir,
+            ...(findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir).length > 0
+              ? []
+              : [workspaceDir]),
+            sessionsDir,
+            ...retiredDatabasePaths,
+          ])
+        : `Delete agent "${agentId}" and prune workspace/state?`,
       initialValue: false,
     });
     if (!confirmed) {
@@ -183,8 +212,6 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
     }
   }
 
-  const workspaceDir = existingJournal?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
-  const sessionsDir = existingJournal?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId);
   const result = configured
     ? pruneAgentConfig(cfg, agentId)
     : { config: cfg, removedBindings: 0, removedAllow: 0, clearedOwnerRefs: [] };
@@ -267,13 +294,13 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
 
   return await withAgentDeletion(agentId, async (begin) => {
     existingJournal = await readAgentDeletionJournalAsync(agentId);
-    if (configured && existingJournal?.cleanupCompleted) {
+    if ((configured || retired) && existingJournal?.cleanupCompleted) {
       if (!(await claimCompletedAgentDeletion(agentId, existingJournal.operationId))) {
         throw new Error(`Agent "${agentId}" deletion tombstone changed before fresh deletion.`);
       }
       existingJournal = undefined;
     }
-    if (!configured && (!existingJournal || existingJournal.cleanupCompleted)) {
+    if (!configured && !retired && (!existingJournal || existingJournal.cleanupCompleted)) {
       throw new Error(`Agent "${agentId}" deletion already completed.`);
     }
     await assertAgentSessionStoreDeletionSafe(cfg, agentId);

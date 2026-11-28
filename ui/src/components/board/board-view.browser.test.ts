@@ -274,8 +274,9 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     },
   );
 
-  it("moves a narrow card onto the visible target's logical position", async () => {
-    const applyOps = vi.fn(async () => undefined);
+  it("holds a narrow card at its drop target until a newer snapshot arrives", async () => {
+    const saving = createDeferred<void>();
+    const applyOps = vi.fn(() => saving.promise);
     const view = await mount(applyOps);
     view.style.width = "354px";
     const cards = [...view.querySelectorAll<HTMLElement>(".board-widget")];
@@ -287,6 +288,15 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     await vi.waitFor(() =>
       expect(applyOps).toHaveBeenCalledWith([{ kind: "widget_move", name: "second", position: 0 }]),
     );
+    const firstIsAbove = () =>
+      cards[0]!.getBoundingClientRect().top < cards[1]!.getBoundingClientRect().top;
+    await vi.waitFor(() => expect(firstIsAbove()).toBe(false));
+    expect(view.querySelector(".board-widget--dragging")).toBeNull();
+    await updateSnapshot(view, { revision: 2 });
+    expect(firstIsAbove()).toBe(true);
+    saving.resolve();
+    await settle(view);
+    expect(firstIsAbove()).toBe(true);
   });
 
   // Chrome must stay revealed while focus is anywhere inside the cell (menu

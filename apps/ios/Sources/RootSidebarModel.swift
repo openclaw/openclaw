@@ -598,10 +598,6 @@ final class RootSidebarModel {
         }
     }
 
-    func reportSessionError(_ error: any Error) {
-        self.sessionErrorText = error.localizedDescription
-    }
-
     static func tokenUsageSummary(
         for sessions: [OpenClawChatSessionEntry],
         rosterIsComplete: Bool = true) -> TokenUsageSummary

@@ -148,7 +148,18 @@ struct ChatAssistantRunGroup: Identifiable {
                     guard case let .run(runID, inputBoundary, _) = group.id else { return false }
                     return runID == liveRunID && inputBoundary == boundary
                 }) {
-                    groups[index].includesLive = true
+                    // The working line ends its turn. Output the Gateway stamped with no run (imported CLI
+                    // rows once their live calls end) stays above it; a new input or another run ends the turn.
+                    let unowned = groups[(index + 1)...].prefix { $0.runID == nil && $0.parts.first?.boundaryID == nil }
+                    if unowned.isEmpty {
+                        groups[index].includesLive = true
+                    } else {
+                        groups.insert(Self(
+                            id: .run(liveRunID, boundary, segments[liveRunID, default: 0]),
+                            runID: liveRunID,
+                            parts: [],
+                            includesLive: true), at: unowned.endIndex)
+                    }
                 } else {
                     groups.append(Self(
                         id: .run(liveRunID, boundary, segments[liveRunID, default: 0]),

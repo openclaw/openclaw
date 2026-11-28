@@ -1,6 +1,7 @@
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
@@ -78,7 +79,7 @@ export async function captureSessionGeneration(params: {
 
 async function readCurrentEntry<T>(
   target: Pick<SessionGeneration, "agentId" | "storePath" | "sessionKey">,
-  consume: (entry: { sessionId?: string; lifecycleRevision?: string } | undefined) => T,
+  consume: (entry: InternalSessionEntry | undefined) => T,
 ): Promise<T> {
   return await withSessionEntriesFromStoresInWorker(
     [
@@ -138,7 +139,7 @@ export async function postSessionNotice(
       entry?.sessionId !== generation.sessionId ||
       (entry.lifecycleRevision ?? null) !== generation.lifecycleRevision
     ) {
-      return false;
+      return undefined;
     }
     assertCurrent();
     // Queued in the same read that proved the generation and the owner, before any awaited work.
@@ -147,14 +148,14 @@ export async function postSessionNotice(
         sessionKey: resolveSystemEventQueueKey(sessionKey, agentId),
       });
     }
-    return true;
+    return entry;
   });
   if (!current) {
     return { status: "skipped", reason: "session-changed" };
   }
   const target = route?.deliveryContext;
   const channel = target?.channel ? normalizeMessageChannel(target.channel) : undefined;
-  const delivery =
+  const planned =
     channel &&
     target?.to &&
     isDeliverableMessageChannel(channel) &&
@@ -166,6 +167,19 @@ export async function postSessionNotice(
           // The session key's thread is canonical; stored context may name a stale thread.
           threadId: route?.threadId ?? target.threadId,
         }
+      : undefined;
+  // A conversation that denies automatic sends keeps the notice in its transcript only. The
+  // policy owner reaches the channel plugin registry, which loads this module: keep it lazy,
+  // like the delivery runtime below.
+  const delivery =
+    planned &&
+    (await import("./send-policy.js")).resolveSendPolicy({
+      cfg: config,
+      entry: current,
+      sessionKey,
+      channel: planned.channel,
+    }) !== "deny"
+      ? planned
       : undefined;
   if (delivery) {
     assertCurrent();
