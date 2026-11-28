@@ -170,6 +170,60 @@ describe("buildSkillSnapshot", () => {
     });
   });
 
+  it("routes OpenClaw product questions through the bundled handbook and docs skills", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("openclaw-handbook-skill");
+    const snapshot = await buildSnapshot(workspaceDir, {
+      bundledSkillsDir: path.resolve("skills"),
+      config: { skills: { load: { watch: false } } },
+    });
+    const installed = prepareInstalledSkillCatalog({ snapshot, workspaceDir });
+
+    expect(snapshot.prompt).toContain("<name>openclaw-handbook</name>");
+    expect(snapshot.prompt).toContain("<name>openclaw-docs</name>");
+    for (const query of [
+      "How do I connect Telegram to OpenClaw?",
+      "What are the OpenClaw permission modes?",
+      "Why is my OpenClaw Gateway not starting?",
+    ]) {
+      const found = await searchInstalledSkills(installed, query, 3);
+      expect(
+        found.skills.map((skill) => skill.name),
+        query,
+      ).toContain("openclaw-handbook");
+    }
+
+    const location = path.resolve("skills/openclaw-handbook/SKILL.md");
+    const hub = await fs.readFile(location, "utf8");
+    expect(await readInstalledSkill(installed, "openclaw-handbook")).toEqual({
+      name: "openclaw-handbook",
+      location,
+      content: hub,
+    });
+
+    const troubleshooting = await fs.readFile(
+      path.resolve("skills/openclaw-handbook/references/troubleshooting.md"),
+      "utf8",
+    );
+    const pageIds = [
+      ...`${hub}\n${troubleshooting}`.matchAll(/`([a-z0-9-]+(?:\/[a-z0-9-]+)+)`/g),
+    ].map((match) => match[1]);
+    expect(pageIds.length).toBeGreaterThan(0);
+    for (const pageId of new Set(pageIds)) {
+      await expect(
+        fs.access(path.resolve("docs", `${pageId}.md`)),
+        pageId,
+      ).resolves.toBeUndefined();
+    }
+    const skillNames = [...hub.matchAll(/`([a-z0-9-]+)` skill/g)].map((match) => match[1]);
+    expect(skillNames.length).toBeGreaterThan(0);
+    for (const name of new Set(skillNames)) {
+      await expect(
+        fs.access(path.resolve("skills", name!, "SKILL.md")),
+        name,
+      ).resolves.toBeUndefined();
+    }
+  });
+
   it("keeps custodian skills absent from every non-custodian discovery surface", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("custodian-gate");
     for (const name of CUSTODIAN_SKILL_NAMES) {

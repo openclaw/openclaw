@@ -718,7 +718,10 @@ Toggle and configure bundled or managed skills under `skills.entries` in
   `false` disables the skill even when bundled or installed. The `coding-agent`
   bundled skill is opt-in — set `skills.entries.coding-agent.enabled: true`
   and check that one of `claude`, `codex`, `opencode`, or another supported CLI
-  is installed and authenticated.
+  is installed and authenticated. The bundled `openclaw-handbook` skill routes
+  questions about OpenClaw itself to the right skill, docs page, or diagnostic
+  command. The bundled `openclaw-docs` skill finds the docs page for a topic.
+  Disable either one with `skills.entries.<name>.enabled: false`.
 </ParamField>
 
 <ParamField path="apiKey" type='string | { source, provider, id }'>

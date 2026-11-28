@@ -29,6 +29,7 @@ Own docs authoring, published links, docs i18n policy.
 - Alphabetize services/providers in docs, UI copy, pickers, except explicit runtime/auto-detection order.
 - CI schema-checks JSON/JSON5 fences resembling whole `openclaw.json` files (`pnpm docs:check-config-examples`). Deliberately partial/legacy fences: `validate=false`.
 - Never hand-edit `docs/plugins/reference/**`, `docs/plugins/reference.md`, `docs/plugins/plugin-inventory.md`; run `pnpm plugins:inventory:gen`. `docs/maturity/**`: see below.
+- Never hand-edit `skills/openclaw-docs/references/docs-map.md`; run `pnpm docs:skill-map:gen` after `docs/docs.json` or page changes (`pnpm docs:skill-map:check` verifies). [#117398](https://github.com/openclaw/openclaw/pull/117398) explains why derived docs maps must be regenerated rather than maintained by hand.
 - Only source stub in `docs/docs_map.md`; publishing/packaging generate expanded map from `pnpm docs:list --headings`. Never commit heading mirror.
 
 ## Internal Docs
