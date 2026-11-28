@@ -64,7 +64,7 @@ export async function prepareMemorySearchChannelRead(params: {
   targets: readonly MemorySearchChannelTargets[];
 }): Promise<MemorySearchChannelRead | undefined> {
   if (
-    resolveEffectiveSessionToolsVisibility(params) !== "channel" ||
+    (params.targets.length === 0 && resolveEffectiveSessionToolsVisibility(params) !== "channel") ||
     !params.hits.some((hit) => hit.source === "sessions")
   ) {
     return undefined;

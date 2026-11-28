@@ -154,7 +154,7 @@ The `channel` setting authorizes retrieval; it does not merge thread sessions or
 automatically inject sibling-thread history. Sibling send, status/model changes,
 and session controls remain denied. In channel mode, cross-session list, history,
 search, and transcript-backed memory recall require a Gateway-hosted agent;
-standalone RPC-only readers fail closed for those results. Self-only reads and
+standalone RPC-only readers fail closed for those results. Before returning a channel-scoped read, the Gateway checks that the caller still has access to the same session. A route or policy change during the read can remove sibling results, including snippets and citations. Self-only reads and
 ordinary memory/wiki retrieval retain their existing behavior. Cross-session
 history anchors must use the target's currently admitted session ID; older
 incarnations do not inherit its current route authorization.

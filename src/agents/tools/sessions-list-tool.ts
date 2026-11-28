@@ -377,16 +377,20 @@ export function createSessionsListTool(opts?: {
         (archived === true || archived === "all") &&
         !hydrateTranscriptFieldsAfterFiltering &&
         messageLimit === 0;
-      const channelAccess = await prepareSessionsListChannelAccess({
-        cfg,
+      const channelRead = {
         visibility,
         sessions,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
-        mainSessionKey,
         a2aPolicy,
-        callGateway: gatewayCall,
+        sandboxed: opts?.sandboxed === true,
         allowArchivedMetadata,
+      };
+      const channelAccess = await prepareSessionsListChannelAccess({
+        ...channelRead,
+        cfg,
+        mainSessionKey,
+        callGateway: gatewayCall,
         ...(signal ? { signal } : {}),
       });
       sessions.splice(0, sessions.length, ...channelAccess.sessions);
@@ -713,12 +717,7 @@ export function createSessionsListTool(opts?: {
         return jsonResult(resultFor(count));
       };
       return finalizeSessionsListChannelRead({
-        sessions,
-        visibility,
-        requesterAgentId,
-        requesterSessionKey: effectiveRequesterKey,
-        a2aPolicy,
-        allowArchivedMetadata,
+        ...channelRead,
         requireSessionReadOwner,
         hasEnrichment: hydrateTranscriptFieldsAfterFiltering || messageLimit > 0,
         finalize,

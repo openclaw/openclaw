@@ -90,7 +90,7 @@ export async function searchRecallSessionTranscripts(params: {
   ) => {
     const { cfg, policyConfig, rowContext } = read.state;
     const context = resolveSessionToolContext({
-      config: cfg,
+      config: policyConfig,
       agentId: recall.requesterAgentId,
       agentSessionKey: recall.requesterSessionKey,
       sandboxed: recall.sandboxed,
@@ -252,22 +252,31 @@ export async function searchRecallSessionTranscripts(params: {
           recall.visibility !== "channel" ||
           (liveRequester !== undefined && liveRequester.entry.sessionId === requester?.sessionId);
         const current = requesterCurrent
-          ? pages.filter(({ target, page }) =>
-              recall.visibility === "channel"
-                ? page.hits.every((hit) => {
-                    const expected = admittedSessionIds.get(targetIdentity(target, hit.sessionKey));
-                    const row = read.describe({ ...target, key: hit.sessionKey });
-                    if (!row || expected === undefined || row.entry.sessionId !== expected) {
-                      return false;
-                    }
-                    return true;
-                  })
-                : authorize(
-                    target,
-                    page.hits.map((hit) => hit.sessionKey),
-                    read,
-                  ).every(Boolean),
-            )
+          ? pages.flatMap(({ target, page }) => {
+              const visible = authorize(
+                target,
+                page.hits.map((hit) => hit.sessionKey),
+                read,
+                liveRequester && channelScopeFor(liveRequester),
+              );
+              if (recall.visibility !== "channel") {
+                return visible.every(Boolean) ? [{ page }] : [];
+              }
+              const hits = page.hits.filter((hit, index) => {
+                const expected = admittedSessionIds.get(targetIdentity(target, hit.sessionKey));
+                return (
+                  visible[index] &&
+                  expected === hit.sessionId &&
+                  read.describe({ ...target, key: hit.sessionKey })?.entry.sessionId === expected
+                );
+              });
+              // Counts and flags describe the whole worker page. Withhold them when rows drop.
+              const authorizedPage: typeof page =
+                hits.length === page.hits.length
+                  ? page
+                  : { hits, indexing: false, truncated: false };
+              return [{ page: authorizedPage }];
+            })
           : [];
         if (revision !== projection.sharingRevision) {
           return false;

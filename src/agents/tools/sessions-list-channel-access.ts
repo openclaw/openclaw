@@ -88,6 +88,7 @@ export async function prepareSessionsListChannelAccess(params: {
   mainSessionKey?: string;
   a2aPolicy: AgentToAgentPolicy;
   callGateway: AgentToolGatewayRequestCaller;
+  sandboxed: boolean;
   allowArchivedMetadata: boolean;
   signal?: AbortSignal;
 }) {
@@ -129,6 +130,7 @@ export async function prepareSessionsListChannelAccess(params: {
         requesterAgentId: params.requesterAgentId,
         requesterSessionKey: params.requesterSessionKey,
         a2aPolicy: params.a2aPolicy,
+        sandboxed: params.sandboxed,
         allowArchivedMetadata: params.allowArchivedMetadata,
         targets: [{ key: entry.key, agentId, expectedSessionId: entry.sessionId }],
       },
@@ -175,6 +177,7 @@ export async function finalizeSessionsListChannelRead<T>(params: {
   requesterAgentId: string;
   requesterSessionKey: string;
   a2aPolicy: AgentToAgentPolicy;
+  sandboxed: boolean;
   allowArchivedMetadata: boolean;
   requireSessionReadOwner: boolean;
   hasEnrichment: boolean;
@@ -184,7 +187,7 @@ export async function finalizeSessionsListChannelRead<T>(params: {
     requesterAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
     a2aPolicy: params.a2aPolicy,
-    channelAccess: "admitted" as const,
+    sandboxed: params.sandboxed,
     allowArchivedMetadata: params.allowArchivedMetadata,
     targets: params.sessions.map(({ entry, agentId: sessionAgentId }) => ({
       key: entry.key,

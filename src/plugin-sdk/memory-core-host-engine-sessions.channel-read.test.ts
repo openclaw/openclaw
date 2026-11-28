@@ -46,7 +46,7 @@ it("keeps standalone self reads and rejects async consumers and cross-session al
 });
 
 it.each(["channel", "self"] as const)(
-  "admits SDK transcript reads with the initial %s policy and applies reloads next time",
+  "intersects the initial %s policy with current permission before returning transcript hits",
   async (initialVisibility) => {
     const config: OpenClawConfig = {
       agents: { entries: { main: {} } },
@@ -84,21 +84,18 @@ it.each(["channel", "self"] as const)(
         }),
       );
     const admitted = await prepare();
-    config.tools = { sessions: { visibility: "self" } };
-    owner.setRow({
-      key: sibling,
-      sessionId: sibling,
-      chatType: "channel",
-      space: "t111",
-      origin: { provider: "slack" },
-      deliveryContext: { channel: "slack", accountId: "default", to: "channel:c222" },
-    });
     expect(await owner.run(() => admitted.withCurrentAccess((visible) => [...visible]))).toEqual([
       initialVisibility === "channel",
     ]);
+    config.tools = {
+      sessions: { visibility: initialVisibility === "channel" ? "self" : "channel" },
+    };
+    expect(await owner.run(() => admitted.withCurrentAccess((visible) => [...visible]))).toEqual([
+      false,
+    ]);
     const next = await prepare();
     expect(await owner.run(() => next.withCurrentAccess((visible) => [...visible]))).toEqual([
-      false,
+      initialVisibility === "self",
     ]);
   },
 );

@@ -31,6 +31,7 @@ import {
   resolveSessionToolTargetAgentId,
   runWithScopedSessionAccess,
 } from "./scoped-session-access.js";
+import { withCurrentSessionChannelReadAccess } from "./sessions-channel-read-result.js";
 import {
   formatSessionToolAccessDenial,
   isSessionToolMainAlias,
@@ -412,12 +413,21 @@ export function createSessionsSearchTool(opts?: {
           }
           throw error;
         }
-        const indexing = result.indexing === true;
-        const archivedTranscriptsExcluded = result.archivedTranscriptsExcluded ?? 0;
-        const backendTruncated = result.truncated === true;
+        const channelTarget =
+          visibility === "channel" && sessionTarget?.key !== effectiveRequesterKey
+            ? sessionTarget
+            : undefined;
+        let removedChannelHit = false;
         const visibleHits: SanitizedSearchHit[] = [];
         for (const hit of Array.isArray(result.results) ? result.results : []) {
           if (typeof hit.sessionKey !== "string" || isIncognitoSessionKey(hit.sessionKey)) {
+            continue;
+          }
+          if (
+            channelTarget &&
+            (!channelTarget.expectedSessionId || hit.sessionId !== channelTarget.expectedSessionId)
+          ) {
+            removedChannelHit = true;
             continue;
           }
           if (sessionTarget && hit.sessionKey !== sessionTarget.key) {
@@ -427,6 +437,7 @@ export function createSessionsSearchTool(opts?: {
               parsed?.agentId !== sessionTarget.agentId ||
               parsed.rest !== sessionTarget.key.trim()
             ) {
+              removedChannelHit ||= Boolean(channelTarget);
               continue;
             }
           }
@@ -442,13 +453,18 @@ export function createSessionsSearchTool(opts?: {
         visibleHits.sort(compareSessionTranscriptSearchHits);
         const limited = visibleHits.slice(0, limit);
         const capped = capSearchHits(limited);
+        const indexing = !removedChannelHit && result.indexing === true;
+        const archivedTranscriptsExcluded = removedChannelHit
+          ? 0
+          : (result.archivedTranscriptsExcluded ?? 0);
+        const backendTruncated = !removedChannelHit && result.truncated === true;
         const warnings = [
           indexing ? SESSIONS_SEARCH_INDEXING_WARNING : undefined,
           archivedTranscriptsExcluded > 0
             ? `Search excludes ${archivedTranscriptsExcluded} archived chats. Restore a chat to include it in search.`
             : undefined,
         ].filter(Boolean);
-        return jsonResult({
+        const response = jsonResult({
           results: capped.items,
           ...(opts?.sessionLinkBase
             ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
@@ -460,6 +476,19 @@ export function createSessionsSearchTool(opts?: {
             ? { truncated: true }
             : {}),
         });
+        if (channelTarget) {
+          return withCurrentSessionChannelReadAccess(
+            {
+              requesterAgentId,
+              requesterSessionKey: effectiveRequesterKey,
+              a2aPolicy,
+              sandboxed: opts?.sandboxed === true,
+              targets: [channelTarget],
+            },
+            ([visible]) => (visible ? response : jsonResult({ results: [] })),
+          );
+        }
+        return response;
       }),
     ),
   };

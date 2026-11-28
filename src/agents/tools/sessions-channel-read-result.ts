@@ -1,9 +1,14 @@
+import { resolveCanonicalMainSessionKey } from "../../config/sessions/main-session-key.js";
 import type { SessionRowReadView } from "../../gateway/session-row-prepared-read.js";
 import {
   createSessionVisibilityDecisionChecker,
   resolveSessionChannelScope,
 } from "../../plugin-sdk/session-visibility-internal.js";
-import type { AgentToAgentPolicy } from "../../plugin-sdk/session-visibility.js";
+import {
+  createAgentToAgentPolicy,
+  resolveEffectiveSessionToolsVisibility,
+  type AgentToAgentPolicy,
+} from "../../plugin-sdk/session-visibility.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
@@ -20,15 +25,14 @@ export type SessionChannelReadTarget = {
 type ChannelReadParams = {
   requesterAgentId: string;
   requesterSessionKey: string;
+  sandboxed: boolean;
   a2aPolicy: AgentToAgentPolicy;
   targets: readonly SessionChannelReadTarget[];
-  /** Preserve a channel decision made before the read while rechecking owner identity. */
-  channelAccess?: "current" | "admitted";
   /** Explicit archive inventory may disclose metadata, never transcript enrichment. */
   allowArchivedMetadata?: boolean;
 };
 
-/** Recheck buffered disclosure owners while preserving an explicitly admitted channel decision. */
+/** Check every buffered disclosure in the same synchronous owner read as its publication. */
 export function currentSessionChannelReadAccess(
   params: ChannelReadParams,
   read?: SessionRowReadView,
@@ -62,39 +66,55 @@ export function currentSessionChannelReadAccess(
     agentId: params.requesterAgentId,
     key: params.requesterSessionKey,
   });
-  const channelChecker =
-    params.channelAccess === "admitted"
-      ? undefined
-      : createSessionVisibilityDecisionChecker({
-          action: "history",
-          requesterAgentId: params.requesterAgentId,
-          requesterSessionKey: params.requesterSessionKey,
-          requesterChannelScope: requester?.channelScope,
-          visibility: "channel",
-          a2aPolicy: params.a2aPolicy,
-        });
+  const channelChecker = createSessionVisibilityDecisionChecker({
+    action: "history",
+    requesterAgentId: params.requesterAgentId,
+    requesterSessionKey: params.requesterSessionKey,
+    requesterChannelScope: requester?.channelScope,
+    visibility: "channel",
+    a2aPolicy: params.a2aPolicy,
+  });
+  const policyConfig = read.state.policyConfig;
+  const currentChecker = createSessionVisibilityDecisionChecker({
+    action: "history",
+    requesterAgentId: params.requesterAgentId,
+    requesterSessionKey: params.requesterSessionKey,
+    requesterChannelScope: requester?.channelScope,
+    mainSessionKey: resolveCanonicalMainSessionKey({
+      agentId: params.requesterAgentId,
+      mainKey: policyConfig.session?.mainKey,
+      sessionScope: policyConfig.session?.scope,
+    }),
+    visibility: resolveEffectiveSessionToolsVisibility({
+      cfg: policyConfig,
+      sandboxed: params.sandboxed,
+    }),
+    a2aPolicy: createAgentToAgentPolicy(policyConfig, { sandboxed: params.sandboxed }),
+  });
   return params.targets.map((target) => {
     if (isSelf(target)) {
-      return requester !== undefined;
+      return Boolean(
+        requester &&
+        (!target.expectedSessionId || requester.row.entry.sessionId === target.expectedSessionId),
+      );
     }
     const current = scope(target);
     if (
       !requester ||
+      requester.row.entry.archivedAt !== undefined ||
       !current ||
       (!params.allowArchivedMetadata && current.row.entry.archivedAt !== undefined) ||
       (target.expectedSessionId && current.row.entry.sessionId !== target.expectedSessionId)
     ) {
       return false;
     }
-    if (!channelChecker) {
-      return true;
-    }
-    return channelChecker.check({
+    const row = {
       ...target,
       channelScope: current.channelScope,
       spawnedBy: current.row.entry.spawnedBy,
       parentSessionKey: current.row.entry.parentSessionKey,
-    }).allowed;
+    };
+    return channelChecker.check(row).allowed && currentChecker.check(row).allowed;
   });
 }
 

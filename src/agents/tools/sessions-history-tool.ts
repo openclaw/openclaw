@@ -580,7 +580,7 @@ export function createSessionsHistoryTool(opts?: {
               requesterAgentId,
               requesterSessionKey: effectiveRequesterKey,
               a2aPolicy,
-              channelAccess: "admitted",
+              sandboxed: opts?.sandboxed === true,
               targets: [
                 {
                   key: resolvedKey,

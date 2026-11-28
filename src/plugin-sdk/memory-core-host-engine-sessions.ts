@@ -82,6 +82,7 @@ export async function prepareSessionTranscriptChannelRead(params: {
           requesterAgentId: params.requesterAgentId,
           requesterSessionKey: params.requesterSessionKey,
           a2aPolicy: standalonePolicy,
+          sandboxed: params.sandboxed,
           targets: params.groups.flat(),
         });
         let offset = 0;
@@ -193,7 +194,7 @@ export async function prepareSessionTranscriptChannelRead(params: {
                   requesterAgentId: params.requesterAgentId,
                   requesterSessionKey: params.requesterSessionKey,
                   a2aPolicy,
-                  channelAccess: "admitted",
+                  sandboxed: params.sandboxed,
                   targets: captured.map((entry) => entry.target),
                 },
                 currentRead,

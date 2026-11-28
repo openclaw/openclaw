@@ -164,20 +164,7 @@ it.each(["route", "policy"] as const)(
       release.resolve();
       const results = await execution;
       const disclosed = results.map(({ snippet, citation }) => ({ snippet, citation }));
-      expect(disclosed).toEqual(
-        withdrawal === "route"
-          ? [{ snippet: "durable-snippet", citation: "MEMORY.md#L5-L6" }]
-          : [
-              { snippet: "retained-snippet", citation: "sessions/main/retained.jsonl#L3-L4" },
-              { snippet: "durable-snippet", citation: "MEMORY.md#L5-L6" },
-            ],
-      );
-      if (withdrawal === "policy") {
-        const next = await search();
-        expect(next.map(({ snippet, citation }) => ({ snippet, citation }))).toEqual([
-          { snippet: "durable-snippet", citation: "MEMORY.md#L5-L6" },
-        ]);
-      }
+      expect(disclosed).toEqual([{ snippet: "durable-snippet", citation: "MEMORY.md#L5-L6" }]);
     });
   },
 );
