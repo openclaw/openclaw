@@ -9,7 +9,7 @@ import { FsSafeError, readLocalFileSafely } from "../../infra/fs-safe.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { statIfExists } from "../../infra/path-existence.js";
 import { isPathInside } from "../../security/scan-paths.js";
-import { escapeRegExp } from "../../shared/regexp.js";
+import { collectCapabilityCalls } from "./capability-references.js";
 
 const LITERAL_SECRET_PATTERN =
   /\b(?:sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{32,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[baprs]-[A-Za-z0-9-]{20,}|AIza[0-9A-Za-z_-]{35})(?![A-Za-z0-9_-])|-----BEGIN ([A-Z0-9 ]*PRIVATE KEY)-----\r?\n(?=(?:[A-Za-z0-9+/=]\r?\n?){48,}-----END \1-----)(?:[A-Za-z0-9+/=]+\r?\n)+-----END \1-----/;
@@ -209,87 +209,10 @@ const SKILL_CONTENT_RULES: SourceRule[] = [
   },
 ];
 
-const CHILD_PROCESS_EXEC_METHODS = new Set([
-  "exec",
-  "execSync",
-  "spawn",
-  "spawnSync",
-  "execFile",
-  "execFileSync",
-]);
-
-type ChildProcessBindings = {
-  methodAliases: Set<string>;
-  namespaceAliases: Set<string>;
-};
-
-// Only imports/requires establish provenance; unrelated aliases must not match.
-function collectChildProcessBindings(source: string): ChildProcessBindings {
-  const methodAliases = new Set<string>();
-  const namespaceAliases = new Set<string>();
-
-  // ESM named imports: import { spawn as launch, execFile } from "child_process"
-  const esmNamed = /\bimport\s*\{([^}]*)\}\s*from\s*["'](?:node:)?child_process["']/g;
-  // ESM default namespace: import cp from "child_process"
-  const esmDefault = /\bimport\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
-  // ESM namespace import: import * as proc from "child_process"
-  const esmNamespace = /\bimport\s*\*\s*as\s+(\w+)\s+from\s*["'](?:node:)?child_process["']/g;
-  // CJS destructured: const { exec: run, spawn } = require("child_process")
-  const cjsDestructured =
-    /\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
-  // CJS namespace: const proc = require("child_process")
-  const cjsNamespace =
-    /\b(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
-
-  const collectSpecifiers = (specText: string): void => {
-    for (const rawSpec of specText.split(",")) {
-      const spec = rawSpec.trim();
-      // Renamed binding: `spawn as launch` (ESM) or `exec: run` (CJS)
-      const asMatch = spec.match(/^(\w+)\s+(?:as)\s+(\w+)$/) ?? spec.match(/^(\w+)\s*:\s*(\w+)$/);
-      if (asMatch?.[1] && asMatch[2]) {
-        if (CHILD_PROCESS_EXEC_METHODS.has(asMatch[1])) {
-          methodAliases.add(asMatch[2]);
-        }
-      }
-      // Bare imported method name (`execFile`) is already matched by the
-      // literal pattern, so no alias entry is needed for it.
-    }
-  };
-
-  for (const pattern of [esmNamed, cjsDestructured]) {
-    for (const match of source.matchAll(pattern)) {
-      collectSpecifiers(expectDefined(match[1], "child_process import specifiers"));
-    }
-  }
-  for (const pattern of [esmDefault, esmNamespace, cjsNamespace]) {
-    for (const match of source.matchAll(pattern)) {
-      namespaceAliases.add(expectDefined(match[1], "child_process namespace"));
-    }
-  }
-
-  return { methodAliases, namespaceAliases };
-}
-
-// Report every standalone alias call in source order, excluding object members.
-function matchAliasedChildProcessCalls(line: string, methodAliases: Set<string>): number[] {
-  const calls: number[] = [];
-  for (const alias of methodAliases) {
-    const pattern = new RegExp(`(?<![\\w.])${escapeRegExp(alias)}\\s*\\(`, "g");
-    for (const callMatch of line.matchAll(pattern)) {
-      calls.push(callMatch.index);
-    }
-  }
-  return calls.toSorted((a, b) => a - b);
-}
-
 // Retain the conventional child_process names alongside proven namespace aliases.
 const LITERAL_NAMESPACE_RECEIVERS = new Set(["cp", "childProcess", "child_process"]);
 
-function isBenignMemberExecMatch(
-  line: string,
-  match: RegExpExecArray,
-  namespaceAliases: Set<string>,
-): boolean {
+function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean {
   // group 1 = direct call command, group 2 = computed-member command.
   const command = match[1] ?? match[2];
   if (!command) {
@@ -298,19 +221,18 @@ function isBenignMemberExecMatch(
 
   const matchIndex = match.index;
   const charAtMatch = line[matchIndex];
-  let receiver: string | undefined;
+  let receiverText: string | undefined;
   // Computed calls require a known receiver for every watched method;
   // direct calls require it only for .exec, excluding RegExp.exec.
   if (charAtMatch === '"' || charAtMatch === "'") {
-    receiver = line.slice(0, matchIndex).match(/(\w+)\s*\[\s*$/)?.[1];
+    receiverText = line.slice(0, matchIndex).match(/^([\s\S]*?)\s*\[\s*$/)?.[1];
   } else if (command === "exec" && matchIndex > 0 && line[matchIndex - 1] === ".") {
-    receiver = line.slice(0, matchIndex - 1).match(/(\w+)\s*$/)?.[1];
+    receiverText = line.slice(0, matchIndex - 1);
   } else {
     return false;
   }
-  return (
-    !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
-  );
+  const receiver = receiverText?.match(/(\w+)\s*$/)?.[1];
+  return !receiver || !LITERAL_NAMESPACE_RECEIVERS.has(receiver);
 }
 
 function stripCommentsForHeuristics(source: string): string {
@@ -404,7 +326,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
   const lines = source.split("\n");
   const heuristicSource = stripCommentsForHeuristics(source);
 
-  const { methodAliases, namespaceAliases } = collectChildProcessBindings(heuristicSource);
+  const capabilityCalls = collectCapabilityCalls(source, filePath);
 
   for (const rule of LINE_RULES) {
     if (rule.requiresContext && !rule.requiresContext.test(source)) {
@@ -437,12 +359,9 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
           rule.pattern.flags.includes("g") ? rule.pattern.flags : `${rule.pattern.flags}g`,
         ),
       );
-      const literalDangerousExecIndexes = new Set<number>();
+      const literalMatchIndexes = new Set<number>();
       for (const match of matches) {
-        if (
-          rule.ruleId === "dangerous-exec" &&
-          isBenignMemberExecMatch(line, match, namespaceAliases)
-        ) {
+        if (rule.ruleId === "dangerous-exec" && isBenignMemberExecMatch(line, match)) {
           continue;
         }
 
@@ -454,17 +373,12 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
         }
 
         addFinding(line, i + 1);
-        if (rule.ruleId === "dangerous-exec") {
-          literalDangerousExecIndexes.add(match.index);
-        }
+        literalMatchIndexes.add(match.index);
       }
 
       // Aliases follow literal matches; don't emit a call twice if both patterns match.
-      if (rule.ruleId === "dangerous-exec" && methodAliases.size > 0) {
-        for (const index of matchAliasedChildProcessCalls(line, methodAliases)) {
-          if (literalDangerousExecIndexes.has(index)) {
-            continue;
-          }
+      for (const column of capabilityCalls.get(rule.ruleId)?.get(i + 1) ?? []) {
+        if (!literalMatchIndexes.has(column)) {
           addFinding(line, i + 1);
         }
       }

@@ -78,6 +78,69 @@ it("refuses unsafe content before anything is written", async () => {
   await expect(fs.stat(path.join(skillsRoot, "deploy"))).rejects.toMatchObject({ code: "ENOENT" });
 });
 
+it("refuses aliased child_process and eval calls but saves benign aliases", async () => {
+  const fenced = (code: string) => `Run the deploy.\n\n\`\`\`js\n${code}\n\`\`\``;
+  const write = (skillName: string, body: string, filePath = "SKILL.md") =>
+    writeSkillRootFile({
+      skillsRoot,
+      skillName,
+      filePath,
+      content: filePath === "SKILL.md" ? skill(skillName, body) : body,
+    });
+  await expect(
+    write(
+      "shell",
+      fenced(
+        'const mod = require("child_process");\nconst box = { exec: mod.exec };\nconst run = box.exec;\nrun("id");',
+      ),
+    ),
+  ).rejects.toEqual(refusal("unsafe_content", /line 12 matches security rule "dangerous-exec"/));
+  await expect(
+    write(
+      "code",
+      fenced(
+        'const { eval: evaluate } = globalThis;\nconst box = { run: evaluate };\nbox.run("1+1");',
+      ),
+    ),
+  ).rejects.toEqual(
+    refusal("unsafe_content", /line 11 matches security rule "dynamic-code-execution"/),
+  );
+  for (const [body, ruleId] of [
+    ['```js\nconst { exec: run } = require("child_process");\nrun("id");\n```', "dangerous-exec"],
+    ['```js\nconst run = eval;\nrun("1+1");\n```', "dynamic-code-execution"],
+  ] as const) {
+    await expect(write("support", body, "references/example.md")).rejects.toEqual(
+      refusal("unsafe_content", new RegExp(`line 3 matches security rule "${ruleId}"`)),
+    );
+  }
+  for (const [body, ruleId] of [
+    [
+      '# Demo\n\nRun `const { exec: run } = require("child_process"); run("id");`.',
+      "dangerous-exec",
+    ],
+    ['# Demo\n\nRun `const run = eval; run("1+1");`.', "dynamic-code-execution"],
+  ] as const) {
+    await expect(write("inline", body)).rejects.toEqual(
+      refusal("unsafe_content", new RegExp(`line 8 matches security rule "${ruleId}"`)),
+    );
+  }
+  await expect(fs.readdir(skillsRoot)).rejects.toMatchObject({ code: "ENOENT" });
+
+  const benign = fenced(
+    'const box = { run: eval };\nconst safe = { run: (x) => x };\nfunction local(eval) { const evaluate = eval; return evaluate("ok"); }\nsafe.run("ok");\nconst { run: callback = eval } = { run: x => x };\ncallback("ok");',
+  );
+  await expect(write("deploy", benign)).resolves.toEqual({ description: "Deploy staging builds" });
+  await expect(readSkillDirFile(path.join(skillsRoot, "deploy"), "SKILL.md")).resolves.toBe(
+    skill("deploy", benign),
+  );
+  const support =
+    '```js\nvar run = x => x;\nvar run;\nrun("ok");\n```\nRun `const unused = eval; const run = x => x; run("ok");`.';
+  await expect(write("deploy", support, "references/benign.md")).resolves.toEqual({});
+  await expect(
+    readSkillDirFile(path.join(skillsRoot, "deploy"), "references/benign.md"),
+  ).resolves.toBe(support);
+});
+
 it("parses frontmatter strictly for writes and leniently for reads", () => {
   expect(
     validateSkillFileContent({

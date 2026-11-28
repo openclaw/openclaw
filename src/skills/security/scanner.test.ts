@@ -161,6 +161,266 @@ describe("scanSource", () => {
     expect(findings).toHaveLength(2);
   });
 
+  it("follows bindings from child_process, eval, and Function to their calls", () => {
+    const cases: Array<[string, string, number?]> = [
+      ["dangerous-exec", 'const { ["exec"]: r } = require("child_process");\nr("id");'],
+      ["dangerous-exec", 'const mod = require("child_process");\nconst r = mod.exec;\nr("id");'],
+      ["dangerous-exec", 'const mod = require("child_process");\nconst r = mod;\nr.exec("id");'],
+      ["dangerous-exec", 'const r = require(["child_process"][0]);\nr.exec("id");'],
+      ["dangerous-exec", 'import r = require("child_process");\nr.exec("id");'],
+      [
+        "dangerous-exec",
+        'import * as cp from "node:child_process";\nconst { exec } = cp;\nconst r = exec;\nr("id");',
+      ],
+      [
+        "dangerous-exec",
+        'const cp = await import("node:child_process");\nconst r = cp["exec"];\nr("id");',
+      ],
+      ["dangerous-exec", 'const run: Runner = require("child_process").execSync;\nrun("id");'],
+      ["dangerous-exec", 'require("child_process").exec("id");'],
+      ["dangerous-exec", 'const tasks = { run: require("child_process").exec };\ntasks.run("id");'],
+      [
+        "dangerous-exec",
+        'const m = require("child_process");\nconst box = { exec: m.exec };\nconst r = box.exec;\nr("id");',
+      ],
+      [
+        "dangerous-exec",
+        'const m = require("child_process");\nconst box = {};\nbox["exec"] = m.exec;\nconst { exec: r } = box;\nr("id");',
+      ],
+      ["dynamic-code-execution", 'const f = eval;\nf("1+1");'],
+      ["dynamic-code-execution", 'const f = globalThis.eval;\nf("1+1");'],
+      ["dynamic-code-execution", 'const { eval: g } = globalThis;\ng("1+1");'],
+      ["dynamic-code-execution", 'const o = { r: eval };\no.r("1+1");'],
+      ["dynamic-code-execution", 'const o = {};\no.r = eval;\no["r"]("1+1");'],
+      ["dynamic-code-execution", 'const F = Function;\nconst h = new F("return 1");'],
+      ["dynamic-code-execution", 'const F = globalThis.Function;\nconst h = new F("return 1");'],
+      ["dynamic-code-execution", 'let g;\ng = window;\ng["eval"]("1+1");'],
+      [
+        "dynamic-code-execution",
+        'const box = { eval };\nconst other = box;\nconst r = other.eval;\nr("1+1");',
+      ],
+      ["dynamic-code-execution", 'const r = eval;\nr\n("1+1");', 2],
+      [
+        "dynamic-code-execution",
+        'const box = { run: eval };\nfunction safe() { box.run = x => x; }\nbox.run("1+1");',
+      ],
+      [
+        "dangerous-exec",
+        'launch("node", ["-v"]);\nimport { spawn as launch } from "node:child_process";',
+        1,
+      ],
+      ["dangerous-exec", 'proc.exec("id");\nimport * as proc from "child_process";', 1],
+      [
+        "dangerous-exec",
+        'const run = proc.exec;\nrun("id");\nimport proc from "node:child_process";',
+        2,
+      ],
+      [
+        "dangerous-exec",
+        'function example() { launch("node", ["-v"]); }\nimport { spawn as launch } from "child_process";',
+        1,
+      ],
+      ["dangerous-exec", 'const run = exec;\nrun("id");\nimport { exec } from "child_process";', 2],
+      ["dangerous-exec", 'var { exec: run } = require("child_process");\nvar run;\nrun("id");'],
+      [
+        "dangerous-exec",
+        'var mod = require("child_process");\nvar mod;\nconst run = mod.exec;\nrun("id");',
+      ],
+      ["dynamic-code-execution", 'var run = eval;\nvar run;\nrun("1+1");'],
+      ["dynamic-code-execution", 'const { run = eval } = {};\nrun("1+1");'],
+      ["dynamic-code-execution", 'const { run = eval } = { run: undefined };\nrun("1+1");'],
+      [
+        "dynamic-code-execution",
+        'const { run = eval } = { run: globalThis.undefined };\nrun("1+1");',
+      ],
+      ["dangerous-exec", 'var { exec: run } = require("child_process");\ndelete run;\nrun("id");'],
+      ["dynamic-code-execution", 'const { run = eval } = { run: void 0 };\nrun("1+1");'],
+      [
+        "dynamic-code-execution",
+        'let missing;\nconst { run = eval } = { run: missing };\nrun("1+1");',
+      ],
+      [
+        "dynamic-code-execution",
+        'var missing;\nconst { run = eval } = { run: missing };\nrun("1+1");',
+      ],
+      [
+        "dynamic-code-execution",
+        'const box = { run: x => x };\ndelete box.run;\nconst { run = eval } = box;\nrun("1+1");',
+      ],
+      [
+        "dangerous-exec",
+        'import { exec as run } from "child_process";\nconst label = <string>"ok";\nrun("id");',
+      ],
+      [
+        "dynamic-code-execution",
+        'const Constructor = <FunctionConstructor>Function;\nnew Constructor("return 1");',
+      ],
+      ["dynamic-code-execution", 'const run = eval;\nconst view = <div>{run("1+1")}</div>;'],
+      [
+        "dynamic-code-execution",
+        'const first = { run: eval };\nconst second = { ...first };\nsecond.run("1+1");',
+      ],
+      ["dynamic-code-execution", 'const box = { ...{ run: x => x }, run: eval };\nbox.run("1+1");'],
+      [
+        "dynamic-code-execution",
+        'const first = { run: x => x };\nfirst.run = eval;\nconst second = { ...first };\nsecond.run("1+1");',
+      ],
+      ["dynamic-code-execution", 'const box = { run: eval, ...null };\nbox.run("1+1");'],
+      [
+        "dangerous-exec",
+        'const box = { ...require("child_process") };\nconst run = box.exec;\nrun("id");',
+      ],
+      [
+        "dangerous-exec",
+        'function task() { run("id"); }\nconst { exec: run } = require("child_process");\ntask();',
+        1,
+      ],
+      [
+        "dangerous-exec",
+        'const task = () => { run("id"); };\nconst mod = require("child_process");\nconst run = mod.exec;\ntask();',
+        1,
+      ],
+      [
+        "dynamic-code-execution",
+        'function outer() { function inner() { run("1+1"); } const run = eval; inner(); }\nouter();',
+        1,
+      ],
+    ];
+    for (const [ruleId, source, expectedLine] of cases) {
+      const findings = scanSource(source, "plugin.ts").filter((f) => f.ruleId === ruleId);
+      expect(findings, source).toEqual([
+        expect.objectContaining({
+          severity: "critical",
+          line: expectedLine ?? source.split("\n").length,
+        }),
+      ]);
+    }
+  });
+
+  it("does not treat unrelated names or properties as capabilities", () => {
+    for (const source of [
+      'import { exec } from "child_process";\nconst r = /x/.exec;\nconst run = (cmd) => cmd;\nrun("id");',
+      'const tasks = { run: helper };\ntasks.run("id"); // child_process',
+      'const calc = { evaluate: (x) => x };\nconst f = calc.evaluate;\nf("1");',
+      'const { evaluate } = globalThis;\nconst F = MyFunction;\nnew F(evaluate("x"));',
+      'const proto = Function.prototype;\nif (x == eval) proto("x");',
+      'const dangerous = { run: eval };\nconst safe = { run: x => x };\nsafe.run("ok");',
+      'const dangerous = { run: eval };\nconst safe = { run: x => x };\nconst r = safe.run;\nr("ok");',
+      'const r = eval;\nfunction safe(r) { r("ok"); }',
+      'const r = eval;\n{ const r = x => x; r("ok"); }',
+      'function safe(eval) { const r = eval; r("ok"); }',
+      'function safe(globalThis) { const r = globalThis.eval; r("ok"); }',
+      'let r = eval;\nr = x => x;\nr("ok");',
+      'const box = { run: eval };\nbox.run = x => x;\nbox.run("ok");',
+      'let box = { run: eval };\nbox = { run: x => x };\nbox.run("ok");',
+      'const m = require("child_process");\nconst box = { run: m.exec };\nconst safe = { run: x => x };\nsafe.run("ok");',
+      'const m = require("child_process");\nconst r = m.exec;\nfunction safe(r) { r("ok"); }',
+      'const m = require("child_process");\nlet r = m.exec;\nr = x => x;\nr("ok");',
+      'const m = require("child_process" && "harmless");\nconst r = m.exec;\nr("ok");',
+      'let r = x => x;\nfunction example() { r = eval; }\nr("ok");',
+      'function safe(launch) { launch("ok"); }\nimport { spawn as launch } from "child_process";',
+      'let run = proc.exec;\nrun = x => x;\nrun("ok");\nimport proc from "child_process";',
+      'function task(run) { run("ok"); }\nconst { exec: run } = require("child_process");\ntask(x => x);',
+      'var { exec: run } = require("child_process");\nvar run = x => x;\nrun("ok");',
+      'function safe(run) { var run; run("ok"); }\nconst { exec: run } = require("child_process");\nsafe(x => x);',
+      'const { run = eval } = { run: x => x };\nrun("ok");',
+      'function helper(x) { return x; }\nconst { run = eval } = { run: helper };\nrun("ok");',
+      'const { run = eval } = { run(x) { return x; } };\nrun("ok");',
+      'const { run = eval } = { run: null };\nrun("ok");',
+      'const undefined = x => x;\nconst { run = eval } = { run: undefined };\nrun("ok");',
+      'const { toString: run = eval } = {};\nrun("ok");',
+      'const box = { toString: x => x };\ndelete box.toString;\nconst { toString: run = eval } = box;\nrun("ok");',
+      'function helper() { return { run: x => x }; }\nconst { run = eval } = { ...helper() };\nrun("ok");',
+      'const { nested: { run = eval } = { run: x => x } } = {};\nrun("ok");',
+      'const unused = eval;\nconst run = x => x;\nconst view = <div>{run("ok")}</div>;',
+      'const box = { run: eval, ...{ run: x => x } };\nbox.run("ok");',
+      'const safe = {};\nsafe.run = x => x;\nconst box = { run: eval, ...safe };\nbox.run("ok");',
+      'const first = { run: eval };\nfirst.run = x => x;\nconst second = { ...first };\nsecond.run("ok");',
+      'const mod = require("child_process");\nconst box = { run: mod.exec, ...{ run: x => x } };\nbox.run("ok");',
+    ]) {
+      expect(scanSource(source, "plugin.ts"), source).toEqual([]);
+    }
+  });
+
+  it("keeps Markdown examples independent and reports original call locations", () => {
+    const source = [
+      "# Examples",
+      "",
+      "```js",
+      "const run = eval;",
+      'run("1+1");',
+      "```",
+      "",
+      "```ts",
+      "const run = (x: string) => x;",
+      'run("ok");',
+      "```",
+    ].join("\n");
+    expect(scanSource(source, "SKILL.md")).toEqual([
+      expect.objectContaining({ ruleId: "dynamic-code-execution", line: 5 }),
+    ]);
+    const indented =
+      '# Examples\n\n    const { exec: run } = require("child_process");\n    run("id");\n\nNext example:\n\n    const run = x => x;\n    run("ok");';
+    expect(scanSource(indented, "SKILL.md")).toEqual([
+      expect.objectContaining({ ruleId: "dangerous-exec", line: 4 }),
+    ]);
+    for (const [example, ruleId, line] of [
+      [
+        '```js\nconst { exec: run } = require("child_process");\nrun("id");\n```',
+        "dangerous-exec",
+        3,
+      ],
+      ['```js\nconst run = eval;\nrun("1+1");\n```', "dynamic-code-execution", 3],
+      [
+        '# Demo\n\nRun `const { exec: run } = require("child_process"); run("id");`.',
+        "dangerous-exec",
+        3,
+      ],
+      ['# Demo\n\nRun `const run = eval; run("1+1");`.', "dynamic-code-execution", 3],
+      ['> Run ``const run = eval;\n> run("1+1");``.', "dynamic-code-execution", 2],
+      [
+        '- Run `const { exec: run } = require("child_process");\n  run("id");`.',
+        "dangerous-exec",
+        2,
+      ],
+      [
+        'Run `const run = eval; run("1+1");`. Then `const run = x => x; run("ok");`.',
+        "dynamic-code-execution",
+        1,
+      ],
+      [
+        '> ```js\n> const { exec: run } = require("child_process");\n> run("id");\n> ```',
+        "dangerous-exec",
+        3,
+      ],
+      [
+        '> ```js\n> const cp = require("child_process");\n> cp.exec("id");\n> ```',
+        "dangerous-exec",
+        3,
+      ],
+      [
+        '1. Deploy:\n\n   ```ts\n   const run = eval;\n   run("1+1");\n   ```',
+        "dynamic-code-execution",
+        5,
+      ],
+      ['> > ```js\n> > const run = eval;\n> > run("1+1");\n> > ```', "dynamic-code-execution", 3],
+      ['# Example\n\n\tconst run = eval;\n\trun("1+1");', "dynamic-code-execution", 4],
+    ] as const) {
+      expect(scanSource(example, "SKILL.md"), example).toEqual([
+        expect.objectContaining({ ruleId, line }),
+      ]);
+    }
+    expect(
+      scanSource('Run `const unused = eval; const run = x => x; run("ok");`.', "SKILL.md"),
+    ).toEqual([]);
+    expect(
+      scanSource(
+        '```js\nconst { exec: run } = require("child_process");\nrun("id");\n```',
+        "example.js",
+      ),
+    ).toEqual([]);
+  });
+
   it("does not flag a computed exec-style call on a non-child_process object", () => {
     const source =
       '\nimport { exec } from "child_process";\nconst re = /pattern/;\nre["exec"](value);\n';
