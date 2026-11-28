@@ -54,6 +54,21 @@ describe("resolveWhatsAppOutboundTarget", () => {
     });
   });
 
+  it("denies a DM when allowFrom has only invalid entries", () => {
+    expect(
+      resolveWhatsAppOutboundTarget({
+        to: PRIMARY_TARGET,
+        allowFrom: ["typo!!!"],
+        mode: "implicit",
+      }),
+    ).toEqual({
+      ok: false,
+      error: expect.objectContaining({
+        message: 'WhatsApp allowFrom has no valid entries. Use E.164 numbers or "*".',
+      }),
+    });
+  });
+
   it("trims the resolved target", () => {
     expect(
       resolveWhatsAppOutboundTarget({

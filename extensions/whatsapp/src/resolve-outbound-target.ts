@@ -22,10 +22,16 @@ export function resolveWhatsAppOutboundTarget(params: {
 
   const allowListRaw = normalizeStringEntries(params.allowFrom ?? []);
   const hasWildcard = allowListRaw.includes("*");
-  const allowList = allowListRaw
-    .filter((entry) => entry !== "*")
+  const configured = allowListRaw.filter((entry) => entry !== "*");
+  const allowList = configured
     .map((entry) => normalizeWhatsAppTarget(entry))
     .filter((entry): entry is string => Boolean(entry));
+  if (!hasWildcard && configured.length > 0 && allowList.length === 0) {
+    return {
+      ok: false,
+      error: new Error('WhatsApp allowFrom has no valid entries. Use E.164 numbers or "*".'),
+    };
+  }
   if (hasWildcard || allowList.length === 0 || allowList.includes(normalizedTo)) {
     return { ok: true, to: normalizedTo };
   }
