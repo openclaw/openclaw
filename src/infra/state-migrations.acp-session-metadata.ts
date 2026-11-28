@@ -47,7 +47,7 @@ import {
 } from "./state-migrations.session-store-paths.js";
 import {
   aliasedSessionStoreMigrationWarning,
-  canonicalizeSessionKeyForAgent,
+  canonicalizeLegacySessionKeyForAgent,
   distinctSessionStoreAliasWarning,
   normalizeSessionEntry,
   readPendingPluginSessionMigrations,
@@ -351,7 +351,7 @@ async function migrateLegacyAcpSessionMetadataPass(
           continue;
         }
         const rowAgentId = resolveCanonicalAgentSessionOwner(sessionKey) ?? target.agentId;
-        const canonicalSessionKey = canonicalizeSessionKeyForAgent({
+        const canonicalSessionKey = canonicalizeLegacySessionKeyForAgent({
           key: sessionKey,
           agentId: rowAgentId,
           mainKey,
