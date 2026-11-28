@@ -14,7 +14,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cach
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { HumanMentionWebPush } from "./event-web-push.js";
+import type { HumanMentionNotification } from "./notification-intent.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
@@ -108,7 +108,11 @@ vi.mock("./session-sharing.js", async (importOriginal) => ({
   canReceiveSessionEvent: mocks.canReceive,
 }));
 
-const { createEventWebPushDelivery } = await import("./event-web-push.js");
+const { createWebPushNotificationDestination } = await import("./event-web-push.js");
+const { createNotificationDelivery } = await import("./notification-delivery.js");
+const createEventWebPushDelivery = (
+  ...args: Parameters<typeof createWebPushNotificationDestination>
+) => createNotificationDelivery([createWebPushNotificationDestination(...args)]);
 let authorityCompleted = createDeferred();
 
 function makeSubscription(
@@ -139,7 +143,7 @@ function makeSubscription(
   };
 }
 
-function humanMention(overrides: Partial<HumanMentionWebPush> = {}): HumanMentionWebPush {
+function humanMention(overrides: Partial<HumanMentionNotification> = {}): HumanMentionNotification {
   return {
     id: "mention-1",
     recipientProfileId: "bob",
