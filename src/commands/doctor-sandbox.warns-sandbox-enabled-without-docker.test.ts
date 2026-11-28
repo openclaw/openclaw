@@ -114,6 +114,55 @@ describe("sandbox health", () => {
     await expect(checkSandboxImageRepairPending(cfg)).resolves.toBe("work");
   });
 
+  it("names an agent's enabled mode before a role requirement and checks each image once", async () => {
+    const roleRequired = {
+      roles: {
+        definitions: {
+          guest: { sessions: { others: "view" }, agents: "*", scopes: [], sandbox: "required" },
+        },
+      },
+    } as NonNullable<OpenClawConfig["gateway"]>;
+    const cfg: OpenClawConfig = {
+      gateway: roleRequired,
+      agents: {
+        defaults: { sandbox: { mode: "all" } },
+        entries: { web: { sandbox: { mode: "all", browser: { enabled: true } } } },
+      },
+    };
+    runExec.mockImplementation(async (_command: string, args: string[]) => {
+      if (args[0] === "image") {
+        throw Object.assign(new Error("missing image"), { stderr: "No such image" });
+      }
+      return { stdout: "", stderr: "" };
+    });
+    await maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter);
+    const prompts = vi
+      .mocked(mockPrompter.confirmRuntimeRepair)
+      .mock.calls.map(([prompt]) => (prompt as { message: string }).message);
+    expect(prompts).toEqual(["Build base sandbox image now?", "Build browser sandbox image now?"]);
+
+    vi.clearAllMocks();
+    runExec.mockRejectedValue(new Error("Docker not installed"));
+    await maybeRepairSandboxImages(
+      {
+        gateway: roleRequired,
+        agents: { entries: { work: { sandbox: { mode: "all" } } } },
+      },
+      mockRuntime,
+      mockPrompter,
+    );
+    expectNote('mode: "all" for agent "work") but Docker is not available');
+  });
+
+  it("reports sandbox settings the runtime rejects instead of failing Doctor", async () => {
+    const cfg = {
+      agents: { defaults: { sandbox: { ssh: { workspaceRoot: "relative/root" } } } },
+    } as OpenClawConfig;
+    await expect(maybeRepairSandboxImages(cfg, mockRuntime, mockPrompter)).resolves.toEqual([
+      expect.stringContaining("Doctor could not resolve these sandbox settings"),
+    ]);
+  });
+
   it("checks and offers to build the image when only a gateway role requires a sandbox", async () => {
     const cfg: OpenClawConfig = {
       gateway: {

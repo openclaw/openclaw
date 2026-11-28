@@ -174,27 +174,34 @@ async function probeCodexBwrapNamespaces(
 
 type EnabledSandboxBackend = {
   sandbox: SandboxConfig;
-  /** Resolved mode; "off" only for the defaults a gateway role requires anyway. */
+  /** Resolved mode; "off" only where a gateway role requires a sandbox anyway. */
   mode: SandboxConfig["mode"];
   backend: string;
   containerEngine: typeof DOCKER_SANDBOX_ENGINE | typeof PODMAN_SANDBOX_ENGINE | undefined;
-  /** The agent whose own sandbox enables this backend; undefined for the defaults. */
+  /** The agent this sandbox belongs to; undefined for the defaults. */
   agentId?: string;
 };
 
 /**
- * Resolves each distinct enabled sandbox backend and its local container engine, when it has
- * one. Each agent's sandbox comes from the runtime's own resolver, so a per-agent `sandbox.mode`
- * counts. A role that requires a sandbox enables the defaults even when their mode is off.
+ * Resolves every sandbox the runtime can start, through the runtime's own per-agent resolver,
+ * so an agent's own `sandbox.mode` and images count. A role that requires a sandbox starts one
+ * for any agent, even with its mode off. Settings the resolver rejects are reported, not thrown.
  */
-function resolveEnabledSandboxBackends(cfg: OpenClawConfig): EnabledSandboxBackend[] {
+function resolveEnabledSandboxBackends(cfg: OpenClawConfig) {
   const roleRequired = Object.values(cfg.gateway?.roles?.definitions ?? {}).some(
     (role) => role.sandbox === "required",
   );
-  const enabled = new Map<string, EnabledSandboxBackend>();
+  const enabled: EnabledSandboxBackend[] = [];
+  const invalid: string[] = [];
   for (const agentId of [undefined, ...listAgentIds(cfg)]) {
-    const sandbox = resolveSandboxConfigForAgent(cfg, agentId);
-    if (sandbox.mode === "off" && !(roleRequired && agentId === undefined)) {
+    let sandbox: SandboxConfig;
+    try {
+      sandbox = resolveSandboxConfigForAgent(cfg, agentId);
+    } catch (error) {
+      invalid.push(`${agentId ? `agent "${agentId}"` : "defaults"}: ${String(error)}`);
+      continue;
+    }
+    if (sandbox.mode === "off" && !roleRequired) {
       continue;
     }
     const backend = sandbox.backend.toLowerCase();
@@ -204,20 +211,41 @@ function resolveEnabledSandboxBackends(cfg: OpenClawConfig): EnabledSandboxBacke
         : backend === "docker"
           ? DOCKER_SANDBOX_ENGINE
           : undefined;
-    const browserImage = sandbox.browser.enabled ? sandbox.browser.image : "";
-    const key = `${backend}\0${sandbox.docker.image}\0${browserImage}`;
-    if (!enabled.has(key)) {
-      enabled.set(key, { sandbox, mode: sandbox.mode, backend, containerEngine, agentId });
+    enabled.push({ sandbox, mode: sandbox.mode, backend, containerEngine, agentId });
+  }
+  // An enabled mode names the cause of a missing engine before a role-only requirement.
+  enabled.sort((a, b) => Number(a.mode === "off") - Number(b.mode === "off"));
+  return { enabled, invalid };
+}
+
+/** Each container engine once, with the sandboxes that use it. */
+function groupByContainerEngine(enabled: readonly EnabledSandboxBackend[]) {
+  const groups = new Map<string, EnabledSandboxBackend[]>();
+  for (const entry of enabled) {
+    if (entry.containerEngine) {
+      groups.set(entry.containerEngine.id, [
+        ...(groups.get(entry.containerEngine.id) ?? []),
+        entry,
+      ]);
     }
   }
-  return [...enabled.values()];
+  return [...groups.values()];
+}
+
+/** Each distinct image a group of sandboxes inspects once. */
+function resolveDistinctImageTargets(group: readonly EnabledSandboxBackend[]) {
+  const targets = new Map<string, ReturnType<typeof resolveSandboxImageTargets>[number]>();
+  for (const target of group.flatMap(resolveSandboxImageTargets)) {
+    targets.set(`${target.engineCommand}\0${target.image}`, target);
+  }
+  return [...targets.values()];
 }
 
 export async function noteCodexBwrapNamespaceWarnings(
   cfg: OpenClawConfig,
   options: SandboxHealthOptions = {},
 ): Promise<void> {
-  const containerEngine = resolveEnabledSandboxBackends(cfg).find(
+  const containerEngine = resolveEnabledSandboxBackends(cfg).enabled.find(
     (enabled) => enabled.mode !== "off" && enabled.containerEngine,
   )?.containerEngine;
   if (process.platform !== "linux" || !containerEngine) {
@@ -367,28 +395,17 @@ function resolveSandboxImageTargets(enabled: EnabledSandboxBackend) {
 export async function checkSandboxImageRepairPending(
   cfg: OpenClawConfig,
 ): Promise<DoctorMaintenancePending> {
-  for (const enabled of resolveEnabledSandboxBackends(cfg)) {
-    if ((await checkSandboxBackendImageWork(enabled)) === "work") {
-      return "work";
+  for (const group of groupByContainerEngine(resolveEnabledSandboxBackends(cfg).enabled)) {
+    const engine = group[0]!.containerEngine!;
+    const buildable = resolveDistinctImageTargets(group).filter((target) => target.buildScript);
+    if (buildable.length === 0 || !(await isContainerEngineAvailable(engine.command))) {
+      continue;
     }
-  }
-  return "none";
-}
-
-async function checkSandboxBackendImageWork(
-  enabled: EnabledSandboxBackend,
-): Promise<DoctorMaintenancePending> {
-  const buildable = resolveSandboxImageTargets(enabled).filter((target) => target.buildScript);
-  if (!enabled.containerEngine || buildable.length === 0) {
-    return "none";
-  }
-  if (!(await isContainerEngineAvailable(enabled.containerEngine.command))) {
-    return "none";
-  }
-  await validateSandboxContainerEngineTarget(enabled.containerEngine);
-  for (const target of buildable) {
-    if (!(await containerImageExists(target.engineCommand, target.image))) {
-      return "work";
+    await validateSandboxContainerEngineTarget(engine);
+    for (const target of buildable) {
+      if (!(await containerImageExists(target.engineCommand, target.image))) {
+        return "work";
+      }
     }
   }
   return "none";
@@ -404,37 +421,43 @@ export async function maybeRepairSandboxImages(
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ): Promise<string[]> {
+  const { enabled, invalid } = resolveEnabledSandboxBackends(cfg);
   const warnings: string[] = [];
-  for (const enabled of resolveEnabledSandboxBackends(cfg)) {
-    warnings.push(...(await repairSandboxBackendImages(enabled, runtime, prompter)));
+  if (invalid.length > 0) {
+    const message = ["Doctor could not resolve these sandbox settings:", ...invalid].join("\n- ");
+    note(message, "Sandbox");
+    warnings.push(message);
+  }
+  const browserOnNonContainer = enabled.find(
+    (entry) => !entry.containerEngine && entry.sandbox.browser?.enabled,
+  );
+  if (browserOnNonContainer) {
+    note(
+      `Sandbox backend "${browserOnNonContainer.backend}" selected. Docker browser health checks are skipped; browser sandbox currently requires the docker backend.`,
+      "Sandbox",
+    );
+  }
+  for (const group of groupByContainerEngine(enabled)) {
+    warnings.push(...(await repairContainerEngineImages(group, runtime, prompter)));
   }
   return warnings;
 }
 
-async function repairSandboxBackendImages(
-  enabled: EnabledSandboxBackend,
+async function repairContainerEngineImages(
+  group: readonly EnabledSandboxBackend[],
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ): Promise<string[]> {
-  const { sandbox, mode, backend, containerEngine, agentId } = enabled;
-  if (!containerEngine) {
-    if (sandbox.browser?.enabled) {
-      note(
-        `Sandbox backend "${backend}" selected. Docker browser health checks are skipped; browser sandbox currently requires the docker backend.`,
-        "Sandbox",
-      );
-    }
-    return [];
-  }
-
-  const engineAvailable = await isContainerEngineAvailable(containerEngine.command);
-  if (!engineAvailable) {
-    const name = containerEngine.displayName;
+  // Sorted: an enabled mode, when any, names the cause before a role-only requirement.
+  const { mode, agentId, containerEngine } = group[0]!;
+  const engine = containerEngine!;
+  if (!(await isContainerEngineAvailable(engine.command))) {
+    const name = engine.displayName;
     const lines = [
       mode === "off"
         ? `A gateway role requires a sandbox but ${name} is not available.`
         : `Sandbox mode is enabled (mode: "${mode}"${agentId ? ` for agent "${agentId}"` : ""}) but ${name} is not available.`,
-      containerEngine.id === "docker"
+      engine.id === "docker"
         ? "Docker is required for sandbox mode to function."
         : "Podman is required by the selected sandbox backend.",
       `Isolated sessions (automations, sub-agents) will fail without ${name}.`,
@@ -450,16 +473,16 @@ async function repairSandboxBackendImages(
     note(lines.join("\n"), "Sandbox");
     return [lines.join("\n")];
   }
-  await validateSandboxContainerEngineTarget(containerEngine);
+  await validateSandboxContainerEngineTarget(engine);
 
   const warnings: string[] = [];
-  for (const target of resolveSandboxImageTargets(enabled)) {
+  for (const target of resolveDistinctImageTargets(group)) {
     const warning = await handleMissingSandboxImage(target, runtime, prompter);
     if (warning) {
       warnings.push(warning);
     }
   }
-  if (sandbox.browser?.enabled && containerEngine.id !== "docker") {
+  if (engine.id !== "docker" && group.some((entry) => entry.sandbox.browser?.enabled)) {
     note(
       "Podman sandbox selected. Browser sandbox health checks are skipped because browser sandboxing requires the Docker engine.",
       "Sandbox",
