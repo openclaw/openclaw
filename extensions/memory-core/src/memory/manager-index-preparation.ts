@@ -3,6 +3,7 @@ import {
   chunkMarkdown,
   extractCuratedEntryRecallMetadata,
   enforceEmbeddingMaxInputTokens,
+  extractFrontmatterBlock,
   hashText,
   remapChunkLines,
   stripMemoryAnnotationCarriers,
@@ -66,9 +67,13 @@ export function prepareMemoryIndexChunks({
   const perEntry =
     source === "memory" &&
     (normalizedEntryPath === "MEMORY.md" || normalizedEntryPath === "USER.md");
-  const indexingContent = source === "memory" ? stripMemoryAnnotationCarriers(content) : content;
+  const frontmatter = source === "memory" ? extractFrontmatterBlock(content) : undefined;
+  const indexingContent =
+    source === "memory"
+      ? stripMemoryAnnotationCarriers(frontmatter?.body ?? content.replace(/\r\n?/gu, "\n"))
+      : content;
   // All chunks share one source snapshot; splitting per chunk makes indexing quadratic.
-  const sourceLines = source === "memory" ? content.replace(/\r\n/gu, "\n").split("\n") : [];
+  const sourceLines = source === "memory" ? content.replace(/\r\n?/gu, "\n").split("\n") : [];
   const chunkOptions = { ...chunking, perEntry };
   // Bound heading-only runs. A heading can still join its body up to the provider input limit.
   const maxMergedChunkEstimatedChars = Math.max(32, chunking.tokens * 4);
@@ -84,6 +89,16 @@ export function prepareMemoryIndexChunks({
     : chunkMarkdown(indexingContent, chunkOptions)) {
     if (!chunk.text.trim()) {
       continue;
+    }
+    if (frontmatter) {
+      chunk.startLine += frontmatter.lineRange.endLine;
+      chunk.endLine += frontmatter.lineRange.endLine;
+      if (chunk.entryStartLine !== undefined) {
+        chunk.entryStartLine += frontmatter.lineRange.endLine;
+      }
+      if (chunk.entryEndLine !== undefined) {
+        chunk.entryEndLine += frontmatter.lineRange.endLine;
+      }
     }
     if (source === "memory") {
       const previous =

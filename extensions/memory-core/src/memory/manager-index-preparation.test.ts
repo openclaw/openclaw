@@ -54,6 +54,16 @@ it.each([0, 2])("keeps an over-budget heading with its body when overlap is %s",
   expect(chunks).toMatchObject([{ startLine: 1, endLine: 2, text: content, hash }]);
 });
 
+it("merges a heading with its body at the original lines after removing frontmatter", () => {
+  const body = "# Plan\nThe irrigation starts at dawn.";
+  const { chunks } = prepareHeading(
+    `---\r\nstatus: active\r\n---\r\n${body.replaceAll("\n", "\r\n")}`,
+    2,
+  );
+  const hash = createHash("sha256").update(body).digest("hex");
+  expect(chunks).toMatchObject([{ startLine: 4, endLine: 5, text: body, hash }]);
+});
+
 it("keeps a heading with its body after overlap clips the preceding heading", () => {
   const section = "## Quasar schedule\nSaffron opens the north gate.";
   const { chunks } = prepareHeading(`## Irrigation overview\n${section}`, 2);
@@ -118,5 +128,35 @@ it.each([undefined, { id: "test", maxInputTokens: 4096 }])(
 
     expect(prepared.chunks.map((chunk) => chunk.text).join("")).toBe(content);
     expect(serialize(prepared).byteLength).toBeLessThan(80 * 1024);
+  },
+);
+
+it.each(["\n", "\r\n", "\r"])(
+  "excludes note frontmatter while retaining citation coordinates (%j)",
+  (ending) => {
+    const { chunks } = prepare(
+      ["---", "status: active", "---", "- Prefer aisle seats. <!-- trigger: flight -->"].join(
+        ending,
+      ),
+    );
+    expect(chunks).toMatchObject([
+      { text: "- Prefer aisle seats.", startLine: 4, endLine: 4, triggers: "flight" },
+    ]);
+    expect(chunks).toHaveLength(1);
+  },
+);
+
+it.each([
+  { content: "---\nstatus: active\n---", source: "memory", texts: [] },
+  { content: "---\nstatus: active", source: "memory", texts: ["---\nstatus: active"] },
+  {
+    content: "---\nstatus: active\n---\nConversation text",
+    source: "sessions",
+    texts: ["---\nstatus: active\n---\nConversation text"],
+  },
+] as const)(
+  "preserves incomplete blocks and session text ($source, $content)",
+  ({ content, source, texts }) => {
+    expect(prepare(content, { source }).chunks.map((chunk) => chunk.text)).toEqual(texts);
   },
 );
