@@ -160,15 +160,29 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
     }
   } else {
     const { client, clientOwner } = await connectResumeGateway(connectionOptions, false);
-    let sessions: Awaited<ReturnType<typeof loadRecentSessions>>;
+    let sessions: Awaited<ReturnType<typeof loadRecentSessions>> = [];
+    let storedKey: string | undefined;
     try {
       connection = client.connection;
-      sessions = await loadRecentSessions(
-        client,
-        explicitGlobalSession
-          ? { agentId: explicitGlobalSession.agentId, includeGlobal: true }
-          : undefined,
-      );
+      if (resolvedQuery && parsedQuery && !explicitGlobalSession) {
+        const result = await client.resolveSession({
+          key: resolvedQuery,
+          agentId: parsedQuery.agentId,
+          includeGlobal: false,
+          allowMissing: true,
+        });
+        if (result.ok) {
+          storedKey = result.key;
+        }
+      }
+      if (!storedKey) {
+        sessions = await loadRecentSessions(
+          client,
+          explicitGlobalSession
+            ? { agentId: explicitGlobalSession.agentId, includeGlobal: true }
+            : undefined,
+        );
+      }
     } catch (error) {
       throw await formatResumeConnectionError(error);
     } finally {
@@ -178,7 +192,9 @@ export async function runResumeCommand(query: string | undefined, opts: ResumeCl
         clientOwner.release();
       }
     }
-    if (explicitGlobalSession) {
+    if (storedKey) {
+      sessionKey = storedKey;
+    } else if (explicitGlobalSession) {
       sessionKey = `agent:${explicitGlobalSession.agentId}:global`;
     } else if (resolvedQuery) {
       const resolution = resolveResumeSession(sessions, resolvedQuery);

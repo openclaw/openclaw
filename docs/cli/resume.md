@@ -19,8 +19,9 @@ openclaw resume --handoff <payload>
 ```
 
 With no query, OpenClaw displays up to 50 sessions active in the last seven
-days. With a query, an exact session key wins; otherwise OpenClaw requires a
-unique substring or fuzzy match across session keys, display names, and labels.
+days. If your query matches a full session key, OpenClaw opens that session
+even if it is no longer in the recent list. Otherwise, it looks for a unique
+substring or fuzzy match among recent session keys, display names, and labels.
 
 The picker omits bare `global` rows because they do not identify an owning
 agent. To attach one, pass a fully qualified key such as

@@ -127,6 +127,27 @@ describe("runResumeCommand", () => {
     expect(mocks.runTui).not.toHaveBeenCalled();
   });
 
+  it("opens the requested session outside the recent window, not its similarly named neighbor", async () => {
+    const key = "agent:main:review-notes";
+    const client = createGatewayClient([{ key: key + "-today" }]);
+    client.resolveSession.mockResolvedValue({ ok: true, key, agentId: "main" });
+
+    await runResumeCommand(key, {});
+
+    expect(mocks.runTui).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ session: key }));
+  });
+
+  it("still accepts a unique recent key fragment when there is no exact session", async () => {
+    const fragment = "agent:main:review-no";
+    const key = "agent:main:review-notes-today";
+    const client = createGatewayClient([{ key }]);
+    client.resolveSession.mockResolvedValue({ ok: false });
+
+    await runResumeCommand(fragment, {});
+
+    expect(mocks.runTui).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ session: key }));
+  });
+
   it("rejects a handoff combined with an explicit URL", async () => {
     await expect(
       runResumeCommand(undefined, { handoff: createHandoff(), url: "wss://other.example/ws" }),
