@@ -374,11 +374,6 @@ function validateFalGptImage25Size(size: FalImageSize | undefined): void {
   }
 }
 
-function aspectRatioScore(aspectRatio: string, targetRatio: number): number {
-  const { widthRatio, heightRatio } = parseAspectRatioParts(aspectRatio);
-  return Math.abs(Math.log(widthRatio / heightRatio) - Math.log(targetRatio));
-}
-
 function mapGptImage25Models<T>(value: () => T): Record<string, T> {
   return Object.fromEntries(FAL_GPT_IMAGE_25_MODELS.map((model) => [model, value()]));
 }
@@ -563,15 +558,16 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           sizeForAspectRatio &&
           typeof sizeForAspectRatio !== "string"
         ) {
-          const targetRatio = sizeForAspectRatio.width / sizeForAspectRatio.height;
-          nativeAspectRatio = allowedAspectRatios.reduce<string | undefined>((best, candidate) => {
-            if (!best) {
-              return candidate;
+          const targetLogRatio = Math.log(sizeForAspectRatio.width / sizeForAspectRatio.height);
+          let bestScore = Infinity;
+          for (const candidate of allowedAspectRatios) {
+            const { widthRatio, heightRatio } = parseAspectRatioParts(candidate);
+            const score = Math.abs(Math.log(widthRatio / heightRatio) - targetLogRatio);
+            if (score < bestScore) {
+              nativeAspectRatio = candidate;
+              bestScore = score;
             }
-            return aspectRatioScore(candidate, targetRatio) < aspectRatioScore(best, targetRatio)
-              ? candidate
-              : best;
-          }, undefined);
+          }
         }
         if (nativeAspectRatio) {
           requestBody.aspect_ratio = nativeAspectRatio;
