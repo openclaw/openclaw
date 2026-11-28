@@ -182,9 +182,56 @@ function classifyFailoverDetailCandidates(
   }
   return null;
 }
+const MINUTE_WINDOW_RE = /\b(?:tpm|rpm)\b/i;
+
+function isAmbiguousQuotaDetail(detail: string, message: string): boolean {
+  if (detail.trim().toLowerCase() === "insufficient_quota") {
+    return true;
+  }
+  const payload = safeParseJsonRecord(detail);
+  if (
+    !payload ||
+    Object.keys(payload).length !== 3 ||
+    !["code", "message", "type"].every((key) => Object.hasOwn(payload, key)) ||
+    normalizeOptionalLowercaseString(payload.code) !== "insufficient_quota" ||
+    normalizeOptionalLowercaseString(payload.type) !== "rate_limit_error" ||
+    typeof payload.message !== "string"
+  ) {
+    return false;
+  }
+  const payloadMessage = payload.message.trim();
+  return (
+    MINUTE_WINDOW_RE.test(payloadMessage) &&
+    isRateLimitErrorMessage(payloadMessage) &&
+    message.toLowerCase().includes(payloadMessage.toLowerCase())
+  );
+}
+
+function isTypedMinuteWindowQuotaRateLimit(
+  signal: FailoverSignal,
+  status: number | undefined,
+): boolean {
+  const message = signal.message;
+  if (
+    status !== 429 ||
+    normalizeOptionalLowercaseString(signal.code) !== "insufficient_quota" ||
+    normalizeOptionalLowercaseString(signal.errorType) !== "rate_limit_error" ||
+    !message ||
+    !MINUTE_WINDOW_RE.test(message) ||
+    !isRateLimitErrorMessage(message)
+  ) {
+    return false;
+  }
+  // The quota code is ambiguous here; independent balance evidence must still win.
+  return !signal.details?.some(
+    (detail) => isBillingErrorMessage(detail) && !isAmbiguousQuotaDetail(detail, message),
+  );
+}
+
 function mergeMessageAndDetailClassification(
   messageClassification: FailoverClassification | null,
   detailClassification: FailoverClassification | null,
+  preferTypedMinuteWindowRateLimit = false,
 ): FailoverClassification | null {
   if (!messageClassification || !detailClassification) {
     return messageClassification ?? detailClassification;
@@ -193,7 +240,9 @@ function mergeMessageAndDetailClassification(
     return messageClassification;
   }
   return detailClassification.kind === "context_overflow" ||
-    (detailClassification.reason === "billing" && messageClassification.reason === "rate_limit") ||
+    (detailClassification.reason === "billing" &&
+      messageClassification.reason === "rate_limit" &&
+      !preferTypedMinuteWindowRateLimit) ||
     messageClassification.reason === "format"
     ? detailClassification
     : messageClassification;
@@ -238,6 +287,7 @@ export function classifyFailoverSignalCore(
   const messageOrDetailClassification = mergeMessageAndDetailClassification(
     messageClassification,
     detailClassification,
+    isTypedMinuteWindowQuotaRateLimit(signal, inferredStatus),
   );
   const errorTypeReason = classifyCoreFailoverReasonFromErrorType(signal.errorType);
   const errorTypeClassification = errorTypeReason ? toReasonClassification(errorTypeReason) : null;
