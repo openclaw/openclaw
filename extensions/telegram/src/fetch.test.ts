@@ -27,6 +27,7 @@ const setGlobalDispatcher = vi.hoisted(() => vi.fn());
 const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 type MockDispatcherInstance = {
   options?: Record<string, unknown> | string;
+  compose?: () => MockDispatcherInstance;
   destroy: ReturnType<typeof vi.fn>;
   close: ReturnType<typeof vi.fn>;
 };
@@ -35,6 +36,8 @@ const { AgentCtor, EnvHttpProxyAgentCtor, ProxyAgentCtor } = vi.hoisted(() => {
   const constructor = () =>
     vi.fn(function (this: MockDispatcherInstance, options?: MockDispatcherInstance["options"]) {
       this.options = options;
+      // Fetch is mocked here; the socket-backed suite exercises the interceptor itself.
+      this.compose = () => this;
       this.destroy = vi.fn(async () => undefined);
       this.close = vi.fn(async () => undefined);
     });
