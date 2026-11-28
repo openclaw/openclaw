@@ -8,7 +8,7 @@ import type { SkillSnapshot, SkillUsagePath } from "../skills/types.js";
 import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { MemoryFlushToolRunContext } from "./agent-tools.memory-flush.types.js";
 import type { SkillInstructionDeliveryCache } from "./agent-tools.read.js";
-import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import type { ExecSkillScope, ExecToolDefaults } from "./bash-tools.exec-types.js";
 import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import type {
   AgentRunClientContext,
@@ -157,6 +157,11 @@ export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
   /** The host owns continuation policy when this factory builds only part of its tool surface. */
   sessionEventSourcePolicy?: SessionEventSourcePolicy;
   /**
+   * Host-prepared autoAllowSkills scope for a run whose skill snapshot is not carried here (the
+   * CLI loopback grant). Replaces the scope derived from `agentId` and `skillsSnapshot`.
+   */
+  execSkillScope?: ExecSkillScope;
+  /**
    * Host-resolved lifetime of this turn's tool policy, supplied only by host tool construction.
    * "conversation" means the turn adds no narrowing the session would not re-derive on its next
    * turn. Omitted or "turn" keeps every background follow-up capped at this turn's tool list.
@@ -166,5 +171,8 @@ export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
 
 export type PluginCodingToolsOptions = Omit<
   OpenClawCodingToolsOptions,
-  "sessionReadScopeKey" | "onProgressCardPlanSaved" | "onWebSearchConfiguration"
->;
+  "sessionReadScopeKey" | "onProgressCardPlanSaved" | "onWebSearchConfiguration" | "exec"
+> & {
+  /** Skill-bin trust scope is host-derived from the admitted run, never caller-supplied. */
+  exec?: Omit<ExecToolDefaults, "skillScope"> & ProcessToolDefaults;
+};

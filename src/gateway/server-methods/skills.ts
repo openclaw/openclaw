@@ -1,7 +1,4 @@
-import {
-  normalizeSortedUniqueTrimmedStringList,
-  normalizeTrimmedStringList,
-} from "@openclaw/normalization-core/string-normalization";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
   errorShape,
@@ -23,6 +20,7 @@ import {
   SkillApiKeyReferenceError,
   updateSkillConfigEntry,
 } from "../../skills/config/mutations.js";
+import { collectSkillBins } from "../../skills/discovery/bins.js";
 import { parseRequestedClawHubSkillRef } from "../../skills/lifecycle/clawhub-store.js";
 import { updateSkillsFromClawHub } from "../../skills/lifecycle/clawhub.js";
 import { prepareWorkspaceSkillEntries } from "../../skills/loading/workspace-skill-loader.js";
@@ -121,14 +119,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
           agentSkillFilter: "ignore",
         },
       );
-      for (const bin of normalizeSortedUniqueTrimmedStringList(
-        entries.flatMap((entry) =>
-          (entry.metadata?.requires?.bins ?? []).concat(
-            entry.metadata?.requires?.anyBins ?? [],
-            (entry.metadata?.install ?? []).flatMap((spec) => spec?.bins ?? []),
-          ),
-        ),
-      )) {
+      for (const bin of collectSkillBins(entries)) {
         bins.add(bin);
       }
     }

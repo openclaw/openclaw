@@ -14,7 +14,6 @@ import {
   type ExecApprovalUsageAuthorization,
   resolveExecApprovalAllowedDecisions,
   buildEnforcedShellCommand,
-  evaluateShellAllowlistWithAuthorization,
   hasDurableExecApproval,
   hasExactCommandDurableExecApproval,
   minSecurity,
@@ -67,6 +66,14 @@ import {
   recordAutoReviewDenial,
 } from "./bash-tools.exec-auto-review-state.js";
 import { prepareCronStandingGrantConsumption } from "./bash-tools.exec-cron-grant.js";
+import {
+  chainRevalidations,
+  evaluateGatewayShellAllowlistWithSkillAuthority,
+} from "./bash-tools.exec-host-gateway-revalidation.js";
+import {
+  clearAutoReviewDenials,
+  recordAutoReviewDenialReachesLimit,
+} from "./bash-tools.exec-host-gateway.auto-review-denials.js";
 import {
   buildGatewayExecApprovalFollowupSummary,
   createGatewayExecDenial,
@@ -124,16 +131,11 @@ export async function processGatewayAllowlist(
     agentId: params.agentId,
   });
   const fallbackSecurity = minSecurity(hostSecurity, askFallback);
-  const allowlistEval = await evaluateShellAllowlistWithAuthorization({
-    command: params.command,
-    allowlist: approvals.allowlist,
-    safeBins: params.safeBins,
-    safeBinProfiles: params.safeBinProfiles,
-    cwd: params.workdir,
-    env: params.env,
-    platform: process.platform,
-    trustedSafeBinDirs: params.trustedSafeBinDirs,
-  });
+  const { allowlistEval, skillAuthority } = await evaluateGatewayShellAllowlistWithSkillAuthority(
+    params,
+    approvals.allowlist,
+    evaluationPolicySnapshot.autoAllowSkills,
+  );
   const allowlistMatches = allowlistEval.allowlistMatches;
   const analysisOk = allowlistEval.analysisOk;
   const allowlistSatisfied =
@@ -484,6 +486,12 @@ export async function processGatewayAllowlist(
         initiateSpawn: consumeGrant.initiateSpawn,
         releaseSpawn: consumeGrant.releaseSpawn,
         revalidateBeforeExecution: async () => {
+          // Recheck skill authority before consuming the grant, so a withdrawn skill bin denies
+          // the launch without spending the standing grant.
+          const skillAuthorityDenied = await skillAuthority.revalidateSkillBinAuthority?.();
+          if (skillAuthorityDenied) {
+            return skillAuthorityDenied;
+          }
           let grantUse: Awaited<ReturnType<typeof consume>> | undefined;
           try {
             grantUse = await consume(params.signal);
@@ -579,7 +587,7 @@ export async function processGatewayAllowlist(
         cwdSnapshot: approvedCwdSnapshot,
         cwd: params.workdir,
       });
-    const revalidateBeforeExecution =
+    const revalidateBeforeExecution = chainRevalidations([
       approvedCwdSnapshot || approvalMutableFileBinding.operands.length > 0
         ? () =>
             revalidateGatewayExecApprovalBinding({
@@ -588,7 +596,9 @@ export async function processGatewayAllowlist(
               command: params.command,
               cwd: params.workdir,
             })
-        : undefined;
+        : undefined,
+      skillAuthority.revalidateSkillBinAuthority,
+    ]);
     const authorizationCandidates = allowlistEval.authorizationPlan?.ok
       ? allowlistEval.authorizationPlan.groups.flatMap((group) => group.candidates)
       : [];
@@ -670,8 +680,7 @@ export async function processGatewayAllowlist(
         throw error;
       }
       const denialEscalated =
-        decision.decision === "deny" &&
-        recordAutoReviewDenial(params.sessionKey) >= MAX_CONSECUTIVE_AUTO_REVIEW_DENIALS;
+        decision.decision === "deny" && recordAutoReviewDenialReachesLimit(params.sessionKey);
       publishGatewayGuardianReview(
         params,
         decision.decision === "allow-once" ? "approved" : "denied",
@@ -683,9 +692,7 @@ export async function processGatewayAllowlist(
           if (decision.risk !== "low" && decision.risk !== "medium") {
             break;
           }
-          if (params.sessionKey) {
-            consecutiveAutoReviewDenials.delete(params.sessionKey);
-          }
+          clearAutoReviewDenials(params.sessionKey);
           const deniedResult = await revalidateGatewayExecApprovalBinding({
             binding: approvalMutableFileBinding,
             cwdSnapshot: approvedCwdSnapshot,
@@ -908,8 +915,8 @@ export async function processGatewayAllowlist(
       }
 
       const { decision, state: resolvedDecision } = approvalOutcome;
-      if (decision !== null && params.sessionKey) {
-        consecutiveAutoReviewDenials.delete(params.sessionKey);
+      if (decision !== null) {
+        clearAutoReviewDenials(params.sessionKey);
       }
       const { approvedByAsk } = resolvedDecision;
       let { deniedReason } = resolvedDecision;
@@ -1108,7 +1115,11 @@ export async function processGatewayAllowlist(
               startupSignal: params.signal,
               assertCurrent,
               beforeSpawn: async () => {
-                finalBindingDenied = await resolveApprovalDrift();
+                // Detached approval can settle long after evaluation, so this launch rechecks
+                // skill authority when it starts, as the inline paths do.
+                finalBindingDenied =
+                  (await resolveApprovalDrift()) ??
+                  (await skillAuthority.resolveSkillBinAuthorityDrift?.());
                 if (finalBindingDenied) {
                   throw finalBindingDeniedError;
                 }
@@ -1223,19 +1234,21 @@ export async function processGatewayAllowlist(
     ),
   });
 
+  const revalidateBeforeExecution = chainRevalidations([
+    approvedCwdSnapshot
+      ? () =>
+          revalidateGatewayExecApprovalBinding({
+            cwdSnapshot: approvedCwdSnapshot,
+            command: params.command,
+            cwd: params.workdir,
+          })
+      : undefined,
+    skillAuthority.revalidateSkillBinAuthority,
+  ]);
   return {
     execCommandOverride: enforcedCommand,
     assertCurrent,
-    ...(approvedCwdSnapshot
-      ? {
-          revalidateBeforeExecution: () =>
-            revalidateGatewayExecApprovalBinding({
-              cwdSnapshot: approvedCwdSnapshot,
-              command: params.command,
-              cwd: params.workdir,
-            }),
-        }
-      : {}),
+    ...(revalidateBeforeExecution ? { revalidateBeforeExecution } : {}),
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
