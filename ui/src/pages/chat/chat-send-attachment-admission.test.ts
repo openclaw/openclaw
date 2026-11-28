@@ -9,6 +9,7 @@ import {
   storageTargetForComposer,
   subscribeStoredChatOutboxChanges,
 } from "../../lib/chat/outbox-store.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import {
   createDeliveryAttachmentBatch,
@@ -84,10 +85,10 @@ async function expectPayload(
   ).toEqual(dataUrls);
 }
 
-it.each(["same owner", "connection", "recovery owner", "selected agent"])(
+it.each(["same owner", "same-account reconnect", "gateway", "recovery owner", "selected agent"])(
   "settles overlapping attachment admissions with %s",
   async (changedOwner) => {
-    const { host, dataUrls } = admissionFixture("Stale submission");
+    const { host, attachments, dataUrls } = admissionFixture("Stale submission");
     if (changedOwner === "selected agent") {
       host.sessionKey = "global";
       host.assistantAgentId = "main";
@@ -99,8 +100,11 @@ it.each(["same owner", "connection", "recovery owner", "selected agent"])(
     let current: ReturnType<typeof handleSendChat> | undefined;
     try {
       await enteredBeforeSettling(firstGate.entered.promise, stale);
-      if (changedOwner === "connection") {
+      if (changedOwner === "same-account reconnect") {
+        host.client = createTestGatewayClient(host.request);
         host.connectionEpoch = (host.connectionEpoch ?? 0) + 1;
+      } else if (changedOwner === "gateway") {
+        host.settings = { ...host.settings, gatewayUrl: "ws://replacement.invalid" };
       } else if (changedOwner === "selected agent") {
         host.assistantAgentId = "other";
       } else if (changedOwner === "recovery owner") {
@@ -115,7 +119,10 @@ it.each(["same owner", "connection", "recovery owner", "selected agent"])(
         host.chatMessage = "Newer draft";
         secondGate.release.resolve();
         await current;
-        expect(host).toMatchObject({ chatMessage: "Newer draft", chatAttachments: [] });
+        expect(host).toMatchObject({
+          chatMessage: "Newer draft",
+          chatAttachments: changedOwner === "same-account reconnect" ? attachments : [],
+        });
       }
     } finally {
       firstGate.release.resolve();
@@ -123,14 +130,15 @@ it.each(["same owner", "connection", "recovery owner", "selected agent"])(
       await Promise.all([stale, current]);
     }
     const queued = listStoredChatOutboxes(host)[0]?.queue ?? [];
-    expect(queued.map((item) => item.text)).toEqual(
-      changedOwner === "same owner"
+    expect(queued).toHaveLength(host.chatQueue.length);
+    expect(host.chatQueue.map((item) => item.text)).toEqual(
+      changedOwner === "same owner" || changedOwner === "same-account reconnect"
         ? ["Stale submission", "Current submission"]
         : ["Current submission"],
     );
     expect(host.chatMessage).toBe(changedOwner === "same owner" ? "" : "Newer draft");
     expect(host.chatAttachments).toEqual([]);
-    await expectPayload(host, queued.at(-1), dataUrls);
+    await expectPayload(host, host.chatQueue.at(-1), dataUrls);
     expect(host.request).not.toHaveBeenCalled();
   },
 );

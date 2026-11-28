@@ -139,19 +139,17 @@ export async function handleSendChat(
   const draft = foldPastedTextAttachments(rawMessage, attachmentsToSend);
   const submitted = trimHumanMentions(draft.text, draftMentions);
   const userMessage = intent ? draft.text : submitted.text;
-  const submittedAtMs = performance.now();
+  const createdAt = performance.timeOrigin + performance.now();
   const submittedSessionKey = host.sessionKey;
   const submittedSessionId = host.currentSessionId;
   const submittedConnectionIsCurrent = captureChatConnectionOwner(host, false);
   const submittedOwnerIsCurrent = captureOutboxPayloadOwner(host);
+  const scopeIsCurrent = () => submittedOwnerIsCurrent() && host.sessionKey === submittedSessionKey;
   let expectedLeafEntryId = resolveDisplayedLeafEntryId(host);
   const submitGuardOptions = {
     attachments: messageOverride == null ? attachmentsToSend : [],
     scope: resolveUiConversationIdentity(host, submittedSessionKey),
-    isCurrent: () =>
-      submittedOwnerIsCurrent() &&
-      submittedConnectionIsCurrent() &&
-      host.sessionKey === submittedSessionKey,
+    isCurrent: () => scopeIsCurrent() && submittedConnectionIsCurrent(),
   };
   const clearComposer = (retainAttachments: "none" | "annotations" | "all" = "none") =>
     messageOverride == null
@@ -529,6 +527,9 @@ export async function handleSendChat(
     attachmentsToSend,
     effectiveMentions,
   );
+  const connectionBound = Boolean(rawParsedCommand || intent || isInlineEditSubmission);
+  const submissionIsCurrent = () =>
+    scopeIsCurrent() && (!connectionBound || submittedConnectionIsCurrent());
   let accepted = false;
   const submitMessage = async (guard: ChatSubmitGuard) => {
     if (host.chatLoading && (intent || rawParsedCommand || isInlineEditSubmission)) {
@@ -543,8 +544,7 @@ export async function handleSendChat(
     }
     const submittedAgentId = scopedAgentIdForSession(host, submittedSessionKey);
     const submissionOwnerIsCurrent = () =>
-      submitGuardOptions.isCurrent() &&
-      visibleSessionMatches(host, submittedSessionKey, submittedAgentId);
+      submissionIsCurrent() && visibleSessionMatches(host, submittedSessionKey, submittedAgentId);
     if (!visibleSessionMatches(host, submittedSessionKey, submittedAgentId)) {
       setChatError(host, t("mcpServers.sessionUnavailable"));
       return;
@@ -602,8 +602,8 @@ export async function handleSendChat(
       ...(queuedText.mentions ? { mentions: queuedText.mentions } : {}),
       ...(workContext ? { workContext } : {}),
       ...(appContext ? { appContext } : {}),
-      createdAt: Date.now(),
-      ...(resumedEdit?.orderKey !== undefined ? { orderKey: resumedEdit.orderKey } : {}),
+      createdAt,
+      orderKey: resumedEdit?.orderKey ?? (deliveredAttachments.length ? createdAt : undefined),
       attachments: deliveredAttachments.length ? deliveredAttachments : undefined,
       refreshSessions,
       sendAttempts: 0,
@@ -614,7 +614,7 @@ export async function handleSendChat(
         ? { intent, ...(host.currentSessionId ? { sessionId: host.currentSessionId } : {}) }
         : {}),
       ...(intent && expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
-      sendSubmittedAtMs: submittedAtMs,
+      sendSubmittedAtMs: createdAt - performance.timeOrigin,
       ...admission.scope,
       ...(sender ? { sender } : {}),
       ...(replyToId ? { replyToId } : {}),
@@ -647,8 +647,7 @@ export async function handleSendChat(
         }
         return;
       }
-      // Retain a picker captured before storage, including its rejected result;
-      // delivery follows the latest picker tail before issuing the request.
+      // Retain the picker captured before storage; delivery follows the latest picker tail.
       pendingSettings ??= getPendingChatPickerPatch(host, submittedSessionKey);
       queued.sendState = pendingSettings ? "waiting-model" : reconnectSafeQueuedSendState(host);
     }
@@ -712,7 +711,7 @@ export async function handleSendChat(
       queued,
       {
         yieldToInput: admittedDurably && Boolean(submissionAction),
-        isCurrent: submissionOwnerIsCurrent,
+        isCurrent: () => submissionOwnerIsCurrent() && submittedConnectionIsCurrent(),
         allowActiveRunSend,
         pendingSettings,
       },
@@ -736,6 +735,7 @@ export async function handleSendChat(
     submitKey,
     {
       ...submitGuardOptions,
+      isCurrent: submissionIsCurrent,
       action: submissionAction,
     },
     submitMessage,

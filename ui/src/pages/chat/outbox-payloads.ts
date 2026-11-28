@@ -55,12 +55,10 @@ export function captureOutboxPayloadOwner(
   host: Host,
   scope: StoredChatOutboxScope = payloadScope(host),
 ): () => boolean {
-  const client = host.client;
   const gateway = host.settings?.gatewayUrl;
   const recoveryScope = readOfflineStorageScope(host);
   const incognito = isIncognitoComposerScope(host, scope);
   return () =>
-    host.client === client &&
     host.settings?.gatewayUrl === gateway &&
     readOfflineStorageScope(host) === recoveryScope &&
     isIncognitoComposerScope(host, scope) === incognito;
