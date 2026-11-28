@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { resolveCliRuntimeToolPolicy } from "./prepare-tool-policy.js";
+import {
+  backendSupportsOrdinaryHostToolMediation,
+  resolveCliBootstrapFileAccess,
+  resolveCliRuntimeToolPolicy,
+} from "./prepare-tool-policy.js";
 import type { RunCliAgentParams } from "./types.js";
 
 type Input = Parameters<typeof resolveCliRuntimeToolPolicy>[0];
@@ -174,4 +178,193 @@ it("leaves node-placed Claude turns on their unmediated native surface", async (
     withManagedNative({ params: { sessionEntry: { ...session, execHost: "node" } } }),
     undefined,
   );
+});
+
+const fullHostOwnedTools = ["read", "write", "edit", "apply_patch", "exec", "process"] as const;
+const hostOwnedOrdinary = makeInput({
+  backendId: "custom-cli",
+  hostOwnedTools: fullHostOwnedTools,
+  params: { provider: "custom-cli", sessionEntry: session },
+});
+
+it.each<[string, Parameters<typeof backendSupportsOrdinaryHostToolMediation>[0], boolean]>([
+  ["claude-cli without hostOwnedTools", { backendId: "claude-cli" }, true],
+  [
+    "claude-cli with shell-only hostOwnedTools",
+    { backendId: "claude-cli", hostOwnedTools: ["exec", "process"] },
+    true,
+  ],
+  [
+    "non-Claude backend declaring read+write+exec hostOwnedTools",
+    { backendId: "custom-cli", hostOwnedTools: fullHostOwnedTools },
+    true,
+  ],
+  [
+    "non-Claude backend declaring read+apply_patch hostOwnedTools",
+    { backendId: "custom-cli", hostOwnedTools: ["Read", "apply_patch"] },
+    true,
+  ],
+  [
+    "non-Claude backend declaring only shell hostOwnedTools",
+    { backendId: "custom-cli", hostOwnedTools: ["exec", "process"] },
+    false,
+  ],
+  [
+    "non-Claude backend declaring only read hostOwnedTools",
+    { backendId: "custom-cli", hostOwnedTools: ["read", "edit"] },
+    false,
+  ],
+  [
+    "non-Claude backend declaring read+apply-patch alias hostOwnedTools",
+    { backendId: "custom-cli", hostOwnedTools: ["  Read ", "apply-patch", ""] },
+    true,
+  ],
+  [
+    "non-Claude backend declaring empty/whitespace hostOwnedTools",
+    { backendId: "custom-cli", hostOwnedTools: ["   ", ""] },
+    false,
+  ],
+  [
+    "bundled backend without hostOwnedTools",
+    { backendId: "google-gemini-cli", hostOwnedTools: undefined },
+    false,
+  ],
+])("evaluates ordinary host-tool mediation support for %s", (_label, input, expected) => {
+  expect(backendSupportsOrdinaryHostToolMediation(input)).toBe(expected);
+});
+
+it("mediates ordinary turns for non-Claude backends declaring file hostOwnedTools", async () => {
+  await expectPolicy(hostOwnedOrdinary, emptyTools, ["*"]);
+});
+
+it("preserves explicit exact-list turns without leaking file tools on hostOwnedTools backends", async () => {
+  const exactCron = { native: [], openClaw: ["session_status"] };
+  await expectPolicy(
+    makeInput({ params: { cliToolAvailability: exactCron } }, hostOwnedOrdinary),
+    exactCron,
+    undefined,
+  );
+});
+
+it.each<Overrides>([
+  { hostOwnedTools: ["exec", "process"] },
+  { hostOwnedTools: undefined, backendId: "google-gemini-cli" },
+  { bundleMcp: false },
+  { canEnforceExactToolAvailability: false },
+  { isSideQuestion: true },
+  { skipsTurnPreparation: true },
+  { params: { sessionEntry: { ...session, execHost: "node" } } },
+  { params: { config: { tools: { exec: { host: "node" } } } } },
+  { params: { execOverrides: { host: "node" } } },
+])(
+  "does not trigger ordinary mediation for non-Claude hostOwnedTools backend when %j",
+  async (overrides) => {
+    await expectPolicy(makeInput(overrides, hostOwnedOrdinary), undefined, undefined);
+  },
+);
+
+it.each<[string, Parameters<typeof resolveCliBootstrapFileAccess>[0], boolean]>([
+  [
+    "grants bootstrap file access for mediated read+write on hostOwnedTools backend",
+    {
+      backend: {
+        id: "custom-cli",
+        nativeToolMode: "selectable",
+        hostOwnedTools: fullHostOwnedTools,
+      },
+      params: { cliToolAvailability: { native: [], openClaw: ["read", "write"] } },
+      managedNativeTools: [],
+      projectedToolNames: ["read", "write", "edit", "exec"],
+    },
+    true,
+  ],
+  [
+    "grants bootstrap file access for mediated read+apply_patch on hostOwnedTools backend",
+    {
+      backend: {
+        id: "custom-cli",
+        nativeToolMode: "selectable",
+        hostOwnedTools: ["read", "apply_patch"],
+      },
+      params: { cliToolAvailability: { native: [], openClaw: ["read", "apply_patch"] } },
+      managedNativeTools: [],
+      projectedToolNames: ["read", "apply_patch"],
+    },
+    true,
+  ],
+  [
+    "denies bootstrap file access when mediated projected tools lack write/apply_patch",
+    {
+      backend: {
+        id: "custom-cli",
+        nativeToolMode: "selectable",
+        hostOwnedTools: fullHostOwnedTools,
+      },
+      params: { cliToolAvailability: { native: [], openClaw: ["read", "edit"] } },
+      managedNativeTools: [],
+      projectedToolNames: ["read", "edit"],
+    },
+    false,
+  ],
+  [
+    "denies bootstrap file access when mediated projected tools lack read",
+    {
+      backend: {
+        id: "custom-cli",
+        nativeToolMode: "selectable",
+        hostOwnedTools: fullHostOwnedTools,
+      },
+      params: { cliToolAvailability: { native: [], openClaw: ["write"] } },
+      managedNativeTools: [],
+      projectedToolNames: ["write"],
+    },
+    false,
+  ],
+  [
+    "denies bootstrap file access when tools are disabled",
+    {
+      backend: {
+        id: "custom-cli",
+        nativeToolMode: "selectable",
+        hostOwnedTools: fullHostOwnedTools,
+      },
+      params: {
+        cliToolAvailability: { native: [], openClaw: ["read", "write"] },
+        disableTools: true,
+      },
+      managedNativeTools: [],
+      projectedToolNames: ["read", "write"],
+    },
+    false,
+  ],
+  [
+    "denies mediated bootstrap file access for non-Claude backend with shell-only hostOwnedTools",
+    {
+      backend: {
+        id: "custom-cli",
+        nativeToolMode: "selectable",
+        hostOwnedTools: ["exec", "process"],
+      },
+      params: { cliToolAvailability: { native: [], openClaw: ["read", "write"] } },
+      managedNativeTools: [],
+      projectedToolNames: ["read", "write"],
+    },
+    false,
+  ],
+  [
+    "keeps existing claude-cli mediated bootstrap file access unchanged",
+    {
+      backend: {
+        id: "claude-cli",
+        nativeToolMode: "selectable",
+        hostOwnedTools: ["exec", "process"],
+      },
+      params: { cliToolAvailability: { native: [], openClaw: ["read", "write"] } },
+      managedNativeTools: [],
+      projectedToolNames: ["read", "write"],
+    },
+    true,
+  ],
+])("%s", (_label, input, expected) => {
+  expect(resolveCliBootstrapFileAccess(input)).toBe(expected);
 });

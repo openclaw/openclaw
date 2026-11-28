@@ -421,6 +421,34 @@ Runtime caps such as cron `toolsAllow` are normalized and group-expanded by
 OpenClaw before this contract is built. Native tools are disabled, and a
 backend without a complete declared enforcement path fails before execution.
 
+### OpenClaw-owned coding tools
+
+With bundled MCP enabled, `hostOwnedTools` declares canonical coding tools that
+OpenClaw executes instead of the native CLI. A declaration containing `read`
+and either `write` or `apply_patch` selects ordinary full coding-tool mediation,
+including mediated bootstrap file access. A shell-only declaration such as
+`["exec", "process"]` instead requests partial ownership; it does not opt an
+ordinary turn into full file-tool mediation.
+
+Preparation-based adapters must enforce the final contract before acknowledging
+it:
+
+- When `ctx.toolAvailability` is present, enforce both exact lists and return
+  `toolAvailabilityEnforced: true`. This includes selections narrowed by a
+  `before_prompt_build` hook. The exact acknowledgment supersedes the partial
+  ownership acknowledgment; the host independently limits the MCP catalog and
+  grant to the selected OpenClaw tools.
+- Otherwise, when `ctx.hostOwnedTools` is present, disable the equivalent native
+  tools and return `hostOwnedToolsEnforced: true`. Missing acknowledgment blocks
+  launch. Other native tools remain the adapter's responsibility.
+
+When upgrading a preparation-based plugin that already declares partial
+ownership, add the partial acknowledgment only after its native-tool policy is
+enforced. Do not return either acknowledgment unconditionally. Exercise fresh
+and resumed ordinary turns, a prompt-hook restriction, and rejection with each
+required acknowledgment omitted. Execution-argument adapters keep their
+existing enforcement path.
+
 A backend whose native tools are model-callable may declare
 `projectNativeToolAuthority(nativeTools)` so that automations created from its
 sessions keep the creator's native capabilities. For Claude stream-JSON, the

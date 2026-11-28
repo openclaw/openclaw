@@ -2,13 +2,16 @@ import type { McpLoopbackRequestContext } from "../../gateway/mcp-grant-store.js
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "../../gateway/mcp-http.loopback-runtime.js";
 import type { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
-import type { ResolvedCliBackend } from "../cli-backends.js";
+import {
+  cliBackendSupportsExactToolAvailability,
+  type ResolvedCliBackend,
+} from "../cli-backends.js";
 import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveExecConfigState } from "../exec-defaults.js";
 import { resolveSandboxRuntimeStatusAsync } from "../sandbox/runtime-status.js";
-import { normalizeToolPolicyName } from "../tool-policy.js";
 import { finalizeCliMcpGrant } from "./mcp-grant-context.js";
 import { projectNativeMcpRunContext } from "./native-mcp-context.js";
+import { normalizeHostOwnedTools } from "./prepare-tool-policy.js";
 import { admitCliRunParams } from "./run-admission.js";
 import type { RunCliAgentParams } from "./types.js";
 
@@ -129,10 +132,8 @@ export function resolveCliMcpToolOwnership(
     options.enabled &&
     !nodeExec &&
     run.cliToolAvailability === undefined &&
-    options.backend.nativeToolMode === "selectable" &&
-    options.backend.toolAvailabilityEnforcement === "execution-args" &&
-    options.backend.resolveExecutionArgs !== undefined
-      ? options.backend.hostOwnedTools?.map(normalizeToolPolicyName)
+    cliBackendSupportsExactToolAvailability(options.backend)
+      ? normalizeHostOwnedTools(options.backend.hostOwnedTools)
       : undefined;
   return {
     hostOwnedTools,

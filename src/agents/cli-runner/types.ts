@@ -12,6 +12,7 @@ import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-ac
 import type {
   CliBackendExecute,
   CliBackendExecutionMode,
+  CliBackendPreparedExecution,
   CliBackendPromptContext,
 } from "../../plugins/cli-backend.types.js";
 import type { MemoryAudience } from "../../plugins/memory-provider-types.js";
@@ -175,6 +176,11 @@ export type RunCliAgentParams = Pick<
 } & AgentRunExecutionContext;
 
 /** Backend config after MCP, skill, env, and cleanup preparation. */
+export type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
+  isolatedCompletionEnforced?: true;
+  secretInput?: CliSecretInput;
+};
+
 export type CliSecretInput = SpawnSecretInput & {
   /** Process-local non-secret generation used only to invalidate a warm child. */
   fingerprint: string;

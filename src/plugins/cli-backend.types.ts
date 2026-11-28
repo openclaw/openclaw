@@ -104,6 +104,8 @@ export type CliBackendPrepareExecutionContext = {
   executionMode?: CliBackendExecutionMode;
   /** Exact runtime tool surface the backend must enforce for this run. */
   toolAvailability?: CliBackendToolAvailability;
+  /** Canonical tools routed through OpenClaw; disable equivalent native tools. */
+  hostOwnedTools?: readonly string[];
   /** Core-prepared environment, including any bundled MCP settings path. */
   env?: Readonly<Record<string, string>>;
 };
@@ -119,6 +121,8 @@ export type CliBackendPreparedExecution = {
   cleanup?: () => Promise<void>;
   /** Positive acknowledgement for `prepare-execution` tool enforcement. */
   toolAvailabilityEnforced?: true;
+  /** Positive acknowledgement for `prepare-execution` partial `hostOwnedTools` enforcement. */
+  hostOwnedToolsEnforced?: true;
   /** Optional plugin-owned execution transport for this prepared local run. */
   execute?: CliBackendExecute;
 };
@@ -608,7 +612,9 @@ type CliBackendPluginBase = {
   nativeToolMode?: CliBackendNativeToolMode;
   /** Default local coding tools owned by OpenClaw instead of the native CLI.
    * Applies only with bundled loopback MCP, outside exact or node runs.
-   * The execution-args adapter must disable the equivalent native tools.
+   * The execution adapter (`resolveExecutionArgs` or `prepareExecution`) must
+   * disable the equivalent native tools; `prepare-execution` backends must also
+   * acknowledge partial ownership via `hostOwnedToolsEnforced: true`.
    */
   hostOwnedTools?: readonly string[];
   /**

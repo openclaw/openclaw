@@ -14,18 +14,56 @@ import { resolveCliNativeWebSearchEnabled } from "./bundle-mcp.js";
 import type { RunCliAgentParams } from "./types.js";
 
 /**
+ * Normalize a backend's declared `hostOwnedTools`, dropping blank entries and
+ * deduplicating aliases. Returns `undefined` when no non-empty tool names remain.
+ */
+export function normalizeHostOwnedTools(hostOwnedTools?: readonly string[]): string[] | undefined {
+  if (!hostOwnedTools || hostOwnedTools.length === 0) {
+    return undefined;
+  }
+  const normalized: string[] = [];
+  const seen = new Set<string>();
+  for (const entry of hostOwnedTools) {
+    const name = normalizeToolPolicyName(entry);
+    if (!name || seen.has(name)) {
+      continue;
+    }
+    seen.add(name);
+    normalized.push(name);
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+/**
+ * Determine whether a backend qualifies for mediated ordinary-turn host-tool access:
+ * `claude-cli` preserves its existing default, while any other backend opts in by
+ * declaring OpenClaw-owned file tools (`read` plus `write` or `apply_patch`).
+ */
+export function backendSupportsOrdinaryHostToolMediation(input: {
+  backendId: string;
+  hostOwnedTools?: readonly string[];
+}): boolean {
+  if (input.backendId === "claude-cli") {
+    return true;
+  }
+  const owned = new Set(normalizeHostOwnedTools(input.hostOwnedTools) ?? []);
+  return owned.has("read") && (owned.has("write") || owned.has("apply_patch"));
+}
+
+/**
  * Translate the caller's runtime tool cap into the CLI run's exact tool availability.
  * Native CLI tools cannot enforce workspace, channel, or inherited completion caps, so those
  * runs expose their whole surface through the mediated MCP policy projection. Bundled
- * local Claude agent turns use that same mediated surface even without a cap, so a
- * completion does not replace the native tool prefix of a running session. Operator-selected
- * backend tools stay on both turn kinds for the same reason.
+ * local backends with ordinary host-tool mediation use that same mediated surface even
+ * without a cap, so a completion does not replace the native tool prefix of a running
+ * session. Operator-selected backend tools stay on both turn kinds for the same reason.
  */
 export async function resolveCliRuntimeToolPolicy(input: {
   params: RunCliAgentParams;
   policySessionKey: string | undefined;
   policyAgentId: string;
   backendId: string;
+  hostOwnedTools?: readonly string[];
   bundleMcp: boolean;
   canEnforceExactToolAvailability: boolean;
   projectNativeToolAuthority?: ResolvedCliBackend["projectNativeToolAuthority"];
@@ -111,8 +149,11 @@ export async function resolveCliRuntimeToolPolicy(input: {
     (params.controlOperation === undefined || !input.skipsTurnPreparation) &&
     !(input.isSideQuestion && input.sideQuestionToolMode === "disabled") &&
     resolveEffectiveToolFsWorkspaceOnly({ cfg: params.config, agentId: input.policyAgentId });
-  const ordinaryClaudeMediation =
-    input.backendId === "claude-cli" &&
+  const ordinaryHostToolMediation =
+    backendSupportsOrdinaryHostToolMediation({
+      backendId: input.backendId,
+      hostOwnedTools: input.hostOwnedTools,
+    }) &&
     input.bundleMcp &&
     input.canEnforceExactToolAvailability &&
     !input.isSideQuestion &&
@@ -131,7 +172,7 @@ export async function resolveCliRuntimeToolPolicy(input: {
       senderRestricted ||
       delegatedExecution ||
       workspaceOnly ||
-      ordinaryClaudeMediation) &&
+      ordinaryHostToolMediation) &&
     params.disableTools !== true
   ) {
     if (
@@ -182,12 +223,47 @@ export async function resolveCliRuntimeToolPolicy(input: {
 }
 
 /**
+ * Fail closed when a `prepare-execution` backend omits the required positive
+ * acknowledgement for either exact `toolAvailability` or partial `hostOwnedTools`.
+ * Final exact availability supersedes partial ownership. Without an exact selection,
+ * its acknowledgement must not vacuously acknowledge partial `hostOwnedTools`.
+ */
+export function assertCliPreparedToolEnforcement(input: {
+  backend: Pick<ResolvedCliBackend, "id" | "toolAvailabilityEnforcement">;
+  toolAvailability: RunCliAgentParams["cliToolAvailability"];
+  hostOwnedTools?: readonly string[];
+  preparedExecution?: {
+    toolAvailabilityEnforced?: boolean;
+    hostOwnedToolsEnforced?: boolean;
+  };
+}): void {
+  if (input.backend.toolAvailabilityEnforcement !== "prepare-execution") {
+    return;
+  }
+  if (input.toolAvailability && input.preparedExecution?.toolAvailabilityEnforced !== true) {
+    throw new Error(
+      `CLI backend ${input.backend.id} did not enforce exact per-run tool availability during execution preparation`,
+    );
+  }
+  if (
+    !input.toolAvailability &&
+    input.hostOwnedTools &&
+    input.preparedExecution?.hostOwnedToolsEnforced !== true
+  ) {
+    throw new Error(
+      `CLI backend ${input.backend.id} did not enforce host-owned tools during execution preparation`,
+    );
+  }
+}
+
+/**
  * Bootstrap routing needs the run's final file access: a native file-capable
- * selection, or Claude's mediated OpenClaw read plus write tools. Managed native
- * selections confer no file capability by backend contract.
+ * selection, or mediated OpenClaw read plus write tools on a backend that
+ * supports ordinary host-tool mediation. Managed native selections confer no
+ * file capability by backend contract.
  */
 export function resolveCliBootstrapFileAccess(input: {
-  backend: Pick<ResolvedCliBackend, "id" | "nativeToolMode">;
+  backend: Pick<ResolvedCliBackend, "id" | "nativeToolMode" | "hostOwnedTools">;
   params: Pick<RunCliAgentParams, "cliToolAvailability" | "disableTools">;
   managedNativeTools: readonly string[];
   projectedToolNames: readonly string[];
@@ -197,7 +273,10 @@ export function resolveCliBootstrapFileAccess(input: {
     params.cliToolAvailability === undefined ||
     params.cliToolAvailability.native.some((name) => !managedNativeTools.includes(name));
   const mediatedBootstrapFileAccess =
-    backend.id === "claude-cli" &&
+    backendSupportsOrdinaryHostToolMediation({
+      backendId: backend.id,
+      hostOwnedTools: backend.hostOwnedTools,
+    }) &&
     projectedToolNames.includes("read") &&
     projectedToolNames.some((name) => ["write", "apply_patch"].includes(name));
   return (

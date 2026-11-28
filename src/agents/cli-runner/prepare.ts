@@ -24,10 +24,7 @@ import {
 } from "../../gateway/mcp-http.runtime.js";
 import { buildSystemAgentToolsMcpServerConfig } from "../../mcp/openclaw-tools-serve-config.js";
 import { CliBackendAuthProfilePreparationError } from "../../plugins/cli-backend-errors.js";
-import type {
-  CliBackendPreparedExecution,
-  CliBackendPromptContext,
-} from "../../plugins/cli-backend.types.js";
+import type { CliBackendPromptContext } from "../../plugins/cli-backend.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import {
   LEGACY_IMPLICIT_AGENT_ID,
@@ -136,12 +133,13 @@ import { prepareCliTurnHookContext, runCliAuthorizedPromptBuild } from "./prepar
 import * as mcp from "./prepare-mcp.js";
 import { runWithCliPreparationSource } from "./prepare-source.js";
 import {
+  assertCliPreparedToolEnforcement,
   capCliToolAvailability,
   retainPolicyAllowedManagedNativeTools,
   keptManagedNativeTools,
   withCliToolSearch,
-  resolveCliBootstrapFileAccess,
   resolveCliRuntimeToolPolicy,
+  resolveCliBootstrapFileAccess,
   resolveCliToolAvailabilityHash,
 } from "./prepare-tool-policy.js";
 import {
@@ -165,7 +163,7 @@ import { captureCliRunToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
   type CliReusableSession,
-  type CliSecretInput,
+  type PrivateCliBackendPreparedExecution,
   type PreparedCliRunContext,
   type RunCliAgentParams,
 } from "./types.js";
@@ -176,11 +174,6 @@ const CALLER_SURFACE_TOOL_NAMES = new Set([
   "suggest_task",
   "dismiss_task",
 ]);
-
-type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
-  isolatedCompletionEnforced?: true;
-  secretInput?: CliSecretInput;
-};
 
 type RunCliAgentPrepareParams = RunCliAgentParams & {
   /** Ring-zero tool transport supplied only by the OpenClaw orchestrator. */
@@ -320,14 +313,15 @@ async function prepareCliRunContextWithinReadFence(
   };
   const toolPolicy = await resolveCliRuntimeToolPolicy({
     params,
-    policySessionKey,
-    policyAgentId,
     backendId: backendResolved.id,
+    hostOwnedTools: backendResolved.hostOwnedTools,
     bundleMcp: backendResolved.bundleMcp,
-    canEnforceExactToolAvailability,
     projectNativeToolAuthority: backendResolved.projectNativeToolAuthority,
     resolveManagedNativeTools: backendResolved.resolveManagedNativeTools,
     sideQuestionToolMode: backendResolved.sideQuestionToolMode,
+    policySessionKey,
+    policyAgentId,
+    canEnforceExactToolAvailability,
     isSideQuestion,
     skipsTurnPreparation: skipsTurnPrefix,
   });
@@ -1055,6 +1049,7 @@ async function prepareCliRunContextWithinReadFence(
       authProfileId: effectiveAuthProfileId,
       executionMode,
       toolAvailability: params.cliToolAvailability,
+      ...(hostOwnedTools ? { hostOwnedTools } : {}),
       env: preparedBackend.env,
       // Bundled owners may project this through a native per-process system-prompt
       // channel. Keep it private so exact isolated inference does not expand the SDK.
@@ -1103,15 +1098,12 @@ async function prepareCliRunContextWithinReadFence(
     if (params.isolatedCompletion && preparedExecution?.isolatedCompletionEnforced !== true) {
       throw unsupportedIsolatedCompletionError(backendResolved.id);
     }
-    if (
-      params.cliToolAvailability &&
-      backendResolved.toolAvailabilityEnforcement === "prepare-execution" &&
-      preparedExecution?.toolAvailabilityEnforced !== true
-    ) {
-      throw new Error(
-        `CLI backend ${backendResolved.id} did not enforce exact per-run tool availability during execution preparation`,
-      );
-    }
+    assertCliPreparedToolEnforcement({
+      backend: backendResolved,
+      toolAvailability: params.cliToolAvailability,
+      hostOwnedTools,
+      preparedExecution,
+    });
     const skipLocalCredentialEpoch = Boolean(
       backendResolved.authEpochMode === "profile-only" &&
       effectiveAuthProfileId &&
