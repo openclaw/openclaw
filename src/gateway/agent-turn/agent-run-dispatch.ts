@@ -50,7 +50,7 @@ import { errorShapeFromError } from "../error-shape.js";
 import type { createAssistantCommentaryMediaCustody } from "../server-methods/chat-send-commentary-media.js";
 import type { GatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import type { DedupeEntry } from "../server-shared.js";
-import { setGatewayDedupeEntries } from "./agent-dedupe.js";
+import { retainAcceptedAgentReplay, setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { captureAgentJobSession } from "./agent-job.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
@@ -62,7 +62,7 @@ import {
   resolveGatewayAgentAbortStopReason,
   resolveResolvedAgentTimeoutStopReason,
 } from "./agent-run-dispatch-outcome.js";
-import type { AgentTurnContext, AgentTurnIo } from "./types.js";
+import type { AgentTurnContext, AgentTurnFrame, AgentTurnIo } from "./types.js";
 
 type AgentRunMediaCustody = Pick<
   ReturnType<typeof createAssistantCommentaryMediaCustody>,
@@ -83,6 +83,12 @@ export function dispatchAgentRunFromGateway(params: {
   runId: string;
   cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
   dedupeKeys: readonly string[];
+  retainYieldedReplay?:
+    | ((
+        publish: (frame: AgentTurnFrame) => void,
+        retain: (deadline: number) => () => void,
+      ) => boolean)
+    | undefined;
   /**
    * Controller whose signal is wired into `ingressOpts.abortSignal`. Used on
    * completion to retire the matching controller source without
@@ -518,7 +524,45 @@ export function dispatchAgentRunFromGateway(params: {
         });
         return { terminalOutcome, settled };
       }
-      persistTerminalDedupe();
+      const retainedReplay =
+        responseStatus === "ok" && result?.meta?.yielded === true && params.retainYieldedReplay;
+      const reservations = retainedReplay
+        ? params.dedupeKeys.map((key) => ({ key, entry: params.context.dedupe.get(key) }))
+        : [];
+      if (
+        !retainedReplay ||
+        !retainedReplay(
+          ([ok, finalPayload, error]) => {
+            // Settle only the reservation from the original admission, never a later retry's owner.
+            const keys = reservations
+              .filter(
+                ({ key, entry: reservation }) =>
+                  reservation && params.context.dedupe.get(key) === reservation,
+              )
+              .map(({ key }) => key);
+            setGatewayDedupeEntries({
+              dedupe: params.context.dedupe,
+              keys,
+              session: captureJobSession(),
+              entry: diagnostics.forReplay({ ts: Date.now(), ok, payload: finalPayload, error }),
+            });
+          },
+          (deadline) => {
+            const releases = reservations.flatMap(({ entry: reservation }) => {
+              const release =
+                reservation?.ok && retainAcceptedAgentReplay(reservation.payload, deadline);
+              return release ? [release] : [];
+            });
+            return () => {
+              for (const release of releases.toReversed()) {
+                release();
+              }
+            };
+          },
+        )
+      ) {
+        persistTerminalDedupe();
+      }
       // A final response resumes durable delivery cleanup. Release the terminal
       // run owner first so exact-session deletion cannot race this admission.
       await cleanupRunOwner();

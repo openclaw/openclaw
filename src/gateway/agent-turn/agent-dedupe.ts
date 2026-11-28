@@ -136,6 +136,25 @@ export function setGatewayDedupeEntries(params: {
   }
 }
 
+/** Keep the exact accepted reservation under the ordinary maintenance expiry policy. */
+export function retainAcceptedAgentReplay(
+  entry: unknown,
+  deadline: number,
+): (() => void) | undefined {
+  if (!isAcceptedAgentDedupePayload(entry)) {
+    return undefined;
+  }
+  const priorExpiry = entry.expiresAtMs;
+  entry.expiresAtMs = deadline;
+  return () => {
+    if (priorExpiry === undefined) {
+      delete entry.expiresAtMs;
+    } else {
+      entry.expiresAtMs = priorExpiry;
+    }
+  };
+}
+
 export function buildAbortedAgentPayload(
   runId: string,
   stopReason: string,

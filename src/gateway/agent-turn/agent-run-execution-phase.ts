@@ -10,6 +10,7 @@ import {
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
+import { observeAgentRpcYieldExecution } from "../../agents/subagents/completion/agent-rpc-yield-reply.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import {
   resolveReplySourceTurnId,
@@ -21,6 +22,7 @@ import { adoptExecRequestSession } from "../../infra/exec-request-context.js";
 import { PluginRuntimeCloseCompletedError } from "../../plugins/runtime-close-error.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { runWithSessionControllerCleanup } from "../../sessions/session-controller.cleanup-context.js";
 import { withSessionControllerSource } from "../../sessions/session-controller.context.js";
@@ -82,9 +84,30 @@ async function executeAgentRun(
   acknowledgeCleanup: () => void,
 ): Promise<void> {
   const { prepared } = params;
+  const transcript = {
+    sessionId: params.resolvedSessionId,
+    lifecycleRevision: params.sessionEntry?.lifecycleRevision,
+  };
+  const yieldReply = observeAgentRpcYieldExecution({
+    input: prepared.activeRunAbort.entry?.input,
+    address:
+      params.resolvedSessionKey && prepared.lifecycleStorePath
+        ? chatRef({
+            agentId: params.activeSessionAgentId,
+            storePath: prepared.lifecycleStorePath,
+            sessionKey: params.resolvedSessionKey,
+          })
+        : undefined,
+    entry: transcript,
+    yieldReply: params.io.yieldReply,
+  });
   let deliverFinal: (() => void) | undefined;
   const deferFinal = (...args: Parameters<typeof params.io.emitFinal>) => {
-    deliverFinal = () => params.io.emitFinal(...args);
+    deliverFinal = () => {
+      if (!yieldReply?.finish(args[0])) {
+        params.io.emitFinal(...args);
+      }
+    };
   };
   const diagnostics = createAgentRunDiagnostics(
     params.resolvedSessionKey,
@@ -526,6 +549,7 @@ async function executeAgentRun(
                       sessionId,
                     });
                     updateRpcSourceSessionId(prepared.activeRunAbort.entry, sessionId);
+                    yieldReply?.adoptTranscript({ ...transcript, sessionId });
                   }
                 },
                 workspaceDir: workspaceOverride ?? replyDispatchRuntime.workspaceDir,
@@ -538,6 +562,7 @@ async function executeAgentRun(
               },
               runId: params.runId,
               dedupeKeys: params.agentDedupeKeys,
+              retainYieldedReplay: yieldReply?.retainReplay,
               abortController: prepared.activeRunAbort.controller,
               cleanupAbortController: cleanupAdmittedRun,
               io: { ...params.io, emitFinal: deferFinal },
@@ -584,6 +609,7 @@ async function executeAgentRun(
       prepared.releaseCallerAuthority?.();
       releaseGatewayRootContinuation?.();
     } finally {
+      yieldReply?.release();
       if (!dispatched) {
         prepared.followupCompletion?.finishExecution(params.runId);
       }

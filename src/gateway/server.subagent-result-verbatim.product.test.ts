@@ -5,10 +5,19 @@ import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-respo
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { writeToolCall } from "./gateway-provider-fixture.test-support.js";
+import { DEDUPE_MAX, DEDUPE_TTL_MS } from "./server-constants.js";
+import { startGatewayMaintenanceTimers } from "./server-maintenance.js";
 import { createSubagentModelConfig } from "./server.subagent-stop-settlement.product.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 const parentPrompt = "Ask the child to explain p95, then quote its answer verbatim.";
 const childTask = "Explain why p95 returns 9 for latencies 1 through 20.";
@@ -35,7 +44,7 @@ function promptStrings(value: unknown): string[] {
 const promptCalls = (body: { input: Array<{ type: string; name?: string }> }) =>
   body.input.flatMap((item) => (item.type === "function_call" && item.name ? [item.name] : []));
 
-async function startModelServer(childReply: string) {
+async function startModelServer(childReply: string, releaseContinuation?: Promise<void>) {
   const completionPrompt = createDeferred<string>();
   const server = await startOpenAiResponsesModelServer({
     modelId: "verbatim-result",
@@ -48,6 +57,7 @@ async function startModelServer(childReply: string) {
         const settlement = promptStrings(JSON.parse(body)).find((text) => RESULT_BLOCK.test(text));
         if (settlement) {
           completionPrompt.resolve(settlement);
+          await releaseContinuation;
           reply(settlement.match(RESULT_BLOCK)?.[1] ?? "", "parent_relay");
           return;
         }
@@ -78,8 +88,9 @@ async function startModelServer(childReply: string) {
   };
 }
 
-async function relayChildAnswer(childReply: string) {
-  const model = await startModelServer(childReply);
+async function relayChildAnswer(childReply: string, source: "chat" | "agent" = "chat") {
+  const childGate = source === "agent" ? createDeferred() : undefined;
+  const model = await startModelServer(childReply, childGate?.promise);
   const state = await createOpenClawTestState({ label: "subagent-result-verbatim" });
   const gateway = await startGatewayWithClient({
     cfg: {
@@ -95,15 +106,68 @@ async function relayChildAnswer(childReply: string) {
   });
   try {
     await gateway.server.startupSettled;
-    const accepted = await gateway.client.request<{ runId: string }>("chat.send", {
+    const input = {
       sessionKey: "main",
       message: parentPrompt,
       idempotencyKey: `verbatim-result-${randomUUID()}`,
       deliver: false,
-    });
-    await expect(
-      gateway.client.request("agent.wait", { runId: accepted.runId, timeoutMs: 30_000 }),
-    ).resolves.toMatchObject({ status: "ok" });
+    };
+    let final: unknown;
+    if (childGate) {
+      const accepted = createDeferred();
+      const pending = gateway.client.request(
+        "agent",
+        { ...input, timeout: 600 },
+        {
+          expectFinal: true,
+          timeoutMs: 30_000,
+          onAccepted: () => accepted.resolve(),
+        },
+      );
+      void pending.catch(() => {});
+      await accepted.promise;
+      const resolveGatewayContext = getGatewayContextResolver(
+        getRpcSource(input.idempotencyKey)!.input,
+      );
+      const dedupe = resolveGatewayContext?.()?.dedupe;
+      if (!dedupe) {
+        throw new Error("Expected the original agent request's live Gateway dedupe map");
+      }
+      await model.completionPrompt;
+      await vi.waitUntil(() => !getRpcSource(input.idempotencyKey));
+
+      const clock = createGatewaySchedulerClock(Date.now());
+      const scheduler = createTestGatewayScheduler(clock.clock);
+      const maintenance = startGatewayMaintenanceTimers({
+        ...createGatewayMaintenanceStateForTest(),
+        dedupe,
+        scheduler,
+        resolveGatewayContext,
+        isNixMode: true,
+      });
+      try {
+        // Ordinary recent entries put the original, oldest reservation under capacity pressure too.
+        const sweepAt = clock.clock.now() + DEDUPE_TTL_MS + 60_000;
+        for (let i = 0; i < DEDUPE_MAX; i++) {
+          dedupe.set("fixture:" + i, { ts: sweepAt - 1, ok: true });
+        }
+        dedupe.set("fixture:expired", { ts: sweepAt - DEDUPE_TTL_MS - 1, ok: true });
+        await clock.advanceTo(sweepAt);
+        expect(dedupe.has("fixture:expired")).toBe(false);
+      } finally {
+        await maintenance.stopPeriodicTasks();
+        await maintenance.skillUsageCleanup();
+        await scheduler.stop();
+      }
+      childGate.resolve();
+      final = await pending;
+    }
+    if (source === "chat") {
+      const accepted = await gateway.client.request<{ runId: string }>("chat.send", input);
+      await expect(
+        gateway.client.request("agent.wait", { runId: accepted.runId, timeoutMs: 30_000 }),
+      ).resolves.toMatchObject({ status: "ok" });
+    }
     const prompt = await model.completionPrompt;
     let relayed: string | undefined;
     await vi.waitUntil(
@@ -119,8 +183,13 @@ async function relayChildAnswer(childReply: string) {
       },
       { interval: 50, timeout: 10_000 },
     );
-    return { prompt, relayed };
+    const replay =
+      source === "agent"
+        ? await gateway.client.request("agent", { ...input, timeout: 600 }, { expectFinal: true })
+        : undefined;
+    return { prompt, relayed, final, replay };
   } finally {
+    childGate?.resolve();
     await disconnectGatewayClient(gateway.client);
     await gateway.server.close({ reason: "subagent result verbatim proof complete" });
     await model.close();
@@ -129,6 +198,16 @@ async function relayChildAnswer(childReply: string) {
 }
 
 afterEach(() => resetSubagentRegistryForTests({ persist: false }));
+
+it("returns the parent continuation to the original Gateway agent request after yield", async () => {
+  const { final, relayed, replay } = await relayChildAnswer(childAnswer, "agent");
+  expect(relayed).toBe(childAnswer);
+  expect(final).toMatchObject({
+    status: "ok",
+    result: { payloads: [{ text: childAnswer }] },
+  });
+  expect(replay).toEqual(final);
+});
 
 it("relays a child's completion result to its requester with the original characters", async () => {
   const { prompt, relayed } = await relayChildAnswer(childAnswer);
