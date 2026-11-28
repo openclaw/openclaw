@@ -147,20 +147,28 @@ in its `ExecStart`:
    runs Doctor and the migrations. Root starts the unit and waits until systemd
    runs the new release and the service account's own `openclaw gateway health`
    reaches it.
-3. As the service account, the update record is written to the service's state,
-   so `openclaw update status` run as that account shows it, and the backup is
-   removed.
+3. Once the installed updater has exited, a transient root unit
+   (`openclaw-update-settle-<id>.service`, see its journal) writes the update
+   record to the service's state as the service account, so `openclaw update
+   status` run as that account shows it, and removes the backup. If the
+   installed updater put the previous package back after a later failure, that
+   unit instead stops the service, restores its state from the backup as the
+   service account, and starts it again.
 
 If the new release does not come ready, the service's state is restored from that
-backup as the service account, the unit is left stopped, and the update fails, so
-the installed updater restores the previous package. The unit starts again on its
-own once the previous package is back; it is never started on the new package
-with the restored state.
+backup as the service account, only after the unit is confirmed stopped, and the
+update fails, so the installed updater restores the previous package. The unit
+starts again on its own once the previous package is back; it is never started on
+the new package with the restored state. If the unit cannot be confirmed stopped
+or the restore fails, the unit is left stopped and the backup is kept; the
+failure names where.
 
-Root runs only `runuser` (a root-owned copy), `systemctl`, and the package manager.
-It never runs anything the service account wrote, never writes into the service's
-state, and reads back only exit statuses and a few status words, checked and size
-limited. Updaters released before this behavior write their own run record and
+Root runs only `runuser` (a root-owned copy), `systemctl`, `systemd-run`, and the
+package manager, with its own trusted environment; the unit's environment is
+handed to the service account's process in a file only that account can read,
+and applies only after the switch. Root never runs anything the service account
+wrote, never writes into the service's state, and reads back only exit statuses
+and a few status words, checked and size limited. Updaters released before this behavior write their own run record and
 report into root's state (`/root/.openclaw`), not the service's.
 
 The update instead refuses before the package is replaced, with nothing changed,
