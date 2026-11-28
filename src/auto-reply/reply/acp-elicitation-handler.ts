@@ -142,6 +142,7 @@ const DEFAULT_ELICITATION_TIMEOUT_MS = 15 * 60_000;
 const MAX_REQUEST_ID_TEXT = 128;
 
 export type AcpElicitationHandlerParams = {
+  channelAnswerScope?: string;
   sourceSessionKey: string;
   targetSessionKey: string;
   outerRequestId: string;
@@ -182,6 +183,7 @@ export function createAcpElicitationHandler(
   params: AcpElicitationHandlerParams,
 ): AcpElicitationHandler {
   const delivery = {
+    channelAnswerScope: params.channelAnswerScope,
     onBlockReply: async (payload: ReplyPayload) => {
       await params.delivery.deliver("block", payload);
     },

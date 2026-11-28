@@ -36,6 +36,7 @@ import {
 import { createDispatchCommentaryProgress } from "./dispatch-from-config.commentary.js";
 import {
   acquireAcpDispatchTurn,
+  resolveAcpQuestionTakeover,
   acquireDispatchTurn,
 } from "./dispatch-from-config.dispatch-admission.js";
 import { admittedSessionSettingsRestrictRuntime } from "./dispatch-from-config.events.js";
@@ -632,6 +633,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         state.recordProcessed("error", { reason: "restricted_runtime_takeover", error }),
     };
   }
+  takeover ??= await resolveAcpQuestionTakeover(state);
   if (takeover) {
     const { queuedFinal, routedFinalCount } =
       takeover.payload.text && !state.suppressDelivery

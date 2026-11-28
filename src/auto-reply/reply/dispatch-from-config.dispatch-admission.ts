@@ -7,6 +7,33 @@ import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.
 import { readReplySourceInput } from "./reply-source-binding.js";
 import { resolveReplyTurnKind } from "./reply-turn-kind.js";
 
+/** Only an eligible ACP takeover may consume an answer before acquiring a normal turn. */
+export async function resolveAcpQuestionTakeover(state: PrepareDispatchOperationReadyState) {
+  const sessionKey = state.acpDispatchSessionKey;
+  if (
+    state.dispatchKind !== "acp" ||
+    !state.allowInboundHandlers ||
+    state.sendPolicyDenied ||
+    !sessionKey ||
+    !state.hookRunner?.hasHooks("reply_dispatch", { dispatchKind: "acp" })
+  ) {
+    return undefined;
+  }
+  const { tryAnswerBoundAcpQuestion } = await import("./acp-channel-question-input.js");
+  const answer = await state.runWithDispatchLifecycleAdmission(() =>
+    tryAnswerBoundAcpQuestion(state, sessionKey),
+  );
+  if (!answer) {
+    return undefined;
+  }
+  return {
+    payload: answer.error ? { text: answer.error, isError: true } : {},
+    deliveryId: "acp-question-input",
+    recordProcessed: () =>
+      state.recordProcessed(answer.error ? "error" : "completed", { reason: answer.reason }),
+  };
+}
+
 /** Acquires the dispatch-phase reply operation, or returns the refused dispatch result. */
 export async function acquireDispatchTurn(state: PrepareDispatchOperationReadyState) {
   const phase = state.activeRunSafeCommandTurn ? "command_resolution" : "dispatch";

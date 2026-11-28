@@ -29,6 +29,7 @@ export type RunAgentHarnessGatewayQuestionParams = {
   gatewayCall?: AgentHarnessQuestionGatewayCall | AgentQuestionDispatcher;
   delivery: Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply"> & {
     hostCapabilities?: AgentHarnessHostCapabilities;
+    channelAnswerScope?: string;
   };
   promptOptions?: AgentHarnessUserInputPromptOptions;
   signal?: AbortSignal;

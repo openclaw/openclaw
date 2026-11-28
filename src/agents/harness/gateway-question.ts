@@ -76,7 +76,9 @@ type PendingAgentSecretInput = {
   settle: (text?: string) => boolean;
 };
 
-type PendingAgentQuestion = PendingAgentGatewayQuestion | PendingAgentSecretInput;
+type PendingAgentQuestion = (PendingAgentGatewayQuestion | PendingAgentSecretInput) & {
+  channelAnswerScope?: string;
+};
 
 const pendingAgentQuestions = resolveGlobalMap<string, PendingAgentQuestion>(
   Symbol.for("openclaw.pendingAgentQuestions"),
@@ -150,6 +152,7 @@ function reserveQuestionInput(state: PendingAgentQuestion, authority?: QuestionI
 
 /** Registers one gateway question as the next plain-text claim target for its session. */
 export function registerPendingAgentQuestion(params: {
+  channelAnswerScope?: string;
   questionId: string;
   sessionKey: string;
   agentId?: string;
@@ -263,6 +266,7 @@ export async function claimPendingAgentQuestionAnswerFromCaller(params: {
 
 /** Owns reservation and persistence; absent questions return before checking caller authority. */
 export async function claimPendingAgentQuestionAnswer(params: {
+  channelAnswerScope?: string;
   sessionKey?: string;
   text: string;
   persist?: () => Promise<void>;
@@ -270,6 +274,34 @@ export async function claimPendingAgentQuestionAnswer(params: {
   authority?: QuestionInputAuthority;
 }): Promise<boolean> {
   return claimQuestionAnswer(params);
+}
+
+function readClaimableQuestion(key: string | undefined) {
+  const state = key ? pendingAgentQuestions.get(key) : undefined;
+  return state && !state.resolving && !(state.kind === "gateway" && state.cancelRequested)
+    ? state
+    : undefined;
+}
+
+/** Retain the exact question across mailbox admission; a replacement cannot inherit this reply. */
+export function capturePendingChannelQuestion(sessionKey: string, scope: string) {
+  const key = sessionKey.trim();
+  const captured = readClaimableQuestion(key);
+  if (captured?.channelAnswerScope !== scope) {
+    return undefined;
+  }
+  return (
+    params: Omit<
+      Parameters<typeof claimPreparedPendingAgentQuestionAnswer>[0],
+      "sessionKey" | "channelAnswerScope"
+    >,
+    assertCurrent: () => Promise<void>,
+  ) =>
+    pendingAgentQuestions.get(key) === captured &&
+    claimPreparedPendingAgentQuestionAnswer(
+      { ...params, sessionKey: key, channelAnswerScope: scope },
+      assertCurrent,
+    );
 }
 
 /** Core ingress revalidates its prepared route after question and source preparation. */
@@ -286,19 +318,19 @@ async function claimQuestionAnswer(
   assertPreparedCurrent?: () => Promise<void>,
 ): Promise<boolean> {
   const sessionKey = params.sessionKey?.trim();
-  const state = sessionKey ? pendingAgentQuestions.get(sessionKey) : undefined;
-  if (!state || state.resolving || (state.kind === "gateway" && state.cancelRequested)) {
+  const state = readClaimableQuestion(sessionKey);
+  if (
+    !state ||
+    (state.channelAnswerScope !== undefined &&
+      state.channelAnswerScope !== params.channelAnswerScope)
+  ) {
     return false;
   }
   let authority = params.authority;
   if (authority?.toolAuthorityPreparation || authority?.prepareCurrent) {
     authority = await prepareQuestionDispatchAuthority(authority);
   }
-  if (
-    pendingAgentQuestions.get(sessionKey!) !== state ||
-    state.resolving ||
-    (state.kind === "gateway" && state.cancelRequested)
-  ) {
+  if (readClaimableQuestion(sessionKey) !== state) {
     return false;
   }
   withQuestionInputAssertion(() => authority?.assertCurrent());
@@ -500,7 +532,8 @@ function runAgentHarnessSecretInput(
     const onAbort = () => finish();
     const timeout = setTimeout(onAbort, params.timeoutMs);
     timeout.unref();
-    const state: PendingAgentSecretInput = {
+    const state: PendingAgentQuestion = {
+      channelAnswerScope: params.delivery.channelAnswerScope,
       kind: "secret",
       sessionKey,
       answerAuthority,
@@ -558,6 +591,7 @@ async function runScopedAgentHarnessQuestion(
   params.signal?.throwIfAborted();
   using prompt = createQuestionPromptLifetime(params.signal);
   const claim = registerPendingAgentQuestion({
+    channelAnswerScope: params.delivery.channelAnswerScope,
     questionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
