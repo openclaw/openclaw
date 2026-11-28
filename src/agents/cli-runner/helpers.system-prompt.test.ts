@@ -4,7 +4,9 @@ import { Type } from "typebox";
 // Verifies CLI system-prompt construction without loading the full runner.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { resolveSessionGitCoauthorPrompt } from "../git-coauthor-prompt.js";
 import { prepareAgentPromptRepoRoot, withAgentPromptProjects } from "../prompt-projects.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
@@ -125,6 +127,35 @@ describe("buildCliAgentSystemPrompt", () => {
 
     expect(prompt).toContain("No OpenClaw tool list is injected");
     expect(prompt).not.toContain("Approval-pending:");
+  });
+
+  it("tells Claude CLI the callable tool names before the Tooling exact-name rule", async () => {
+    const { buildAnthropicCliBackend } = await loadBundledPluginFacade<{
+      buildAnthropicCliBackend: () => CliBackendPlugin;
+    }>({ pluginId: "anthropic", artifactBasename: "api.js" });
+    const tools = ["read", "memory_get"].map((name) => createStubTool(name));
+    const builtPrompt = await buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools,
+      modelDisplay: "claude-cli/sonnet",
+    });
+    const prompt = buildAnthropicCliBackend().transformSystemPrompt?.({
+      provider: "claude-cli",
+      modelId: "sonnet",
+      modelDisplay: "claude-cli/sonnet",
+      systemPrompt: builtPrompt,
+      openClawMcpToolNames: tools.map((tool) => tool.name),
+    });
+    const lines = prompt?.split("\n") ?? [];
+    const tooling = lines.indexOf("## Tooling");
+
+    expect(lines.slice(tooling, tooling + 4)).toEqual([
+      "## Tooling",
+      expect.stringContaining("For OpenClaw tools, call `mcp__openclaw__<name>`"),
+      "Tools policy-filtered. Names case-sensitive; call exact.",
+      "- read: Read files",
+    ]);
+    expect(lines).not.toContain("- memory_get");
   });
 
   it("distinguishes the CLI working directory from the agent workspace", async () => {
