@@ -19,6 +19,7 @@ export function MicrophoneMenu(props: {
   const items = createMemo(
     () => {
       const keyed = props.picker.apiKeyProviders ?? {};
+      const splitTalkUnavailableReason = props.picker.splitTalkUnavailableReason;
       const capabilityRow = (
         key: "realtime" | "dictation",
         status: MicrophonePickerProps["realtimeStatus"],
@@ -43,7 +44,12 @@ export function MicrophoneMenu(props: {
       let capabilities = [
         capabilityRow("realtime", props.picker.realtimeStatus, keyed.talk ?? keyed.speech, {
           label: t("chat.composer.realtimeTalkCapability"),
-          unavailableReason: t("chat.composer.realtimeTalkProviderUnavailable"),
+          unavailableReason:
+            splitTalkUnavailableReason === "speech"
+              ? t("chat.composer.talkSpeechProviderUnavailable")
+              : splitTalkUnavailableReason === "transcription"
+                ? t("chat.composer.dictationProviderUnavailableShort")
+                : t("chat.composer.realtimeTalkProviderUnavailable"),
           canConfigure: Boolean(props.picker.onOpenTalkSettings),
         }),
         capabilityRow("dictation", props.picker.dictationStatus, keyed.dictation, {

@@ -547,6 +547,7 @@ export function createChatComposerContext(
         issue: devicePicker.issue,
         holdToDictate: props.composerHoldToRecord !== false,
         realtimeStatus: devicePicker.realtimeStatus,
+        splitTalkUnavailableReason: devicePicker.splitTalkUnavailableReason,
         dictationStatus: devicePicker.dictationStatus,
         onOpen: devicePicker.handleOpen,
         onClose: devicePicker.handleClose,

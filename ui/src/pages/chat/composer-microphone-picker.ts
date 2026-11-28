@@ -33,6 +33,7 @@ function voiceApiKeyProviders({ realtime, transcription }: TalkCatalogResult, sp
 }
 
 export type ComposerTalkCapabilityStatus = "checking" | "ready" | "unavailable" | "unknown";
+type SplitTalkUnavailableReason = "speech" | "transcription";
 
 export type MicrophonePickerProps = {
   devices: RealtimeTalkInputDevice[];
@@ -44,6 +45,7 @@ export type MicrophonePickerProps = {
   holdToDictate?: boolean;
   showRealtimeCapability?: boolean;
   realtimeStatus: ComposerTalkCapabilityStatus;
+  splitTalkUnavailableReason?: SplitTalkUnavailableReason;
   dictationStatus: ComposerTalkCapabilityStatus;
   onOpen: () => void;
   onClose: () => void;
@@ -71,6 +73,7 @@ export class ComposerMicrophoneOwner extends EventTarget {
   private stopFocus: (() => void) | undefined;
   canConfigure = true;
   realtimeStatus: ComposerTalkCapabilityStatus = "unknown";
+  splitTalkUnavailableReason: SplitTalkUnavailableReason | undefined;
   dictationStatus: ComposerTalkCapabilityStatus = "unknown";
   apiKeyProviders: VoiceApiKeyProviders = {};
   /** Tapping Talk without its key explains why instead of opening the picker. */
@@ -108,6 +111,7 @@ export class ComposerMicrophoneOwner extends EventTarget {
     this.catalogSessionKey = sessionKey;
     this.catalogRequest++;
     this.realtimeStatus = canRead ? "unknown" : "unavailable";
+    this.splitTalkUnavailableReason = undefined;
     this.dictationStatus = canRead || canDictate ? "unknown" : "unavailable";
     this.apiKeyProviders = {};
     this.talkApiKeyNotice = false;
@@ -209,12 +213,9 @@ export class ComposerMicrophoneOwner extends EventTarget {
       const talk = config?.config?.talk;
       this.dictationStatus = catalog.transcription?.ready === true ? "ready" : "unavailable";
       this.apiKeyProviders = voiceApiKeyProviders(catalog, talk?.realtime?.mode === "stt-tts");
-      if (!config) {
-        this.realtimeStatus = "unavailable";
-        return;
-      }
       if (talk?.realtime?.mode !== "stt-tts") {
-        this.realtimeStatus = catalog.realtime?.ready === true ? "ready" : "unavailable";
+        this.splitTalkUnavailableReason = undefined;
+        this.realtimeStatus = config && catalog.realtime?.ready === true ? "ready" : "unavailable";
         return;
       }
       let speechProvider = catalog.speech.activeProvider;
@@ -243,8 +244,12 @@ export class ComposerMicrophoneOwner extends EventTarget {
             speechProvider,
           );
         }
-        this.realtimeStatus =
-          this.dictationStatus === "ready" && speechReady ? "ready" : "unavailable";
+        this.splitTalkUnavailableReason = !speechReady
+          ? "speech"
+          : this.dictationStatus === "ready"
+            ? undefined
+            : "transcription";
+        this.realtimeStatus = this.splitTalkUnavailableReason ? "unavailable" : "ready";
       }
     } catch {
       if (request === this.catalogRequest) {
