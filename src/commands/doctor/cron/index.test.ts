@@ -15,6 +15,7 @@ import {
 } from "../../../cron/store.js";
 import { resolveCronStoreKeyInDatabase } from "../../../cron/store/paths.js";
 import * as quarantine from "../../../cron/store/quarantine.js";
+import { operatorRecoverySnapshotFixture } from "../../../gateway/server/client-fixtures.test-support.js";
 import * as staging from "../../../infra/sqlite-snapshot-staging.js";
 import { createNonExitingRuntime } from "../../../runtime.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
@@ -1021,23 +1022,10 @@ it.each([
         version: 1,
         kind: "gateway",
         agentId: "ops",
-        snapshot: {
-          profileId: "synthetic-operator",
+        snapshot: operatorRecoverySnapshotFixture("synthetic-operator", "synthetic-generation", {
           scopes: ["operator.read", "operator.write"],
-          assignedRole: null,
-          githubLogin: null,
-          grant: null,
-          aliasBindingIds: [],
-          authPolicy: {
-            generation: "",
-            grantGeneration: "synthetic-generation",
-            role: "operator",
-            authMethod: "token",
-          },
-          controlUiAdmin: false,
           localOperator: true,
-          sourceIngress: "internal",
-        },
+        }),
       },
     },
   };
