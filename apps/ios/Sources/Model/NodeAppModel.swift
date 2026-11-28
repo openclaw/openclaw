@@ -3309,52 +3309,6 @@ extension NodeAppModel {
     nonisolated static func cameraFacingPreference(rawValue: String?) -> OpenClawCameraFacing {
         rawValue.flatMap(OpenClawCameraFacing.init(rawValue:)) ?? .front
     }
-
-    private func showCameraHUD(
-        ownerID: String,
-        text: String,
-        kind: CameraHUDKind,
-        autoHideSeconds: Double? = nil)
-    {
-        self.cameraHUDDismissTask?.cancel()
-        self.cameraHUDOwnerID = ownerID
-
-        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
-            self.cameraHUDText = text
-            self.cameraHUDKind = kind
-        }
-
-        guard let autoHideSeconds else { return }
-        self.cameraHUDDismissTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: UInt64(autoHideSeconds * 1_000_000_000))
-            guard self.cameraHUDOwnerID == ownerID else { return }
-            withAnimation(.easeOut(duration: 0.25)) {
-                self.cameraHUDText = nil
-                self.cameraHUDKind = nil
-            }
-            self.cameraHUDOwnerID = nil
-            self.cameraHUDDismissTask = nil
-        }
-    }
-
-    private func updateCameraHUD(
-        ownerID: String,
-        text: String,
-        kind: CameraHUDKind,
-        autoHideSeconds: Double? = nil)
-    {
-        guard self.cameraHUDOwnerID == ownerID else { return }
-        self.showCameraHUD(ownerID: ownerID, text: text, kind: kind, autoHideSeconds: autoHideSeconds)
-    }
-
-    private func clearCameraHUD(ownerID: String) {
-        guard self.cameraHUDOwnerID == ownerID else { return }
-        self.cameraHUDDismissTask?.cancel()
-        self.cameraHUDDismissTask = nil
-        self.cameraHUDOwnerID = nil
-        self.cameraHUDText = nil
-        self.cameraHUDKind = nil
-    }
 }
 
 extension NodeAppModel {
