@@ -34,6 +34,7 @@ import {
 } from "../outbound-media-contract.js";
 import { buildQuotedMessageOptions, lookupInboundMessageMeta } from "../quoted-message.js";
 import { newConnectionId } from "../reconnect.js";
+import { formatError } from "../session-errors.js";
 import { markdownToWhatsAppChunks } from "../targets-runtime.js";
 import { whatsappOutboundLog } from "./loggers.js";
 
@@ -325,8 +326,14 @@ async function deliverWebReplyInActivityScope(params: WhatsAppReplyDeliveryParam
         // Earlier accepted uploads do not make a genuinely rejected trailing upload successful.
         throw preserveAcceptedDeliveryError(error);
       }
-      whatsappOutboundLog.error(`Failed sending web media to ${conversationId}`);
-      replyLogger.warn({ to: conversationId }, "failed to send web media reply");
+      const errorMessage = formatError(error);
+      whatsappOutboundLog.error(`Failed sending web media to ${conversationId}`, {
+        error: errorMessage,
+      });
+      replyLogger.warn(
+        { to: conversationId, error: errorMessage },
+        "failed to send web media reply",
+      );
       // A failed trailing attachment needs its own warning after earlier accepted media.
       const fallbackText = isFirst
         ? [caption ?? "", "⚠️ Media failed."].filter(Boolean).join("\n")
