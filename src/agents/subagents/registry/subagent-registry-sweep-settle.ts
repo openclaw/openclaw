@@ -1,6 +1,8 @@
 import { isTerminalSessionStatus } from "../../../config/sessions/types.js";
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
+import { retryAsync } from "../../../infra/retry.js";
+import { isStateDatabaseAdmissionClosedError } from "../../../infra/sqlite-error-diagnostics.js";
 import { sanitizeAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
 import { readSubagentRunFinalAnswerEvidence } from "../announce/subagent-announce-output.js";
@@ -153,10 +155,9 @@ export async function settleRestartInterruptedSubagentRun(params: {
   entry: SubagentRunRecord;
   readScope?: Pick<SweepReadScope, "completionCurrent">;
   complete: CompleteRun;
-  now: number;
   processStartedAt?: number;
 }): Promise<boolean> {
-  const { runId, entry, readScope, complete, now } = params;
+  const { runId, entry, readScope, complete } = params;
   const processStartedAt = params.processStartedAt ?? performance.timeOrigin;
   if (
     hasSubagentRunEnded(entry) ||
@@ -176,13 +177,15 @@ export async function settleRestartInterruptedSubagentRun(params: {
   let answer;
   if (entry.expectsCompletionMessage === true && !entry.completion?.terminalReply) {
     try {
-      answer = await readSubagentRunFinalAnswerEvidence(entry);
+      answer = await retryAsync(() => readSubagentRunFinalAnswerEvidence(entry), { attempts: 2 });
     } catch (error) {
-      subagentRegistryLog.warn("Deferring subagent restart settlement: result read failed", {
-        runId,
-        error,
-      });
-      return false;
+      if (isStateDatabaseAdmissionClosedError(error)) {
+        return false;
+      }
+      subagentRegistryLog.warn(
+        "Could not read the saved subagent reply during restart settlement",
+        { runId, error },
+      );
     }
   }
   const saved = answer?.completedAt !== undefined ? answer : undefined;
@@ -198,7 +201,7 @@ export async function settleRestartInterruptedSubagentRun(params: {
       runId,
       expectedEntry: entry,
       recoveryCurrent: readScope?.completionCurrent,
-      endedAt: saved?.completedAt ?? now,
+      endedAt: saved?.completedAt,
       outcome: saved
         ? { status: "ok" }
         : { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },

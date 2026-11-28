@@ -305,7 +305,6 @@ async function deliverOwedNoticeAfterRestart(params: {
           runId: child.runId,
           entry: subagentRuns.get(child.runId)!,
           complete: controller.completeSubagentRun,
-          now: Date.now(),
         });
       } finally {
         await drain();

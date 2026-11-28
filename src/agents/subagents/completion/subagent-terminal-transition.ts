@@ -192,6 +192,14 @@ function planTerminalCompletion(
   if (isCompletionHeldByYield(currentEntry, completeParams)) {
     return undefined;
   }
+  // An error without an observed end time cannot prove the run ended before Stop.
+  if (
+    completeParams.endedAt === undefined &&
+    completeParams.reason === SUBAGENT_ENDED_REASON_ERROR &&
+    (currentEntry.killIntent || currentEntry.killReconciliation)
+  ) {
+    return undefined;
+  }
   const entry = structuredClone(currentEntry);
   let suppressSessionEffects =
     prepared.suppressSessionEffects || entry.execution.suppressSessionEffects === true;

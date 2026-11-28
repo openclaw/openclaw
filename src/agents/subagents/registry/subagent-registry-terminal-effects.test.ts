@@ -15,6 +15,7 @@ import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
+  SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
@@ -73,6 +74,26 @@ function fixture(
       }),
   };
 }
+
+it("keeps an accepted cancellation when restart cannot establish a child end time", async () => {
+  const entry = createRunEntry({
+    endedAt: 4_000,
+    endedReason: SUBAGENT_ENDED_REASON_KILLED,
+    outcome: { status: "error", error: "agent run aborted" },
+    killReconciliation: { killedAt: 4_000, taskCancellationAccepted: true },
+    runTimeoutSeconds: 1,
+  });
+  const { read, complete } = fixture({ entry });
+  await complete({
+    endedAt: undefined,
+    reason: SUBAGENT_ENDED_REASON_ERROR,
+    outcome: { status: "error", error: "interrupted" },
+    terminalReply: { disposition: "empty" },
+    triggerCleanup: false,
+  });
+  expect(read().endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
+  expect(read().killReconciliation?.taskCancellationAccepted).toBe(true);
+});
 
 it("retires a terminal callback when another completion replaces its session-effects binding", async ({
   signal,

@@ -147,8 +147,10 @@ A crash or `SIGKILL` cannot write a shutdown marker. Startup can still resume an
 eligible root requester from its persisted run identity in the immediately preceding
 Gateway lifetime. Children do not resume independently. If the worker marked a
 saved answer as final for that run before the crash, its waiting parent receives
-the answer even if the registry still showed the child running. Without that
-confirmation, the requester gets an interruption notice, not partial output.
+the answer even if the registry still showed the child running. If reading the
+child's transcript fails, the Gateway retries the read once. Without a confirmed
+answer, the requester gets an interruption notice, not partial output. The retry
+does not rerun the child or send a second completion.
 The terminal notice waits for fresh requester authority after startup; it cannot
 use the previous Gateway's retired custody.
 
