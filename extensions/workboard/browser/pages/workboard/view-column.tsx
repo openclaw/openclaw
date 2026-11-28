@@ -455,7 +455,7 @@ export function WorkboardColumn(input: {
                           >
                             <WorkboardCardView
                               workboard={input.workboard}
-                              card={card()}
+                              card={state().inlinePreviews.get(card()) ?? card()}
                               cardRefs={input.cardRefs}
                               surface={surface()}
                             />

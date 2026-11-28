@@ -15,12 +15,23 @@ struct ChatAssistantListCell: Identifiable {
     let joinsAbove: Bool
     let joinsBelow: Bool
 
+    private static func rowID(_ row: ChatTranscriptRow) -> ID {
+        #if os(iOS)
+        if case let .completedWork(work) = row, work.isActivityRun, let first = work.messages.first,
+           let run = first.workRunID, let call = first.content.first(where: \.isToolCall)?.id
+        {
+            return .tool(run, call)
+        }
+        #endif
+        return .row(row.id)
+    }
+
     static func cells(_ groups: ArraySlice<ChatAssistantRunGroup>) -> [Self] {
         groups.flatMap { group in
             let count = group.parts.count + (group.includesLive ? 1 : 0)
             var cells = group.parts.enumerated().map { index, part in
                 let id: ID = switch part {
-                case let .row(row): .row(row.id)
+                case let .row(row): Self.rowID(row)
                 case let .tool(tool): .tool(tool.runID, tool.id)
                 }
                 return Self(

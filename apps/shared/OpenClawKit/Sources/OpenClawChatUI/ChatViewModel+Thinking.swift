@@ -50,16 +50,28 @@ extension OpenClawChatViewModel {
             level: next,
             isExplicit: !clearsOverride))
         self.reconcileThinkingPreferenceRequests()
-        enqueueSessionSettingsPatch(requestID: requestID, target: target) { [weak self] routeLease in
+        enqueueSessionSettingsPatch(
+            requestID: requestID,
+            target: target,
+            mayFinishAfterSend: true)
+        { [weak self] routeLease in
             guard let self else { return }
+            // Latest wins: a level that a newer pick replaced before its turn is never sent.
+            guard requestID == self.latestThinkingSelectionRequestIDsByTarget[target] else {
+                self.thinkingPreferenceRequests.removeValue(forKey: requestID)
+                self.reconcileThinkingPreferenceRequests()
+                return
+            }
             var patchError: Error?
             do {
                 guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
-                let patchResult = try await routeLease.patchSessionSettings(
-                    target.canonicalSessionKey,
-                    target.agentID,
-                    OpenClawChatSessionSettingsPatch(
-                        thinkingLevel: .some(clearsOverride ? nil : next)))
+                let patchResult = try await Self.retryingOnce {
+                    try await routeLease.patchSessionSettings(
+                        target.canonicalSessionKey,
+                        target.agentID,
+                        OpenClawChatSessionSettingsPatch(
+                            thinkingLevel: .some(clearsOverride ? nil : next)))
+                }
                 let acceptedLevel = Self.normalizedThinkingLevel(patchResult?.thinkingLevel) ?? next
                 let acceptedResult = self.mergedThinkingPatchSuccess(
                     patchResult,
@@ -109,7 +121,18 @@ extension OpenClawChatViewModel {
                 // the gateway-confirmed rollback value.
                 self.thinkingLevel = acceptedLevel
                 self.updateCurrentSessionThinkingLevel(sessionLevel, sessionKey: sessionKey)
-                self.errorText = patchError.localizedDescription
+                #if os(iOS)
+                chatUILogger
+                    .error("sessions.patch(thinking) failed \(patchError.localizedDescription, privacy: .public)")
+                self.reportSettingsChangeFailure(String(localized: "Couldn’t change effort")) { [weak self] in
+                    self?.selectThinkingLevel(level)
+                }
+                #else
+                self.reportFailure(
+                    String(localized: "Couldn’t change the thinking level."),
+                    patchError,
+                    while: "select thinking level")
+                #endif
             }
         }
     }
@@ -305,7 +328,7 @@ extension OpenClawChatViewModel {
         return self.sessionModelChoice(for: currentSession)
     }
 
-    private func sessionModelChoice(
+    func sessionModelChoice(
         for currentSession: OpenClawChatSessionEntry?) -> OpenClawChatModelChoice?
     {
         if ChatPayloadDecoding.trimmedNonEmptyString(currentSession?.model) != nil {
@@ -314,7 +337,7 @@ extension OpenClawChatViewModel {
         return self.modelChoice(modelID: sessionDefaults?.model, provider: sessionDefaults?.modelProvider)
     }
 
-    private func modelChoice(modelID: String?, provider: String?) -> OpenClawChatModelChoice? {
+    func modelChoice(modelID: String?, provider: String?) -> OpenClawChatModelChoice? {
         guard let modelID = ChatPayloadDecoding.trimmedNonEmptyString(modelID) else { return nil }
         if let provider = ChatPayloadDecoding.trimmedNonEmptyString(provider) {
             let selectionID = Self.providerQualifiedModelSelectionID(modelID: modelID, provider: provider)
@@ -324,7 +347,9 @@ extension OpenClawChatViewModel {
             })
         }
 
-        let matches = modelChoices.filter { $0.selectionID == modelID || $0.modelID == modelID }
+        // A route's model ID can be another provider's full selection ID. The exact pick wins.
+        if let exact = self.modelChoices.first(where: { $0.selectionID == modelID }) { return exact }
+        let matches = self.modelChoices.filter { $0.modelID == modelID }
         return matches.count == 1 ? matches[0] : nil
     }
 

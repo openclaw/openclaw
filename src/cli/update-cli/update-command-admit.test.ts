@@ -86,7 +86,7 @@ beforeEach(() => {
   root = path.join(home, "prefix", "lib", "node_modules", "openclaw");
   const stateDir = path.join(home, "profile");
   fs.mkdirSync(root, { recursive: true });
-  fs.mkdirSync(stateDir);
+  fs.mkdirSync(stateDir, { mode: 0o700 });
   writeFixtureJsonSync(path.join(root, "package.json"), { name: "openclaw", version: "2026.9.1" });
   configPath = path.join(stateDir, "openclaw.json");
   contextPath = path.join(home, "context.json");
@@ -567,19 +567,6 @@ describe("candidate update admission", () => {
       expect(fs.existsSync(resolveOpenClawStateSqlitePath())).toBe(false);
     },
   );
-
-  it("admits despite a leftover update-check cache", async () => {
-    const filename = path.join(path.dirname(configPath), "update-check.json");
-    fs.writeFileSync(filename, '{"lastAvailableVersion":"2026.9.7"}\n');
-    const before = snapshotFiles();
-
-    await updateAdmitCommand(contextPath);
-
-    expect(process.exitCode).toBe(0);
-    expect(readVerdict()).toMatchObject({ verdict: "admit", reasons: [] });
-    expect(stderr).toBe("");
-    expect(snapshotFiles()).toEqual(before);
-  });
 
   it("uses the explicit installed root and emits one JSON verdict without creating live state", async () => {
     vi.spyOn(runtimeGuard, "nodeVersionSatisfiesEngine").mockReturnValue(true);

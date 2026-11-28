@@ -130,63 +130,31 @@ struct LocalChatFixture {
         ])
 }
 
-struct LocalFixtureChatTransport: OpenClawChatTransport {
-    var supportsComposerCapabilities: Bool {
-        true
+struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTransport, ChatPRReaderTransport {
+    func prepareChildStop(_ target: OpenClawChildStopTarget) async -> OpenClawChildStopAction? {
+        guard ActivityPillsFixture.isEnabled, ActivityPillsFixture.child(forKey: target.key) != nil else { return nil }
+        return OpenClawChildStopAction(target: target) { try await self.store.stopChild(target) }
     }
 
-    func loadComposerCapabilityCatalog(
-        sessionKey _: String,
-        agentID _: String?) async -> OpenClawChatComposerCapabilityCatalog
-    {
-        OpenClawChatComposerCapabilityCatalog(
-            sessionSettingsAvailable: true,
-            modelMutationAvailable: ScreenshotFixtureMode.modelSignInScenario != "read-only",
-            effortMutationAvailable: true,
-            verboseMutationAvailable: true,
-            webSearchBaseEnabled: true,
-            webSearchAvailable: true,
-            skills: [
-                OpenClawChatComposerSkill(
-                    key: "autoreview",
-                    name: "Auto Review",
-                    baseEnabled: true,
-                    missingDependencies: false,
-                    blocked: false),
-                OpenClawChatComposerSkill(
-                    key: "release",
-                    name: "Release OpenClaw",
-                    baseEnabled: true,
-                    missingDependencies: false,
-                    blocked: false),
-                OpenClawChatComposerSkill(
-                    key: "disabled-fixture",
-                    name: "Disabled Skill",
-                    baseEnabled: false,
-                    missingDependencies: false,
-                    blocked: false),
-            ],
-            connectors: [
-                OpenClawChatComposerConnector(
-                    name: "GitHub",
-                    baseEnabled: true,
-                    tools: [
-                        OpenClawChatComposerTool(name: "search_code", label: "Search code"),
-                        OpenClawChatComposerTool(name: "create_issue", label: "Create issue"),
-                    ]),
-                OpenClawChatComposerConnector(
-                    name: "Linear",
-                    baseEnabled: true,
-                    tools: [
-                        OpenClawChatComposerTool(name: "search_issues", label: "Search issues"),
-                    ]),
-            ],
-            skillsAvailable: true,
-            connectorsAvailable: true,
-            toolAccessAvailable: true,
-            permissionMutationAvailable: true,
-            toolOverrideMutationAvailable: true,
-            canSelectFullPermission: true)
+    func pullRequestOverview(url: String, sessionKey _: String) async throws -> Data? {
+        #if DEBUG
+        let args = ProcessInfo.processInfo.arguments
+        guard ActivityPillsFixture.isEnabled, let i = args.firstIndex(of: "--pr-reader-fixtures"), i + 1 < args.count,
+              let docs = try JSONSerialization.jsonObject(with: Data(args[i + 1].utf8)) as? [[String: Any]],
+              let doc = docs.first(where: { $0["url"] as? String == url }) else { return nil }
+        return try JSONSerialization.data(withJSONObject: doc)
+        #else
+        return nil
+        #endif
+    }
+
+    func goalControls() async -> (update: Bool, clear: Bool) {
+        (true, true)
+    }
+
+    func mutateGoal(_ mutation: OpenClawChatGoalMutation) async throws -> Data {
+        if ActivityPillsFixture.failsReads { throw OpenClawChatTransportSendError.notDispatched }
+        return try await self.store.mutateGoal(mutation)
     }
 
     private let fixture: LocalChatFixture
@@ -233,17 +201,40 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     }
 
     func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
-        try await self.store.history(sessionKey: sessionKey)
+        if ActivityPillsFixture.nativeChildChat, ActivityPillsFixture.child(forKey: sessionKey) != nil {
+            let state = await self.store.childSnapshot(sessionKey)
+            if let child = try await ActivityPillsFixture.history(
+                sessionKey: sessionKey,
+                stopped: state.stopped,
+                liveText: state.liveText) { return child }
+        } else if let child = try await ActivityPillsFixture.history(sessionKey: sessionKey) { return child }
+        return try await self.store.history(sessionKey: sessionKey)
+    }
+
+    func watchSessionPullRequests(sessionKeys: [String]) async throws -> Bool? {
+        guard ActivityPillsFixture.isEnabled, !ActivityPillsFixture.goalOnly,
+              let key = sessionKeys.first, ActivityPillsFixture.child(forKey: key) == nil else { return nil }
+        let store = self.store
+        Task {
+            // After the view model records the watch, as a Gateway's first push would arrive.
+            try? await Task.sleep(for: .milliseconds(300))
+            await store.publish(.sessionPullRequestsChanged(OpenClawSessionPullRequestsChangedEvent(
+                sessions: [key: ScreenshotFixtureMode.chatInfoEnabled
+                    ? .init(pullRequests: Array(ActivityPillsFixture.pullRequests().pullRequests.prefix(1)))
+                    : ActivityPillsFixture.pullRequests()])))
+        }
+        return true
     }
 
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
-        guard ScreenshotFixtureMode.progressCardEnabled,
+        guard ScreenshotFixtureMode.progressCardEnabled || ActivityPillsFixture.isEnabled,
               ["progressCard.get", "progressCard.refresh"].contains(method)
         else { return nil }
         return true
     }
 
     func fetchProgressCard(sessionKey: String, agentID _: String?) async throws -> ProgressCard? {
+        if let card = ActivityPillsFixture.progressCard(sessionKey: sessionKey) { return card }
         guard ScreenshotFixtureMode.progressCardEnabled || ScreenshotFixtureMode.progressBarEnabled else { return nil }
         return ProgressCard(
             sessionkey: sessionKey,
@@ -288,15 +279,10 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
 
     func acquireModelSignInContext(agentID: String?) async -> OpenClawChatModelSignInContext? {
         guard self.fixture.sessionIDPrefix == "screenshot-fixture",
-              ScreenshotFixtureMode.modelSignInScenario != nil
+              ScreenshotFixtureMode.modelSignInScenario != nil,
+              await ModelSignInFixture.shared.supportsSignIn
         else { return nil }
-        return OpenClawChatModelSignInContext(
-            agentID: agentID ?? self.fixture.defaultAgentID,
-            request: { method, _ in
-                guard method == "models.authStatus" else { throw CancellationError() }
-                return Data(#"{"providers":[],"providerCapabilities":[]}"#.utf8)
-            },
-            isCurrent: { true })
+        return await ModelSignInFixture.shared.context(agentID: agentID ?? self.fixture.defaultAgentID)
     }
 
     func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
@@ -321,7 +307,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             ]}
             """#.utf8))
         }
-        return [
+        var choices = [
             OpenClawChatModelChoice(
                 modelID: self.fixture.modelID,
                 name: self.fixture.modelName,
@@ -329,6 +315,36 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 contextWindow: 128_000,
                 supportsFastMode: true),
         ] + self.fixture.additionalModels
+        if ScreenshotFixtureMode.composerModelLayout {
+            choices += [
+                OpenClawChatModelChoice(
+                    modelID: "atlas-extended",
+                    name: "Atlas Extended Context Research Preview",
+                    provider: "openai",
+                    contextWindow: nil,
+                    reasoning: false,
+                    supportsFastMode: true),
+                OpenClawChatModelChoice(
+                    modelID: "nova-extended",
+                    name: "Nova Extended Context Research Preview",
+                    provider: "openai",
+                    contextWindow: nil,
+                    reasoning: false,
+                    supportsFastMode: false),
+            ]
+        }
+        if ScreenshotFixtureMode.modelSignInScenario != nil,
+           await ModelSignInFixture.shared.providersNeedingSignIn.contains("xai")
+        {
+            choices += try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(#"""
+            {"models":[{"id":"grok-5","name":"Grok 5","provider":"xai",
+              "available":false,"unavailableReason":"missing-auth","contextWindow":256000}]}
+            """#.utf8))
+        } else if ScreenshotFixtureMode.modelSignInScenario != nil {
+            choices.append(OpenClawChatModelChoice(
+                modelID: "grok-5", name: "Grok 5", provider: "xai", contextWindow: 256_000))
+        }
+        return choices
     }
 
     func loadModelCatalog(
@@ -355,7 +371,11 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         idempotencyKey: String,
         attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
     {
-        await self.store.sendMessage(
+        if ScreenshotFixtureMode.failsSends { throw ScreenshotFixtureMode.sendTimeoutError }
+        if let delay = ScreenshotFixtureMode.replyDelay {
+            try await Task.sleep(for: delay)
+        }
+        return await self.store.sendMessage(
             sessionKey: sessionKey,
             message: message,
             runId: idempotencyKey)
@@ -383,7 +403,19 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
                 status: "running",
                 hasActiveRun: true))
         }
+        await ActivityPillsFixture.decorate(
+            sessions: &sessions,
+            parentKey: self.fixture.sessionKey,
+            stoppedAt: self.store.stoppedChildAt)
         if ScreenshotFixtureMode.groupControlsEnabled { sessions += await DrawerGroupFixture.store.sessions() }
+        if ScreenshotFixtureMode.sessionStatesEnabled { sessions += ScreenshotFixtureMode.sessionStateRows() }
+        if ScreenshotFixtureMode.toolFailuresEnabled {
+            sessions += ScreenshotFixtureMode.toolFailureChats.map { chat in
+                var entry = OpenClawChatSessionEntry(key: chat.key, parentSessionKey: self.fixture.sessionKey)
+                entry.label = chat.label
+                return entry
+            }
+        }
         if archived {
             sessions = []
         }
@@ -410,6 +442,9 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     }
 
     func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult {
+        if let children = try await ActivityPillsFixture.childSessions(
+            parentKey: parentKey,
+            stoppedAt: self.store.stoppedChildAt) { return children }
         guard ProcessInfo.processInfo.arguments.contains("--openclaw-swarm-chat-fixture") else {
             return OpenClawChatChildSessionsResult(rows: [], isComplete: true)
         }
@@ -508,9 +543,9 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     }
 }
 
-private actor LocalFixtureChatStore {
+actor LocalFixtureChatStore {
     private let fixture: LocalChatFixture
-    private var messages: [OpenClawChatMessage]
+    var messages: [OpenClawChatMessage]
     private var modelID: String
     private var thinkingLevel: String?
     private var fastMode: OpenClawChatFastMode?
@@ -524,6 +559,13 @@ private actor LocalFixtureChatStore {
         self.fixture = fixture
         self.messages = Self.seedMessages(fixture: fixture)
         self.modelID = fixture.modelID
+        if Self.playsToolRunFixture {
+            self.activeRunID = Self.toolRunID
+            self.messages = Self.toolRunSeed()
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-goal-running-fixture") {
+            self.activeRunID = "fixture-goal-run"
+        }
     }
 
     func createSession(key: String) -> OpenClawChatCreateSessionResponse {
@@ -532,9 +574,10 @@ private actor LocalFixtureChatStore {
 
     func history(sessionKey: String) throws -> OpenClawChatHistoryPayload {
         let owner = ScreenshotFixtureMode.progressCardEnabled || ScreenshotFixtureMode.progressBarEnabled
+            || ActivityPillsFixture.isEnabled
             ? self.fixture.defaultAgentID : nil
         let normalizedSessionKey = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
-        var startupSnapshot: OpenClawChatInFlightRun?
+        var startupSnapshot = self.toolRunSnapshot(sessionKey: normalizedSessionKey)
         if ProcessInfo.processInfo.arguments.contains("--openclaw-startup-status-fixture"),
            let runID = self.activeRunID
         {
@@ -552,6 +595,9 @@ private actor LocalFixtureChatStore {
         {
             startupSnapshot = OpenClawChatInFlightRun(runId: runID, text: "", events: self.externalRunEvents)
         }
+        if Self.playsWorkingLineFixture, let runID = self.activeRunID {
+            startupSnapshot = OpenClawChatInFlightRun(runId: runID, text: "", events: self.fixtureToolEvents)
+        }
         let historyMessages: [OpenClawChatMessage] = if self.fixture.sessionIDPrefix == "screenshot-fixture",
                                                         ProcessInfo.processInfo.arguments
                                                             .contains("--openclaw-subagent-wait-fixture"),
@@ -568,72 +614,55 @@ private actor LocalFixtureChatStore {
         } else {
             self.messages
         }
-        var historyWireMessages = try JSONDecoder().decode(
-            [AnyCodable].self, from: JSONEncoder().encode(historyMessages))
-        var historyActivity: [OpenClawChatHistoryActivity]?
+        var historyWireMessages = try ScreenshotFixtureMode.turnPresentationEnabled
+            ? ToolActivityFixtures.turnPresentation()
+            : ScreenshotFixtureMode.toolFailuresEnabled
+            ? ToolActivityFixtures.toolFailures()
+            : JSONDecoder().decode([AnyCodable].self, from: JSONEncoder().encode(historyMessages))
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-image-review-tools-fixture") {
+            historyWireMessages = try ToolActivityFixtures.imageReview()
+        }
+        let arguments = ProcessInfo.processInfo.arguments
+        if arguments.contains("--openclaw-long-chat-fixture") ||
+            (arguments.contains("--openclaw-step-labels-fixture") && !arguments
+                .contains("--openclaw-nested-tools-fixture"))
+        {
+            // These fixtures exercise Worked, which folds only when the recorded author is OpenAI.
+            historyWireMessages = historyWireMessages.map { row in
+                guard var message = row.dictionaryValue, message["role"]?.stringValue == "assistant" else {
+                    return row
+                }
+                message["provider"] = AnyCodable("openai")
+                message["model"] = AnyCodable("gpt-5.4")
+                return AnyCodable(message)
+            }
+        }
+        historyWireMessages += self.importedToolRows
+        var historyActivity = try self.importedToolRows.isEmpty ? nil : Self.importedHistoryActivity()
         if ProcessInfo.processInfo.arguments.contains("--openclaw-step-labels-fixture") {
-            historyActivity = try JSONDecoder().decode([OpenClawChatHistoryActivity].self, from: Data("""
-            [{"messageId":"fixture-step-call","items":[
-              {"itemId":"tool:fixture-exec","toolCallId":"fixture-exec","kind":"tool","phase":"end",
-               "title":"Exec — outcome unknown","name":"exec"},
-              {"itemId":"tool:fixture-no-result","toolCallId":"fixture-no-result","kind":"tool","phase":"end",
-               "title":"Exec — outcome unknown","name":"exec"},
-              {"itemId":"tool:fixture-success","toolCallId":"fixture-success","kind":"tool","phase":"end",
-               "title":"Exec","name":"exec","status":"completed"}
-            ]}]
-            """.utf8))
+            historyActivity = try ToolActivityFixtures.stepLabels()
         }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-nested-tools-fixture") {
-            // Keep the existing step transcript/latest reply intact. These earlier raw carriers
-            // cross the real history JSON decoder; the public message initializer cannot mark them.
-            var nested = try JSONDecoder().decode([AnyCodable].self, from: Data(#"""
-            [
-              {"role":"custom","customType":"openclaw.nested-tool.v1","display":true,"excludeFromContext":true,
-               "__openclaw":{"id":"fixture-nested-pending-row","runId":"fixture-nested-run"},"timestamp":1,
-               "content":[{"type":"toolCall","id":"fixture-nested-pending","name":"knowledge_status",
-                 "arguments":{"query":"Original pending control"},
-                 "runId":"fixture-nested-run","parentToolCallId":"fixture-parent"}]},
-              {"role":"custom","customType":"openclaw.nested-tool.v1","display":true,"excludeFromContext":true,
-               "__openclaw":{"id":"fixture-nested-failed-row","runId":"fixture-nested-run"},"timestamp":2,
-               "content":[{"type":"toolCall","id":"fixture-nested-failed","name":"read",
-                 "arguments":{"path":"synthetic.txt"},"parentToolCallId":"fixture-parent"},
-                 {"type":"toolResult","role":"toolResult","toolCallId":"fixture-nested-failed","toolName":"read",
-                  "isError":true,"content":[{"type":"text","text":"Recorded nested output"}]}]},
-              {"role":"custom","customType":"openclaw.nested-tool.v1","display":true,"excludeFromContext":true,
-               "__openclaw":{"id":"fixture-nested-success-row","runId":"fixture-nested-run"},"timestamp":3,
-               "content":[{"type":"toolCall","id":"fixture-nested-success","name":"knowledge_status",
-                 "arguments":{},"runId":"fixture-nested-run","parentToolCallId":"fixture-parent"},
-                 {"type":"toolResult","role":"toolResult","toolCallId":"fixture-nested-success",
-                  "toolName":"knowledge_status","runId":"fixture-nested-run","parentToolCallId":"fixture-parent",
-                  "afterEntryId":"fixture-nested-failed-row","isError":false,
-                  "content":[{"type":"text","text":"Sanitized nested success output"}]}]}
-            ]
-            """#.utf8))
-            if self.nestedSuccessPending,
-               let index = nested.firstIndex(where: {
-                   $0.dictionaryValue?["__openclaw"]?.dictionaryValue?["id"]?.stringValue ==
-                       "fixture-nested-success-row"
-               }),
-               var carrier = nested[index].dictionaryValue,
-               let content = carrier["content"]?.arrayValue
-            {
-                carrier["content"] = AnyCodable(content.filter {
-                    $0.dictionaryValue?["type"]?.stringValue != "toolResult"
-                })
-                nested[index] = AnyCodable(carrier)
-            }
-            historyWireMessages.insert(contentsOf: nested, at: 0)
-            historyActivity = try (historyActivity ?? []) + JSONDecoder().decode(
-                [OpenClawChatHistoryActivity].self, from: Data("""
-                [{"messageId":"fixture-nested-success-row","items":\(self.nestedSuccessPending ? """
-                [{"itemId":"tool:fixture-nested-success","toolCallId":"fixture-nested-success","kind":"tool",
-                  "phase":"start","status":"running","title":"Knowledge status","name":"knowledge_status"}]
-                """ : "[]")},
-                {"messageId":"fixture-nested-pending-row","items":[
-                  {"itemId":"tool:fixture-nested-pending","toolCallId":"fixture-nested-pending","kind":"tool",
-                   "phase":"start","status":"running","title":"Knowledge status","name":"knowledge_status"}
-                ]}]
-                """.utf8))
+            let nested = try ToolActivityFixtures.nestedTools(successPending: self.nestedSuccessPending)
+            historyWireMessages.insert(contentsOf: nested.messages, at: 0)
+            historyActivity = (historyActivity ?? []) + nested.activity
+        }
+        if let sent = try ToolActivityFixtures.sentMessageHistory() {
+            historyWireMessages = sent
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-single-command-fixture") {
+            historyWireMessages = try ToolActivityFixtures.singleCommand()
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-reaction-tool-fixture") {
+            historyActivity = try JSONDecoder().decode([OpenClawChatHistoryActivity].self, from: Data(
+                #"[{"messageId":"reaction-call","items":[]}]"#.utf8))
+        }
+        if let clockMedia = try ScreenshotFixtureMode.clockMediaHistory() {
+            historyWireMessages = clockMedia
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-reaction-tool-fixture") {
+            historyActivity = try JSONDecoder().decode([OpenClawChatHistoryActivity].self, from: Data(
+                #"[{"messageId":"reaction-call","items":[]}]"#.utf8))
         }
         return try OpenClawChatHistoryPayload(
             sessionKey: normalizedSessionKey,
@@ -680,6 +709,7 @@ private actor LocalFixtureChatStore {
             timestamp: now,
             transcriptMessageID: "\(runId):user",
             idempotencyKey: "\(runId):user")
+        if ScreenshotFixtureMode.composerModelLayout { self.sentComposerDraftKey = sessionKey }
         self.messages.append(userMessage)
         self.publishReactions(for: userMessage, sessionKey: sessionKey)
         if ProcessInfo.processInfo.arguments.contains("--openclaw-dup-filter-fixture"),
@@ -689,6 +719,11 @@ private actor LocalFixtureChatStore {
             self.duplicateReplaySessionKey = sessionKey
             self.duplicateReplayStarted = false
             return OpenClawChatSendResponse(runId: runId, status: "pending")
+        }
+        if Self.playsWorkingLineFixture, self.fixture.sessionIDPrefix == "screenshot-fixture" {
+            self.activeRunID = runId
+            Task { await self.playWorkingLine(sessionKey: sessionKey, runId: runId) }
+            return OpenClawChatSendResponse(runId: runId, status: "started")
         }
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let subject = trimmed.isEmpty ? "that request" : "\"\(trimmed)\""
@@ -740,56 +775,35 @@ private actor LocalFixtureChatStore {
         self.messages.append(saved)
         self.publish(.sessionMessage(OpenClawSessionMessageEventPayload(
             sessionKey: sessionKey, message: saved, messageId: saved.transcriptMessageID, messageSeq: nil)))
-        self.emitDuplicateAgentEvent(
-            runId: runId,
-            seq: 1,
-            stream: "assistant",
-            timestamp: timestamp + 2,
-            data: ["text": text])
-        self.emitDuplicateAgentEvent(
-            runId: runId,
-            seq: 2,
-            stream: "tool",
-            timestamp: timestamp + 3,
-            data: [
-                "phase": "start", "name": "read", "toolCallId": "dup-filter-receipt",
-                "args": ["path": "dup-filter-inputs-received"],
-            ])
-        self.emitDuplicateAgentEvent(
-            runId: runId,
-            seq: 3,
-            stream: "usage",
-            timestamp: timestamp + 4,
-            data: ["outputTokens": 485])
-        self.emitDuplicateAgentEvent(
-            runId: runId,
-            seq: 4,
-            stream: "run_status",
-            timestamp: timestamp + 5,
-            data: ["phase": "retrying", "attempt": 2, "maxAttempts": 3])
-    }
-
-    private func emitDuplicateAgentEvent(
-        runId: String,
-        seq: Int,
-        stream: String,
-        timestamp: Double,
-        data: [String: Any])
-    {
-        let frame = EventFrame(
-            type: "event",
-            event: "agent",
-            payload: AnyCodable([
-                "runId": runId, "seq": seq, "stream": stream, "ts": Int(timestamp), "data": data,
-            ]))
-        guard let event = OpenClawChatGatewayPayloadCodec.event(from: frame) else {
-            preconditionFailure("Invalid duplicate reply fixture event")
+        func emit(_ seq: Int, _ stream: String, _ data: [String: Any]) {
+            self.emitFixtureAgentEvent(
+                runId: runId, seq: seq, stream: stream, timestamp: timestamp + Double(seq + 1), data: data)
         }
-        self.publish(event)
+        emit(1, "assistant", ["text": text])
+        emit(2, "tool", [
+            "phase": "start", "name": "read", "toolCallId": "dup-filter-receipt",
+            "args": ["path": "dup-filter-inputs-received"],
+        ])
+        // The receipt is complete before retry: the working row should return to the retry phase.
+        emit(
+            3,
+            "tool",
+            ["phase": "result", "name": "read", "toolCallId": "dup-filter-receipt", "result": ["text": text]])
+        emit(4, "usage", ["outputTokens": 485])
+        emit(5, "run_status", ["phase": "retrying", "attempt": 2, "maxAttempts": 3])
     }
 
+    var fixtureToolEvents: [OpenClawAgentEventPayload] = []
+
+    private(set) var stoppedChildAt: [String: Double] = [:]
+    var childLiveText: [String: String] = [:]
+    var scheduledChildDelta: Set<String> = []
+
+    private var sentComposerDraftKey: String?
     private var heldInitialRun = false
-    private var activeRunID: String?
+    var activeRunID: String?
+    private var goal = ActivityPillsFixture.initialGoal
+
     private var eventContinuations: [UUID: AsyncStream<OpenClawChatTransportEvent>.Continuation] = [:]
 
     func setEventContinuation(_ continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation) {
@@ -806,12 +820,17 @@ private actor LocalFixtureChatStore {
                 self.publishExternalRunStatus()
                 try? await Task.sleep(for: .seconds(8))
                 self.publishExternalRunTool()
+                try? await Task.sleep(for: .seconds(6))
+                self.finishExternalRunTool()
             }
         }
         continuation.onTermination = { [weak self] _ in
             Task { await self?.removeEventContinuation(id) }
         }
     }
+
+    var importedToolRows: [AnyCodable] = []
+    var toolRunReplayStarted = false
 
     private var externalRunStarted = false
     private var externalRunEvents: [OpenClawAgentEventPayload] = []
@@ -849,13 +868,38 @@ private actor LocalFixtureChatStore {
         self.eventContinuations[id] = nil
     }
 
-    private func publish(_ event: OpenClawChatTransportEvent) {
+    func publish(_ event: OpenClawChatTransportEvent) {
         for continuation in self.eventContinuations.values {
             continuation.yield(event)
         }
     }
 
+    func recordChildEnd(key: String, runID: String, error: String? = nil) {
+        let end = Date().timeIntervalSince1970 * 1000
+        self.stoppedChildAt[key] = end
+        self.publish(.sessionsChanged(.init(
+            sessionKey: key,
+            agentId: "main",
+            reason: "run",
+            status: error == nil ? "aborted" : "failed",
+            hasActiveRun: false,
+            activeRunIds: [],
+            endedAt: end)))
+        self.publish(.chat(.init(
+            runId: runID,
+            sessionKey: key,
+            state: error == nil ? "aborted" : "error",
+            message: nil,
+            errorMessage: error)))
+    }
+
     func runObservation(runId: String) -> OpenClawChatRunObservation {
+        if ActivityPillsFixture.nativeChildChat,
+           let child = ActivityPillsFixture.children.first(where: { runId == "fixture-run-\($0.id)" })
+        {
+            return self.stoppedChildAt[child.key] == nil && child
+                .status == "running" ? .checkAgain : .terminal(.completed)
+        }
         if self.activeRunID == runId,
            let sessionKey = self.duplicateReplaySessionKey,
            !self.duplicateReplayStarted,
@@ -869,6 +913,13 @@ private actor LocalFixtureChatStore {
     }
 
     func abortRun(sessionKey: String, runId: String) {
+        if ActivityPillsFixture.nativeChildChat, let child = ActivityPillsFixture.child(forKey: sessionKey),
+           child.status == "running",
+           self.stoppedChildAt[sessionKey] == nil, runId == "fixture-run-\(child.id)"
+        {
+            self.recordChildEnd(key: sessionKey, runID: runId)
+            return
+        }
         guard self.activeRunID == runId else { return }
         self.activeRunID = nil
         self.duplicateReplaySessionKey = nil
@@ -912,21 +963,38 @@ private actor LocalFixtureChatStore {
             effectiveFastMode: self.fastMode,
             permissionMode: self.permissionMode,
             toolOverrides: self.toolOverrides)
+        entry.goal = self.goal
         entry.visibility = .shared
         entry.sharingRole = .owner
         var sessions = [entry]
+        if let key = self.sentComposerDraftKey, key != entry.key {
+            sessions.append(OpenClawChatSessionEntry(
+                key: key,
+                displayName: "Hello",
+                sessionId: "\(self.fixture.sessionIDPrefix)-\(key)",
+                modelProvider: self.selectedModelProvider,
+                model: self.modelID))
+        }
         if ScreenshotFixtureMode.chatSwitchEnabled {
             sessions[0].displayName = "Release checklist"
-            sessions.append(OpenClawChatSessionEntry(
+            var launchPlan = OpenClawChatSessionEntry(
                 key: ScreenshotFixtureMode.chatSwitchSecondSessionKey,
                 kind: "chat",
-                displayName: "Launch plan",
+                displayName: ScreenshotFixtureMode.chatSwitchSecondSessionTitle,
                 surface: "ios",
                 updatedAt: Date().timeIntervalSince1970 * 1000 - 60000,
                 sessionId: "\(self.fixture.sessionIDPrefix)-launch-plan",
                 modelProvider: self.fixture.modelProvider,
                 model: self.modelID,
-                contextTokens: 128_000))
+                contextTokens: 128_000)
+            if ProcessInfo.processInfo.arguments.contains("--openclaw-long-project-title-fixture") {
+                launchPlan
+                    .displayName = "Launch plan for a field recording trip across the coast, including tide tables, " +
+                    "microphone tests, backup locations and recording notes for the return journey"
+                launchPlan.spawnedCwd = "/projects/Fieldnotes"
+            }
+            ScreenshotFixtureMode.decorateChatInfo(&launchPlan)
+            sessions.append(launchPlan)
         }
         return OpenClawChatSessionsListResponse(
             ts: Date().timeIntervalSince1970 * 1000,
@@ -1070,6 +1138,10 @@ private actor LocalFixtureChatStore {
         if let messageID = message.transcriptMessageID, let reactions = self.reactionOverrides[messageID] {
             return reactions
         }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-reaction-tool-fixture") {
+            guard message.transcriptMessageID == "reaction-prompt" else { return [] }
+            return [.init(emoji: "👍", count: 1, identities: [.init(id: "fixture-agent", label: "Assistant")])]
+        }
         let casey = OpenClawChatReactionIdentity(id: "fixture-casey", label: "Casey")
         if message.role == "user" {
             return [
@@ -1099,6 +1171,16 @@ private actor LocalFixtureChatStore {
 
     private static func seedMessages(fixture: LocalChatFixture) -> [OpenClawChatMessage] {
         let now = Date().timeIntervalSince1970 * 1000
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-reaction-tool-fixture") {
+            return Self.reactionToolMessages(now: now)
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-goal-controls-fixture") {
+            return [Self.message(
+                role: "user",
+                text: "Summarize the release plan in 500 characters.",
+                timestamp: now - 31000,
+                transcriptMessageID: "fixture-release-request")]
+        }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture") {
             return [Self.message(
                 role: "user",
@@ -1270,6 +1352,43 @@ private actor LocalFixtureChatStore {
         ]
     }
 
+    private static func reactionToolMessages(now: Double) -> [OpenClawChatMessage] {
+        [
+            self.message(role: "user", text: "Hello", timestamp: now - 5000, transcriptMessageID: "hello"),
+            self.message(
+                role: "assistant",
+                text: "Hi! I’m here.",
+                timestamp: now - 4000,
+                transcriptMessageID: "reply"),
+            self.message(role: "user", text: "Great", timestamp: now - 3000, transcriptMessageID: "thanks"),
+            self.message(
+                role: "user",
+                text: "React to my message with an emoji",
+                timestamp: now - 2000,
+                transcriptMessageID: "reaction-prompt"),
+            OpenClawChatMessage(
+                role: "assistant",
+                content: [.init(
+                    type: "toolCall",
+                    id: "reaction",
+                    name: "message",
+                    arguments: AnyCodable([
+                        "action": "react",
+                        "emoji": "👍",
+                    ]))],
+                timestamp: now - 1000,
+                transcriptMessageID: "reaction-call",
+                stopReason: "toolUse"),
+            OpenClawChatMessage(
+                role: "toolResult",
+                content: [.init(type: "text", text: #"{"ok":true,"changed":true,"remove":false,"dryRun":false}"#)],
+                timestamp: now,
+                transcriptMessageID: "reaction-result",
+                toolCallId: "reaction",
+                toolName: "message"),
+        ]
+    }
+
     private static func stepLabelMessages(now: Double) -> [OpenClawChatMessage] {
         [
             self.message(
@@ -1371,5 +1490,50 @@ private actor LocalFixtureChatStore {
     private static func normalizedSessionKey(_ value: String, fallback: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? fallback : trimmed
+    }
+}
+
+extension LocalFixtureChatStore {
+    fileprivate func mutateGoal(_ mutation: OpenClawChatGoalMutation) throws -> Data {
+        struct Receipt: Encodable {
+            let action: String
+            let operationId: String
+            let sessionId: String
+            let goalId: String
+            let status: String
+            let goal: OpenClawChatSessionGoal?
+            let runId: String?
+        }
+        guard let goal, goal.id == mutation.goalID, let status = goal.status, let objective = goal.objective,
+              let createdAt = goal.createdAt else { throw OpenClawChatTransportSendError.notDispatched }
+        let now = Date().timeIntervalSince1970 * 1000
+        let nextStatus: OpenClawChatSessionGoal.Status = switch mutation.action {
+        case .pause: .paused
+        case .resume: .active
+        default: status
+        }
+        let nextObjective: String = if case let .edit(text) = mutation.action {
+            text
+        } else { objective }
+        self.goal = mutation.action == .clear ? nil : OpenClawChatSessionGoal(
+            id: mutation.goalID,
+            objective: nextObjective,
+            status: nextStatus,
+            createdAt: createdAt,
+            updatedAt: now,
+            tokensUsed: goal.tokensUsed ?? 0,
+            tokenBudget: goal.tokenBudget,
+            lastStatusNote: goal.lastStatusNote,
+            statusAt: nextStatus == status ? goal.statusChangedAt : now)
+        if mutation.action == .resume { self.activeRunID = mutation.operationID }
+        return try JSONEncoder().encode(Receipt(
+            action: mutation.action.name,
+            operationId: mutation.operationID,
+            sessionId: mutation.sessionID,
+            goalId: mutation.goalID,
+            status: mutation.action == .clear ? "cleared" : mutation
+                .action == .resume ? "started" : "updated",
+            goal: self.goal,
+            runId: mutation.action == .resume ? self.activeRunID : nil))
     }
 }

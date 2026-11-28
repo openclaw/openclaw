@@ -12,6 +12,7 @@ import {
 import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { scanSessionTranscriptNavigationTree } from "./session-accessor.sqlite-branch-summaries.js";
+import { selectActiveCompactionMarkers } from "./session-accessor.sqlite-compaction-selection.js";
 import { commitSqliteSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { getActiveTranscriptKysely } from "./session-accessor.sqlite-projection-read.js";
@@ -24,6 +25,7 @@ import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-t
 import {
   isDegradedCompactionEvent,
   planInPlaceSessionMessageCut,
+  summarizeSelectedCompactions,
   type SessionMessageCutReader,
 } from "./session-message-cut-plan.js";
 import { SESSION_MESSAGE_CUT_MAX_BYTES } from "./session-message-cut-read.js";
@@ -244,12 +246,7 @@ function createSessionMessageCutReader(
         )
       );
     },
-    canonicalSelectionHolds(targetId) {
-      // A reset after the selection is the only normalization that can move the
-      // planned control's target, so an ordinary cut answers without the scan.
-      return !hasResetAfterSelection(targetId) || resolve(targetId).leafId === targetId;
-    },
-    selectedPathHasDegradedCompaction(targetId) {
+    selectedCompactions(targetId) {
       // One compaction payload at a time, bounded by the per-event read budget.
       // A payload the reader cannot verify (missing, or over the budget) counts
       // as not degraded: compaction payloads are summaries, far under the budget
@@ -269,54 +266,37 @@ function createSessionMessageCutReader(
         }
         return isDegradedCompactionEvent(JSON.parse(readTranscriptPayload(payload)));
       };
+      if (scanned?.targetId === targetId || hasResetAfterSelection(targetId)) {
+        const tree = resolve(targetId);
+        return tree.leafId === targetId
+          ? summarizeSelectedCompactions(
+              selectSessionTranscriptTreePathNodes(tree, targetId),
+              ({ entry }) => entry?.type,
+              ({ entry }) => typeof entry?.seq === "number" && isDegradedCompactionSeq(entry.seq),
+            )
+          : undefined;
+      }
       if (targetId === null) {
-        // The repoint selects an empty path, so no compaction on it can be
-        // degraded. Answering here keeps a rewind to the root off the canonical
-        // scan.
-        return false;
+        return { count: 0, degraded: false };
       }
-      // The planned control resolves onto the target itself when the target is
-      // already on the active path with no later reset, so the selected path is
-      // the active path through it: the projection names its compactions without
-      // scanning the whole transcript. An ordinary rewind (whose predecessor is
-      // already active) never builds the canonical tree — the indexed in-place
-      // cut exists so large production sessions rewind without whole-history
-      // navigation work.
-      const target = readIdentity(targetId);
-      if (target !== undefined && target.active_position !== null) {
-        if (!hasResetAfterSelection(targetId)) {
-          for (const row of iterateSqliteQuerySync(
-            database.db,
-            db
-              .selectFrom("session_transcript_active_events as active")
-              .innerJoin("transcript_event_identities as identity", (join) =>
-                join
-                  .onRef("identity.session_id", "=", "active.session_id")
-                  .onRef("identity.seq", "=", "active.event_seq"),
-              )
-              .select("identity.seq")
-              .where("active.session_id", "=", sessionId)
-              .where("active.active_position", "<=", target.active_position)
-              .where("identity.event_type", "=", "compaction"),
-          )) {
-            if (isDegradedCompactionSeq(row.seq)) {
-              return true;
-            }
-          }
-          return false;
-        }
+      // Ordinary rewinds stay on the active projection. Read boundary types in
+      // path order and load bounded summaries only until degradation is known.
+      const position = readIdentity(targetId)?.active_position;
+      if (position == null) {
+        return undefined;
       }
-      // The target is off the active path (branch switch) or a later reset
-      // re-roots the selection, so only the canonical scan can name the
-      // selected path.
-      const tree = resolve(targetId);
-      const compactionSeqs = selectSessionTranscriptTreePathNodes(tree, tree.leafId).flatMap(
-        (node) =>
-          node.entry?.type === "compaction" && typeof node.entry?.seq === "number"
-            ? [node.entry.seq]
-            : [],
+      return summarizeSelectedCompactions(
+        iterateSqliteQuerySync(
+          database.db,
+          selectActiveCompactionMarkers(database, sessionId).where(
+            "active.active_position",
+            "<=",
+            position,
+          ),
+        ),
+        (row) => row.type,
+        (row) => isDegradedCompactionSeq(row.event_seq),
       );
-      return compactionSeqs.some(isDegradedCompactionSeq);
     },
     canonicalBranchPathSeqs(leafEventId) {
       return selectSessionTranscriptTreePathNodes(resolve(leafEventId), leafEventId).flatMap(

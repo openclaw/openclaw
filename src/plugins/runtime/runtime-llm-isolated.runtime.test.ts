@@ -1,10 +1,7 @@
 // Isolated runtime.llm.complete tests cover zero-tool dispatch and policy enforcement.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelsConfigState from "../../agents/models-config-state.js";
-import {
-  PreparedModelRuntimeInitialRunAdmissionError,
-  PreparedModelRuntimeOwnerNotPublishedError,
-} from "../../agents/prepared-model-runtime.errors.js";
+import { PreparedModelRuntimeOwnerNotPublishedError } from "../../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../../config/types.plugins.js";
 import {
@@ -569,10 +566,9 @@ describe("runtime.llm.complete isolated agent runtime", () => {
   });
 
   it("codes isolated reload admission refusals as lifecycle failures", async () => {
-    const refusal = new PreparedModelRuntimeInitialRunAdmissionError(
-      new PreparedModelRuntimeOwnerNotPublishedError("Model runtime replacement is in progress", {
-        admissionBlocked: true,
-      }),
+    const refusal = new PreparedModelRuntimeOwnerNotPublishedError(
+      "Model runtime replacement is in progress",
+      { admissionBlocked: true },
     );
     hoisted.runIsolatedCompletion.mockRejectedValueOnce(refusal);
     const llm = authorizedLlm();

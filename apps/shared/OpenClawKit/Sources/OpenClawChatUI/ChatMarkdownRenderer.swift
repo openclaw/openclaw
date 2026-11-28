@@ -95,6 +95,8 @@ struct ChatMarkdownRenderer: View {
     @ScaledMetric(relativeTo: .body) private var quoteGap: CGFloat = 7
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openURL) private var parentOpenURL
+    @Environment(\.openClawToastPresenter) private var toastPresenter
+    /// macOS only: the iPhone confirms through its toast instead.
     @State private var copiedFilePath: String?
 
     init(
@@ -153,6 +155,7 @@ struct ChatMarkdownRenderer: View {
     @Environment(\.openClawChatMarkdownFileLinks) private var fileLinksEnabled
     @Environment(\.openClawChatMarkdownFileLabels) private var inheritedFileLabels
     #if os(iOS)
+    @Environment(\.openClawChatColumn) private var column
     @Environment(\.openClawReadingPosition) private var readingPosition
     @Environment(\.openClawReadingAnswerRun) private var readingAnswerRun
     #endif
@@ -193,6 +196,11 @@ struct ChatMarkdownRenderer: View {
 
             if !snapshot.images.isEmpty {
                 InlineImageList(images: snapshot.images)
+                    #if os(iOS)
+                        .frame(
+                            maxWidth: self.typography == .document ? nil : self.column.bubbleAndMediaMaxWidth,
+                            alignment: self.context == .user ? .trailing : .leading)
+                    #endif
             }
         }
         .environment(\.openClawChatMarkdownFileLabels, fileLabels)
@@ -203,7 +211,11 @@ struct ChatMarkdownRenderer: View {
             }
             // No file viewer exists on this surface yet; copying keeps the path usable.
             ChatPasteboard.copy(file.path)
-            self.copiedFilePath = file.path
+            if let toastPresenter {
+                toastPresenter.post(.copied(String(localized: "Path copied")))
+            } else {
+                self.copiedFilePath = file.path
+            }
             return .handled
         })
         .overlay(alignment: .topTrailing) {

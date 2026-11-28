@@ -320,7 +320,9 @@ it.each([
   move();
   expect(hidden.viewRequest).toHaveBeenCalledExactlyOnceWith("workboard.cards.move", {
     ...moveParams,
-    ...(input === "drop" ? { expectedUpdatedAt: cards[0].updatedAt } : {}),
+    ...(input === "drop"
+      ? { expectedUpdatedAt: expectDefined(cards[0], "ready card").updatedAt }
+      : {}),
   });
   await expectStatus(hidden, "running", 'select[aria-label="Status: Ready card"]');
   hidden.dispose();
