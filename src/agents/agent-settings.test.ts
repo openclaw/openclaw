@@ -178,7 +178,7 @@ it.each([
   ["openrouter", "openrouter/z-ai/glm-5", true],
   ["z.ai", "glm-5.1", true],
   ["z-ai", "glm-5.1", true],
-  ["openai", "glm-5.1", true, "https://api.z.ai/api/coding/paas/v4"],
+  ["openai", "relabeled-model", true, "https://api.z.ai/api/coding/paas/v4"],
   ["custom", "glm-5.1", true],
   ["custom", "glm-4.7", true],
   ["openai", "glm-5.1", true],
