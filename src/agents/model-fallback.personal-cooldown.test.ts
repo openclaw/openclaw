@@ -19,6 +19,51 @@ import * as sessionSuspension from "./session-suspension.js";
 import { createModelFallbackConfig } from "./test-helpers/model-fallback-config-fixture.js";
 
 describe("personal account fallback cooldown summaries", () => {
+  it("reports the saved subscription reset when the only model is skipped without an inference request", async () => {
+    await withOpenClawTestState({ layout: "home", prefix: "skipped-quota-" }, async (state) => {
+      const model = "gpt-5.5";
+      const profileId = "openai:subscription";
+      const resetAt = Date.now() + 5 * 86_400_000;
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai",
+            access: "fixture",
+            refresh: "fixture",
+            expires: resetAt,
+          },
+        },
+        usageStats: {
+          [profileId]: {
+            blockedReason: "subscription_limit",
+            blockedSource: "wham",
+            blockedScope: "model",
+            blockedModel: model,
+            blockedUntil: resetAt,
+            lastProbeAt: Date.now(),
+          },
+        },
+      });
+      const agentDir = state.agentDir();
+      markProbeAttempt(Date.now(), resolveProbeThrottleKey("openai", agentDir));
+      const run = vi.fn(async () => "unexpected inference");
+      await expect(
+        runWithModelFallback({
+          cfg: { plugins: { enabled: false } },
+          provider: "openai",
+          model,
+          fallbacksOverride: [],
+          agentDir,
+          manifestPlugins: [],
+          run,
+        }),
+      ).rejects.toMatchObject({ provider: "openai", model, rateLimitResetAt: resetAt });
+      expect(run).not.toHaveBeenCalled();
+    });
+  });
+
   it("refreshes selected cooldown with authored order", async () => {
     await withOpenClawTestState(
       { layout: "home", prefix: "fallback-personal-expiry-" },

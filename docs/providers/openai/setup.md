@@ -234,8 +234,11 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
     openclaw config validate
     ```
 
-    If `models auth list --provider openai` shows no usable profile, sign in
-    again:
+    If the account shows `blocked:subscription_limit`, check the reset time on
+    that line. An unexpired sign-in and a credit balance can coexist with a
+    usage limit. Signing in again does not reset it.
+
+    If the account is missing or the sign-in is no longer valid:
 
     ```bash
     openclaw models auth login --provider openai
