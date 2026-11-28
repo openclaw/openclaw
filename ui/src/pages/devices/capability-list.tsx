@@ -1,3 +1,5 @@
+/// <reference lib="es2024.object" />
+
 import { createMemo, For, Show } from "solid-js";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
@@ -43,22 +45,19 @@ const CAPABILITY_LIMIT = 16;
 
 /** Reads as one sentence; each item keeps its explanation in the title. */
 export function CapabilityList(props: { caps: readonly string[] }) {
-  const unique = createMemo(() => [
-    ...new Set(
+  const list = createMemo(() => {
+    const unique = new Set(
       props.caps.map((cap) => (cap === "codex-cli-session-source" ? "codex-cli-sessions" : cap)),
-    ),
-  ]);
-  const runtimes = createMemo(() =>
-    unique().filter((cap) => SESSION_RUNTIME_CAPABILITIES.has(cap)),
-  );
-  const capabilities = createMemo(() =>
-    unique().filter((cap) => !SESSION_RUNTIME_CAPABILITIES.has(cap)),
-  );
-  const visible = () => capabilities().slice(0, CAPABILITY_LIMIT - (runtimes().length > 0 ? 1 : 0));
-  const overflow = () => capabilities().length - visible().length;
+    );
+    const { runtimes = [], capabilities = [] } = Object.groupBy(unique, (cap) =>
+      SESSION_RUNTIME_CAPABILITIES.has(cap) ? "runtimes" : "capabilities",
+    );
+    const visible = capabilities.slice(0, CAPABILITY_LIMIT - (runtimes.length > 0 ? 1 : 0));
+    return { runtimes, visible, overflow: capabilities.length - visible.length };
+  });
   return (
     <span class="device-capabilities">
-      <For each={visible()}>
+      <For each={list().visible}>
         {(cap, index) => (
           <>
             {index() > 0 ? ", " : ""}
@@ -66,23 +65,23 @@ export function CapabilityList(props: { caps: readonly string[] }) {
           </>
         )}
       </For>
-      <Show when={overflow() > 0}>
+      <Show when={list().overflow > 0}>
         {", "}
         <span
           class="device-capability"
-          title={t("devices.capabilities.overflow", { count: String(overflow()) })}
+          title={t("devices.capabilities.overflow", { count: String(list().overflow) })}
         >
-          +{overflow()}
+          +{list().overflow}
         </span>
       </Show>
-      <Show when={runtimes().length > 0}>
-        {visible().length > 0 ? ", " : ""}
-        <span class="device-capability" title={runtimes().join(", ")}>
+      <Show when={list().runtimes.length > 0}>
+        {list().visible.length > 0 ? ", " : ""}
+        <span class="device-capability" title={list().runtimes.join(", ")}>
           {t(
-            runtimes().length === 1
+            list().runtimes.length === 1
               ? "devices.capabilities.runtime"
               : "devices.capabilities.runtimes",
-            { count: String(runtimes().length) },
+            { count: String(list().runtimes.length) },
           )}
         </span>
       </Show>

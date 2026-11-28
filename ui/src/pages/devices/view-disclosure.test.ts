@@ -25,6 +25,7 @@ describe("Devices disclosure lifetime", () => {
       paired: true,
       connected: true,
       commands: ["system.run"],
+      caps: ["browser", "codex-cli-session-source", "file", "browser", "codex-cli-sessions"],
     };
     const props = createDevicesViewProps({ nodes: [node] });
     const container = renderDevicesContainer(props, false);
@@ -34,10 +35,11 @@ describe("Devices disclosure lifetime", () => {
     );
     expect(row.querySelector(".device-entry__body")).toBeNull();
 
+    const offlineNode = { ...node, connected: false };
     const updated = {
       ...props,
       canManagePairing: false,
-      nodes: [{ ...node, connected: false }],
+      nodes: [offlineNode],
     };
     renderDevicesInto(container, updated, false);
     expect(getSettingsRow(container, "Node One")).toBe(row);
@@ -49,6 +51,8 @@ describe("Devices disclosure lifetime", () => {
     await Promise.resolve();
     flush();
     const body = expectDefined(row.querySelector(".device-entry__body"), "opened body");
+    const capabilities = () => body.querySelector(".device-capabilities")?.textContent;
+    expect(capabilities()).toBe("Browser, Files, 1 runtime");
     const remove = () =>
       expectDefined(
         row.querySelector<HTMLButtonElement>('[data-device-action="remove"]'),
@@ -60,12 +64,21 @@ describe("Devices disclosure lifetime", () => {
     row.open = false;
     row.dispatchEvent(new Event("toggle"));
     flush();
-    renderDevicesInto(container, { ...updated, canManagePairing: true }, false);
+    renderDevicesInto(
+      container,
+      {
+        ...updated,
+        nodes: [{ ...offlineNode, caps: ["pi-sessions", "claude-sessions"] }],
+        canManagePairing: true,
+      },
+      false,
+    );
     row.open = true;
     row.dispatchEvent(new Event("toggle"));
     flush();
     expect(row.querySelector(".device-entry__body")).toBe(body);
     expect(nested.open).toBe(true);
+    expect(capabilities()).toBe("2 runtimes");
     expect(remove().disabled).toBe(false);
   });
 
