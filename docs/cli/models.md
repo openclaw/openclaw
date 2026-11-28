@@ -118,7 +118,7 @@ Options:
 | `--probe-max-tokens <n>`  | Optional output-token cap per check (best effort). Unset sends no cap, like chat.                             |
 | `--agent <id>`            | Configured agent id; overrides `OPENCLAW_AGENT_DIR`.                                                          |
 
-`--probe` needs exclusive ownership of the state directory. It refuses while a Gateway owns it; omit `--probe`, or stop the Gateway first.
+When the local Gateway is running, it runs the checks for the selected agent. Otherwise, the CLI runs them locally under an exclusive state lock.
 
 `--probe-timeout` requires a positive number; `--probe-concurrency` and `--probe-max-tokens` require positive integers. Omit `--probe-timeout` and `--probe-concurrency` to use their defaults (`8000` and `2`). Omit `--probe-max-tokens` to send no cap: reasoning models can spend a small cap on thinking and return no visible reply, which the check reports as `format`. Explicitly empty values are rejected.
 
@@ -126,7 +126,7 @@ Check rows can come from auth profiles, env credentials, or `models.json`. Check
 
 Checks make a fresh, prompt-only request through OpenClaw's provider transport without creating a normal agent session. OAuth profiles retain the normal persistent credential-refresh owner. Reported per-credential latency measures the request round-trip, excluding model and credential preparation; checks that fail before sending a request have no latency. The overall check can take longer when several credentials are tested.
 
-Direct `models status --probe` runs require exclusive ownership of the configured state directory. Stop a running Gateway with `openclaw gateway stop` before checking. Temporary auth directories and the state lock remain held until accepted work and cleanup settle, including after interruption. Cleanup failures are reported; a timeout does not certify that resources have closed.
+A successful check of a saved auth profile clears the cooldown for the model that answered. A failed check or an empty reply does not. Offline checks hold the state lock until in-flight requests and cleanup finish, even after an interruption.
 
 Check detail/reason codes to expect when a check never reaches a model call:
 
@@ -425,6 +425,8 @@ An OAuth loopback callback runs on the Gateway host, which is the same machine
 as this local CLI. Keep the command running while completing browser sign-in.
 An older Gateway without owner-bound login support receives no login request:
 update and restart it, or stop it and retry offline.
+
+`models auth activate <profileId> [--agent <id>]` tests the saved auth profile through the local Gateway when it is running, or locally when it is stopped. If the check succeeds, only the selected agent switches to that model and profile. If it fails, the agent keeps its current model and account.
 
 Other `models auth` commands require exclusive offline ownership of the selected
 local state. Stop the Gateway through its service owner, wait for it to release

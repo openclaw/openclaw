@@ -5,7 +5,6 @@ import {
   errorShape,
   validateSystemAgentChatParams,
   validateSystemAgentChatHistoryParams,
-  validateSystemAgentSetupActivateParams,
   validateSystemAgentSetupActivateStartParams,
   validateSystemAgentSetupAuthStartParams,
   validateSystemAgentSetupRuntimeStartParams,
@@ -48,7 +47,6 @@ import {
 } from "./gateway-client-identity.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import {
-  runExclusiveSystemAgentSetupActivation,
   respondSetupAdmissionBusy,
   SetupAdmissionBusyError,
   startGatewayWizard,
@@ -64,12 +62,12 @@ import {
   runSystemAgentChatInput,
 } from "./system-agent-chat-turn.js";
 import {
-  activateGatewaySetupInference,
   createSystemAgentGatewayRuntime,
   runSystemAgentGatewayTask,
   verifyGatewaySetupInference,
 } from "./system-agent-execution.js";
 import { resolveSystemAgentSessionOwnerKey } from "./system-agent-session-owner.js";
+import { activateSetupHandler } from "./system-agent-setup-activate.js";
 import { startSetupActivationWizard } from "./system-agent-setup-wizard.js";
 import { withSystemAgentTemplateRequests } from "./system-agent-templates.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -339,27 +337,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
    * queueing work that could outlive their RPC timeout. Verification failures never
    * commit a broken model; post-commit application failures explain the saved state.
    */
-  "openclaw.setup.activate": defineValidatedGatewayHandler(
-    "openclaw.setup.activate",
-    validateSystemAgentSetupActivateParams,
-    async ({ params, respond }) => {
-      try {
-        const result = await runExclusiveSystemAgentSetupActivation(() =>
-          activateGatewaySetupInference({
-            ...params,
-            surface: "gateway",
-            runtime: createSystemAgentGatewayRuntime(),
-          }),
-        );
-        respond(true, result, undefined);
-      } catch (error) {
-        if (!(error instanceof SetupAdmissionBusyError)) {
-          throw error;
-        }
-        respondSetupAdmissionBusy(respond);
-      }
-    },
-  ),
+  "openclaw.setup.activate": activateSetupHandler,
   "openclaw.chat": withSystemAgentTemplateRequests(async (options) => {
     const { params: rawParams, respond, client, context } = options;
     const reject = (error: ReturnType<typeof errorShape>) => respond(false, undefined, error);

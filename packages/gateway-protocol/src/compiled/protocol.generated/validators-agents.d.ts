@@ -52,6 +52,7 @@ export {
   isSkillsSecurityVerdictsParams,
   isSkillsSkillCardParams,
   isSkillsFileGetParams,
+  isModelsProbeBatchParams,
   isModelsProbeParams,
   isToolUsageStatusParams,
   isToolUsageImportParams,

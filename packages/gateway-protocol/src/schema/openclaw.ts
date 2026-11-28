@@ -401,7 +401,7 @@ export const SystemAgentSetupVerifyResultSchema = Type.Union([
   }),
 ]);
 
-export const SystemAgentSetupActivateParamsSchema = closedObject({
+const setupActivateProperties = {
   modelTarget: Type.Optional(Type.Literal("utility")),
   /** Agent that owns the verified and persisted inference route. */
   agentId: Type.Optional(NonEmptyString),
@@ -415,11 +415,18 @@ export const SystemAgentSetupActivateParamsSchema = closedObject({
   workspace: Type.Optional(Type.String()),
   /** Fresh-install opt-in for native provider conversation discovery. */
   nativeSessionCatalogsEnabled: Type.Optional(Type.Boolean()),
+};
+
+export const SystemAgentSetupActivateParamsSchema = closedObject({
+  ...setupActivateProperties,
+  /** Local models auth activate explicitly confirms this exact saved-account selection. */
+  expectedOwnerId: Type.Optional(NonEmptyString),
+  activationConfirmed: Type.Optional(Type.Literal(true)),
 });
 
 /** Starts interactive activation without moving artifact consent into the client. */
 export const SystemAgentSetupActivateStartParamsSchema = closedObject({
-  ...SystemAgentSetupActivateParamsSchema.properties,
+  ...setupActivateProperties,
   /** Client-generated so the session can be cancelled after a lost start reply. */
   sessionId: NonEmptyString,
 });

@@ -303,6 +303,46 @@ describe("prepareSimpleCompletionModel", () => {
     );
   });
 
+  it("rechecks only the explicitly probed profile without clearing its cooldown before inference", async () => {
+    const profileId = "openai:cooling";
+    const cooldownUntil = Date.now() + 60_000;
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: { [profileId]: { type: "api_key", provider: "openai", key: "test-key" } },
+      usageStats: {
+        [profileId]: { cooldownUntil, cooldownReason: "rate_limit", cooldownModel: "gpt-5.5" },
+      },
+    };
+    const input = {
+      preparedModelRuntime,
+      cfg: {},
+      provider: "openai",
+      modelId: "gpt-5.5",
+      profileId,
+      authStore: store,
+      bindAuthOwner: true,
+      modelResolver: createOpenAIRouteModelResolver({
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+    };
+    hoisted.getApiKeyForModelMock.mockResolvedValue({
+      apiKey: "test-key",
+      mode: "api-key",
+      profileId,
+      source: "profile:openai:cooling",
+    });
+    expect(await prepareSimpleCompletionModel(input)).toHaveProperty("error");
+    const result = await prepareSimpleCompletionModel({ ...input, probeTransientCooldown: true });
+    expectPreparedModelResult(result);
+    expect(result.auth.profileId).toBe(profileId);
+    expect(store.usageStats?.[profileId]?.cooldownUntil).toBe(cooldownUntil);
+    store.usageStats![profileId]!.disabledUntil = cooldownUntil;
+    expect(
+      await prepareSimpleCompletionModel({ ...input, probeTransientCooldown: true }),
+    ).toHaveProperty("error");
+  });
+
   it("keeps a bound personal OAuth owner stable across token rotation", async () => {
     const profileId =
       "personal:9ee1b53f-13f7-4d21-b0a1-2b539ab4fd1d:5b99e716-6cea-49f2-a79e-ffb6df8ad5e1";

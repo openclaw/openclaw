@@ -325,6 +325,7 @@ export {
   ModelsAuthSetApiKeyResultSchema,
   ModelsListParamsSchema,
   AuthProbeStatusSchema,
+  ModelsProbeBatchParamsSchema,
   ModelsProbeParamsSchema,
   ModelsProbeResultSchema,
   ModelsProbeTargetResultSchema,

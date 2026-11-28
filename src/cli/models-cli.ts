@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
 import type { ModelsAuthSetApiKeyResult } from "../../packages/gateway-protocol/src/schema/models-auth.js";
+import type { SystemAgentSetupActivateResult } from "../../packages/gateway-protocol/src/schema/openclaw.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/server-capabilities.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { ModelsAccountsOptions } from "../commands/models/accounts.js";
@@ -548,11 +549,45 @@ export function registerModelsCli(program: Command) {
     .argument("<profileId>", "Saved sign-in id from models auth list")
     .option("--agent <id>", mutationAgentHelp)
     .action((profileId: string, _opts, command) =>
-      runAuthModelCommand(
-        command,
-        (agent) => ({ profileId, agent }),
-        async () => (await import("../commands/models/auth-activate.js")).modelsAuthActivateCommand,
-      ),
+      withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command);
+        const result = await runWithLocalStateOwner<SystemAgentSetupActivateResult | void>({
+          method: "openclaw.setup.activate",
+          params: async () => {
+            const { toSavedAuthSetupKind } =
+              await import("../system-agent/setup-inference-core.js");
+            return {
+              kind: toSavedAuthSetupKind(profileId.trim()),
+              agentId: agent,
+              activationConfirmed: true,
+            };
+          },
+          target: "saved model sign-in",
+          requireLocalBackendSharedAuth: true,
+          requiredCapabilities: [GATEWAY_SERVER_CAPS.MODELS_AUTH_ACTIVATE_OWNER],
+          runLocal: async () => {
+            const { modelsAuthActivateCommand } =
+              await import("../commands/models/auth-activate.js");
+            await modelsAuthActivateCommand({ profileId, agent }, defaultRuntime);
+          },
+        });
+        if (!result) {
+          return;
+        }
+        if (!result.ok) {
+          throw new Error(
+            sanitizeTerminalText(result.error ?? "Could not activate the saved sign-in."),
+          );
+        }
+        for (const line of result.lines ?? []) {
+          defaultRuntime.log(sanitizeTerminalText(line));
+        }
+        if (result.gatewayRestartRequired) {
+          defaultRuntime.error(
+            "The model and sign-in were selected for this agent. Restart the Gateway to apply the change.",
+          );
+        }
+      }),
     );
 
   auth

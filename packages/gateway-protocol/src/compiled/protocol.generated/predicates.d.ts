@@ -467,6 +467,11 @@ export function isSkillsFileGetParams(
 ): value is import("typebox").Static<
   typeof import("../../schema-modules.js").SkillsFileGetParamsSchema
 >;
+export function isModelsProbeBatchParams(
+  value: unknown,
+): value is import("typebox").Static<
+  typeof import("../../schema-modules.js").ModelsProbeBatchParamsSchema
+>;
 export function isModelsProbeParams(
   value: unknown,
 ): value is import("typebox").Static<

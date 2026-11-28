@@ -20,10 +20,14 @@ import { createSelectedAuthProfileUnavailableError } from "../auth-profiles/sele
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
   getSoonestCooldownExpiry,
+  isActiveUnusableWindow,
+  isBlockedWindowActiveForModel,
   isProfileInCooldown,
+  readAuthProfileUsageStats,
   resolveProfilesUnavailableReason,
 } from "../auth-profiles/usage-state.js";
 import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { shouldUseTransientCooldownProbeSlot } from "../failover-policy.js";
 import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../failover/error.js";
 import { resolveProviderDirectAuthPlanningEvidence } from "../model-auth-env.js";
 import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
@@ -131,6 +135,7 @@ export function preparedAgentRuntimeProfileAttemptHasCandidate(params: {
   attempt: PreparedAgentRuntimeAuthAttempt;
   store: AuthProfileStore;
   modelId: string;
+  probeProfileId?: string;
 }): boolean {
   if (params.attempt.kind !== "profile") {
     return false;
@@ -138,9 +143,25 @@ export function preparedAgentRuntimeProfileAttemptHasCandidate(params: {
   const profileIds = params.attempt.plan.forwardedAuthProfileCandidateIds ?? [
     params.attempt.profileId,
   ];
-  return profileIds.some(
-    (profileId) => !isProfileInCooldown(params.store, profileId, undefined, params.modelId),
-  );
+  const now = Date.now();
+  return profileIds.some((profileId) => {
+    if (!isProfileInCooldown(params.store, profileId, now, params.modelId)) {
+      return true;
+    }
+    if (
+      profileId !== params.probeProfileId ||
+      params.attempt.plan.forwardedAuthProfileSource !== "user"
+    ) {
+      return false;
+    }
+    const stats = readAuthProfileUsageStats(params.store, profileId);
+    return Boolean(
+      stats &&
+      shouldUseTransientCooldownProbeSlot(stats.cooldownReason) &&
+      !isBlockedWindowActiveForModel(stats, now, params.modelId) &&
+      !isActiveUnusableWindow(stats.disabledUntil, now),
+    );
+  });
 }
 
 /** True when a prepared auth tuple can be reused for this exact compaction target. */

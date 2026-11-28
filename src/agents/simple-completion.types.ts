@@ -31,6 +31,8 @@ export type PrepareModelWithCredentialsParams = {
   agentRuntimeId?: string;
   /** Internal stream callers own provider transport construction and embedded policy. */
   transport?: "simple-completion" | "provider-stream";
+  /** Internal explicit credential check, never an automatic fallback. */
+  probeTransientCooldown?: boolean;
 };
 
 export type PrepareSimpleCompletionModelParams = PrepareModelWithCredentialsParams & {

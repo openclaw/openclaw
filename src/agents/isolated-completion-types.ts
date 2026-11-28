@@ -13,6 +13,8 @@ export type RunIsolatedCompletionParams = {
   model: string;
   /** Explicit credential owner. CLI and harness paths must not replace it with another profile. */
   authProfileId?: string;
+  /** A credential check may retry a transient cooldown on this exact profile. */
+  probeTransientCooldown?: boolean;
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;

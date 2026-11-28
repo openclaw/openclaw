@@ -81,6 +81,27 @@ function probeInput(cfg: OpenClawConfig, options: Partial<ProbeParams["options"]
   };
 }
 
+it("retries a cooling profile only after its pinned model returns visible text", async () => {
+  const profileId = "openai:profile";
+  const modelId = "gpt-5.5";
+  const agentDir = state.agentDir();
+  const read = () => authProfiles.ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
+  await authProfiles.markAuthProfileFailure({
+    store: await read(),
+    agentDir,
+    profileId,
+    modelId,
+    reason: "rate_limit",
+    retryAfterMs: 60_000,
+  });
+  const input = probeInput({}, { profileIds: [profileId] });
+  mocks.runner.mockResolvedValueOnce({ text: " " });
+  expect((await probe.runAuthProbes(input)).results[0]?.status).toBe("format");
+  expect(authProfiles.isProfileInCooldown(await read(), profileId, undefined, modelId)).toBe(true);
+  expect((await probe.runAuthProbes(input)).results[0]?.status).toBe("ok");
+  expect(authProfiles.isProfileInCooldown(await read(), profileId, undefined, modelId)).toBe(false);
+});
+
 it("reports failover reasons through probe results", async () => {
   for (const [reason, expected] of [
     ["auth_permanent", "auth"],
@@ -114,6 +135,7 @@ it.each([false, true])("reports request-only timing (provider config: %s)", asyn
     expect.objectContaining({
       authProfileId: "openai:profile",
       outputTextPolicy: "strict-visible",
+      probeTransientCooldown: true,
       agentHarnessRuntimeOverride: "openclaw",
       thinkLevel: "off",
     }),
