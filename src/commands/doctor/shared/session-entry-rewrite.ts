@@ -206,6 +206,31 @@ export async function scanDoctorSessionEntryRecords(
   }
 }
 
+/** A legacy cut rotated the window, copied its tree and appended a leaf control. */
+function readUncountedCutWindow(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  entry: Record<string, unknown> | null,
+): string | undefined {
+  if (
+    typeof entry?.previousSessionId !== "string" ||
+    typeof entry.sessionId !== "string" ||
+    entry.compactionCount !== undefined
+  ) {
+    return undefined;
+  }
+  return executeSqliteQueryTakeFirstSync(
+    database.db,
+    getSessionKysely(database.db)
+      .selectFrom("transcript_event_identities")
+      .select("seq")
+      .where("session_id", "=", entry.sessionId)
+      .where("event_type", "=", "leaf")
+      .limit(1),
+  )
+    ? entry.sessionId
+    : undefined;
+}
+
 /** Normalize legacy entries before canonical reads; clean stores stay read-only. */
 export async function repairLegacyStartupSessionEntries(
   scope: DoctorSessionScanScope,
@@ -219,7 +244,7 @@ export async function repairLegacyStartupSessionEntries(
   assertCurrent();
   const expectedIdentity = readDatabasePathIdentitySync(scope.storePath);
   const runKeys = new Set<string>();
-  const cutSessions = new Map<string, string>();
+  const cutKeys = new Set<string>();
   const tombstones = new Set<string>();
   const warnings = new Map<string, string>();
   let terminalUnmatched = 0;
@@ -258,28 +283,13 @@ export async function repairLegacyStartupSessionEntries(
     (row, database) => {
       const entry = parseSqliteSessionEntryRecord(row);
       visitStartupEntry(entry, row.session_key);
-      // Old rewind/switch rotated the window, copied its tree and appended a leaf control.
-      // A fork didn't inherit a predecessor, and an ordinary rollover alone isn't a cut.
-      if (typeof entry?.previousSessionId !== "string" || entry.compactionCount !== undefined) {
-        return;
-      }
-      if (
-        executeSqliteQueryTakeFirstSync(
-          database.db,
-          getSessionKysely(database.db)
-            .selectFrom("transcript_event_identities")
-            .select("seq")
-            .where("session_id", "=", entry.sessionId)
-            .where("event_type", "=", "leaf")
-            .limit(1),
-        )
-      ) {
-        cutSessions.set(row.session_key, entry.sessionId);
+      if (readUncountedCutWindow(database, entry) !== undefined) {
+        cutKeys.add(row.session_key);
       }
     },
   );
   assertCurrent();
-  if (runKeys.size === 0 && cutSessions.size === 0) {
+  if (runKeys.size === 0 && cutKeys.size === 0) {
     reportWarnings();
     return { repaired: 0, terminalUnmatched };
   }
@@ -301,7 +311,7 @@ export async function repairLegacyStartupSessionEntries(
     });
     assertRepairCurrent();
   }
-  const countCut = cutSessions.size
+  const countCut = cutKeys.size
     ? (await import("../../../config/sessions/session-accessor.sqlite-compaction-selection.js"))
         .countRetainedCutCompactions
     : undefined;
@@ -310,15 +320,13 @@ export async function repairLegacyStartupSessionEntries(
       assertRepairCurrent();
       return rewriteDoctorSessionEntries({
         scope,
-        sessionKeys: [...runKeys, ...cutSessions.keys()],
+        sessionKeys: [...runKeys, ...cutKeys],
         rawTransform: (stored, sessionKey, updatedAt, database) => {
-          const cut = cutSessions.get(sessionKey);
+          const cut = cutKeys.has(sessionKey)
+            ? readUncountedCutWindow(database, stored)
+            : undefined;
           const entry =
-            countCut &&
-            cut !== undefined &&
-            cut === stored.sessionId &&
-            typeof stored.previousSessionId === "string" &&
-            stored.compactionCount === undefined
+            countCut && cut !== undefined
               ? { ...stored, compactionCount: countCut(database, cut) }
               : stored;
           if (!runKeys.has(sessionKey)) {
