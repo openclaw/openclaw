@@ -83,6 +83,18 @@ export type ControlUiAppearancePickerProps = {
   onChange: (appearance: { icon: string | null; color: string | null }) => void;
 };
 
+export type ControlUiInlineAlertProps = {
+  tone: "danger" | "warning" | "info" | "success";
+  /** Plain-language summary, such as “Couldn’t load the pool. Try again.” */
+  message: string;
+  title?: string;
+  /** Raw failure text. The host redacts it and keeps it collapsed under Show details with Copy. */
+  detail?: string;
+  /** Trailing control, usually Retry. */
+  action?: { label: string; disabled?: boolean; onSelect: () => void };
+  onDismiss?: () => void;
+};
+
 export type ControlUiComponents = {
   /** Resolve a shared palette or custom hex color; invalid or cleared values return an empty string. */
   resolveAppearanceColor: (value: string | null | undefined) => string;
@@ -110,6 +122,11 @@ export type ControlUiComponents = {
     container: HTMLElement,
     props: ControlUiSelectPickerProps,
   ) => ControlUiComponentHandle<ControlUiSelectPickerProps>;
+  /** The host's inline alert: tone, summary, optional Retry, and raw detail collapsed under Show details. */
+  mountInlineAlert: (
+    container: HTMLElement,
+    props: ControlUiInlineAlertProps,
+  ) => ControlUiComponentHandle<ControlUiInlineAlertProps>;
   mountSessionSummary: (
     container: HTMLElement,
     props: ControlUiSessionSummaryProps,
