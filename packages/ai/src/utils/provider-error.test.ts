@@ -1,6 +1,10 @@
 import { APIError } from "openai/core/error";
 import { describe, expect, it } from "vitest";
-import { configureProviderErrorRedactor, projectProviderError } from "./provider-error.js";
+import {
+  configureProviderErrorRedactor,
+  projectProviderError,
+  readProviderDailyModelQuotaEvidence,
+} from "./provider-error.js";
 
 describe("projectProviderError", () => {
   const malformed = "[Malformed diagnostic JSON redacted]";
@@ -223,9 +227,9 @@ describe("projectProviderError", () => {
       },
     );
     expect(projectProviderError(error).stopReason).toBe("error");
-    // Fixed timing-metadata probes (headers plus the RetryInfo body shape) precede the
-    // bounded diagnostic walk.
-    expect(descriptorReads).toBe(64 + 10);
+    // Diagnostic fields + timing probes + the quota validator's 11 own-data fields.
+    // This hostile record contradicts quota status, so quota traversal stops at its root.
+    expect(descriptorReads).toBe(64 + 10 + 11);
   });
   it("caps descriptor reads across a branching hostile graph", () => {
     let descriptorReads = 0;
@@ -242,9 +246,42 @@ describe("projectProviderError", () => {
         },
       );
     expect(projectProviderError(createNode()).stopReason).toBe("error");
-    // Status, response and RetryInfo shape probes are a fixed cost, not another graph walk.
-    expect(descriptorReads).toBe(64 * 64 + 33);
+    // The diagnostic graph cap is unchanged; contradictory quota status adds only
+    // one record of 11 probes, independently of diagnostic graph branching.
+    expect(descriptorReads).toBe(64 * 64 + 33 + 11);
   });
+  it.each(["branching", "nested", "cyclic"] as const)(
+    "bounds quota metadata reads across a %s graph without invoking accessors",
+    (shape) => {
+      let descriptorReads = 0;
+      let getterCalls = 0;
+      const createNode = (): object => {
+        const target = Object.defineProperty({}, "message", {
+          get: () => {
+            getterCalls += 1;
+            throw new Error("hostile getter");
+          },
+        });
+        const node: object = new Proxy(target, {
+          getOwnPropertyDescriptor(source, key) {
+            descriptorReads += 1;
+            if (
+              key === "cause" ||
+              (shape === "branching" && ["error", "response", "payload"].includes(String(key)))
+            ) {
+              return { configurable: true, value: shape === "cyclic" ? node : createNode() };
+            }
+            return Reflect.getOwnPropertyDescriptor(source, key);
+          },
+        });
+        return node;
+      };
+      expect(readProviderDailyModelQuotaEvidence(createNode())).toBeUndefined();
+      // Seven fact/identity fields and four edges per distinct object, at most 16 objects.
+      expect(descriptorReads).toBe((shape === "cyclic" ? 1 : 16) * 11);
+      expect(getterCalls).toBe(0);
+    },
+  );
   it.each([
     ["value", "late-discriminator-secret", "name", "api_key"],
     ["data", "QUJDRA==", "type", "video"],

@@ -4,7 +4,7 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { FailoverReason } from "../agents/failover/signal.js";
+import type { FailoverReason, FailoverSignal } from "../agents/failover/signal.js";
 import type { ProgressContinuationCapability } from "../channels/progress-continuation.js";
 import type { ReplyToMode } from "../config/types.base.js";
 import type { AgentAssistantSourceReceipt } from "../infra/agent-events.types.js";
@@ -366,6 +366,9 @@ export type ReplyPayloadMetadata = {
   /** Model fallback uses observed failure facts, never the displayed wording. */
   providerFailure?: {
     reason: FailoverReason | null;
+    status?: number;
+    code?: string;
+    quotaScope?: FailoverSignal["quotaScope"];
     rawError?: string;
     rateLimitRetriesExhausted?: number;
   };

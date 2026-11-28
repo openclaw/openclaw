@@ -7,7 +7,7 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentRunTerminalOutcome } from "../agent-run-terminal-outcome.types.js";
 import { isProviderRequestSizeCeilingError, isTimeoutErrorMessage } from "./message-patterns.js";
-import type { FailoverReason } from "./signal.js";
+import type { FailoverReason, FailoverSignal } from "./signal.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 
@@ -51,6 +51,7 @@ export type FallbackAttemptRecord = {
   reason: FailoverReason;
   status?: number;
   code?: string;
+  quotaScope?: FailoverSignal["quotaScope"];
   error?: string;
   rateLimitRetriesExhausted?: number;
   rateLimitResetAt?: number;
@@ -65,6 +66,7 @@ export class FailoverError extends Error {
   readonly authMode?: string;
   readonly status?: number;
   readonly code?: string;
+  readonly quotaScope?: FailoverSignal["quotaScope"];
   readonly rawError?: string;
   readonly userMessage?: string;
   /** Controller-owned count exhaustion; zero means retries were disabled. Not a provider fact. */
@@ -97,6 +99,7 @@ export class FailoverError extends Error {
     this.authMode = params.authMode;
     this.status = params.status;
     this.code = params.code;
+    this.quotaScope = params.quotaScope;
     this.rawError = params.rawError;
     this.userMessage = params.userMessage;
     this.rateLimitRetriesExhausted = params.rateLimitRetriesExhausted;

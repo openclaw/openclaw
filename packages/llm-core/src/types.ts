@@ -567,6 +567,8 @@ export interface AssistantMessage {
   endTurn?: boolean;
   errorMessage?: string;
   errorCode?: string;
+  /** Transport-verified exhausted daily quota for this model, not generic throttling. */
+  quotaScope?: "daily-model";
   /** Transport-owned repair outcome; execution owns whether a deferred request can replay. */
   itemConflictRecovery?: "deferred" | "recovered" | "failed";
   errorType?: string;

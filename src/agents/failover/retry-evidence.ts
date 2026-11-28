@@ -179,7 +179,8 @@ export function shouldRetryFailoverSignal(params: {
 }): boolean {
   if (
     (params.classification?.kind === "reason" &&
-      params.classification.reason === "route_unavailable") ||
+      (params.classification.sameModelRetry === false ||
+        params.classification.reason === "route_unavailable")) ||
     !hasTransientRetryEvidence(params.signal)
   ) {
     return false;

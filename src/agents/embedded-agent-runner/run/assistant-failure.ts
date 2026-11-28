@@ -558,6 +558,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       authMode,
       status,
       code: listedModelRejection ? MODEL_CHAT_REJECTED_CODE : failedAssistant?.errorCode,
+      quotaScope: assistantSignal?.quotaScope,
       rawError: failedAssistant?.errorMessage?.trim(),
       // Retry reason "timeout" also includes 5xx; only the terminal owner records a deadline.
       timeout:

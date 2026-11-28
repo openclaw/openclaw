@@ -30,6 +30,14 @@ function expectRetry(
 }
 
 describe("isRetryableAssistantError", () => {
+  it.each([undefined, "daily-model"] as const)("honors persisted quota scope %s", (quotaScope) => {
+    expectRetry("429 Quota exhausted", quotaScope === undefined, {
+      provider: "provider-cedar",
+      errorCode: "RESOURCE_EXHAUSTED",
+      quotaScope,
+    });
+  });
+
   it.each([undefined, "invalid"])("keeps identity conflicts terminal: %s", (errorBody) => {
     expectRetry(
       "Responses stream changed output item identity; connection reset",

@@ -49,7 +49,10 @@ import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./result-fallback-classifier.js";
-import { resolveRunEntryModelSelection } from "./run-entry-model-selection.js";
+import {
+  resolveRunEntryFallbackSelection,
+  resolveRunEntryModelSelection,
+} from "./run-entry-model-selection.js";
 import {
   buildRunEntryTerminal,
   canAdvanceContextEngineTurn,
@@ -127,21 +130,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     assertCurrent,
   });
   const hookOwnsFallbacks = hookSelection?.fallbacksOverride !== undefined;
-  const runSelection = params.modelResolve?.modelSelectionLocked
-    ? { ...params.selection, fallbacksOverride: [] }
-    : hookOwnsFallbacks && hookSelection
-      ? {
-          ...params.selection,
-          provider: hookSelection.provider,
-          model: hookSelection.modelId,
-          fallbacksOverride: hookSelection.fallbacksOverride,
-          requestedRouteResolution:
-            hookSelection.provider !== params.selection.provider ||
-            hookSelection.modelId !== params.selection.model
-              ? ("raw" as const)
-              : params.selection.requestedRouteResolution,
-        }
-      : params.selection;
+  const runSelection = resolveRunEntryFallbackSelection(params, hookSelection);
   const harnessContext = (provider: string, modelId: string) => ({
     config: params.selection.cfg,
     provider,

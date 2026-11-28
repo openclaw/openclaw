@@ -692,6 +692,36 @@ describe("handleEmbeddedAssistantFailure", () => {
 });
 
 describe("assistant failure fallback guards", () => {
+  it("preserves daily quota evidence through assistant failure and outer fallback", async () => {
+    const run = vi.fn(async () =>
+      handleEmbeddedAssistantFailure(
+        makeAssistantFailureInput({
+          provider: "provider-cedar",
+          model: "selected-model",
+          content: [],
+          ...projectProviderError({
+            status: 429,
+            code: "RESOURCE_EXHAUSTED",
+            quotaScope: "daily-model",
+            message: "Quota exhausted",
+          }),
+        }),
+      ),
+    );
+    await expect(
+      runWithModelFallback({
+        cfg: undefined,
+        provider: "provider-cedar",
+        model: "selected-model",
+        manifestPlugins: [],
+        skipAuthProfileRuntime: true,
+        fallbacksOverride: [],
+        run,
+      }),
+    ).rejects.toMatchObject({ quotaScope: "daily-model", reason: "rate_limit" });
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   async function failureFor(input: AssistantFailureInput): Promise<FailoverError> {
     const failure: unknown = await handleEmbeddedAssistantFailure(input).catch(
       (error: unknown) => error,

@@ -70,6 +70,7 @@ export function isRetryableAssistantError(message: AssistantHistoryMessage): boo
     message: errorMessage,
     provider: message.provider,
     code: message.errorCode,
+    quotaScope: message.quotaScope,
     errorType: message.errorType,
     ...(status === undefined ? {} : { status }),
   };

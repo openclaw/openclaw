@@ -30,7 +30,10 @@ import {
 } from "../../agent-run-terminal-reply.js";
 import { withAgentTerminalPayloadSnapshot } from "../../agent-terminal-snapshot.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
-import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers/assistant-message-failures.js";
+import {
+  buildAssistantFailoverSignal,
+  classifyAssistantFailoverReason,
+} from "../../embedded-agent-helpers/assistant-message-failures.js";
 import {
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
@@ -287,6 +290,9 @@ export function buildEmbeddedRunPayloads(params: {
       isTimeoutErrorMessage(rawErrorMessage) &&
       errorText === SYNTHESIZED_TIMEOUT_ERROR_TEXT;
     if (errorText && !deferAssistantTimeoutError) {
+      const providerSignal = assistantForPayload
+        ? buildAssistantFailoverSignal(assistantForPayload)
+        : undefined;
       const errorPayload = {
         text: errorText,
         isError: true,
@@ -306,6 +312,9 @@ export function buildEmbeddedRunPayloads(params: {
             ? {
                 providerFailure: {
                   reason: classifyAssistantFailoverReason(assistantForPayload, errorContext),
+                  status: providerSignal?.status,
+                  code: providerSignal?.code,
+                  quotaScope: providerSignal?.quotaScope,
                   rawError: rawErrorMessage,
                   rateLimitRetriesExhausted,
                 },
