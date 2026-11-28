@@ -1,0 +1,18 @@
+{
+  "id": "notion",
+  "name": "Notion",
+  "description": "Shared memory and native Notion Skills through Notion MCP (OAuth required).",
+  "skills": ["./skills"],
+  "mcpServers": {
+    "notion": {
+      "transport": "streamable-http",
+      "url": "https://mcp.notion.com/mcp",
+      "auth": "oauth"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

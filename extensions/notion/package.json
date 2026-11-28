@@ -1,0 +1,13 @@
+{
+  "name": "@openclaw/notion",
+  "version": "2026.10.10",
+  "description": "Notion shared memory and Skills over the official hosted MCP server",
+  "type": "module",
+  "license": "MIT",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"]
+  }
+}
