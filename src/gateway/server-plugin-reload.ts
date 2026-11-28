@@ -41,6 +41,10 @@ import {
 import { createPluginReloadLifecycle } from "./server-plugin-reload-lifecycle.js";
 import { reverifyReloadedPluginPayloads } from "./server-plugin-reload-quarantine.js";
 import {
+  createPluginReloadFinishHandler,
+  createPluginRuntimeReplacementControl,
+} from "./server-plugin-runtime-generation.js";
+import {
   createPluginReloadRecovery,
   resolvePluginReloadReplacementIds,
 } from "./server-plugin-reload-recovery.js";
@@ -166,7 +170,7 @@ export async function reloadGatewayPlugins(
     recordWarning,
     retainRetirement: (retire) => kernel.pluginMetadata.retire(cache, retire),
   });
-  const previousReloadStatus = pluginRuntimeGeneration.getReloadStatus();
+  const replacementControl = createPluginRuntimeReplacementControl(pluginRuntimeGeneration);
   const assertCurrent = () => {
     drainSignal.throwIfAborted();
     params.assertInvokerOwned?.();
@@ -185,10 +189,14 @@ export async function reloadGatewayPlugins(
   };
   return lifecycle.run(
     {
-      previousReloadStatus,
       channels,
       recovery,
-      finishReloadInputs: { changedPluginIds, runtime, restartDrainSignal, log },
+      finishReload: createPluginReloadFinishHandler(replacementControl, {
+        changedPluginIds,
+        registry: pluginRuntime.registry,
+        unavailablePluginIds: recovery.unavailablePluginIds,
+        reportFailure: restartDrainSignal.aborted ? undefined : log.error,
+      }),
     },
     async (facts) => {
       try {
@@ -271,28 +279,20 @@ export async function reloadGatewayPlugins(
         });
         rollbackConfigEffects = configEffects.rollback;
         facts.phase = overlap ? "activate" : "drain";
-        pluginRuntimeGeneration.setReloadStatus({
+        replacementControl.reportReloadStatus({
           phase: "reloading",
           pluginIds: [...changedPluginIds],
         });
         if (!overlap) {
-          await drainRetainedWork(
-            resourceHandoffIds,
-            drainSignal,
-            pluginRuntimeGeneration.setReloadStatus,
-          );
+          await drainRetainedWork(resourceHandoffIds, drainSignal, replacementControl.reportReloadStatus);
           await checkpoint();
+          replacementControl.reserve();
           decisionReplacement = prepareDecisionProviderReload(previousRegistry, changedPluginIds);
           channels.pause();
           quiesceInstances();
-          await drainRetainedWork(
-            resourceHandoffIds,
-            drainSignal,
-            pluginRuntimeGeneration.setReloadStatus,
-            {
-              includeCalls: true,
-            },
-          );
+          await drainRetainedWork(resourceHandoffIds, drainSignal, replacementControl.reportReloadStatus, {
+            includeCalls: true,
+          });
           await checkpoint();
           configEffects.retire();
           for (const sidecar of runtimeState.gatewayLifetimeSidecars.snapshot()) {
@@ -318,13 +318,9 @@ export async function reloadGatewayPlugins(
               (entry) => !changedPluginIds.has(entry.pluginId),
             ),
           });
-          await drainBeforeReplacement(
-            resourceHandoffIds,
-            drainSignal,
-            pluginRuntimeGeneration.setReloadStatus,
-          );
+          await drainBeforeReplacement(resourceHandoffIds, drainSignal, replacementControl.reportReloadStatus);
           await checkpoint();
-          pluginRuntimeGeneration.setReloadStatus({
+          replacementControl.reportReloadStatus({
             phase: "reloading",
             pluginIds: [...changedPluginIds],
           });
@@ -361,6 +357,9 @@ export async function reloadGatewayPlugins(
         }
         await checkpoint();
         facts.phase = "activate";
+        if (!replacementControl.get()) {
+          replacementControl.reserve();
+        }
         loaded = await withPluginCache(cache, () => preparePlugins(loadParams));
         nextRegistry = loaded.pluginRegistry;
         const { resolvedConfig } = loaded;
@@ -402,6 +401,9 @@ export async function reloadGatewayPlugins(
           memoryReplacement?.restartPluginIds,
         );
         await checkpoint();
+        if (!replacementControl.get()) {
+          throw new Error("Plugin runtime generation was not reserved before activation");
+        }
         // Publication owns every independent activation tail, even when an earlier one fails.
         const activationErrors: unknown[] = [];
         try {
@@ -424,7 +426,9 @@ export async function reloadGatewayPlugins(
               );
               publishMetadata();
               runtime.pluginMetadataSnapshot = nextMetadata;
-              pluginRuntimeGeneration.setServices(startedServices);
+              const reserved = replacementControl.get()!;
+              reserved.commit();
+              pluginRuntimeGeneration.publishServices(reserved.claim, startedServices);
               publishCapabilities();
               facts.committed = true;
               log.info(`Plugin replacement applied: ${[...changedPluginIds].join(", ")}`);
@@ -491,10 +495,14 @@ export async function reloadGatewayPlugins(
           }),
         };
       } catch (error) {
+        if (!replacementControl.get()) {
+          replacementControl.clearQueuedStatus();
+        }
         let failure = includeServiceStopFailure(error);
         const onCleanupFailure = (message: string) => (cleanupError: unknown) => {
           failure = new AggregateError([failure, cleanupError], message);
         };
+        replacementControl.reject();
         if (!facts.committed) {
           const candidateRegistry =
             loaded?.pluginRegistry ??
@@ -554,7 +562,7 @@ export async function reloadGatewayPlugins(
               if (previousStopStarted) {
                 // Stop is not reversible for all plugins (for example, aborted controllers).
                 // Re-register captured old code instead of reopening a stopped registration.
-                await drainForRecovery(restartDrainSignal, pluginRuntimeGeneration.setReloadStatus);
+                await drainForRecovery(restartDrainSignal, replacementControl.reportReloadStatus);
                 if (!previousHooksStopped) {
                   previousHooksStopped = true;
                   await runLifecycleHooks(
@@ -718,3 +726,4 @@ export async function reloadGatewayPlugins(
     },
   );
 }
+/* oxlint-disable max-lines -- deferred runtime generation reserve expands reload orchestration. */
