@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isPidAlive, runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
-import { afterAll, afterEach, assert, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { createMemoryCliHarness } from "./memory-cli.test-support.js";
 import { readMemoryStats } from "./memory-stats.js";
 import { installTmpDirHarness } from "./test-helpers.js";
@@ -87,7 +87,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it("stats preserves agent scope without writing into the table directory", async () => {
+it("stats preserves agent scope and takes no custody", async () => {
   transport.tsconfigPath = path.join(getTmpDir(), "tsconfig.json");
   const configUrl = new URL("../../tsconfig.json", import.meta.url);
   const { compilerOptions }: { compilerOptions: { paths: Record<string, string[]> } } = JSON.parse(
@@ -114,6 +114,11 @@ it("stats preserves agent scope without writing into the table directory", async
 
 it("reports an empty database without creating a table", async () => {
   await expect(readStats("fixture://empty")).resolves.toBe(0);
+});
+
+it("reports a missing local database without creating it", async () => {
+  await expect(readStats(getDbPath())).resolves.toBe(0);
+  await expect(fs.access(getDbPath())).rejects.toThrow();
 });
 
 it.each([

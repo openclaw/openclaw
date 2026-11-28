@@ -4,6 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as lancedb from "@lancedb/lancedb";
 import { expectDefined } from "@openclaw/normalization-core";
+import { listDirectoryTreeStrict } from "openclaw/plugin-sdk/file-access-runtime";
 import type {
   PluginDoctorStateMigration,
   PluginDoctorStateMigrationContext,
@@ -207,10 +208,10 @@ test("keeps literal $ patterns in home when expanding a tilde dbPath", async () 
 
 async function snapshotTree(root: string): Promise<Record<string, string>> {
   const tree: Record<string, string> = {};
-  for (const entry of await fs.readdir(root, { recursive: true, withFileTypes: true })) {
-    const entryPath = path.join(entry.parentPath, entry.name);
+  for (const { relativePath, dirent } of await listDirectoryTreeStrict(root)) {
+    const entryPath = path.join(root, relativePath);
     const stat = await fs.lstat(entryPath);
-    tree[path.relative(root, entryPath)] = entry.isFile()
+    tree[relativePath] = dirent.isFile()
       ? `${stat.size}:${stat.mtimeMs}:${createHash("sha256")
           .update(await fs.readFile(entryPath))
           .digest("hex")}`
