@@ -206,23 +206,32 @@ describe("CLI preparation for a scheduled account", () => {
   });
 
   it.each([
-    { name: "the delivery channel", configured: true, messageProvider: undefined, refused: false },
+    { name: "the delivery channel", configured: true, messageProvider: undefined },
     {
       name: "cross-channel delivery",
       configured: false,
       messageProvider: undefined,
       messageChannel: "discord",
       sessionKey: "agent:main:telegram:direct:123",
-      refused: false,
     },
-    { name: "a removed account", configured: false, messageProvider: undefined, refused: true },
-    { name: "an explicit provider", configured: true, messageProvider: "slack", refused: true },
+    {
+      name: "a removed account",
+      configured: false,
+      messageProvider: undefined,
+      expectedProcessStatus: "account not listed",
+    },
+    {
+      name: "an explicit provider",
+      configured: true,
+      messageProvider: "slack",
+      expectedProcessStatus: "plugin not loaded",
+    },
   ])(
     "resolves scheduled CLI accounts with $name",
     async ({
       configured,
       messageProvider,
-      refused,
+      expectedProcessStatus,
       messageChannel = "telegram",
       sessionKey = "agent:main:cron:scheduled-account",
     }) => {
@@ -281,8 +290,10 @@ describe("CLI preparation for a scheduled account", () => {
         toolsAllow: ["read"],
         scheduledToolPolicy,
       });
-      if (refused) {
-        await expect(run).rejects.toThrow('Scheduled account "scheduled" is unavailable.');
+      if (expectedProcessStatus !== undefined) {
+        await expect(run).rejects.toThrow(
+          `Scheduled account "scheduled" is unavailable on channel "${messageProvider ?? messageChannel}". Process registry: ${expectedProcessStatus}; scoped registry: no scope.`,
+        );
         return;
       }
       const context = await run;

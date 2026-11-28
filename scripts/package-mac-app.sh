@@ -199,10 +199,26 @@ trap 'interrupt_package_build INT 130' INT
 trap 'interrupt_package_build TERM 143' TERM
 trap 'interrupt_package_build HUP 129' HUP
 
-merge_framework_machos() {
+thin_macho_for_arch() {
+  local file="$1" arch="$2"
+  if [[ "$(/usr/bin/lipo -archs "$file")" == "$arch" ]]; then
+    return
+  fi
+  local thin_file
+  thin_file=$(mktemp "$file.thin.XXXXXX")
+  if ! /usr/bin/lipo -thin "$arch" "$file" -output "$thin_file"; then
+    rm -f "$thin_file"
+    return 1
+  fi
+  chmod "$(/usr/bin/stat -f '%Lp' "$file")" "$thin_file"
+  mv "$thin_file" "$file"
+}
+
+assemble_framework_machos() {
   local primary="$1"
   local dest="$2"
-  shift 2
+  local thin_arch="$3"
+  shift 3
   local others=("$@")
 
   archs_for() {
@@ -223,6 +239,12 @@ merge_framework_machos() {
   while IFS= read -r -d '' file; do
     if /usr/bin/file "$file" | /usr/bin/grep "Mach-O" >/dev/null; then
       local rel="${file#"$primary"/}"
+      # SwiftPM copies binary frameworks intact, including nested helper slices.
+      # Select the app architecture on our copy before the signing pass seals it.
+      if [[ -n "$thin_arch" ]]; then
+        thin_macho_for_arch "$dest/$rel" "$thin_arch"
+        continue
+      fi
       local primary_archs
       primary_archs=$(archs_for "$file")
       IFS=' ' read -r -a primary_arch_array <<< "$primary_archs"
@@ -444,7 +466,9 @@ if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
     fi
     OTHER_FRAMEWORKS+=("$(sparkle_framework_for_arch "$arch")")
   done
-  merge_framework_machos "$SPARKLE_FRAMEWORK_PRIMARY" "$APP_ROOT/Contents/Frameworks/Sparkle.framework" "${OTHER_FRAMEWORKS[@]}"
+  assemble_framework_machos "$SPARKLE_FRAMEWORK_PRIMARY" "$APP_ROOT/Contents/Frameworks/Sparkle.framework" "" "${OTHER_FRAMEWORKS[@]}"
+else
+  assemble_framework_machos "$SPARKLE_FRAMEWORK_PRIMARY" "$APP_ROOT/Contents/Frameworks/Sparkle.framework" "$PRIMARY_ARCH"
 fi
 chmod -R a+rX "$APP_ROOT/Contents/Frameworks/Sparkle.framework"
 
@@ -452,6 +476,9 @@ echo "📦 Copying Swift 6.2 compatibility libraries"
 SWIFT_COMPAT_LIB="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx/libswiftCompatibilitySpan.dylib"
 if [ -f "$SWIFT_COMPAT_LIB" ]; then
   cp "$SWIFT_COMPAT_LIB" "$APP_ROOT/Contents/Frameworks/"
+  if [[ "${#BUILD_ARCHS[@]}" -eq 1 ]]; then
+    thin_macho_for_arch "$APP_ROOT/Contents/Frameworks/libswiftCompatibilitySpan.dylib" "$PRIMARY_ARCH"
+  fi
   chmod +x "$APP_ROOT/Contents/Frameworks/libswiftCompatibilitySpan.dylib"
 elif [[ "$BUILD_CONFIG" == "release" ]]; then
   echo "ERROR: Swift compatibility library not found at $SWIFT_COMPAT_LIB" >&2

@@ -24,6 +24,19 @@ describe("Workboard native execution", () => {
     expect(state.cards[0]?.runId).toBe("run-1");
   });
 
+  it("does not suggest a duplicate start when manual session creation is unconfirmed", async () => {
+    const host = {};
+    const card = createWorkboardCard();
+    const state = getWorkboardState(host);
+    state.loaded = true;
+    state.cards = [card];
+    const client = createWorkboardTestClient({ "sessions.create": {} });
+    expect(await startWorkboardCard({ host, client, card, mode: "manual" })).toBeNull();
+    expect(client.request.mock.calls.map(([method]) => method)).toEqual(["sessions.create"]);
+    expect(state.error).toBe("Couldn’t confirm that a session was created for this card.");
+    expect(state.cards[0]).toEqual(card);
+  });
+
   it("aborts the recorded native session run before updating the card", async () => {
     const host = {};
     const card = createWorkboardCard({
