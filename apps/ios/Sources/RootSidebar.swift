@@ -306,7 +306,7 @@ struct RootSidebar: View {
                     targetID: "section:recent")
             }
             if !self.sessionsCollapsed {
-                let rows = self.sessionRows(in: sections)
+                let rows = Self.sessionRows(in: sections, collapsedParents: self.collapsedParents)
                 if self.model.isRefreshing, self.model.sessions.isEmpty {
                     HStack(spacing: 9) {
                         ProgressView().controlSize(.small)
@@ -543,9 +543,13 @@ struct RootSidebar: View {
         nodes.flatMap { [$0] + self.flattened($0.children) }
     }
 
-    private func sessionRows(in sections: [ChatSessionSidebarModel.Section]) -> [ChatSessionSidebarModel.Row] {
-        let recent = sections.flatMap(\.nodes).sorted { ($0.session.updatedAt ?? 0) > ($1.session.updatedAt ?? 0) }
-        return Array(self.displayRows(recent).prefix(Self.recentSessionCap))
+    static func sessionRows(
+        in sections: [ChatSessionSidebarModel.Section], collapsedParents: Set<String>) -> [ChatSessionSidebarModel.Row]
+    {
+        let rows = ChatSessionSidebarModel.rows(sections.flatMap(\.nodes), byConversationActivity: true) {
+            !collapsedParents.contains($0.id)
+        }
+        return Array(rows.prefix(Self.recentSessionCap))
     }
 
     static let recentSessionCap = 15
