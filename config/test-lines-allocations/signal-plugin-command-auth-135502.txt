@@ -1,0 +1,2 @@
+34
+# Signal access-policy regressions: registered plugin command from an allowlisted direct sender is command-authorized, and ordinary open-group text mentioning a plugin command is not blocked (#135502).

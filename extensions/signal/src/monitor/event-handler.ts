@@ -745,7 +745,7 @@ export function createSignalEventHandler(deps: SignalEvent.SignalEventHandlerDep
         groupId,
         isGroup,
         cfg,
-        hasControlCommand: hasControlCommandInMessage,
+        commandText: messageText,
         contextBinding,
       });
     const accessDecision = await resolveChannelIngress();
