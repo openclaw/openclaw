@@ -51,6 +51,7 @@ export function createBaseParams(overrides: Partial<Params> = {}): Params {
     },
     effectiveRequest: null,
     runtimeSessionKey: "main",
+    runtimeSessionTitle: undefined,
     runtimeSessionMatchesSelectedAgent: true,
     githubIdentity,
     onOpenGitHubConnections: vi.fn(),

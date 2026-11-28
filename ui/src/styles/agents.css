@@ -670,6 +670,13 @@
   }
 }
 
+.agent-tools-preview-session {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .agent-tools-buttons,
 .agent-tools-runtime {
   display: flex;

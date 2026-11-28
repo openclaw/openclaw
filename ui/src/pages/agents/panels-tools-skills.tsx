@@ -610,7 +610,8 @@ export function AgentTools(
         {(preview) => (
           <ToolRuntime
             preview={preview()}
-            sessionKey={params.runtimeSessionKey}
+            sessionKey={params.runtimeSessionMatchesSelectedAgent ? params.runtimeSessionKey : ""}
+            sessionTitle={params.runtimeSessionTitle}
             resolveJump={resolveJump}
           />
         )}

@@ -4,7 +4,6 @@ import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { canDeleteAgent, deleteAgent } from "../../lib/agents/delete-agent.ts";
-import { buildToolsEffectiveRequestKey } from "../../lib/agents/index.ts";
 import { setDefaultAgent } from "../../lib/agents/mutations.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
 import { resolveAgentSettingsAccess } from "../../lib/agents/settings-access.ts";
@@ -14,7 +13,6 @@ import { createInitialCronState } from "../../lib/cron/index.ts";
 import { isCronInventoryInvalidation } from "../../lib/cron/inventory-connection.ts";
 import {
   canCallGatewayMethod,
-  canPresentGatewayMethod,
   type GatewayMethodOperatorScope,
 } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
@@ -40,7 +38,7 @@ import {
 import type { AgentsRouteData } from "./route.ts";
 import { createAgentSelectionDrafts } from "./selection-drafts.ts";
 import { createAgentSkillsReset, createAgentSkillsReader } from "./skills.ts";
-import { createAgentToolsCatalog, createAgentEffectiveTools } from "./tools.ts";
+import { createAgentToolsReads } from "./tools.ts";
 
 export type AgentsPageView = ReturnType<ReturnType<typeof createAgentsPageState>["read"]>;
 
@@ -174,6 +172,7 @@ export function createAgentsPageState(
       identitySaves = selectionDrafts.bindContext(context);
       selectionDrafts.observeGateway(gatewaySnapshot);
       syncGatewayState();
+      previewSession.ensure();
       const nextReadAccessKey = Object.values(settingsAccess().reads).join(",");
       if (readAccessKey !== nextReadAccessKey) {
         readAccessKey = nextReadAccessKey;
@@ -194,24 +193,16 @@ export function createAgentsPageState(
       }
     },
     ensureInitialData: () => ensureInitialData(),
-    onPageActivation: () => effectiveTools.ensure(),
+    onPageActivation: () => {
+      effectiveTools.ensure();
+      previewSession.ensure();
+    },
   });
-  const isCurrentToolsRead = (client: GatewayBrowserClient, generation: number, agentId: string) =>
-    isCurrentRequest(client, generation, agentId, {});
-  const toolsCatalog = createAgentToolsCatalog({
+  const { toolsCatalog, effectiveTools, previewSession } = createAgentToolsReads({
+    getGateway: () => context.gateway,
     scope: () => state,
-    canRead: () =>
-      canPresentGatewayMethod(context.gateway.snapshot, "tools.catalog", "operator.read"),
-    isCurrent: isCurrentToolsRead,
-  });
-  const effectiveTools = createAgentEffectiveTools({
-    scope: () => state,
-    canRead: () =>
-      canPresentGatewayMethod(context.gateway.snapshot, "tools.effective", "operator.read"),
-    isCurrent: isCurrentToolsRead,
+    isCurrent: (client, generation, agentId) => isCurrentRequest(client, generation, agentId, {}),
     isSessionAgent: (agentId) => agentId === chatAgentId(),
-    isPresented: () => state.agentsPanel === "tools",
-    key: (agentId, sessionKey) => buildToolsEffectiveRequestKey(state, { agentId, sessionKey }),
     changed: publish,
   });
 
@@ -221,6 +212,7 @@ export function createAgentsPageState(
       normalizedLocation = syncAgentsCanonicalLocation(context, routeData, normalizedLocation);
     }
     ensureInitialData();
+    previewSession.ensure();
   }
 
   function syncGatewayState() {
@@ -585,6 +577,7 @@ export function createAgentsPageState(
         onOpenGitHubConnections: () =>
           context.navigate("profile", { hash: "#settings-profile-github-connections" }),
         runtimeSessionKey: state.sessionKey,
+        runtimeSessionTitle: previewSession.title,
         runtimeSessionMatchesSelectedAgent: selectedAgentId === chatAgentId(),
         ...configActions.tools,
       },
@@ -635,6 +628,7 @@ export function createAgentsPageState(
     let intentRevision = selection.intentRevision;
     const stops = [
       context.gateway.subscribeEvents((event) => {
+        previewSession.onEvent(event);
         if (isCronInventoryInvalidation(event)) {
           cron.onRefresh(false);
         } else if (event.event === "cron") {
@@ -667,6 +661,7 @@ export function createAgentsPageState(
           navigateToAgent(context, agentId, previousId, state.agentsPanel);
         }
         loadActivePanelData();
+        previewSession.ensure();
         publish();
       }),
       // Roster and file publications adopt metadata before dependent file reads can settle.

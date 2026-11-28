@@ -567,6 +567,7 @@ shows **Loading schema…** until a schema is available.
 In an agent's **Tools** tab, expand a tool group to browse its tools and policy
 details. Browser Find searches group summaries and tools in expanded groups.
 Selecting a tool in **Tool preview** opens its group and focuses its details.
+The preview shows the current session by name when available, or by its session key.
 Collapsing a group closes its tool details.
 
 In an agent's **Files** editor, **Add file** opens a missing optional workspace
