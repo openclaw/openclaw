@@ -1522,6 +1522,13 @@ data. Retain them until the updated Gateway is verified and any needed payload
 has been recovered. Do not overwrite newer runtime state with this original
 copy. This recovery does not establish which writer created the orphan rows.
 
+### Workboard orphaned card rows
+
+With the Gateway stopped and Workboard enabled, `openclaw doctor --fix` backs up
+the Workboard SQLite database (including committed WAL data), then removes only
+supported child rows whose card is missing. Doctor prints the private backup path
+and refuses repair if the database also has unrelated foreign-key violations.
+
 ### Why you cannot go back after updating to 2026.7.2
 
 Every release through `v2026.7.1` used agent schema 1 and state schema 1. The 2026.7.2 release train (starting with `v2026.7.2-beta.1`) migrates your databases forward on first start. That migration is one-way: the data is rewritten into the newer schema, and installing an older OpenClaw afterwards does not undo it. The older build refuses to start with a `newer schema version` error that names the build that owns the database.

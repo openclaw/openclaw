@@ -27,6 +27,10 @@
     "stateMigrations": [
       {
         "id": "workboard-28-kv-to-sqlite"
+      },
+      {
+        "id": "workboard-card-orphans",
+        "doctorOnly": true
       }
     ]
   },

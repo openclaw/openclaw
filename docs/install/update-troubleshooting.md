@@ -575,6 +575,10 @@ running in the installed updater. Version 2026.9.6 admits retained `import.meta`
 syntax. Current snapshot inventory also records unparseable entries as named
 plugin warnings instead of aborting the snapshot.
 
+If `candidate-snapshot-failed` lists Workboard card-child rows referencing missing
+`workboard_cards`, stop the Gateway, run `openclaw doctor --fix` with Workboard
+enabled on a build with the [Workboard repair](/reference/database-schemas/integrity-and-recovery#workboard-orphaned-card-rows), then retry the update.
+
 ### Snapshot cleanup could not be confirmed
 
 An update can stop with `Update snapshot cleanup could not be confirmed` (reason

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import {
   createPluginStateKeyedStoreForTests as createPluginStateKeyedStore,
@@ -69,5 +70,29 @@ describe.each([true, false])("Workboard retirement with count support %s", (supp
     } finally {
       await store.delete("retained");
     }
+  });
+});
+
+it("repairs card orphans only when no unrelated FK violations exist", async () => {
+  const dir = path.join(stateDir, "plugins", "workboard");
+  fs.mkdirSync(dir, { recursive: true });
+  using db = new DatabaseSync(path.join(dir, "workboard.sqlite"));
+  db.exec(`
+    PRAGMA foreign_keys = OFF;
+    PRAGMA journal_mode = WAL;
+    CREATE TABLE workboard_cards (id TEXT PRIMARY KEY);
+    CREATE TABLE workboard_card_labels (card_id TEXT REFERENCES workboard_cards(id) ON DELETE CASCADE);
+    CREATE TABLE unrelated (card_id TEXT REFERENCES workboard_cards(id));
+    INSERT INTO workboard_cards VALUES ('keep');
+    INSERT INTO workboard_card_labels VALUES ('keep'), ('missing');
+    INSERT INTO unrelated VALUES ('missing');`);
+  const repair = expectDefined(stateMigrations[1], "Workboard orphan repair");
+  await expect(repair.migrateLegacyState(input(true))).rejects.toThrow(/unrelated/u);
+  expect(db.prepare("PRAGMA foreign_key_check").all()).toHaveLength(2);
+  db.exec("DROP TABLE unrelated");
+  expect((await repair.migrateLegacyState(input(true))).changes[0]).toContain("backup:");
+  expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  expect(db.prepare("SELECT card_id FROM workboard_card_labels").get()).toEqual({
+    card_id: "keep",
   });
 });
