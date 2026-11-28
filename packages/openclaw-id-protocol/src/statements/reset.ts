@@ -1,4 +1,6 @@
-// Owner reset (OCF-319): a root change the claw's Gateway key vouches for.
+// Owner reset (OCF-319): a root change the claw's Gateway key vouches for. The reset also
+// replaces K_gw, so Discovery's rule for a new K_gw (signed by the new key, with the owner
+// account's one-time code) gates every reset, and a copied old K_gw cannot reset again.
 import type { Ed25519PublicKey } from "../keys.js";
 import type { RootResetBody, SignedStatement } from "./types.js";
 import {
@@ -35,9 +37,9 @@ export type RootResetCheck = { ok: true; reset: RootResetBody } | VerifyFailure;
  * against its pin). Checks, in order: the RootReset is signed by current's K_gw for the same claw
  * (`wrong_signer`, `bad_signature`, `wrong_claw`); its binding_seq is higher than current's
  * (`rollback`); it names next's root (`root_mismatch`), which is a new root (`reset_mismatch`);
- * next's binding is signed by that root (`wrong_signer`, `bad_signature`) and keeps the claw,
- * hostname, K_srv and K_gw at the reset's binding_seq (`wrong_claw`, `host_mismatch`,
- * `reset_mismatch`).
+ * next's binding is signed by that root (`wrong_signer`, `bad_signature`), keeps the claw,
+ * hostname and K_srv, names a new K_gw, and is at the reset's binding_seq (`wrong_claw`,
+ * `host_mismatch`, `reset_mismatch`).
  */
 export async function verifyRootReset(
   current: RootBinding,
@@ -75,8 +77,11 @@ export async function verifyRootReset(
   if (after.hostname !== before.hostname) {
     return failure("host_mismatch", "a reset keeps the hostname");
   }
-  if (after.k_srv !== before.k_srv || after.k_gw !== before.k_gw) {
-    return failure("reset_mismatch", "a reset keeps K_srv and K_gw");
+  if (after.k_srv !== before.k_srv) {
+    return failure("reset_mismatch", "a reset keeps K_srv");
+  }
+  if (after.k_gw === before.k_gw) {
+    return failure("reset_mismatch", "a reset replaces K_gw");
   }
   if (after.binding_seq !== body.binding_seq) {
     return failure("reset_mismatch", "the new binding is not the one the reset names");

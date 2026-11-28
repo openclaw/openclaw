@@ -121,6 +121,7 @@ const KEY_NAMES = [
   "device-4",
   "device-5",
   "gateway",
+  "gateway-2",
   "server",
   "server-2",
   "peer-1",
@@ -215,11 +216,16 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     { device_pub: pub("device-3"), caps: limitedCaps },
   ];
 
-  const bindingBody = (seq: number, server: KeyName = "server", host = VECTOR_HOST) => ({
+  const bindingBody = (
+    seq: number,
+    server: KeyName = "server",
+    host = VECTOR_HOST,
+    gateway: KeyName = "gateway",
+  ) => ({
     claw_id: VECTOR_CLAW_ID,
     hostname: host,
     k_srv: iroh(server),
-    k_gw: pub("gateway"),
+    k_gw: pub(gateway),
     binding_seq: seq,
     root_epoch: ROOT_EPOCH,
     issued_at: VECTOR_ISSUED_AT,
@@ -439,10 +445,10 @@ export async function buildStatementVectors(): Promise<StatementVectors> {
     signers["device-1"],
   );
   // A binding from another root fails the pin at any seq, unless the claw's K_gw vouched for
-  // the new root with a RootReset (owner reset: K_srv and K_gw stay, binding_seq 2 -> 3).
+  // the new root with a RootReset (owner reset: K_srv stays, K_gw is replaced, binding_seq 2 -> 3).
   const newRootBinding = await signStatement(
     "ServerBinding",
-    bindingBody(3, "server-2"),
+    bindingBody(3, "server-2", VECTOR_HOST, "gateway-2"),
     signers["root-2"],
   );
   const resetBody = {

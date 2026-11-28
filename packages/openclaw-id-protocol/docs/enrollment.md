@@ -44,38 +44,49 @@ the mailbox. A refusal leaves the state unchanged and has no events.
 
 ### Owner reset (OCF-319)
 
-The person at the machine always wins. Owner reset replaces a claw's root R with a new one R'
-from a new recovery kit, for a lost or leaked kit or a claw the owner no longer controls
-remotely. It is offered only on the machine: `openclaw id reset` (also with the Gateway
-stopped) and a Control UI button on a direct `local_operator` connection. Over the tunnel the
-Gateway refuses it with `not_local_operator` and the UI does not show it. Anyone who can run
-processes on the Gateway host can reset; that is accepted, because operator access already
-implies it.
+The person at the machine wins, provided they also hold the owner account. Owner reset replaces
+a claw's root R with a new one R' from a new recovery kit, for a lost or leaked kit or a claw the
+owner no longer controls remotely. It needs both:
+
+- **The machine.** It is offered only on the machine: `openclaw id reset` (also with the Gateway
+  stopped) and a Control UI button on a direct `local_operator` connection. Over the tunnel the
+  Gateway refuses it with `not_local_operator` and the UI explains where it can be done instead.
+  A reset started over the tunnel would also cut off the connection it was started from.
+- **The owner account.** A one-time link code from the account that owns the claw at Discovery
+  (the same code a re-bind uses). Discovery accepts the new root only with it, so a copy of the
+  machine's key files alone cannot reset the claw.
 
 Reset:
 
 - makes a new kit (S', R'). The kit is shown once and never stored on the Gateway; R' signs the
   new ServerBinding and is dropped;
+- makes a new Gateway key K_gw' and keeps K_srv. A copied K_gw therefore stops working at the
+  reset and cannot vouch for another one;
 - removes every owner device, member and invite, closes every tunnel session and invalidates
   every tunnel-bound token. Local access is unaffected;
-- keeps K_srv, K_gw, the claw id, the hostname and all claw data. The membership `seq` keeps
-  counting up (Discovery and clients order snapshots by it);
-- publishes, together, the new binding (signed by R', same claw, hostname, K_srv and K_gw,
-  binding_seq + 1) and a `RootReset { claw_id, new_root_pub: R', binding_seq, issued_at }`
-  signed by K_gw, the key in the binding being replaced (discovery.md, "Owner reset").
+- keeps the claw id, the hostname and all claw data. The membership `seq` keeps counting up
+  (Discovery and clients order snapshots by it);
+- publishes, together, the new binding (signed by R', same claw, hostname and K_srv, K_gw',
+  binding_seq + 1), a `RootReset { claw_id, new_root_pub: R', binding_seq, issued_at }` signed by
+  K_gw, the key in the binding being replaced, and the first snapshot signed by K_gw'. The request
+  is signed by K_gw' and carries the owner account's code (discovery.md, "Owner reset").
 
 There is no root rotation, no root epoch and no frozen state: `root_epoch` stays in
 OwnerDeviceCert, ServerBinding and Revocation as the constant 1 (`ROOT_EPOCH`), and any other
 value is `malformed`. Nothing R signed counts under R'.
 
 A browser pinned to R that reads the new descriptor gets `owner_reset` from
-`verifyBindingForPin` when the reset is valid and signed by the K_gw its pin stored: it opens no socket, keeps no new pin and shows
-"The owner reset access to this claw. Set up this browser again." It is set up again with the
-new kit (kit enrollment below) or an approval from a new owner device. A root change without a
-valid RootReset is still `root_mismatch`, the substitution warning.
+`verifyBindingForPin` when the reset is valid and signed by the K_gw its pin stored: it opens no
+socket, keeps no new pin and shows "The owner reset access to this claw. Set up this browser
+again." It is set up again with the new kit (kit enrollment below) or an approval from a new owner
+device. A root change without a valid RootReset is still `root_mismatch`, the substitution
+warning.
 
-Trade-off: K_gw now vouches for a root change, so whoever holds K_gw (the machine) can reset
-the claw. Moving a claw to new machine keys is a separate operation, not designed yet.
+Trade-off: the RootReset is signed by the old K_gw, so a pinned browser can tell a reset from a
+substitution, but that signature alone authorizes nothing at Discovery. Whoever holds the old
+K_gw and the owner account's code can reset; neither alone can. Moving a claw to new machine
+keys without changing its root is a re-bind (`openclaw id rebind`), which needs the current
+kit instead of the machine's old K_gw.
 
 ### Unlinking a claw (OCF-281)
 

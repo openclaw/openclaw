@@ -54,6 +54,12 @@
       "iroh": "iroh:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
       "fp": "fp:9548a580cb2ad711c3e63b645865f833f558c30b58d35ea6992280b069fa641a"
     },
+    "gateway-2": {
+      "seed_hex": "00515dcb7f97d47b53ae8eb2e9fa94634bfc8a1e524e72c5c9480003e8113b75",
+      "ed25519": "ed25519:7ddead81e26bd446b5ce772263a4d5aceea93878d33924dd651c91ba681a720a",
+      "iroh": "iroh:7ddead81e26bd446b5ce772263a4d5aceea93878d33924dd651c91ba681a720a",
+      "fp": "fp:43892f680d48ae66d2ec2c02d3feb4e6057ff1d40e2078256fa249190d9845ec"
+    },
     "server": {
       "seed_hex": "c89bb4b0d7044e1696c9840d7ffb151d41191853a9150fafb32a5a8737988a78",
       "ed25519": "ed25519:7022dac097a512a354b1314190f937d577a2ae458c8d3fae3b2df5f23bed59a4",
@@ -1496,14 +1502,14 @@
             "claw_id": "0123456789abcdef0123456789abcdef",
             "hostname": "studio-k7x2q.crabd.me",
             "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
-            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "k_gw": "ed25519:7ddead81e26bd446b5ce772263a4d5aceea93878d33924dd651c91ba681a720a",
             "binding_seq": 3,
             "root_epoch": 1,
             "issued_at": 1793314800
           },
           "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
           "alg": "ed25519",
-          "sig": "kdfmNMWinzwViv8o_XVp6eFTuUJu9LuM9HABUioYX0GhlKaqNd39M1z42KtyTuUbgSjWeOdqOy-0OqTZDF0NAg"
+          "sig": "xddxp6ZOxkg_2keyHHihLoMgd4vabuUDLvLQt2Qy6fLoy39_KiBVu5ME4Q8hpa6IeSpf9IX_VVe0PyeMgQluBQ"
         }
       },
       "expected": {
@@ -1529,14 +1535,14 @@
             "claw_id": "0123456789abcdef0123456789abcdef",
             "hostname": "studio-k7x2q.crabd.me",
             "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
-            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "k_gw": "ed25519:7ddead81e26bd446b5ce772263a4d5aceea93878d33924dd651c91ba681a720a",
             "binding_seq": 3,
             "root_epoch": 1,
             "issued_at": 1793314800
           },
           "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
           "alg": "ed25519",
-          "sig": "kdfmNMWinzwViv8o_XVp6eFTuUJu9LuM9HABUioYX0GhlKaqNd39M1z42KtyTuUbgSjWeOdqOy-0OqTZDF0NAg"
+          "sig": "xddxp6ZOxkg_2keyHHihLoMgd4vabuUDLvLQt2Qy6fLoy39_KiBVu5ME4Q8hpa6IeSpf9IX_VVe0PyeMgQluBQ"
         },
         "reset": {
           "previous_root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
@@ -1594,14 +1600,14 @@
             "claw_id": "0123456789abcdef0123456789abcdef",
             "hostname": "studio-k7x2q.crabd.me",
             "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
-            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "k_gw": "ed25519:7ddead81e26bd446b5ce772263a4d5aceea93878d33924dd651c91ba681a720a",
             "binding_seq": 3,
             "root_epoch": 1,
             "issued_at": 1793314800
           },
           "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
           "alg": "ed25519",
-          "sig": "kdfmNMWinzwViv8o_XVp6eFTuUJu9LuM9HABUioYX0GhlKaqNd39M1z42KtyTuUbgSjWeOdqOy-0OqTZDF0NAg"
+          "sig": "xddxp6ZOxkg_2keyHHihLoMgd4vabuUDLvLQt2Qy6fLoy39_KiBVu5ME4Q8hpa6IeSpf9IX_VVe0PyeMgQluBQ"
         },
         "reset": {
           "previous_root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",
@@ -1658,14 +1664,14 @@
             "claw_id": "0123456789abcdef0123456789abcdef",
             "hostname": "studio-k7x2q.crabd.me",
             "k_srv": "iroh:16085815b3fd60a7142b61f014f04f0ead101fab6edd6cc51c742ae37e7036cb",
-            "k_gw": "ed25519:3e1af81872e639cce0e29facf80c4a1f987b1e081669cff6eff90268d37d9ab6",
+            "k_gw": "ed25519:7ddead81e26bd446b5ce772263a4d5aceea93878d33924dd651c91ba681a720a",
             "binding_seq": 3,
             "root_epoch": 1,
             "issued_at": 1793314800
           },
           "signer": "ed25519:02447e03f7b33984b1cdb296a64e536e14f593416057cc82661899d67972ef0a",
           "alg": "ed25519",
-          "sig": "kdfmNMWinzwViv8o_XVp6eFTuUJu9LuM9HABUioYX0GhlKaqNd39M1z42KtyTuUbgSjWeOdqOy-0OqTZDF0NAg"
+          "sig": "xddxp6ZOxkg_2keyHHihLoMgd4vabuUDLvLQt2Qy6fLoy39_KiBVu5ME4Q8hpa6IeSpf9IX_VVe0PyeMgQluBQ"
         },
         "reset": {
           "previous_root_pub": "ed25519:449f954c3e538eb4c96e4c18a6d7eca2b58e3c521b31aa00d6244b26ccc07012",

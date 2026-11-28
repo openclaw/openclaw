@@ -116,25 +116,29 @@ After an owner reset on the machine (enrollment.md), the Gateway publishes the n
 with `reset`: the root and binding it replaced and the RootReset signed by that binding's K_gw.
 The RootReset travels in the descriptor, not as a separate object, because a client pinned to
 the old root reads only the descriptor before it decides anything, and Discovery stores the
-descriptor as one row. The request is signed by the same K_gw (a reset keeps it).
+descriptor as one row. A reset always names a new K_gw', so the publish follows the rule for a
+new K_gw: the request is signed by K_gw', carries the new binding's snapshot, and needs a
+one-time code from the claw owner's account (`code`), spent in the same write. A copied old K_gw
+can sign a RootReset but cannot publish it.
 
 - **Accepting a new root.** When a republished descriptor's root differs from the stored one,
-  Discovery accepts it only if `checkDescriptorRootReset(stored, next)` passes: `reset` names the
-  stored root and the exact stored binding (`reset_mismatch`), and `verifyRootReset` passes with
-  the stored binding as the current one: signed by the stored K_gw, same claw, binding_seq
-  higher than the stored one, the new binding signed by `new_root_pub` with the same hostname,
-  K_srv and K_gw. A new root without `reset` is `root_mismatch`. Refusals are
-  `invalid_statement`.
+  Discovery accepts it only if the request carries a valid owner-account code and
+  `checkDescriptorRootReset(stored, next)` passes: `reset` names the stored root and the exact
+  stored binding (`reset_mismatch`), and `verifyRootReset` passes with the stored binding as the
+  current one: signed by the stored K_gw, same claw, binding_seq higher than the stored one, the
+  new binding signed by `new_root_pub` with the same hostname and K_srv and a new K_gw. A new
+  root without `reset` is `root_mismatch`. Refusals are `invalid_statement`; a missing, used,
+  expired or foreign code is `code_invalid`.
 - **Same root.** A republished descriptor with the stored root is checked as before
   (`verifyBindingForPin` with the stored root as the pin); `reset` is ignored there but still
   checked by `checkDescriptorConsistency`.
 - **How long `reset` stays.** The Gateway includes `reset` with the binding the reset created and
   drops it on the next binding change. After the new root's first binding change, a browser
   that missed the reset sees `root_mismatch` and is set up again; this is accepted.
-- **Rows.** A reset leaves the claw id, hostname, K_srv, K_gw and owner account unchanged. The
-  stored snapshot is for the old binding_seq, so owner and member relay rows drop until the
-  Gateway publishes the snapshot for the new binding (it has no owner devices or members, so
-  this matches the claw).
+- **Rows.** A reset leaves the claw id, hostname, K_srv and owner account unchanged and replaces
+  K_gw, which retires the old key's Gateway sockets. The snapshot published with it is for the
+  new binding and has no owner devices or members, so owner and member relay rows drop, which
+  matches the claw.
 
 ### Unlinking
 

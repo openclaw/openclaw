@@ -267,14 +267,15 @@ steps 2-4 under the pinned root (`reset.previous_root_pub`) and names that same 
 3. It names the served root (`root_mismatch`), which differs from the previous one
    (`reset_mismatch`).
 4. The served binding is signed by that root (`wrong_signer`, `bad_signature`), for the same claw
-   and hostname (`wrong_claw`, `host_mismatch`), with the same K_srv and K_gw and the reset's
+   and hostname (`wrong_claw`, `host_mismatch`), with the same K_srv, a new K_gw and the reset's
    binding_seq (`reset_mismatch`).
 
 Any failure is reported as `root_mismatch` (the detail names the step), so a forged reset
 still shows the substitution warning. `owner_reset` is not a pass: the client dials nothing,
 stores nothing, and offers to set the browser up again with the new kit. It proves only that
-whoever holds the K_gw this browser already verified changed the root, which is what owner
-reset means.
+whoever holds the K_gw this browser already verified changed the root. Discovery separately
+requires the owner account's code before it publishes such a reset (discovery.md, "Owner
+reset").
 
 The K_gw must come from the pin, not from the descriptor: the previous binding is signed only by
 the old root, and a reset is often done because that root's kit leaked. With the old kit alone,
@@ -296,7 +297,7 @@ Discovery's snapshot (`getSnapshot`, untrusted):
 1. Verify the snapshot under the binding's K_gw (`verifyMembershipSnapshot`).
 2. A verified snapshot names a higher binding_seq than the binding it verified under ->
    `snapshot_ahead`, and nothing of it is stored: only R-signed bindings raise the binding_seq
-   high-water. A re-bind always replaces K_gw, so an honest K_gw never names a binding beyond
+   high-water. A re-bind and an owner reset always replace K_gw, so an honest K_gw never names a binding beyond
    its own; a stolen one must not be able to retire every binding a client can still verify.
 3. A binding below the highest binding_seq this client verified -> `stale_binding`. This is
    how a replaced server key is retired: the new binding's higher binding_seq, not a
