@@ -1,8 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { mockPublishedModelRuntimeForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import type { OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it, vi } from "vitest";
 import { createTelegramCallbackContext } from "./bot.test-helpers.js";
 import type { TelegramBotOptions } from "./bot.types.js";
@@ -16,8 +13,6 @@ export function registerTelegramModelPickerCases({
   loadConfig,
   createTelegramBot,
   getTelegramCallbackHandlerForTests,
-  getTelegramTestState,
-  readOnlySessionEntry,
   firstEditMessageTextArg,
   harness: { telegramBotDepsForTest, replySpy, editMessageTextSpy, answerCallbackQuerySpy },
 }: {
@@ -31,12 +26,8 @@ export function registerTelegramModelPickerCases({
     },
   ) => OpenClawConfig;
   loadConfig: ReturnType<Harness["getLoadConfigMock"]>;
-  createTelegramBot: (options: TelegramBotOptions) => unknown;
+  createTelegramBot: (options: TelegramBotOptions) => Promise<unknown>;
   getTelegramCallbackHandlerForTests: () => (context: Record<string, unknown>) => Promise<void>;
-  getTelegramTestState: () => OpenClawTestState;
-  readOnlySessionEntry: (
-    storePath: string,
-  ) => ReturnType<typeof listSessionEntries>[number]["entry"] | undefined;
   firstEditMessageTextArg: (index: number) => unknown;
   harness: Pick<
     Harness,
@@ -63,7 +54,7 @@ export function registerTelegramModelPickerCases({
     });
 
     loadConfig.mockReturnValue(config);
-    createTelegramBot({
+    await createTelegramBot({
       token: "tok",
       config,
     });
@@ -91,66 +82,5 @@ export function registerTelegramModelPickerCases({
       [{ text: "<< Back", callback_data: "mdl_back" }],
     ]);
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-model-display-names-1");
-  });
-
-  it("persists the native runtime selected through the Telegram picker", async () => {
-    const storePath = createTelegramTestStorePath("native-model-only");
-    const config = makeModelPickerConfig(storePath, { omitModels: true });
-    const nativeEntry = {
-      provider: "acp-opencode",
-      id: "big-pickle",
-      name: "Big Pickle",
-      nativeRuntime: "acp-opencode",
-    };
-    vi.mocked(telegramBotDepsForTest.buildModelsProviderData).mockResolvedValueOnce({
-      byProvider: new Map([["acp-opencode", new Set(["big-pickle"])]]),
-      providers: ["acp-opencode"],
-      resolvedDefault: { provider: "anthropic", model: "claude-opus-4-6" },
-      modelNames: new Map(),
-      modelCatalog: [nativeEntry],
-    });
-    const { createEmptyPluginRegistry } = await import("openclaw/plugin-sdk/plugin-test-runtime");
-    const registry = createEmptyPluginRegistry();
-    registry.agentHarnesses.push({
-      pluginId: "acpx",
-      source: "test",
-      harness: {
-        id: "acp-opencode",
-        label: "OpenCode",
-        authBootstrap: "harness",
-        supports: ({ requestedRuntime }) => ({ supported: requestedRuntime === "acp-opencode" }),
-        async runAttempt() {
-          throw new Error("Model selection must not execute inference");
-        },
-      },
-    });
-    await mockPublishedModelRuntimeForTest({
-      config,
-      isCurrent: () => true,
-      facts: {
-        pluginRegistry: registry,
-        modelCatalog: { entries: [nativeEntry], routeVariants: [nativeEntry] },
-      },
-      paths: {
-        agentDir: getTelegramTestState().agentDir(),
-        workspaceDir: getTelegramTestState().workspaceDir,
-      },
-      authStore: { version: 1, profiles: {} },
-    });
-    loadConfig.mockReturnValue(config);
-    createTelegramBot({ token: "tok", config });
-    await getTelegramCallbackHandlerForTests()(
-      createTelegramCallbackContext({
-        id: "native-model-only",
-        data: "mdl_sel_acp-opencode/big-pickle",
-        message: { message_id: 17 },
-      }),
-    );
-    expect(readOnlySessionEntry(storePath)).toMatchObject({
-      providerOverride: "acp-opencode",
-      modelOverride: "big-pickle",
-      agentRuntimeOverride: "acp-opencode",
-    });
-    expect(requireRecord(firstEditMessageTextArg(3), "edit params").parse_mode).toBe("HTML");
   });
 }

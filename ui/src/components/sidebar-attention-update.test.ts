@@ -1,21 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
+import { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { buildUpdateInboxEntry } from "./sidebar-attention-entries.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 
-function contextWithGitStatus(
-  status: "ahead" | "behind" | "current" | "diverged" | "unavailable",
-): ApplicationContext {
+function contextWithGitStatus(status: "behind" | "current" | "unavailable"): ApplicationContext {
   const git =
     status === "current"
       ? { status }
-      : status === "ahead"
-        ? { status, commitsAhead: 1 }
-        : status === "behind"
-          ? { status, commitsBehind: 50 }
-          : status === "diverged"
-            ? { status, commitsAhead: 1, commitsBehind: 50 }
-            : { status, reason: "fetch-failed" };
+      : status === "behind"
+        ? { status, commitsBehind: 50 }
+        : { status, reason: "fetch-failed" };
   return {
     gateway: { snapshot: { phase: "connected" } },
     overlays: {
@@ -23,11 +18,11 @@ function contextWithGitStatus(
         updateAvailable: {
           currentVersion: "2026.9.2",
           latestVersion: "2026.9.3",
-          channel: "dev",
+          channel: "stable",
           commitsBehind: 246,
         },
         updateSchedule: {
-          channel: "dev",
+          channel: "stable",
           autoEnabled: false,
           install: { kind: "git", git },
           target: {
@@ -37,49 +32,83 @@ function contextWithGitStatus(
             commitsBehind: 246,
           },
         },
-        updateRunning: false,
-        updateReconciliationPending: false,
-        updateStatusBanner: null,
       },
     },
   } as unknown as ApplicationContext;
 }
 
-function resolveUpdateEntry(context: ApplicationContext) {
-  const state = resolveSidebarUpdateAttention(context);
-  const entry = buildUpdateInboxEntry({
-    canDismiss: state.canUpdate,
-    dismissal: state.dismissal,
-    forced: state.forced,
-    requiresAction: state.actionable,
-    severity: "warning",
-    visible: state.present,
-  });
-  return { entry, state };
-}
+it.each([
+  ["stable", "stable", "behind", true],
+  ["beta", "beta", "behind", true],
+  ["dev", "dev", "behind", false],
+  ["extended-stable", "extended-stable", "behind", false],
+  ["unknown", "unknown", "behind", false],
+  ["stable", "dev", "behind", false],
+  ["stable", null, "behind", true],
+  ["dev", null, "behind", false],
+  ["stable", "stable", "current", false],
+  ["stable", "stable", "unavailable", true],
+] as const)("eligibility %s / %s / %s", (advertised, selected, status, visible) => {
+  const context = contextWithGitStatus(status);
+  const snapshot = context.overlays.snapshot;
+  snapshot.updateAvailable!.channel = advertised;
+  snapshot.updateSchedule =
+    selected === null ? null : { ...snapshot.updateSchedule!, channel: selected };
+  expect(resolveSidebarUpdateAttention(context) !== null).toBe(visible);
+});
 
-describe("update attention", () => {
-  it.each(["current", "ahead"] as const)(
-    "retires stale git availability from the Inbox after a refreshed %s comparison",
-    (status) => {
-      const { entry, state } = resolveUpdateEntry(contextWithGitStatus(status));
-      expect(state.present).toBe(false);
-      expect(entry).toBeNull();
-    },
-  );
+it("keeps explicit dev update progress and errors visible", () => {
+  const context = contextWithGitStatus("behind");
+  context.overlays.snapshot.updateSchedule!.channel = "dev";
+  context.overlays.snapshot.updateAvailable!.channel = "dev";
+  context.overlays.snapshot.updateRunning = true;
+  expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
+  context.overlays.snapshot.updateRunning = false;
+  context.overlays.snapshot.updateStatusBanner = { tone: "danger", text: "Update failed" };
+  expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
+});
 
-  it("retains cached git availability when the refreshed comparison is unavailable", () => {
-    const { entry, state } = resolveUpdateEntry(contextWithGitStatus("unavailable"));
-    expect(state.present).toBe(true);
-    expect(entry).not.toBeNull();
-  });
+it.each([
+  ["installed ahead", "2026.10.1", "2026.9.4", "2026.9.4", false],
+  ["serving moved", "2026.9.4", "2026.10.1", "2026.9.4", true],
+  ["installed ahead, no observation", "2026.10.1", "2026.9.4", undefined, false],
+  ["newer Gateway, no observation", "2026.9.4", "2026.10.1", undefined, false],
+] as const)(
+  "keeps only current failed-run attention: %s",
+  (_name, installed, version, recorded, historical) => {
+    const context = contextWithGitStatus("current");
+    context.overlays.snapshot.updateRun = createUpdateRunFixture({
+      status: "failed",
+      before: { version: installed },
+      verification: recorded ? { serviceRunning: true, runningVersion: recorded } : {},
+      finishedAtMs: Date.now(),
+    });
+    context.gateway.snapshot.hello = {
+      type: "hello-ok",
+      protocol: 1,
+      server: { version },
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      features: { methods: [] },
+    };
+    expect(resolveSidebarUpdateAttention(context) !== null).toBe(!historical);
+  },
+);
 
-  it.each(["behind", "diverged"] as const)(
-    "keeps refreshed %s git availability in the Inbox",
-    (status) => {
-      const { entry, state } = resolveUpdateEntry(contextWithGitStatus(status));
-      expect(state.present).toBe(true);
-      expect(entry).not.toBeNull();
-    },
-  );
+it.each([
+  ["stable admin update", "operator.admin", false, true],
+  ["read-only update", "operator.read", false, false],
+  ["forced update", "operator.admin", true, false],
+] as const)("projects %s with explicit dismissal policy", (_name, scope, forced, dismissible) => {
+  const context = contextWithGitStatus("behind");
+  context.gateway.snapshot.client = new GatewayBrowserClient({ url: "ws://gateway.test" });
+  context.gateway.snapshot.hello = {
+    type: "hello-ok",
+    protocol: 1,
+    server: { bootId: "boot-a" },
+    auth: { role: "operator", scopes: [scope] },
+    features: { methods: ["update.run"] },
+  };
+  context.overlays.snapshot.updateRunning = forced;
+
+  expect(Boolean(resolveSidebarUpdateAttention(context)?.dismissal)).toBe(dismissible);
 });

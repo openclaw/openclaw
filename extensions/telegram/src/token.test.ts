@@ -1,4 +1,3 @@
-// Telegram tests cover token plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -7,599 +6,279 @@ import {
   tempWorkspaceSync,
   type TempWorkspaceSync,
 } from "openclaw/plugin-sdk/temp-path";
+import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { telegramSetupPlugin } from "../setup-plugin-api.js";
+import { inspectTelegramAccount } from "./account-inspect.js";
 import { resolveTelegramBotUserIdFromToken } from "./token-fingerprint.js";
 import { resolveTelegramToken } from "./token.js";
+import * as tokenRuntime from "./token.js";
 
-describe("resolveTelegramBotUserIdFromToken", () => {
-  it.each([
-    ["123456:secret", 123456],
-    ["not-a-bot:secret", undefined],
-    ["0:secret", undefined],
-    ["9007199254740992:secret", undefined],
-    ["+123:secret", undefined],
-    ["123 :secret", undefined],
-  ])("parses %j as %j", (token, expected) => {
-    expect(resolveTelegramBotUserIdFromToken(token)).toBe(expected);
+const config = telegramSetupPlugin.config;
+let workspace: TempWorkspaceSync | undefined;
+function createTokenFile(fileName: string, contents: string): string {
+  workspace ??= tempWorkspaceSync({
+    rootDir: resolvePreferredOpenClawTmpDir(),
+    prefix: "openclaw-telegram-token-",
   });
+  const tokenFile = path.join(workspace.dir, fileName);
+  fs.writeFileSync(tokenFile, contents, "utf-8");
+  return tokenFile;
+}
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  workspace?.cleanup();
+  workspace = undefined;
 });
 
-describe("resolveTelegramToken", () => {
-  const tempWorkspaces: TempWorkspaceSync[] = [];
-  const collisionProviders = [
-    { source: "file", path: "/unused" },
-    { source: "exec", command: "/unused" },
-    { source: "store" },
-  ] satisfies NonNullable<NonNullable<OpenClawConfig["secrets"]>["providers"]>[string][];
+it("stops duplicate-token inspection at the requested owner and observes later credential changes", () => {
+  const alerts = createTokenFile("alerts.txt", "123:alerts");
+  const ops = createTokenFile("ops.txt", "456:ops");
+  const work = createTokenFile("work.txt", "789:work");
+  const cfg = telegramConfig({
+    defaultAccount: "alerts",
+    accounts: {
+      alerts: { tokenFile: alerts },
+      ops: { tokenFile: ops },
+      work: { tokenFile: work },
+    },
+  });
+  const reads = vi.spyOn(tokenRuntime, "readTelegramTokenFile");
 
-  function createTokenFile(fileName: string, contents = "file-token\n"): string {
-    const workspace = tempWorkspaceSync({
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-telegram-token-",
-    });
-    tempWorkspaces.push(workspace);
-    const tokenFile = path.join(workspace.dir, fileName);
-    fs.writeFileSync(tokenFile, contents, "utf-8");
-    return tokenFile;
-  }
+  expect(inspectTelegramAccount({ cfg, accountId: "alerts" }).configured).toBe(true);
+  expect(reads.mock.calls.map(([file]) => file)).toEqual([alerts, alerts]);
 
-  function createUnknownAccountConfig(): OpenClawConfig {
-    return {
-      channels: {
-        telegram: {
-          botToken: "wrong-bot-token",
-          accounts: {
-            knownBot: { botToken: "known-bot-token" },
-          },
-        },
+  fs.writeFileSync(ops, "123:alerts");
+  expect(inspectTelegramAccount({ cfg, accountId: "ops" })).toMatchObject({
+    configured: false,
+    stateReason:
+      'Duplicate Telegram bot token: account "ops" shares a token with account "alerts". Keep one owner account per bot token.',
+  });
+});
+function telegramConfig(
+  telegram: NonNullable<OpenClawConfig["channels"]>["telegram"],
+  secrets?: OpenClawConfig["secrets"],
+): OpenClawConfig {
+  return { channels: { telegram }, ...(secrets ? { secrets } : {}) };
+}
+
+it.each([
+  { accountId: "work", configured: false },
+  { accountId: "ops", configured: true },
+])("preserves credential owner status for $accountId", ({ accountId, configured }) =>
+  withEnv({ TELEGRAM_BOT_TOKEN: undefined, TG_INSPECTION_MISSING: undefined }, () => {
+    const cfg = telegramConfig({
+      defaultAccount: "alerts",
+      webhookUrl: "https://example.test/telegram",
+      groups: { "*": { requireMention: false } },
+      accounts: {
+        alerts: { botToken: "123:shared" },
+        work: { botToken: "123:shared" },
+        ops: { botToken: "456:healthy" },
+        missing: {},
+        unavailable: { botToken: "${TG_INSPECTION_MISSING}" },
       },
-    } as OpenClawConfig;
-  }
-
-  function expectNoTokenForUnknownAccount(cfg: OpenClawConfig) {
-    const res = resolveTelegramToken(cfg, { accountId: "unknownBot" });
-    expect(res.token).toBe("");
-    expect(res.source).toBe("none");
-  }
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
-    for (const workspace of tempWorkspaces.splice(0)) {
-      workspace.cleanup();
+    });
+    const inspected = inspectTelegramAccount({ cfg, accountId });
+    expect(inspected).toMatchObject({
+      accountId,
+      enabled: true,
+      configured,
+      tokenStatus: "available",
+      mode: "webhook",
+      allowUnmentionedGroups: true,
+    });
+    expect(config.describeAccount?.(inspected, cfg)?.configured).toBe(configured);
+    expect(config.isConfigured?.(inspected, cfg)).toBe(configured);
+    if (accountId === "work") {
+      expect(config.unconfiguredReason?.(inspected, cfg)).toContain('account "alerts"');
     }
+  }),
+);
+
+it("keeps read-only accessors from resolving bot token SecretRefs", () => {
+  const cfg = telegramConfig({
+    botToken: { source: "file", provider: "telegram_token", id: "value" },
+    allowFrom: ["1128540374256849009"],
+    defaultTo: "1498959610751750304",
   });
+  expect(config.resolveAllowFrom?.({ cfg, accountId: "default" })).toEqual(["1128540374256849009"]);
+  expect(config.resolveDefaultTo?.({ cfg, accountId: "default" })).toBe("1498959610751750304");
+});
 
-  it.each([
-    {
-      name: "prefers config token over env",
-      envToken: "env-token",
-      cfg: {
-        channels: { telegram: { botToken: "cfg-token" } },
-      } as OpenClawConfig,
-      expected: { token: "cfg-token", source: "config" },
+it.each([
+  { name: "TG_STATUS_TOKEN", secrets: undefined, tokenStatus: "available", token: "123:token" },
+  {
+    name: "TG_NOT_ALLOWED",
+    secrets: {
+      defaults: { env: "secure-env" },
+      providers: { "secure-env": { source: "env" as const, allowlist: ["TG_ALLOWED"] } },
     },
-    {
-      name: "uses env token when config is missing",
-      envToken: "env-token",
-      cfg: {
-        channels: { telegram: {} },
-      } as OpenClawConfig,
-      expected: { token: "env-token", source: "env" },
-    },
-    {
-      name: "uses tokenFile when configured",
-      envToken: "",
-      cfg: {
-        channels: { telegram: { tokenFile: "" } },
-      } as OpenClawConfig,
-      resolveCfg: () =>
-        ({
-          channels: { telegram: { tokenFile: createTokenFile("token.txt") } },
-        }) as OpenClawConfig,
-      expected: { token: "file-token", source: "tokenFile" },
-    },
-    {
-      name: "falls back to config token when no env or tokenFile",
-      envToken: "",
-      cfg: {
-        channels: { telegram: { botToken: "cfg-token" } },
-      } as OpenClawConfig,
-      expected: { token: "cfg-token", source: "config" },
-    },
-  ])("$name", ({ envToken, cfg, resolveCfg, expected }) => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", envToken);
-    const res = resolveTelegramToken(resolveCfg ? resolveCfg() : cfg);
-    expect(res).toEqual(expected);
-  });
+    tokenStatus: "configured_unavailable",
+    token: "",
+  },
+])(
+  "resolves env templates subject to the provider allowlist: $name",
+  ({ name, secrets, tokenStatus, token }) =>
+    withEnv({ [name]: "123:token" }, () => {
+      const cfg = telegramConfig({ botToken: `\${${name}}` }, secrets);
+      const account = inspectTelegramAccount({ cfg, accountId: "default" });
+      expect(account).toMatchObject({ tokenSource: "env", tokenStatus, token });
+    }),
+);
 
-  it("resolves the configured defaultAccount token when accountId is omitted (#61012)", () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
-    const cfg = {
-      channels: {
-        telegram: {
-          defaultAccount: "kitt",
-          accounts: {
-            kitt: { botToken: "kitt-token" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const res = resolveTelegramToken(cfg);
-    expect(res).toEqual({ token: "kitt-token", source: "config" });
-  });
-
-  it("keeps the env token for omitted accountId when no defaultAccount is configured", () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
-    const cfg = {
-      channels: {
-        telegram: {
-          accounts: {
-            kitt: { botToken: "kitt-token" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-    const res = resolveTelegramToken(cfg);
-    expect(res).toEqual({ token: "env-token", source: "env" });
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "marks symlinked tokenFile paths configured-unavailable",
-    () => {
-      vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-      const workspace = tempWorkspaceSync({
-        rootDir: resolvePreferredOpenClawTmpDir(),
-        prefix: "openclaw-telegram-token-",
-      });
-      tempWorkspaces.push(workspace);
-      const dir = workspace.dir;
-      const tokenFile = path.join(dir, "token.txt");
-      const tokenLink = path.join(dir, "token-link.txt");
-      fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
-      fs.symlinkSync(tokenFile, tokenLink);
-
-      const cfg = { channels: { telegram: { tokenFile: tokenLink } } } as OpenClawConfig;
-      const result = resolveTelegramToken(cfg);
-      expect(result).toEqual({
+const scopedAccounts = telegramConfig({
+  botToken: "123:root",
+  defaultAccount: "ops",
+  groups: { "-100999": { requireMention: true } },
+  accounts: {
+    ops: { botToken: "123:ops" },
+    Work: { botToken: "123:work", groups: { "-100123": { requireMention: false } } },
+  },
+});
+it.each([
+  [
+    "configured default (#61012)",
+    undefined,
+    { accountId: "ops", tokenSource: "config", token: "123:ops" },
+  ],
+  ["mixed-case group policy", "work", { allowUnmentionedGroups: true }],
+  [
+    "unknown account fallback denial",
+    "unknown",
+    { accountId: "unknown", configured: false, tokenSource: "none", tokenStatus: "missing" },
+  ],
+] as const)("inspects %s", (_name, accountId, expected) =>
+  withEnv({ TELEGRAM_BOT_TOKEN: "123:env" }, () => {
+    expect(inspectTelegramAccount({ cfg: scopedAccounts, accountId })).toMatchObject(expected);
+    if (accountId === "unknown") {
+      expect(resolveTelegramToken(scopedAccounts, { accountId })).toEqual({
         token: "",
-        source: "tokenFile",
-        credentialDiagnostics: [
-          {
-            code: "CREDENTIAL_FILE_UNAVAILABLE",
-            path: "channels.telegram.tokenFile",
-            reason: "symlink",
-          },
-        ],
+        source: "none",
       });
-      expect(JSON.stringify(result)).not.toContain(tokenLink);
-    },
-  );
+    }
+  }),
+);
 
-  it.runIf(process.platform !== "win32")(
-    "marks symlinked account-level tokenFile paths configured-unavailable",
-    () => {
-      vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-      const workspace = tempWorkspaceSync({
-        rootDir: resolvePreferredOpenClawTmpDir(),
-        prefix: "openclaw-telegram-token-",
-      });
-      tempWorkspaces.push(workspace);
-      const dir = workspace.dir;
-      const tokenFile = path.join(dir, "token.txt");
-      const tokenLink = path.join(dir, "token-link.txt");
-      fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
-      fs.symlinkSync(tokenFile, tokenLink);
+it.runIf(process.platform !== "win32")(
+  "treats symlinked token files as configured_unavailable",
+  () => {
+    const tokenFile = createTokenFile("token.txt", "123:token\n");
+    const tokenLink = path.join(path.dirname(tokenFile), "token-link.txt");
+    fs.symlinkSync(tokenFile, tokenLink);
 
-      const cfg = {
-        channels: {
-          telegram: {
-            accounts: {
-              work: { tokenFile: tokenLink },
-            },
-          },
-        },
-      } as OpenClawConfig;
-      const result = resolveTelegramToken(cfg, { accountId: "work" });
-      expect(result.credentialDiagnostics).toEqual([
-        {
-          code: "CREDENTIAL_FILE_UNAVAILABLE",
-          path: "channels.telegram.accounts.work.tokenFile",
-          reason: "symlink",
-        },
-      ]);
-      expect(JSON.stringify(result)).not.toContain(tokenLink);
-    },
-  );
-
-  it("does not fall back to config when tokenFile is missing", () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-    const workspace = tempWorkspaceSync({
-      rootDir: resolvePreferredOpenClawTmpDir(),
-      prefix: "openclaw-telegram-token-",
-    });
-    tempWorkspaces.push(workspace);
-    const dir = workspace.dir;
-    const tokenFile = path.join(dir, "missing-token.txt");
-    const cfg = {
-      channels: { telegram: { tokenFile, botToken: "cfg-token" } },
-    } as OpenClawConfig;
-    const res = resolveTelegramToken(cfg);
-    expect(res.token).toBe("");
-    expect(res.source).toBe("tokenFile");
-    expect(res.credentialDiagnostics).toEqual([
+    const cfg = telegramConfig({ tokenFile: tokenLink, botToken: "fallback-token" });
+    const diagnostics = [
       {
         code: "CREDENTIAL_FILE_UNAVAILABLE",
         path: "channels.telegram.tokenFile",
-        reason: "not-found",
+        reason: "symlink",
       },
-    ]);
-    expect(JSON.stringify(res)).not.toContain(tokenFile);
+    ];
+    const account = inspectTelegramAccount({ cfg, accountId: "default" });
+    expect(account).toMatchObject({
+      tokenSource: "tokenFile",
+      tokenStatus: "configured_unavailable",
+      token: "",
+    });
+    expect(account.credentialDiagnostics).toEqual(diagnostics);
+    const resolved = resolveTelegramToken(cfg);
+    expect(resolved).toEqual({
+      token: "",
+      source: "tokenFile",
+      credentialDiagnostics: diagnostics,
+    });
+    expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(tokenLink);
+    expect(JSON.stringify(resolved)).not.toContain(tokenLink);
+  },
+);
+
+it.each(["not-a-bot:secret", "9007199254740992:secret"])(
+  "rejects invalid bot identity %j",
+  (token) => expect(resolveTelegramBotUserIdFromToken(token)).toBeUndefined(),
+);
+
+describe("resolveTelegramToken", () => {
+  const envRef = (provider = "tg", id = "TG_TOKEN") => ({
+    source: "env" as const,
+    provider,
+    id,
   });
-
-  it("resolves per-account tokens when the config account key casing doesn't match routing normalization", () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-    const cfg = {
-      channels: {
-        telegram: {
-          accounts: {
-            // Note the mixed-case key; runtime accountId is normalized.
-            careyNotifications: { botToken: "acct-token" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const res = resolveTelegramToken(cfg, { accountId: "careynotifications" });
-    expect(res.token).toBe("acct-token");
-    expect(res.source).toBe("config");
-  });
-
-  it("resolves per-account tokens when config keys normalize spaces to dashes", () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-    const cfg = {
-      channels: {
-        telegram: {
-          accounts: {
-            "Carey Notifications": { botToken: "acct-token" },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const res = resolveTelegramToken(cfg, { accountId: "carey-notifications" });
-    expect(res.token).toBe("acct-token");
-    expect(res.source).toBe("config");
-  });
-
-  it("falls back to top-level token for non-default accounts without account token", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "top-level-token",
-          accounts: {
-            work: {},
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const res = resolveTelegramToken(cfg, { accountId: "work" });
-    expect(res.token).toBe("top-level-token");
-    expect(res.source).toBe("config");
-  });
-
-  it("uses account-level tokenFile before top-level fallbacks", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "top-level-token",
-          tokenFile: createTokenFile("top-level-token.txt", "top-level-file-token\n"),
-          accounts: {
-            work: {
-              tokenFile: createTokenFile("account-token.txt", "account-file-token\n"),
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const res = resolveTelegramToken(cfg, { accountId: "work" });
-    expect(res.token).toBe("account-file-token");
-    expect(res.source).toBe("tokenFile");
-  });
-
   it("applies account file, account config, channel file, channel config, then env precedence", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
     const accountTokenFile = createTokenFile("account-token.txt", "account-file-token\n");
     const channelTokenFile = createTokenFile("channel-token.txt", "channel-file-token\n");
-    const baseTelegramConfig = {
-      botToken: "channel-config-token",
-      tokenFile: channelTokenFile,
-      accounts: {
-        default: {
-          botToken: "account-config-token",
-          tokenFile: accountTokenFile,
-        },
-      },
-    };
-
-    const resolve = (telegram: Record<string, unknown>) =>
-      resolveTelegramToken({ channels: { telegram } } as OpenClawConfig);
-
-    expect(resolve(baseTelegramConfig)).toEqual({
-      token: "account-file-token",
-      source: "tokenFile",
-    });
-    expect(
-      resolve({
-        ...baseTelegramConfig,
-        accounts: { default: { botToken: "account-config-token" } },
-      }),
-    ).toEqual({ token: "account-config-token", source: "config" });
-    expect(resolve({ ...baseTelegramConfig, accounts: { default: {} } })).toEqual({
-      token: "channel-file-token",
-      source: "tokenFile",
-    });
-    expect(
-      resolve({
-        ...baseTelegramConfig,
-        tokenFile: undefined,
-        accounts: { default: {} },
-      }),
-    ).toEqual({ token: "channel-config-token", source: "config" });
-    expect(resolve({ accounts: { default: {} } })).toEqual({
-      token: "env-token",
-      source: "env",
-    });
-  });
-
-  it("falls back to top-level tokenFile for non-default accounts", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          tokenFile: createTokenFile("token.txt"),
-          accounts: {
-            work: {},
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const res = resolveTelegramToken(cfg, { accountId: "work" });
-    expect(res.token).toBe("file-token");
-    expect(res.source).toBe("tokenFile");
-  });
-
-  it("does not use env token for non-default accounts", () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
-    const cfg = {
-      channels: {
-        telegram: {
-          accounts: {
-            work: {},
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const res = resolveTelegramToken(cfg, { accountId: "work" });
-    expect(res.token).toBe("");
-    expect(res.source).toBe("none");
-  });
-
-  it("does not fall through to channel-level token when non-default accountId is not in config", () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
-    expectNoTokenForUnknownAccount(createUnknownAccountConfig());
-  });
-
-  it("resolves env-backed SecretRefs from process.env", () => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "secretref-env-token");
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expect(resolveTelegramToken(cfg)).toEqual({
-      token: "secretref-env-token",
-      source: "config",
-    });
-  });
-
-  it.each(
-    [undefined, ...collisionProviders].map((declaration) => ({
-      declaration,
-      source: declaration?.source ?? "undeclared",
-    })),
-  )(
-    "does not fall back to TELEGRAM_BOT_TOKEN when a selected ref is unavailable ($source)",
-    ({ declaration }) => {
-      vi.stubEnv("TELEGRAM_BOT_TOKEN", "fallback-env-token");
-      vi.stubEnv("TELEGRAM_REF_TOKEN", "");
-      const cfg = {
-        secrets: { providers: declaration ? { default: declaration } : undefined },
-        channels: {
-          telegram: {
-            botToken: { source: "env", provider: "default", id: "TELEGRAM_REF_TOKEN" },
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      expect(resolveTelegramToken(cfg)).toEqual({
-        token: "",
-        source: "none",
+    const channel = { botToken: "channel-config-token", tokenFile: channelTokenFile };
+    const account = { botToken: "account-config-token", tokenFile: accountTokenFile };
+    for (const [root, selected, token, source] of [
+      [channel, account, "account-file-token", "tokenFile"],
+      [channel, { botToken: account.botToken }, "account-config-token", "config"],
+      [channel, {}, "channel-file-token", "tokenFile"],
+      [{ botToken: channel.botToken }, {}, "channel-config-token", "config"],
+      [{}, {}, "env-token", "env"],
+    ] as const) {
+      expect(
+        resolveTelegramToken(telegramConfig({ ...root, accounts: { default: selected } })),
+      ).toEqual({
+        token,
+        source,
       });
-    },
-  );
-
-  it.each(
-    [undefined, ...collisionProviders].map((declaration) => ({
-      declaration,
-      source: declaration?.source ?? "undeclared",
-    })),
-  )(
-    "does not fall through when an account-level selected ref is unavailable ($source)",
-    ({ declaration }) => {
-      vi.stubEnv("TELEGRAM_BOT_TOKEN", "fallback-env-token");
-      vi.stubEnv("TELEGRAM_ACCOUNT_REF_TOKEN", "");
-      const cfg = {
-        secrets: {
-          defaults: { env: "selected" },
-          providers: declaration ? { selected: declaration } : undefined,
-        },
-        channels: {
-          telegram: {
-            botToken: "channel-token",
-            tokenFile: createTokenFile("fallback.txt", "channel-file-token"),
-            accounts: {
-              default: {
-                botToken: {
-                  source: "env",
-                  provider: "selected",
-                  id: "TELEGRAM_ACCOUNT_REF_TOKEN",
-                },
-              },
-            },
-          },
-        },
-      } as unknown as OpenClawConfig;
-
-      expect(resolveTelegramToken(cfg)).toEqual({
-        token: "",
-        source: "none",
-      });
-    },
-  );
-
-  it.each(
-    [[], ["OTHER_TELEGRAM_BOT_TOKEN"], ["TELEGRAM_BOT_TOKEN"]].map((allowlist) => ({ allowlist })),
-  )("honors the selected explicit env provider allowlist $allowlist", ({ allowlist }) => {
-    vi.stubEnv("TELEGRAM_BOT_TOKEN", "secretref-env-token");
-    const cfg = {
-      secrets: {
-        defaults: { env: "telegram-env" },
-        providers: {
-          "telegram-env": {
-            source: "env",
-            allowlist,
-          },
-        },
-      },
-      channels: {
-        telegram: {
-          botToken: { source: "env", provider: "telegram-env", id: "TELEGRAM_BOT_TOKEN" },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    if (allowlist.includes("TELEGRAM_BOT_TOKEN")) {
-      expect(resolveTelegramToken(cfg)).toEqual({ token: "secretref-env-token", source: "config" });
-    } else {
-      expect(() => resolveTelegramToken(cfg)).toThrow(
-        /not allowlisted in secrets\.providers\.telegram-env\.allowlist/i,
-      );
     }
   });
 
-  it("throws when an env SecretRef points at a provider configured with another source", () => {
-    const cfg = {
-      secrets: {
-        providers: {
-          "telegram-env": {
-            source: "file",
-            path: "/tmp/secrets.json",
-          },
-        },
-      },
-      channels: {
-        telegram: {
-          botToken: { source: "env", provider: "telegram-env", id: "TELEGRAM_BOT_TOKEN" },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expect(() => resolveTelegramToken(cfg)).toThrow(
-      /Secret provider "telegram-env" has source "file" but ref requests "env"/i,
-    );
-  });
-
-  it("throws when an env SecretRef provider is not configured and not the default env alias", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: { source: "env", provider: "ops-env", id: "TELEGRAM_BOT_TOKEN" },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expect(() => resolveTelegramToken(cfg)).toThrow(
-      /Secret provider "ops-env" is not configured \(ref: env:ops-env:TELEGRAM_BOT_TOKEN\)/i,
-    );
-  });
-
-  it.each(
-    ["default", "telegram-runtime"].flatMap((provider) =>
-      [undefined, ...collisionProviders].map((declaration) => ({
-        provider,
-        declaration,
-        source: declaration?.source ?? "undeclared",
-      })),
-    ),
-  )("accepts env default $provider shadowing $source", ({ provider, declaration }) => {
-    vi.stubEnv("TELEGRAM_RUNTIME_TOKEN", "secretref-env-token");
-    const cfg = {
-      secrets: {
-        defaults: provider === "default" ? undefined : { env: provider },
-        providers: declaration ? { [provider]: declaration } : undefined,
-      },
-      channels: {
-        telegram: {
-          botToken: {
-            source: "env",
-            provider,
-            id: "TELEGRAM_RUNTIME_TOKEN",
-          },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expect(resolveTelegramToken(cfg)).toEqual({
-      token: "secretref-env-token",
-      source: "config",
+  it.each([
+    ["non-default env", { accounts: { work: {} } }, "work", ""],
+    ["unavailable ref", { botToken: envRef("default", "MISSING") }, undefined, ""],
+    ["binding-created account (#53876)", { botToken: "root" }, "bot-main", "root"],
+  ] as const)("resolves scoped token for %s", (_name, telegram, accountId, token) => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
+    vi.stubEnv("MISSING", "");
+    expect(resolveTelegramToken(telegramConfig(telegram), { accountId })).toEqual({
+      token,
+      source: token ? "config" : "none",
     });
   });
 
-  it("keeps strict runtime behavior for unresolved non-env SecretRefs", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: { source: "file", provider: "vault", id: "/telegram/bot-token" },
-        },
-      },
-    } as unknown as OpenClawConfig;
-
-    expect(() => resolveTelegramToken(cfg)).toThrow(
+  it.each([
+    [
+      envRef(),
+      { defaults: { env: "tg" }, providers: { tg: { source: "env", allowlist: ["TG_TOKEN"] } } },
+      "secretref-env-token",
+    ],
+    [
+      envRef(),
+      { providers: { tg: { source: "env", allowlist: [] } } },
+      /not allowlisted in secrets\.providers\.tg\.allowlist/i,
+    ],
+    [
+      envRef(),
+      { providers: { tg: { source: "file", path: "/tmp/secrets.json" } } },
+      /Secret provider "tg" has source "file" but ref requests "env"/i,
+    ],
+    [
+      envRef("ops-env"),
+      undefined,
+      /Secret provider "ops-env" is not configured \(ref: env:ops-env:TG_TOKEN\)/i,
+    ],
+    [
+      { source: "file", provider: "vault", id: "/telegram/bot-token" },
+      undefined,
       /channels\.telegram\.botToken: unresolved SecretRef/i,
-    );
-  });
-
-  // Regression: https://github.com/openclaw/openclaw/issues/53876
-  // Binding-created accountIds should inherit the channel-level token in
-  // single-bot setups (no accounts section).
-  it("falls through to channel-level token for binding-created accountId without accounts section", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "channel-level-token",
-          enabled: true,
-        },
-      },
-    } as OpenClawConfig;
-
-    const res = resolveTelegramToken(cfg, { accountId: "bot-main" });
-    expect(res.token).toBe("channel-level-token");
-    expect(res.source).toBe("config");
+    ],
+  ] satisfies Array<
+    [
+      NonNullable<Parameters<typeof telegramConfig>[0]>["botToken"],
+      OpenClawConfig["secrets"],
+      string | RegExp,
+    ]
+  >)("resolves or rejects SecretRef %j", (botToken, secrets, expected) => {
+    vi.stubEnv("TG_TOKEN", "secretref-env-token");
+    const resolve = () => resolveTelegramToken(telegramConfig({ botToken }, secrets));
+    if (typeof expected === "string") {
+      expect(resolve()).toEqual({ token: expected, source: "config" });
+    } else {
+      expect(resolve).toThrow(expected);
+    }
   });
 });

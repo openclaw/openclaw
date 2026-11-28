@@ -7,8 +7,10 @@ import type {
   RepairShortTermPromotionArtifactsResult,
   ShortTermAuditSummary,
   ShortTermDreamingStats,
-} from "../memory-host-sdk/dreaming.js";
+} from "../memory-host-sdk/dreaming-report-types.js";
 import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
+import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
+import { capturePluginStateOperationModuleSource } from "../plugins/plugin-state-operation-source.js";
 // Memory core bundled runtime helpers load the internal memory plugin through SDK facades.
 import { loadBundledPluginPublicSurfaceModuleSyncCore } from "./facade-loader.js";
 import type {
@@ -114,27 +116,31 @@ type ApiFacadeModule = {
   }) => Promise<{ dreamsPath: string; removed: number }>;
 };
 
-function loadApiFacadeModule(): ApiFacadeModule {
-  const module = loadBundledPluginPublicSurfaceModuleSyncCore<ApiFacadeModule>({
+type FacadeModules = {
+  "api.js": ApiFacadeModule;
+  "runtime-api.js": RuntimeFacadeModule;
+};
+
+function loadFacadeModule<Artifact extends keyof FacadeModules>(
+  artifactBasename: Artifact,
+): FacadeModules[Artifact] {
+  const module = loadBundledPluginPublicSurfaceModuleSyncCore<FacadeModules[Artifact]>({
     dirName: "memory-core",
-    artifactBasename: "api.js",
+    artifactBasename,
   });
-  module.configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStore<T>("memory-core", options),
+  const instance = getPluginValueInstance(module);
+  const assertCurrent = instance ? () => instance.run(() => {}) : undefined;
+  const moduleSource = assertCurrent
+    ? capturePluginStateOperationModuleSource(instance, assertCurrent)
+    : undefined;
+  module.configureMemoryCoreDreamingState(<Value>(options: OpenKeyedStoreOptions) =>
+    createPluginStateKeyedStore<Value>("memory-core", options, assertCurrent, moduleSource),
   );
   return module;
 }
 
-function loadRuntimeFacadeModule(): RuntimeFacadeModule {
-  const module = loadBundledPluginPublicSurfaceModuleSyncCore<RuntimeFacadeModule>({
-    dirName: "memory-core",
-    artifactBasename: "runtime-api.js",
-  });
-  module.configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStore<T>("memory-core", options),
-  );
-  return module;
-}
+const loadApiFacadeModule = () => loadFacadeModule("api.js");
+const loadRuntimeFacadeModule = () => loadFacadeModule("runtime-api.js");
 
 /** Returns the memory-core-owned recovery message for an absent local provider plugin. */
 export function getMissingLocalMemoryEmbeddingProviderMessage(): string {

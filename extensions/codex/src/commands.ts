@@ -1,17 +1,15 @@
-/**
- * Registers the `/codex` plugin command and lazy-loads the app-server command
- * handler implementation.
- */
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/plugin-entry";
-import type { CodexCommandDepsOverride } from "./command-handlers.js";
+import type { CodexCommandDeps } from "./command-handler-deps.js";
 
-type CodexCommandOptions = {
+const loadCommandDispatch = createLazyRuntimeModule(() => import("./command-dispatch.js"));
+
+export type CodexCommandOptions = {
   pluginConfig?: unknown;
   resolvePluginConfig?: () => unknown;
-  deps: CodexCommandDepsOverride;
+  deps: CodexCommandDeps;
 };
 
-/** Creates the reserved `/codex` command definition exposed by the plugin. */
 export function createCodexCommand(options: CodexCommandOptions): OpenClawPluginCommandDefinition {
   return {
     name: "codex",
@@ -34,8 +32,9 @@ export function createCodexCommand(options: CodexCommandOptions): OpenClawPlugin
     acceptsArgs: true,
     requireAuth: true,
     handler: async (ctx) => {
-      const { handleCodexCommand } = await import("./command-dispatch.js");
-      return handleCodexCommand(ctx, options);
+      const commandContext = { ...ctx, gatewayClientScopes: ctx.gatewayClientScopes?.slice() };
+      const { handleCodexCommand } = await loadCommandDispatch();
+      return handleCodexCommand(commandContext, options);
     },
   };
 }

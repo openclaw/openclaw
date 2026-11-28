@@ -1,0 +1,685 @@
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isTranscriptArtifactProvider } from "../../packages/agent-core/src/harness/session/transcript-model.js";
+import { normalizeThinkLevel } from "../auto-reply/thinking.js";
+import { resolveInternalSessionEffectsIdentity } from "../config/sessions/internal-session-key.js";
+import { retainPreparedSessionEntryPredicate } from "../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { isIndexedSessionEntry } from "../config/sessions/session-entry-codec.js";
+import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import {
+  composeSessionSourceAssertion,
+  type PreparedSessionSourceAuthority,
+} from "../config/sessions/session-source-authority.js";
+import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
+import { prepareSessionTranscriptHydration } from "../config/sessions/session-transcript-hydration.js";
+import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
+import { withSessionTranscriptReadSource } from "../config/sessions/session-transcript-read-source.js";
+import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
+import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
+import {
+  readSqliteDatabaseScopedWriteTokenForPath,
+  retainSqliteDatabaseWriteScopesForPath,
+  sqliteSessionIdWriteScope,
+} from "../infra/sqlite-database-admission.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import type { AssistantHistoryMessage } from "../llm/types.js";
+import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
+import { getBackgroundOwnerLane } from "../process/background-work.js";
+import { isExpectedRunCancellation } from "../process/expected-run-cancellation.js";
+import {
+  getGatewayRestartDrainSignal,
+  runWithGatewayDetachedWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { SESSION_FORK_SOURCE_TOOL } from "../sessions/input-provenance.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "./admitted-run-context.js";
+import { resolveAgentDir } from "./agent-scope-config.js";
+import {
+  readLiveSessionForkRequest,
+  type SessionForkPin,
+} from "./embedded-agent-runner/session-fork-request.js";
+import { parseSystemPromptRouteKey } from "./embedded-agent-runner/session-prompt-state.js";
+import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
+import { emitInternalRunUsageDiagnostic } from "./internal-run-usage.js";
+import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
+import {
+  readSessionForkRequesterFromTurn,
+  type SessionForkRequester,
+} from "./session-fork-requester.js";
+import { assertSessionForkRunSucceeded } from "./session-fork-result.js";
+import { resolveSessionModelRef } from "./session-model-ref.js";
+import { SessionManager } from "./sessions/session-manager.js";
+import { resolveIngressWorkspaceOverrideForSessionRun } from "./spawned-context.js";
+
+/**
+ * A background agent run on a copy of one session's conversation, through one completed
+ * transcript entry. The fork sends the session's own request (system prompt, tool definitions,
+ * prompt-cache key and history) and appends its prompt, so the provider serves the session's
+ * cached prefix. Every session tool stays listed; only the listed `tools` may execute. It never
+ * writes the source transcript, and stops when the source session is reset, replaced or
+ * rewritten. Tools see the source through `inputProvenance` (`sourceTool: "session_fork"`).
+ */
+type SessionForkRunParams = {
+  config: OpenClawConfig;
+  /** The completed transcript entry the fork reads through. */
+  source: TranscriptEntryAnchor;
+  prompt: string;
+  /** Tools the fork may execute, as admitted by `prepareSessionFork`; empty for a tool-free fork. */
+  tools: readonly string[];
+  /** Caller-chosen id, so the caller can find what the fork's tools recorded even when it fails. */
+  runId: string;
+  /** Owner label for admission, lane and diagnostics, such as `core:skill-workshop`. */
+  owner: string;
+  model: { provider: string; model: string; authProfileId?: string };
+  /** The session's durable workspace, never a throwaway worktree. */
+  workspaceDir: string;
+  /** The finished turn's requester; its current policy is checked again for the run. */
+  requester?: SessionForkRequester;
+  /** Plugin-owned tools added for this run; the source session's deny policy still applies. */
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
+  timeoutMs: number;
+  /** Output token limit; the session's own when omitted. */
+  maxTokens?: number;
+  /**
+   * Send one read-only prewarm of the session's cached prefix (`StreamOptions.cachePrewarm`):
+   * no output, no tools, the session's own tool choice, never a CLI turn. Refused without the
+   * session's pinned prompt, since a rebuilt prompt would write a new prefix instead.
+   */
+  cachePrewarm?: true;
+  abortSignal?: AbortSignal;
+  /** The caller's own liveness, rechecked with the source fences (for example, a feature switch). */
+  assertCallerCurrent?: () => void;
+  /** The exact source generation the fork read, reported before the model runs. */
+  onSourceAdmitted?: (entry: { sessionId: string; lifecycleRevision?: string | null }) => void;
+};
+
+// Retain initiating input across long tool loops without hydrating every result body.
+const FORK_TURN_SEARCH_LIMITS = {
+  maxBytes: 8_388_608,
+  maxEvents: 20_000,
+  toolResultOverflow: "omit",
+} as const;
+
+type SessionForkTurn = {
+  /** Undefined for a turn stored before requester recording; callers use session facts. */
+  requester?: SessionForkRequester;
+  model?: { provider: string; model: string };
+};
+
+/**
+ * Facts of the turn a fork reads through: the requester its initiating user message recorded and
+ * the model its last provider response ran on. The search stops at that turn's initiating input,
+ * within a bounded window. Returns undefined when that window no longer holds the input
+ * (too large or compacted mid-turn), so callers refuse instead of guessing the requester.
+ */
+export async function readSessionForkTurn(
+  source: TranscriptEntryAnchor,
+  signal?: AbortSignal,
+): Promise<SessionForkTurn | undefined> {
+  let model: SessionForkTurn["model"];
+  const sessionManager = await SessionManager.openModelContextAsync(source, {
+    through: source,
+    limits: FORK_TURN_SEARCH_LIMITS,
+    ...(signal ? { signal } : {}),
+  });
+  for (const entry of sessionManager.getBranch().toReversed()) {
+    if (entry.type !== "message") {
+      continue;
+    }
+    const message: { role?: unknown; provider?: unknown; model?: unknown } = entry.message;
+    // Delivery mirrors and other OpenClaw-authored rows are assistant messages no provider
+    // answered; taking their marker as the model sends the fork to a model that does not exist.
+    if (
+      !model &&
+      message.role === "assistant" &&
+      typeof message.provider === "string" &&
+      typeof message.model === "string" &&
+      message.provider &&
+      message.model &&
+      !isTranscriptArtifactProvider(message.provider)
+    ) {
+      model = { provider: message.provider, model: message.model };
+    }
+    if (message.role !== "user") {
+      continue;
+    }
+    const meta = asOptionalRecord(Reflect.get(message, "__openclaw"));
+    // Steering joins a running turn; the turn's requester is its initiating input.
+    if (typeof meta?.steerTargetRunId === "string") {
+      continue;
+    }
+    const requester = readSessionForkRequesterFromTurn(meta);
+    return { ...(requester ? { requester } : {}), ...(model ? { model } : {}) };
+  }
+  return undefined;
+}
+
+/**
+ * The model a fork runs on: the anchored turn's (else the session's), on the credential the
+ * session's own turns use when the provider matches (a user pin or an automatic rotation). The
+ * fork's internal session has no stored selection, so without this it could bill another
+ * profile and miss the turn's cache.
+ */
+export function resolveSessionForkModel(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry: SessionEntry;
+  turnModel?: { provider: string; model: string };
+}) {
+  const sessionModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
+  const turnModel = params.turnModel ?? sessionModel;
+  const sessionProfile =
+    turnModel && sessionModel && turnModel.provider === sessionModel.provider
+      ? params.entry.authProfileOverride?.trim()
+      : undefined;
+  return {
+    sessionModel,
+    turnModel,
+    model: turnModel && {
+      ...turnModel,
+      ...(sessionProfile ? { authProfileId: sessionProfile } : {}),
+    },
+  };
+}
+
+/**
+ * Admits a fork before any model call: every fork tool must pass the source session's policy.
+ * Returns the session's durable workspace (never a throwaway worktree), or undefined to refuse.
+ */
+export async function prepareSessionFork(params: {
+  config: OpenClawConfig;
+  source: Pick<TranscriptEntryAnchor, "agentId" | "sessionKey" | "storePath">;
+  tools: readonly string[];
+  model: { provider: string; model: string };
+  workspaceDir: string;
+  /** The anchored turn's conversation facts, with the fork caller's owner flag. */
+  requester?: SessionForkRequester;
+  runtimePluginToolGrant?: RuntimePluginToolGrant;
+}): Promise<{ workspaceDir: string } | undefined> {
+  // exec is not on the owner-only list: a fork runs it only for a caller with owner authority.
+  if (params.tools.includes("exec") && params.requester?.senderIsOwner !== true) {
+    return undefined;
+  }
+  const { prepareConversationCapabilityProfile } =
+    await import("./conversation-capability-profile.js");
+  const { isToolAllowedByPolicies } = await import("./tool-policy-match.js");
+  const { mergeAlsoAllowPolicy } = await import("./tool-policy.js");
+  const entry = await readSessionEntryReadOnlyInWorker({
+    agentId: params.source.agentId,
+    sessionKey: params.source.sessionKey,
+    storePath: params.source.storePath,
+    projection: "list",
+  });
+  // A managed-worktree session records its durable workspace for every turn entry point.
+  const workspaceDir = entry?.worktree?.canonicalWorkspaceDir ?? params.workspaceDir;
+  const { policy } = await prepareConversationCapabilityProfile({
+    config: params.config,
+    sessionKey: params.source.sessionKey,
+    sandboxSessionKey: params.source.sessionKey,
+    agentId: params.source.agentId,
+    ...sessionConversationFacts(entry),
+    ...params.requester,
+    runtimePluginToolGrant: params.runtimePluginToolGrant,
+    modelProvider: params.model.provider,
+    modelId: params.model.model,
+    workspaceDir,
+  });
+  const policies = [
+    mergeAlsoAllowPolicy(policy.profilePolicy, policy.profileAlsoAllow),
+    mergeAlsoAllowPolicy(policy.providerProfilePolicy, policy.providerProfileAlsoAllow),
+    policy.globalPolicy,
+    policy.globalProviderPolicy,
+    policy.agentPolicy,
+    policy.agentProviderPolicy,
+    policy.groupPolicy,
+    policy.senderPolicy,
+    policy.subagentPolicy,
+    policy.inheritedToolPolicy,
+  ];
+  return params.tools.every((tool) => isToolAllowedByPolicies(tool, policies))
+    ? { workspaceDir }
+    : undefined;
+}
+
+/** The delivery channel a session records; a carried requester takes precedence. */
+function sessionConversationFacts(entry: SessionEntry | undefined) {
+  const delivery = deliveryContextFromSession(entry);
+  return {
+    ...(delivery?.channel
+      ? { messageChannel: delivery.channel, messageProvider: delivery.channel }
+      : {}),
+    ...(delivery?.accountId ? { agentAccountId: delivery.accountId } : {}),
+  };
+}
+
+/**
+ * The session's last system prompt checkpoint on this model and history. The model view keeps
+ * only checkpoint navigation, so the entry is hydrated from the transcript.
+ */
+async function readSessionForkPin(
+  manager: SessionManager,
+  scope: TranscriptEntryAnchor,
+  model: { provider: string; model: string },
+  signal: AbortSignal,
+): Promise<SessionForkPin | undefined> {
+  const entries = manager.getBranch();
+  const index = entries.findLastIndex(
+    (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+  );
+  const version = manager.getTranscriptSnapshotVersion();
+  if (index < 0 || !version || entries.slice(index + 1).some((e) => e.type === "model_change")) {
+    return undefined;
+  }
+  const reader = prepareSessionTranscriptHydration(scope, undefined, signal);
+  const { event } = await reader.readCurrentTurnEntry({
+    entryId: entries[index]!.id,
+    version,
+    includeEntry: true,
+  });
+  reader.assertCurrent();
+  const data = isIndexedSessionEntry(event) && event.type === "custom" ? event.data : undefined;
+  const route = isRecord(data) ? parseSystemPromptRouteKey(data.routeKey) : undefined;
+  const historyId =
+    entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ?? null;
+  if (
+    !isRecord(data) ||
+    typeof data.prefix !== "string" ||
+    !Array.isArray(data.tools) ||
+    data.historyId !== historyId ||
+    route?.provider !== model.provider ||
+    route.model !== model.model
+  ) {
+    return undefined;
+  }
+  // SAFETY: the session prompt owner alone writes the checkpoint's tool definitions.
+  const tools = data.tools as SessionForkPin["tools"];
+  return { prefix: data.prefix, tools };
+}
+
+/**
+ * A tool call still running at the fork's anchor gets a non-error result saying so, so the
+ * fork does not read the call as failed. The model view has no persistence target: these
+ * results exist only in the fork.
+ */
+async function markRunningToolCalls(manager: SessionManager): Promise<void> {
+  // The latest batch is the last assistant message plus the tool results recorded after it.
+  const completed = new Set<string>();
+  let batch: AssistantHistoryMessage | undefined;
+  for (const entry of manager.getBranch().toReversed()) {
+    if (entry.type !== "message") {
+      continue;
+    }
+    if (entry.message.role === "toolResult") {
+      completed.add(entry.message.toolCallId);
+      continue;
+    }
+    batch = entry.message.role === "assistant" ? entry.message : undefined;
+    break;
+  }
+  for (const block of batch?.content ?? []) {
+    if (block.type === "toolCall" && !completed.has(block.id)) {
+      await manager.appendMessageAsync({
+        role: "toolResult",
+        toolCallId: block.id,
+        toolName: block.name,
+        content: [
+          {
+            type: "text",
+            text: "This tool call is still running. Its result is not available yet.",
+          },
+        ],
+        isError: false,
+        timestamp: Date.now(),
+      });
+    }
+  }
+}
+
+/**
+ * `cancelled` marks an expected stop: the caller's signal, a Gateway restart drain, or the
+ * source session changing under the fork. Anything else is a failure.
+ */
+type SessionForkOutcome =
+  | { ok: true; result: EmbeddedAgentRunResult }
+  | { ok: false; error: unknown; cancelled: boolean };
+
+/**
+ * Runs the fork, then the caller's settlement (for example, announcing what the fork's tools
+ * committed) inside the same detached admission, so a graceful restart waits for both.
+ */
+export async function runSessionFork<T>(
+  params: SessionForkRunParams,
+  settle: (outcome: SessionForkOutcome) => Promise<T>,
+): Promise<T> {
+  const abortSignal = params.abortSignal
+    ? AbortSignal.any([getGatewayRestartDrainSignal(), params.abortSignal])
+    : getGatewayRestartDrainSignal();
+  // The foreground root has closed by the time a background owner forks. Admit this detached
+  // run independently; a real Gateway drain still refuses it.
+  return await runWithGatewayDetachedWorkAdmission(
+    async () => {
+      let outcome: SessionForkOutcome;
+      try {
+        const result = await runSessionForkInner(params, abortSignal);
+        assertSessionForkRunSucceeded(result);
+        outcome = { ok: true, result };
+      } catch (error) {
+        outcome = {
+          ok: false,
+          error,
+          cancelled:
+            abortSignal.aborted ||
+            isExpectedRunCancellation(error) ||
+            (error instanceof Error && error.name === "AbortError"),
+        };
+      }
+      return await settle(outcome);
+    },
+    `${params.owner}:session-fork`,
+    abortSignal,
+  );
+}
+
+async function runSessionForkInner(params: SessionForkRunParams, abortSignal: AbortSignal) {
+  const { source, config, runId, workspaceDir } = params;
+  const { agentId, sessionKey } = source;
+  const forkSession = resolveInternalSessionEffectsIdentity({ agentId, runId });
+  const writeScopes = [sessionKey, sqliteSessionIdWriteScope(source.sessionId)];
+  const readWriteToken = () =>
+    readSqliteDatabaseScopedWriteTokenForPath(source.storePath, writeScopes);
+  let validatedWriteToken: string | undefined;
+  using sourceLifetime: Disposable & {
+    entry?: ReturnType<typeof retainPreparedSessionEntryPredicate>;
+  } = {
+    [Symbol.dispose]() {
+      this.entry?.release();
+    },
+  };
+
+  const prepare = async (
+    scoped: TranscriptEntryAnchor,
+    assertPhysicalCurrent: () => void,
+    assertPreparationCurrent: () => void,
+    databaseIdentity?: string,
+  ) => {
+    const sessionManager = await SessionManager.openModelContextAsync(scoped, {
+      cwd: workspaceDir,
+      through: source,
+      signal: abortSignal,
+    });
+    assertPreparationCurrent();
+    // Deleting, replacing, or resetting the source session must not revive its captured evidence.
+    let sourceEntry:
+      | Pick<InternalSessionEntry, "sessionId" | "lifecycleRevision" | "permissionMode">
+      | undefined;
+    await readSessionTranscriptAnchorsAsync(
+      scoped,
+      { entryIds: [], contextAuthority: true, contextValidation: { through: source } },
+      abortSignal,
+      (facts) => {
+        assertPreparationCurrent();
+        const current = facts.contextAuthority?.entry;
+        if (current?.sessionId !== source.sessionId) {
+          throw new Error("Session fork source session was deleted or replaced.");
+        }
+        if (facts.contextValidated) {
+          sourceEntry = current;
+          if (databaseIdentity) {
+            sourceLifetime.entry = retainPreparedSessionEntryPredicate({
+              databaseIdentity,
+              sessionKey,
+              entry: current,
+              matches: (_before, after) =>
+                after?.sessionId === current.sessionId &&
+                (after.lifecycleRevision ?? null) === (current.lifecycleRevision ?? null) &&
+                after.permissionMode === current.permissionMode,
+            });
+          }
+          validatedWriteToken = readWriteToken();
+        }
+      },
+    );
+    if (!sourceEntry) {
+      throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+    }
+    return { scoped, sourceEntry, sessionManager, assertPhysicalCurrent };
+  };
+  const { scoped, sourceEntry, sessionManager, assertPhysicalCurrent } =
+    await withSessionTranscriptReadSource(
+      source,
+      ({ scope, expectedIdentity, assertCurrent }) => {
+        const assertSourceIdentity = () => {
+          abortSignal.throwIfAborted();
+          if (expectedIdentity) {
+            assertExistingDatabaseIdentity(
+              scope.storePath,
+              expectedIdentity.key,
+              expectedIdentity.birthtime,
+            );
+          }
+        };
+        return prepare(
+          { ...source, ...scope },
+          assertSourceIdentity,
+          assertCurrent,
+          expectedIdentity?.key,
+        );
+      },
+      abortSignal,
+    );
+  params.onSourceAdmitted?.({
+    sessionId: sourceEntry.sessionId,
+    lifecycleRevision: sourceEntry.lifecycleRevision ?? null,
+  });
+  const assertScopeCurrent = () => {
+    assertPhysicalCurrent();
+    if (sourceLifetime.entry && !sourceLifetime.entry.isCurrent()) {
+      throw new SessionTranscriptReadFenceError(
+        "Session fork source changed. Retry in a new turn.",
+      );
+    }
+    params.assertCallerCurrent?.();
+  };
+  const assertReceiptCurrent = (token: string | undefined) => {
+    assertScopeCurrent();
+    if (token === undefined || readWriteToken() !== token) {
+      throw new SessionTranscriptReadFenceError("Session transcript changed during context read");
+    }
+  };
+  const prepareSource = async (): Promise<PreparedSessionSourceAuthority> => {
+    assertScopeCurrent();
+    const release = retainSqliteDatabaseWriteScopesForPath(scoped.storePath, writeScopes);
+    if (!release) {
+      throw new SessionTranscriptReadFenceError("Session fork source is unavailable");
+    }
+    try {
+      if (validatedWriteToken === undefined || readWriteToken() !== validatedWriteToken) {
+        // The reader retains writer admission through this callback. Reuse its
+        // authority until an owning session or transcript writer publishes a change.
+        validatedWriteToken = undefined;
+        await readSessionTranscriptAnchorsAsync(
+          scoped,
+          {
+            entryIds: [],
+            contextValidation: { through: source, expectedAuthority: sourceEntry },
+          },
+          abortSignal,
+          (facts) => {
+            if (facts.contextValidated) {
+              validatedWriteToken = readWriteToken();
+            }
+          },
+        );
+      }
+      const token = validatedWriteToken;
+      const assertCurrent = () => assertReceiptCurrent(token);
+      assertCurrent();
+      return { assertCurrent, checks: [], release };
+    } catch (error) {
+      release();
+      throw error;
+    }
+  };
+  const assertSourceCurrent = composeSessionSourceAssertion([
+    Object.assign(
+      () => {
+        // Model liveness follows admitted entry facts; each effect separately
+        // revalidates the completed-turn anchor and retains its exact write receipt.
+        assertScopeCurrent();
+        if (!sourceLifetime.entry) {
+          assertReceiptCurrent(validatedWriteToken);
+        }
+      },
+      {
+        assertScopeCurrent,
+        prepareSessionSource: prepareSource,
+        prepareSessionSourceScope: prepareSource,
+      },
+    ),
+  ]);
+  const preparedRunAdmission = prepareAgentRunAdmission({
+    cfg: config,
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+    facts: {
+      runId,
+      agentId,
+      ingress: { kind: "system", boundary: `${params.owner}.session-fork`, state: "present" },
+    },
+    assertSourceCurrent,
+  });
+  const entry = await readSessionEntryReadOnlyInWorker({
+    agentId,
+    sessionKey,
+    storePath: source.storePath,
+    projection: "list",
+  });
+  const agentDir = resolveAgentDir(config, agentId);
+  // Keep the transcript's durable cwd, but prepare sandbox execution exactly as a parent turn.
+  const executionWorkspaceDir =
+    entry?.worktree &&
+    resolveSandboxRuntimeStatus({
+      cfg: config,
+      agentId,
+      sessionKey,
+      preparedSessionEntry: entry,
+    }).sandboxed
+      ? (resolveIngressWorkspaceOverrideForSessionRun({
+          spawnedBy: entry.spawnedBy,
+          workspaceDir: entry.spawnedWorkspaceDir,
+          cwd: entry.spawnedCwd,
+        }) ?? workspaceDir)
+      : workspaceDir;
+
+  const live = readLiveSessionForkRequest({ sessionKey, model: params.model });
+  // A live parent's request is replayed byte for byte; the pin makes the fork's own rebuilt
+  // request carry the session's system prompt and tool definitions too.
+  const pin = await readSessionForkPin(sessionManager, scoped, params.model, abortSignal);
+  if (params.cachePrewarm && (live || !pin || params.tools.length > 0)) {
+    // A live run keeps its own cache warm; without the pin the rebuilt prompt is a new prefix.
+    throw new Error("Cache prewarm needs a settled session with its pinned prompt and no tools.");
+  }
+  await markRunningToolCalls(sessionManager);
+  // Background runs stay out of the Control UI and never project into a user session.
+  registerAgentRunContext(runId, {
+    agentId,
+    sessionId: forkSession.sessionId,
+    sessionKey: forkSession.sessionKey,
+    isControlUiVisible: false,
+    projectSessionActive: false,
+    projectSessionLifecycle: false,
+    projectSessionMessages: false,
+  });
+  try {
+    abortSignal.throwIfAborted();
+    const { runEmbeddedAgent } = await import("./embedded-agent.js");
+    const result = await runEmbeddedAgent({
+      agentId,
+      agentDir,
+      config,
+      preparedRunAdmission,
+      sessionId: forkSession.sessionId,
+      sessionKey: forkSession.sessionKey,
+      // Policy, sandbox and inherited restrictions follow the source conversation.
+      sandboxSessionKey: sessionKey,
+      sandboxAgentId: agentId,
+      ...sessionConversationFacts(entry),
+      ...params.requester,
+      ...(params.runtimePluginToolGrant
+        ? { runtimePluginToolGrant: params.runtimePluginToolGrant }
+        : {}),
+      inputProvenance: {
+        kind: "internal_system",
+        sourceTool: SESSION_FORK_SOURCE_TOOL,
+        sourceSessionKey: sessionKey,
+        runId,
+      },
+      sessionManager,
+      workspaceDir: executionWorkspaceDir,
+      permissionMode: sourceEntry.permissionMode,
+      abortSignal,
+      prompt: params.prompt,
+      provider: params.model.provider,
+      model: params.model.model,
+      ...(params.model.authProfileId
+        ? { authProfileId: params.model.authProfileId, authProfileIdSource: "user" as const }
+        : {}),
+      runId,
+      lane: getBackgroundOwnerLane(params.owner),
+      agentHarnessId: "openclaw",
+      agentHarnessRuntimeOverride: "openclaw",
+      // Background work never spends interactive capacity on retries or fallbacks.
+      modelSelectionLocked: true,
+      modelFallbacksOverride: [],
+      retryTransientErrors: false,
+      allowAuthProfileFallback: false,
+      authProfileFailurePolicy: "local_transient",
+      // A subscription login runs on its own CLI, within plan limits; API keys keep the replay.
+      // A prewarm reads the cache the session's own embedded turns wrote, so it stays embedded.
+      ...(params.cachePrewarm ? {} : { cliBackendDispatch: "subscription-auth" as const }),
+      requestedRouteResolution: "resolved",
+      sessionPersistence: "detached",
+      // The source's prewarms count on the cache-TTL clock, so the copy prunes as the source would.
+      ...(entry?.promptCacheKeepWarm ? { promptCacheKeepWarm: entry.promptCacheKeepWarm } : {}),
+      // A prewarm is one request; it never compacts the copy it reads.
+      ...(params.cachePrewarm ? { disableCompactionRecovery: true } : {}),
+      // Every session tool stays listed for the provider's cached prefix; the run gates execution.
+      toolExecutionAllow: [...params.tools],
+      sessionForkRequest: {
+        ...(live?.preparedRequest ? { preparedRequest: live.preparedRequest } : {}),
+        ...(pin ? { pin } : {}),
+        ownOutputLimit: params.maxTokens !== undefined,
+        ...(params.cachePrewarm ? { cachePrewarm: true as const } : {}),
+      },
+      ...(live?.promptCacheKey ? { promptCacheKey: live.promptCacheKey } : {}),
+      ...(params.maxTokens !== undefined ? { streamParams: { maxTokens: params.maxTokens } } : {}),
+      // Thinking is part of the cached prefix on Anthropic and OpenAI; follow the session.
+      thinkLevel: normalizeThinkLevel(entry?.thinkingLevel),
+      timeoutMs: params.timeoutMs,
+      disableTrajectory: true,
+      silentExpected: true,
+      allowEmptyAssistantReplyAsSilent: true,
+      terminalReplyExpectation: "optional",
+      cleanupBundleMcpOnRunEnd: true,
+      verboseLevel: "off",
+    });
+    await emitInternalRunUsageDiagnostic(result, {
+      config,
+      agentId,
+      agentDir,
+      sessionId: forkSession.sessionId,
+      sessionKey: forkSession.sessionKey,
+      provider: params.model.provider,
+      model: params.model.model,
+    });
+    return result;
+  } finally {
+    preparedRunAdmission.close();
+    clearAgentRunContext(runId);
+    cleanupSessionResources(forkSession.sessionId);
+  }
+}

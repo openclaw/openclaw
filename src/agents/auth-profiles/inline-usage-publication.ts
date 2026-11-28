@@ -1,12 +1,14 @@
 import path from "node:path";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { reportCommittedInlineAuthFailure } from "./constants.js";
+import { observeCanonicalAuthProfileCredentials } from "./credential-observation.js";
 import type { InlineAuthFailureReceipt } from "./inline-usage-kernel.js";
 import {
-  assertAuthProfileMigrationCandidates,
+  prepareAuthProfileMigrationCandidates,
   assertAuthProfileMigrationStateAtDatabasePath,
 } from "./legacy-source-diagnostic.js";
 import { getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath } from "./mutation-lineage.js";
+import { buildPersistedAuthProfileSecretsStore } from "./persisted.js";
 import {
   captureRuntimeAuthProfileLegacyCandidates,
   createEmptyAuthProfileStore,
@@ -22,21 +24,32 @@ import {
   getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath,
   listRuntimeAuthProfileStoreSnapshotsForSharedOwner,
   noteRuntimeAuthProfileStorePersistedMutation,
+  recordRuntimeAuthProfilePersistedStore,
 } from "./runtime-snapshots.js";
 import {
   loadPersistedAuthProfileStoreFromRows,
   prepareAgentAuthProfileRowsRead,
   readSharedAuthProfileRows,
 } from "./sqlite-read.js";
-import { resolveAuthProfileDatabaseOwnerId, type PreparedAuthProfileStoreOwner } from "./sqlite.js";
-import type { AuthProfileRowRead, AuthProfileStore } from "./types.js";
+import { buildPersistedAuthProfileState } from "./state.js";
+import type { watchAuthProfileNativeCommits } from "./store-update-commit.js";
+import type {
+  AuthProfileRowRead,
+  AuthProfileStore,
+  PreparedAuthProfileStoreOwner,
+} from "./types.js";
 
 /** Reconcile committed facts through the existing snapshot owner, without native host rereads. */
 export async function publishInlineAuthFailure(
   owner: PreparedAuthProfileStoreOwner,
-  receipt: InlineAuthFailureReceipt,
+  receipt: Pick<InlineAuthFailureReceipt, "publication">,
   readTarget: () => Promise<AuthProfileRowRead>,
   assertOwner: () => void,
+  committed?: {
+    store: AuthProfileStore;
+    isCurrent: () => boolean;
+    nativeCommits: ReturnType<typeof watchAuthProfileNativeCommits>;
+  },
 ): Promise<void> {
   const agentDir = path.dirname(owner.databasePath);
   const shared = owner.databasePath === owner.sharedDatabasePath;
@@ -46,17 +59,35 @@ export async function publishInlineAuthFailure(
     ...(current ? [current] : []),
     ...(shared ? listRuntimeAuthProfileStoreSnapshotsForSharedOwner(owner) : []),
   ];
-  noteRuntimeAuthProfileStorePersistedMutation(agentDir, receipt.publication, owner);
+  const committedRevision = noteRuntimeAuthProfileStorePersistedMutation(
+    agentDir,
+    receipt.publication,
+    owner,
+    undefined,
+    committed?.isCurrent() ? { store: committed.store, env: owner.env } : undefined,
+  );
   if (entries.length === 0) {
     return;
   }
-  const readers = new Set<ReturnType<typeof prepareAgentAuthProfileRowsRead>>();
+  const readers = new Set<Awaited<ReturnType<typeof prepareAgentAuthProfileRowsRead>>>();
   const read = async (databasePath: string, kind: "agent" | "shared-state") => {
     const revision = getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath);
+    const nativeCurrent =
+      databasePath === owner.databasePath ? committed?.nativeCommits.capture() : undefined;
     let assertCurrent: () => void;
     let rows: AuthProfileRowRead;
     if (databasePath === owner.databasePath) {
-      rows = await readTarget();
+      rows =
+        committed?.isCurrent() && revision === committedRevision
+          ? {
+              store: {
+                status: "readable",
+                raw: buildPersistedAuthProfileSecretsStore(committed.store),
+              },
+              state: { status: "readable", raw: buildPersistedAuthProfileState(committed.store) },
+              cacheable: false,
+            }
+          : await readTarget();
       assertCurrent = assertOwner;
     } else if (kind === "shared-state") {
       const context = captureOpenClawStateWorkerContext({ env: owner.env });
@@ -66,9 +97,8 @@ export async function publishInlineAuthFailure(
       rows = await readSharedAuthProfileRows(context);
       assertCurrent = () => context.admission.assertCurrent();
     } else {
-      const reader = prepareAgentAuthProfileRowsRead({
+      const reader = await prepareAgentAuthProfileRowsRead({
         databasePath,
-        agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
         env: owner.env,
       });
       readers.add(reader);
@@ -78,15 +108,21 @@ export async function publishInlineAuthFailure(
     const assert = () => {
       assertOwner();
       assertCurrent();
-      if (getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath) !== revision) {
+      if (
+        nativeCurrent?.() === false ||
+        getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath) !== revision
+      ) {
         throw new Error("Auth snapshot changed during committed-state preparation");
       }
     };
     assert();
+    const store = markRuntimePersistedProfiles(
+      loadPersistedAuthProfileStoreFromRows(rows, databasePath) ?? createEmptyAuthProfileStore(),
+    );
+    recordRuntimeAuthProfilePersistedStore(databasePath, store);
+    observeCanonicalAuthProfileCredentials(databasePath, store.profiles);
     return {
-      store: markRuntimePersistedProfiles(
-        loadPersistedAuthProfileStoreFromRows(rows, databasePath) ?? createEmptyAuthProfileStore(),
-      ),
+      store,
       assertCurrent: assert,
     };
   };
@@ -108,23 +144,27 @@ export async function publishInlineAuthFailure(
               owner.location === "state-db" ? "shared-state" : "agent",
             );
       const local = await read(targetOwner.databasePath, "agent");
-      inherited?.assertCurrent();
-      local.assertCurrent();
-      assertAuthProfileMigrationCandidates({
+      await prepareAuthProfileMigrationCandidates({
         databasePath: targetOwner.databasePath,
         candidates:
           targetOwner.databasePath === targetOwner.sharedDatabasePath
             ? candidates.shared
             : candidates.local,
-        hasCredentials: () => Object.keys(local.store.profiles).length > 0,
+        hasCredentials: Object.keys(local.store.profiles).length > 0,
+        assertCurrent: local.assertCurrent,
       });
       if (inherited) {
-        assertAuthProfileMigrationCandidates({
+        await prepareAuthProfileMigrationCandidates({
           databasePath: targetOwner.sharedDatabasePath,
           candidates: candidates.shared,
-          hasCredentials: () => Object.keys(inherited.store.profiles).length > 0,
+          hasCredentials: Object.keys(inherited.store.profiles).length > 0,
+          assertCurrent: inherited.assertCurrent,
         });
       }
+      inherited?.assertCurrent();
+      local.assertCurrent();
+      assertAuthProfileMigrationStateAtDatabasePath(targetOwner.databasePath);
+      assertAuthProfileMigrationStateAtDatabasePath(targetOwner.sharedDatabasePath);
       const refreshed: AuthProfileStore = inherited
         ? mergeLocalAuthProfileStoreWithInheritedStore(local.store, inherited.store)
         : setRuntimeLocalProfileMetadata(local.store, listRuntimeLocalProfileIds(local.store));

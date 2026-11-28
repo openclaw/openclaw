@@ -6,6 +6,10 @@ import Observation
 /// health from gateway node listings, so a node channel that never dials still
 /// surfaces its reason to the operator.
 enum MacNodeChannelState: Equatable, Sendable {
+    enum RecoveryAction: Equatable, Sendable {
+        case checkForUpdates
+    }
+
     /// Node mode is paused, stopped, or not configured to run.
     case idle
     /// The channel connected. A non-nil reason means the node-host worker is
@@ -14,15 +18,30 @@ enum MacNodeChannelState: Equatable, Sendable {
     /// The last connect attempt failed; the coordinator keeps retrying.
     case unavailable(reason: String, diagnostic: String? = nil)
 
-    var operatorStatusLine: (label: String, diagnostic: String?, isDegraded: Bool)? {
+    var operatorStatusLine: (
+        label: String,
+        diagnostic: String?,
+        isDegraded: Bool,
+        recoveryAction: RecoveryAction?)?
+    {
+        let reason: String
+        let diagnostic: String?
+        let isDegraded: Bool
         switch self {
         case .idle, .connected(workerUnavailableReason: nil, diagnostic: _):
-            nil
-        case let .connected(workerUnavailableReason: .some(reason), diagnostic: diagnostic):
-            ("Mac node degraded — \(Self.condense(reason))", Self.excerpt(diagnostic), true)
-        case let .unavailable(reason, diagnostic):
-            ("Mac node unavailable — \(Self.condense(reason))", Self.excerpt(diagnostic), false)
+            return nil
+        case let .connected(workerUnavailableReason: .some(value), diagnostic: detail):
+            (reason, diagnostic, isDegraded) = (value, detail, true)
+        case let .unavailable(value, detail):
+            (reason, diagnostic, isDegraded) = (value, detail, false)
         }
+        let status = isDegraded ? "degraded" : "unavailable"
+        let compatibility = NewerStateSchemaError(diagnostic: reason + "\n" + (diagnostic ?? ""))
+        let label = compatibility.map {
+            "Mac node \(status) — update the OpenClaw app: its worker supports schema \($0.supported), " +
+                "but shared state requires schema \($0.required)"
+        } ?? "Mac node \(status) — \(Self.condense(reason))"
+        return (label, Self.excerpt(diagnostic), isDegraded, compatibility == nil ? nil : .checkForUpdates)
     }
 
     /// Menu status lines are single-line; keep the leading reason sentence and

@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   audit:
+    if: github.event_name != 'schedule' || github.repository == 'openclaw/openclaw'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
@@ -25,7 +26,7 @@ jobs:
       - name: Setup Node.js
         run: |
           source .github/actions/setup-pnpm-store-cache/ensure-node.sh
-          openclaw_ensure_node "24.x"
+          openclaw_ensure_node "24.22.1"
 
       - name: Audit production dependencies
         run: |

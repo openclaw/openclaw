@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import Testing
 @testable import OpenClawChatUI
 #if os(macOS)
@@ -71,6 +72,28 @@ struct ChatInputHistoryTests {
         #expect(history.cancel() == "working draft")
     }
 
+    @Test func `paging an older identical input preserves the path back to the draft`() {
+        var history = ChatInputHistory()
+        history.seed(transcriptInputs: ["middle", "same"])
+        #expect(history.previous(draft: "working draft") == "same")
+
+        history.seed(transcriptInputs: ["same", "middle", "same"])
+
+        #expect(history.next() == "working draft")
+    }
+
+    @Test func `evicting an older duplicate keeps the selected input`() {
+        var history = ChatInputHistory()
+        let middle = (1..<(ChatInputHistory.limit - 1)).map { "entry-\($0)" }
+        history.seed(transcriptInputs: ["same"] + middle + ["same"])
+        #expect(history.previous(draft: "working draft") == "same")
+
+        history.record("newest")
+
+        #expect(history.next() == "newest")
+        #expect(history.next() == "working draft")
+    }
+
     @Test func `late successful input preserves active recall draft`() {
         var history = ChatInputHistory()
         history.record("older")
@@ -97,15 +120,33 @@ struct ChatInputHistoryTests {
         var history = ChatInputHistory()
         history.seed(transcriptInputs: ["older"])
         history.record("continue", transcriptEcho: "> **Assistant:** quote\n\ncontinue")
-        history.record("", transcriptEcho: "See attached.")
+        // An attachment-only send carries empty text, so it leaves nothing to recall.
+        history.record("", transcriptEcho: "")
 
         history.seed(transcriptInputs: [
             "older",
             "> **Assistant:** quote\n\ncontinue",
-            "See attached.",
         ])
 
         #expect(history.entries == ["continue", "older"])
+    }
+
+    @Test @MainActor func `legacy attachment-only placeholder stays out of seeded history`() throws {
+        let decode = { (json: String) in
+            try JSONDecoder().decode(OpenClawChatMessage.self, from: Data(json.utf8))
+        }
+        let messages = try [
+            decode(#"{"role":"user","content":[{"type":"text","text":"See attached."}]}"#),
+            decode(#"{"role":"user","content":[{"type":"text","text":"hello"}]}"#),
+            decode(#"{"role":"user","content":[{"type":"text","text":"See attached."},"#
+                + #"{"type":"image","mimeType":"image/png","content":"aW1n"}]}"#),
+        ]
+        let viewModel = OpenClawChatViewModel(sessionKey: "main", transport: InputHistoryTransport())
+
+        viewModel.seedInputHistory(from: messages)
+
+        // Older builds sent the placeholder with attachments; typed text without attachments stays.
+        #expect(viewModel.inputHistoriesBySession[viewModel.visibleComposerKey]?.entries == ["hello", "See attached."])
     }
 
     @Test func `generated transcript echo arriving before acceptance is reconciled`() {
@@ -148,16 +189,6 @@ struct ChatInputHistoryTests {
         #expect(history.cancel() == "")
     }
 
-    @Test func `late acceptance keeps a genuinely newer stashed draft`() {
-        var history = ChatInputHistory()
-        history.record("older")
-        #expect(history.previous(draft: "newer unsent draft") == "older")
-
-        history.record("sent me")
-
-        #expect(history.cancel() == "newer unsent draft")
-    }
-
     @Test func `recall marker stays on the same duplicate after an identical prepend`() {
         var history = ChatInputHistory()
         history.record("dup")
@@ -181,6 +212,25 @@ struct ChatInputHistoryTests {
 
         #expect(!history.isRecalling)
         #expect(history.stashedDraft == nil)
+    }
+
+    @Test(.timeLimit(.minutes(1))) @MainActor
+    func `saving while recalling stores the stashed draft, not the history entry`() async throws {
+        let (store, _, databaseDirectory) = try makeOutboxStore()
+        defer { try? FileManager.default.removeItem(at: databaseDirectory) }
+        let vm = await makeOutboxViewModel(transport: OutboxTestTransport(healthy: false), outbox: store)
+        await settleComposerDraft(vm)
+        vm.recordSuccessfulInput("already sent", sessionKey: vm.composerSessionKey(for: vm.sessionKey))
+        vm.input = "working draft"
+        #expect(vm.recallPreviousInput(caretOnFirstLine: true))
+        #expect(vm.input == "already sent")
+        vm.detachTransport()
+        await settleComposerDraft(vm)
+
+        let rebuilt = await makeOutboxViewModel(transport: OutboxTestTransport(healthy: false), outbox: store)
+        defer { rebuilt.detachTransport() }
+        await settleComposerDraft(rebuilt)
+        #expect(rebuilt.input == "working draft")
     }
 }
 
@@ -206,3 +256,27 @@ struct ChatInputHistoryKeyContextTests {
     }
 }
 #endif
+
+private struct InputHistoryTransport: OpenClawChatTransport {
+    func requestHistory(sessionKey: String) async throws -> OpenClawChatHistoryPayload {
+        OpenClawChatHistoryPayload(sessionKey: sessionKey, sessionId: "session-1", messages: [], thinkingLevel: "off")
+    }
+
+    func sendMessage(
+        sessionKey _: String,
+        message _: String,
+        thinking _: String,
+        idempotencyKey _: String,
+        attachments _: [OpenClawChatAttachmentPayload]) async throws -> OpenClawChatSendResponse
+    {
+        OpenClawChatSendResponse(runId: "run-1", status: "started")
+    }
+
+    func requestHealth(timeoutMs _: Int) async throws -> Bool {
+        true
+    }
+
+    func events() -> AsyncStream<OpenClawChatTransportEvent> {
+        AsyncStream { $0.finish() }
+    }
+}

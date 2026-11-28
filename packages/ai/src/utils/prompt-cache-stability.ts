@@ -6,6 +6,19 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeSurrogates } from "./sanitize-unicode.js";
 
+// Protocols whose prompt cache does not key on `tool_choice`: a request that changes only
+// `tool_choice` reads the same cached prefix, message blocks included. Each entry is a live
+// measurement (2026-11-28: OpenAI Responses, Anthropic Messages); unmeasured protocols stay out.
+const TOOL_CHOICE_CACHE_NEUTRAL: Readonly<Record<string, true>> = {
+  "openai-responses": true,
+  "anthropic-messages": true,
+};
+
+/** Whether changing `tool_choice` keeps the cached prefix on this protocol. */
+export function isToolChoiceCacheNeutral(api: string): boolean {
+  return TOOL_CHOICE_CACHE_NEUTRAL[api] === true;
+}
+
 /** Canonicalizes provider tool order without relying on host locale settings. */
 export function sortPromptCacheToolsByName<
   T extends {
@@ -37,14 +50,11 @@ export function normalizeStructuredPromptSection(text: string): string {
 /** Normalize, de-dupe, and sort capability ids for stable prompt payloads. */
 export function normalizePromptCapabilityIds(capabilities: ReadonlyArray<string>): string[] {
   const seen = new Set<string>();
-  const normalized: string[] = [];
   for (const capability of capabilities) {
     const value = normalizeLowercaseStringOrEmpty(normalizeStructuredPromptSection(capability));
-    if (!value || seen.has(value)) {
-      continue;
+    if (value) {
+      seen.add(value);
     }
-    seen.add(value);
-    normalized.push(value);
   }
-  return normalized.toSorted((left, right) => left.localeCompare(right));
+  return [...seen].toSorted((left, right) => left.localeCompare(right));
 }

@@ -235,18 +235,15 @@ export function buildManagedPluginDependencyStatus(params: {
   };
 }
 
-export async function findMissingRequiredPluginDependencies(
-  params: Parameters<typeof buildManagedPluginDependencyStatus>[0],
-): Promise<string[]> {
-  return buildManagedPluginDependencyStatus(params).missing;
-}
-
 export function pluginInstallIncompleteDiagnostic(
   pluginId: string,
   detail: string,
-  installId = pluginId,
+  installId: string | null = pluginId,
 ): PluginDiagnostic {
-  const fixHint = `Run \`openclaw plugins install ${installId} --force\` to reinstall the plugin.`;
+  const fixHint =
+    installId === null
+      ? "Restore the plugin at its configured local path, then run `openclaw doctor --fix`."
+      : `Run \`openclaw plugins install ${installId} --force\` to reinstall the plugin.`;
   return {
     level: "error",
     pluginId,

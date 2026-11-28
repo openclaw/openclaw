@@ -18,20 +18,25 @@ extension DashboardWindowController {
 
     func readDeviceSettingsSnapshot(sourceID: String) async -> DeviceSettingsSnapshot? {
         guard self.canUseDeviceSettings(sourceID: sourceID) else { return nil }
-        let entries = await Self.devicePermissionEntries()
+        let entries = await Self.devicePermissionEntries(DeviceSettingsPermission.macOSPermissions)
+        let additionalEntries = await Self.devicePermissionEntries(DeviceSettingsPermission.macOSAdditionalPermissions)
         // Permission reads can outlive a document; never deliver device data into its replacement.
         guard self.canUseDeviceSettings(sourceID: sourceID) else { return nil }
-        return self.deviceSettingsSnapshot(permissions: entries)
+        let nodeId = MacNodeModeCoordinator.shared.connectedDeviceId()
+        guard self.canUseDeviceSettings(sourceID: sourceID) else { return nil }
+        return self.deviceSettingsSnapshot(permissions: entries, additionalEntries: additionalEntries, nodeId: nodeId)
     }
 
     func canUseDeviceSettings(sourceID: String) -> Bool {
         !Task.isCancelled && self.notificationSourceID == sourceID && self.isWindowOpen &&
-            !self.isShowingFailurePage && self.hasCurrentBrowserSession &&
-            Self.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
+            !self.isShowingFailurePage && self.documentHost.hasCurrentBrowserSession &&
+            ControlUIDocumentHost.isTrustedLinkSource(self.webView.url, dashboardURL: self.currentURL)
     }
 
     private func deviceSettingsSnapshot(
-        permissions: [DeviceSettingsSnapshot.Permissions.Entry]) -> DeviceSettingsSnapshot
+        permissions: [DeviceSettingsSnapshot.Permissions.Entry],
+        additionalEntries: [DeviceSettingsSnapshot.Permissions.Entry],
+        nodeId: String?) -> DeviceSettingsSnapshot
     {
         let state = AppStateStore.shared
         let defaults = AppDefaults.standard
@@ -44,7 +49,8 @@ extension DashboardWindowController {
             device: .init(
                 appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
                 appBuild: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "",
-                profileName: AppProfile.current.name),
+                profileName: AppProfile.current.name,
+                nodeId: nodeId),
             app: .init(
                 showDockIcon: state.showDockIcon,
                 nativeExperienceEnabled: state.nativeExperienceEnabled,
@@ -57,6 +63,8 @@ extension DashboardWindowController {
                 // A moved app can still remove its existing login item; enabling keeps its separate gate.
                 launchAtLoginAvailable: self.deviceLaunchAtLoginAvailable ||
                     (!AppProfile.current.isActive && state.launchAtLogin),
+                keepGatewayRunning: GatewayProcessManager.shared.gatewayHosting == .service,
+                keepGatewayRunningAvailable: GatewayProcessManager.shared.keepGatewayRunningAvailable,
                 quickChatEnabled: state.quickChatEnabled,
                 quickChatShortcut: .some(KeyboardShortcuts.getShortcut(for: .toggleQuickChat)?.description),
                 debugPaneEnabled: state.debugPaneEnabled),
@@ -70,18 +78,21 @@ extension DashboardWindowController {
                 cuaDriverBundled: CuaDriverArtifact.bundledExecutableURL != nil,
                 peekabooBridgeEnabled: state.peekabooBridgeEnabled,
                 activeComputerPresenceEnabled: state.activeComputerPresenceEnabled,
-                unattendedDesktopEnabled: MacDesktopAvailabilityCoordinator.shared.unattendedEnabled),
+                unattendedDesktopEnabled: MacDesktopAvailabilityCoordinator.shared.unattendedEnabled,
+                aiSetupAvailable: true),
             desktopAvailability: .init(state: MacDesktopAvailabilityCoordinator.shared.refresh()),
             browser: .init(
                 importAvailable: state.connectionMode == .local && BrowserProfileImportModel.shared.importAvailable,
-                cookieSync: Self.deviceCookieSyncSnapshot(state: state)),
+                cookieSync: Self.deviceCookieSyncSnapshot(state: state),
+                chromeSetupActions: ChromeExtensionSetupAction.allCases),
             permissions: .init(
                 entries: permissions,
                 location: .init(
                     mode: DeviceSettingsLocationMode(locationMode),
-                    precise: defaults.object(forKey: locationPreciseKey) as? Bool ?? true)),
+                    precise: defaults.object(forKey: locationPreciseKey) as? Bool ?? true),
+                additionalEntries: additionalEntries),
             voice: .init(
-                supported: voiceWakeSupported && SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(
+                supported: SpeechRecognitionRequestPolicy.supportsPassiveVoiceWake(
                     localeID: state.voiceWakeLocaleID),
                 wakeEnabled: state.swabbleEnabled,
                 wakeTriggersTalkMode: state.voiceWakeTriggersTalkMode,
@@ -135,43 +146,20 @@ extension DashboardWindowController {
             detail: detail)
     }
 
-    private static func devicePermissionEntries() async -> [DeviceSettingsSnapshot.Permissions.Entry] {
-        let monitored = await PermissionManager.authorizationStatus([.accessibility, .screenRecording])
-        var statuses = Dictionary(uniqueKeysWithValues: DeviceSettingsPermission.macOSPermissions.map {
-            ($0, DeviceSettingsPermissionStatus($0.capability.flatMap { monitored[$0] }))
-        })
-        if PermissionManager.notificationCenterAvailable {
-            let settings = await UNUserNotificationCenter.current().notificationSettings()
-            statuses[.notifications] = DeviceSettingsPermissionStatus(
-                rawValue: Self.notificationsPermissionLabel(for: settings.authorizationStatus))
+    private static func devicePermissionEntries(
+        _ permissions: [DeviceSettingsPermission]) async -> [DeviceSettingsSnapshot.Permissions.Entry]
+    {
+        var entries: [DeviceSettingsSnapshot.Permissions.Entry] = []
+        for permission in permissions {
+            guard let capability = permission.capability else { continue }
+            let state = await PermissionManager.missingState(capability)
+            let status: DeviceSettingsPermissionStatus = switch state {
+            case nil: .granted
+            case .denied: .denied
+            default: .notDetermined
+            }
+            entries.append(.init(id: permission, status: status, state: state))
         }
-        statuses[.microphone] = Self.deviceMediaPermission(AVCaptureDevice.authorizationStatus(for: .audio))
-        statuses[.camera] = Self.deviceMediaPermission(AVCaptureDevice.authorizationStatus(for: .video))
-        statuses[.speechRecognition] = switch SFSpeechRecognizer.authorizationStatus() {
-        case .authorized: .granted
-        case .notDetermined: .notDetermined
-        case .denied, .restricted: .denied
-        @unknown default: .unavailable
-        }
-        let location = await PermissionManager.locationAuthorizationStatus()
-        statuses[.location] = if !CLLocationManager.locationServicesEnabled() {
-            .unavailable
-        } else if PermissionManager.isLocationAuthorized(status: location, requireAlways: false) {
-            .granted
-        } else if location == .notDetermined {
-            .notDetermined
-        } else {
-            .denied
-        }
-        return DeviceSettingsPermission.macOSPermissions.map { .init(id: $0, status: statuses[$0] ?? .unavailable) }
-    }
-
-    private static func deviceMediaPermission(_ status: AVAuthorizationStatus) -> DeviceSettingsPermissionStatus {
-        switch status {
-        case .authorized: .granted
-        case .notDetermined: .notDetermined
-        case .denied, .restricted: .denied
-        @unknown default: .unavailable
-        }
+        return entries
     }
 }

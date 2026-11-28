@@ -7,8 +7,10 @@ struct DashboardPageScreen: View {
     @Environment(AppAppearanceModel.self) private var appearanceModel
     @Environment(GatewayConnectionController.self) private var gatewayController
     @State private var navigationPath: [SettingsRoute] = []
+    @State private var embedCompatibility = DashboardEmbedCompatibility()
     let path: String
     let title: String
+    var queryItems: [URLQueryItem] = []
     var headerSidebarAction: OpenClawSidebarHeaderAction?
     var onClose: (() -> Void)?
     var onRouteChange: ((SettingsRoute?) -> Void)?
@@ -47,7 +49,7 @@ struct DashboardPageScreen: View {
             hasOperatorAdminScope: self.appModel.hasOperatorAdminScope,
             isDemoMode: self.appModel.isAppleReviewDemoModeEnabled,
             isScreenshotMode: ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-mode")),
-            let url = AuthenticatedControlUI.pageURL(config: config, path: self.path, queryItems: [])
+            let url = AuthenticatedControlUI.pageURL(config: config, path: self.path, queryItems: self.queryItems)
         {
             EmbeddedDashboardContent(
                 appModel: self.appModel,
@@ -59,7 +61,9 @@ struct DashboardPageScreen: View {
                     if let route = SettingsHubScreen.route(for: panel) {
                         self.navigationPath.append(route)
                     }
-                })
+                },
+                embedCompatibility: self.embedCompatibility,
+                openGateway: { self.navigationPath.append(.gateway) })
                 .navigationTitle(self.title)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {

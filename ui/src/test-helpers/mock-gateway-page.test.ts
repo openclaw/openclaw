@@ -1,4 +1,5 @@
 import { expect } from "vitest";
+import { configSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import {
   createControlUiMockGatewayInitScript,
   createControlUiMockSameOriginGatewayScript,
@@ -39,13 +40,7 @@ it("retires queued Gateway work and listeners when its page closes", async ({ ga
   execute(
     createControlUiMockGatewayInitScript({
       methodResponses: {
-        "config.get": {
-          raw: '{"count":1}',
-          config: { count: 1 },
-          hash: "original",
-          valid: true,
-          issues: [],
-        },
+        "config.get": configSnapshot({ count: 1 }, "original", '{"count":1}'),
       },
     }),
   );

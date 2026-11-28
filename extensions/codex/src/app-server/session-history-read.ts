@@ -5,7 +5,9 @@ import {
   readCodexSessionContext,
   SessionTranscriptReadFenceError,
   type SessionTranscriptContextVersion,
+  type SessionTranscriptContextProjectionSource,
 } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   SessionTranscriptTargetParams,
   TranscriptTurnAdmission,
@@ -17,6 +19,12 @@ import {
   type CodexHistoryReadResult,
 } from "./history-rejection.js";
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
+
+const loadAgentSessions = createLazyRuntimeModule(async () => {
+  const { buildSessionContext, migrateSessionEntries, parseSessionEntries } =
+    await import("openclaw/plugin-sdk/agent-sessions");
+  return { buildSessionContext, migrateSessionEntries, parseSessionEntries };
+});
 
 export type ResolvedCodexHistoryTarget =
   | { kind: "empty" }
@@ -61,6 +69,7 @@ export async function readCodexNativeHistory<T>(
   read: (messages: Iterable<AgentMessage>) => T,
   admission?: TranscriptTurnAdmission,
   onSnapshot?: (version: SessionTranscriptContextVersion | undefined) => void,
+  physicalSource?: SessionTranscriptContextProjectionSource["physicalSource"],
 ): Promise<CodexHistoryReadResult<T>> {
   const consume = (
     messages: Iterable<AgentMessage>,
@@ -80,11 +89,11 @@ export async function readCodexNativeHistory<T>(
       return consume([], undefined);
     }
     if (target.kind === "sqlite") {
-      return readCodexSessionContext(target.target, consume, admission);
+      return readCodexSessionContext(target.target, consume, admission, physicalSource);
     }
     // The legacy file codec is needed only for explicit file imports, never native SQLite reads.
     const { buildSessionContext, migrateSessionEntries, parseSessionEntries } =
-      await import("openclaw/plugin-sdk/agent-sessions");
+      await loadAgentSessions();
     const entries = parseSessionEntries(await fs.readFile(target.sessionFile, "utf-8"));
     return consume(
       (function* () {

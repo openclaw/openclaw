@@ -35,14 +35,15 @@ those tested versions; do not assume a working build supports future releases.
 Existing [compatibility windows and upgrade migrations](/plugins/compatibility)
 still apply. Experimental status does not remove a documented migration path.
 
-Native UI from user-installed plugins also requires the default-off
-[Custom plugin UI lab](/plugins/feature-plugins#enable-custom-plugin-ui).
-Backend plugin APIs and ordinary plugin loading do not require that setting.
+Native UI is available by default for enabled plugins; there is no Labs opt-in.
+The existing [advanced native UI opt-out](/plugins/feature-plugins#enable-custom-plugin-ui)
+remains available for user-installed browser code. Backend plugin APIs and
+ordinary plugin loading are unaffected by that opt-out.
 
 ## What each page covers
 
 - [Imports and module layout](/plugins/sdk-overview/imports) — which subpath to import from, the subpath catalog, and the internal barrel convention.
-- [Capability registration](/plugins/sdk-overview/capabilities) — provider registrars plus the worker-provider and embedding runtime contracts.
+- [Capability registration](/plugins/sdk-overview/capabilities) — provider registrars plus storage, worker, and embedding runtime contracts.
 - [Tools and commands](/plugins/sdk-overview/tools-and-commands) — agent tools, custom commands, node-host commands, and widget presenters.
 - [Infrastructure registration](/plugins/sdk-overview/infrastructure) — hooks, HTTP routes, Gateway methods, services, and the webhook and SQLite helpers.
 - [Host hooks](/plugins/sdk-overview/host-hooks) — session extensions, trusted tool policies, Control UI descriptors, and runtime lifecycle.
@@ -78,21 +79,22 @@ and external URLs. Registering another provider replaces the current provider.
 
 ### API object fields
 
-| Field                    | Type                      | Description                                                                               |
-| ------------------------ | ------------------------- | ----------------------------------------------------------------------------------------- |
-| `api.id`                 | `string`                  | Plugin id                                                                                 |
-| `api.name`               | `string`                  | Display name                                                                              |
-| `api.version`            | `string?`                 | Plugin version (optional)                                                                 |
-| `api.description`        | `string?`                 | Plugin description (optional)                                                             |
-| `api.source`             | `string`                  | Plugin source path                                                                        |
-| `api.runtimeSource`      | `string?`                 | Selected runtime entrypoint path, when the loader has selected a runtime artifact         |
-| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                                          |
-| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available)                |
-| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                                 |
-| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                                   |
-| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                                          |
-| `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight setup flow with runtime available |
-| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                                      |
+| Field                    | Type                      | Description                                                                                                  |
+| ------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `api.id`                 | `string`                  | Plugin id                                                                                                    |
+| `api.name`               | `string`                  | Display name                                                                                                 |
+| `api.version`            | `string?`                 | Plugin version (optional)                                                                                    |
+| `api.description`        | `string?`                 | Plugin description (optional)                                                                                |
+| `api.source`             | `string`                  | Plugin source path                                                                                           |
+| `api.runtimeSource`      | `string?`                 | Selected runtime entrypoint path, when the loader has selected a runtime artifact                            |
+| `api.rootDir`            | `string?`                 | Plugin root directory (optional)                                                                             |
+| `api.config`             | `OpenClawConfig`          | Current config snapshot (active in-memory runtime snapshot when available)                                   |
+| `api.pluginConfig`       | `Record<string, unknown>` | Plugin-specific config from `plugins.entries.<id>.config`                                                    |
+| `api.runtime`            | `PluginRuntime`           | [Runtime helpers](/plugins/sdk-runtime)                                                                      |
+| `api.logger`             | `PluginLogger`            | Scoped logger (`debug`, `info`, `warn`, `error`)                                                             |
+| `api.metrics`            | `{ register }?`           | [Plugin metrics](/gateway/prometheus#plugin-metric-families), if the operator allows metrics for this plugin |
+| `api.registrationMode`   | `PluginRegistrationMode`  | Current load mode; `"setup-runtime"` is the lightweight setup flow with runtime available                    |
+| `api.resolvePath(input)` | `(string) => string`      | Resolve path relative to plugin root                                                                         |
 
 Use `api.runtimeSource` to locate private modules beside the selected runtime
 entrypoint. It records the loader's source, standalone package, or bundled

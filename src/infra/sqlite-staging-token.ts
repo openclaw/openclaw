@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sql, type RawBuilder } from "kysely";
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { executeWithCachedStatement } from "./kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { readSqliteDatabaseAdmissionIdentity } from "./sqlite-database-admission-record.js";
+import { withSqliteDatabaseAdmissionSettlement } from "./sqlite-database-admission-wait.js";
+import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
+import { withSqliteNativeOpen } from "./sqlite-error-diagnostics.js";
+import { assertDatabaseFileIdentity, type DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export const SQLITE_STAGING_TOKEN_FILES = [
   "owner.sqlite",
@@ -12,7 +16,9 @@ export const SQLITE_STAGING_TOKEN_FILES = [
   "owner.sqlite-shm",
 ] as const;
 
-export type SqliteStagingToken = (retiring?: boolean) => void;
+export type SqliteStagingToken = ((retiring?: boolean) => void) & {
+  beginRetirement: () => SqliteStagingToken;
+};
 
 export class SqliteStagingRetiredError extends Error {
   constructor() {
@@ -24,9 +30,52 @@ export class SqliteStagingRetiredError extends Error {
 export function acquireSqliteStagingToken(
   directory: string,
   mode: "create" | "read" | "reclaim",
-  options: { allowMissing?: boolean } = {},
+  options: {
+    allowMissing?: boolean;
+    expectedIdentity?: DatabaseFileIdentity;
+    exclusiveCreate?: boolean;
+  } = {},
+): SqliteStagingToken {
+  // Cancelled work still reclaims, releases or retires private locks instead of
+  // leaving copies behind, but it never mints a new staging owner.
+  const settle = withSqliteDatabaseAdmissionSettlement;
+  const acquire = () => acquireStagingToken(directory, mode, options);
+  const token = mode === "create" ? acquire() : settle(acquire);
+  const settled: SqliteStagingToken = Object.assign(
+    (retiring?: boolean) => settle(() => token(retiring)),
+    {
+      beginRetirement: () => {
+        settle(() => token.beginRetirement());
+        return settled;
+      },
+    },
+  );
+  return settled;
+}
+
+function acquireStagingToken(
+  directory: string,
+  mode: "create" | "read" | "reclaim",
+  options: {
+    allowMissing?: boolean;
+    expectedIdentity?: DatabaseFileIdentity;
+    exclusiveCreate?: boolean;
+  },
 ): SqliteStagingToken {
   const location = path.join(directory, SQLITE_STAGING_TOKEN_FILES[0]);
+  const readIdentity = (pathname: string, kind: "directory" | "file") => {
+    const stat = fs.lstatSync(pathname, { bigint: true });
+    // Windows may report zero identities under contention. Read-compatible
+    // identity matching is insufficient authority for destructive retirement.
+    if (
+      !(kind === "directory" ? stat.isDirectory() : stat.isFile()) ||
+      (process.platform === "win32" && (stat.dev === 0n || stat.ino === 0n))
+    ) {
+      throw new Error("SQLite staging ownership is unknown");
+    }
+    return stat;
+  };
+  const directoryIdentity = readIdentity(directory, "directory");
   // Check sidecars before SQLite may recover or remove a private journal.
   const family = SQLITE_STAGING_TOKEN_FILES.map((file) =>
     fs.lstatSync(path.join(directory, file), { throwIfNoEntry: false }),
@@ -40,51 +89,105 @@ export function acquireSqliteStagingToken(
   ) {
     throw new Error("SQLite snapshot token ownership is unknown");
   }
-  // Legacy callers may supply a parent without a token. Cooperating owners
-  // create the same inode; SQLite arbitrates admission without recreating parents.
-  const db = openNodeSqliteDatabase(existing ? resolveExistingSqliteFileUri(location) : location);
-  const kysely = getNodeSqliteKysely(db);
-  const execute = (statement: RawBuilder<unknown>) =>
-    executeSqliteQueryTakeFirstSync(db, { compile: () => statement.compile(kysely) });
-  const release: SqliteStagingToken = (retiring = false) => {
+  if (mode === "create" && !existing) {
+    // Snapshot, plugin capture, and backup owners create before publishing their private directory.
+    fs.writeFileSync(location, "", { flag: "wx", mode: 0o644 });
+  }
+  const tokenExists = existing !== undefined || mode === "create";
+  // Legacy readers may supply a parent without a token; fresh owners never recreate a removed inode.
+  const existingIdentity = tokenExists ? readIdentity(location, "file") : undefined;
+  if (options.expectedIdentity) {
+    if (!existingIdentity) {
+      throw new Error("SQLite staging ownership is unknown");
+    }
+    assertDatabaseFileIdentity(existingIdentity, options.expectedIdentity);
+  }
+  const db = withSqliteNativeOpen(() =>
+    openNodeSqliteDatabase(
+      tokenExists ? resolveExistingSqliteFileUri(location) : location,
+      { timeout: 0 },
+      existingIdentity && readSqliteDatabaseAdmissionIdentity(existingIdentity),
+    ),
+  );
+  let tokenIdentity: fs.BigIntStats;
+  // This lock primitive needs fixed SQLite commands, not the query-builder graph.
+  const read = (sql: string) =>
+    executeWithCachedStatement(db, sql, [], (statement) => statement.get());
+  let exclusive = mode === "reclaim" || (mode === "create" && options.exclusiveCreate === true);
+  let retired = false;
+  const assertIdentity = () => {
+    const currentDirectory = readIdentity(directory, "directory");
+    if (
+      directoryIdentity.dev !== currentDirectory.dev ||
+      directoryIdentity.ino !== currentDirectory.ino
+    ) {
+      throw new Error("SQLite staging ownership changed before retirement");
+    }
+    const currentToken = readIdentity(location, "file");
+    if (tokenIdentity.dev !== currentToken.dev || tokenIdentity.ino !== currentToken.ino) {
+      throw new Error("SQLite staging ownership changed before retirement");
+    }
+  };
+  const beginRetirement = (): SqliteStagingToken => {
+    assertIdentity();
+    if (!db.isTransaction || !exclusive) {
+      if (db.isTransaction) {
+        db.exec("ROLLBACK");
+      }
+      db.exec("BEGIN EXCLUSIVE");
+      exclusive = true;
+    }
+    return token;
+  };
+  const release = (retiring = false) => {
     if (!db.isOpen) {
       return;
     }
     if (retiring) {
       // Windows handles omit FILE_SHARE_DELETE: commit retirement while fenced,
       // then close for removal. Late workers reject the committed marker.
-      if (!db.isTransaction) {
-        execute(sql`BEGIN IMMEDIATE`);
+      beginRetirement();
+      if (!retired) {
+        db.exec("PRAGMA user_version=1");
       }
-      execute(sql`PRAGMA user_version=1`);
-      execute(sql`COMMIT`);
+      db.exec("COMMIT");
+      retired = true;
     } else if (db.isTransaction) {
       // Bun can retain statements after close_v2; end the transaction now so
       // a released worker cannot keep its parent's retirement commit locked.
-      execute(sql`ROLLBACK`);
+      db.exec("ROLLBACK");
     }
     db.close();
+    if (retiring) {
+      retireSqliteDatabaseAdmissionForPath(location);
+    }
   };
+  const token = Object.assign(release, { beginRetirement });
   try {
-    execute(sql`PRAGMA busy_timeout=0`);
-    if (mode === "create") {
-      execute(sql`BEGIN IMMEDIATE`);
-    } else if (mode === "reclaim") {
-      execute(sql`BEGIN EXCLUSIVE`);
+    tokenIdentity = existingIdentity ?? readIdentity(location, "file");
+    if (exclusive) {
+      db.exec("BEGIN EXCLUSIVE");
+    } else if (mode === "create") {
+      db.exec("BEGIN IMMEDIATE");
     } else {
-      execute(sql`BEGIN`);
-      execute(sql`SELECT rootpage FROM sqlite_schema LIMIT 1`);
+      db.exec("BEGIN");
     }
-    const journalMode = execute(sql`PRAGMA journal_mode`);
-    if (!isRecord(journalMode) || journalMode.journal_mode !== "delete") {
-      throw new Error("SQLite snapshot token journal mode is unknown");
+    // A private wx-created empty token has the native DELETE journal and zero marker.
+    // Existing tokens need their marker read under the lock; this also pins read custody.
+    if (mode !== "create" || existing) {
+      const journalMode = read("PRAGMA journal_mode");
+      if (!isRecord(journalMode) || journalMode.journal_mode !== "delete") {
+        throw new Error("SQLite snapshot token journal mode is unknown");
+      }
+      const header = read("PRAGMA user_version");
+      const version = isRecord(header) ? header.user_version : undefined;
+      if (version !== 0 && (mode !== "reclaim" || version !== 1)) {
+        throw new SqliteStagingRetiredError();
+      }
+      retired = version === 1;
     }
-    const versionRow = execute(sql`PRAGMA user_version`);
-    const version = isRecord(versionRow) ? versionRow.user_version : undefined;
-    if (version !== 0 && (mode !== "reclaim" || version !== 1)) {
-      throw new SqliteStagingRetiredError();
-    }
-    return release;
+    assertIdentity();
+    return token;
   } catch (error) {
     release();
     throw error;

@@ -77,7 +77,7 @@ function replaceValidMatches(
   return output + text.slice(cursor);
 }
 
-function isEscaped(text: string, index: number): boolean {
+export function isEscaped(text: string, index: number): boolean {
   let backslashes = 0;
   for (let cursor = index - 1; cursor >= 0 && text[cursor] === "\\"; cursor -= 1) {
     backslashes += 1;

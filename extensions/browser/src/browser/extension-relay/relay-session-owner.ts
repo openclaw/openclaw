@@ -1,4 +1,6 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+import { isRetiredFetchInterceptionError } from "../cdp-fetch-interception.js";
 import { RelayFetch } from "./relay-fetch.js";
 import { RelayRuntime } from "./relay-runtime.js";
 import { RelayTarget } from "./relay-target.js";
@@ -94,7 +96,7 @@ export class RelaySessionOwner {
       fetch: new RelayFetch((method, params) => this.send(physical, method, params, "fetch")),
     };
     physical.parent?.children.add(physical);
-    this.physical.set(scope.childSessionId ?? scope.rootSessionId, physical);
+    this.physical.set(physical.id, physical);
     return physical;
   }
 
@@ -127,9 +129,14 @@ export class RelaySessionOwner {
       }
       return result;
     } catch (error) {
-      if (domain && !physical.active.signal.aborted) {
+      if (
+        domain &&
+        !physical.active.signal.aborted &&
+        !(domain === "fetch" && isRetiredFetchInterceptionError(error))
+      ) {
         // Only an actual sender failure retires the scope. Local ownership/stage
-        // rejections never pass here and cannot evict another logical user.
+        // rejections never pass here and cannot evict another logical user. A
+        // request Chromium already ended is retired by RelayFetch alone.
         void this.retireAttachment(physical.rootSessionId).catch(this.report);
       }
       throw error;
@@ -356,26 +363,21 @@ export class RelaySessionOwner {
           return;
         }
         const targetCleanup = physical.target.remove(session);
-        let timer: NodeJS.Timeout | undefined;
         try {
           await Promise.all([
             targetCleanup,
-            Promise.race([
+            raceWithTimeout(
               Promise.all([physical.fetch.close(session), physical.runtime.close(session)]),
-              new Promise<never>((_resolve, reject) => {
-                timer = setTimeout(
-                  () => reject(new Error("Session owner cleanup timed out")),
-                  SESSION_RETIREMENT_MS,
-                );
-                timer.unref?.();
-              }),
-            ]),
+              SESSION_RETIREMENT_MS,
+              () => {
+                throw new Error("Session owner cleanup timed out");
+              },
+              { ref: false },
+            ),
           ]);
         } catch (error) {
           await this.retireAttachment(physical.rootSessionId);
           throw error;
-        } finally {
-          clearTimeout(timer);
         }
         if (parent && parent !== reconciling && !physical.subscribers.size) {
           await parent.target.enqueue(() => this.reconcileChildren(parent));
@@ -411,9 +413,8 @@ export class RelaySessionOwner {
         for (const parent of scope.parent?.subscribers ?? []) {
           parent.detachedChildren.delete(scope);
         }
-        const id = scope.childSessionId ?? scope.rootSessionId;
-        if (this.physical.get(id) === scope) {
-          this.physical.delete(id);
+        if (this.physical.get(scope.id) === scope) {
+          this.physical.delete(scope.id);
         }
       }
     };
@@ -511,12 +512,12 @@ export class RelaySessionOwner {
     if (method === "Target.attachedToTarget") {
       const attached = asOptionalRecord(params);
       const childId = attached?.sessionId;
-      const nativeTargetId = asOptionalRecord(attached?.targetInfo)?.targetId;
+      const targetInfo = asOptionalRecord(attached?.targetInfo);
+      const nativeTargetId = targetInfo?.targetId;
       if (typeof childId !== "string" || typeof nativeTargetId !== "string") {
         this.report(new Error("Native child attachment is missing its session or target identity"));
         return;
       }
-      const targetInfo = asOptionalRecord(attached?.targetInfo);
       if (!targetInfo || typeof targetInfo.type !== "string" || !nativeTargetId) {
         this.report(new Error("Native child attachment is missing its target type"));
         return;

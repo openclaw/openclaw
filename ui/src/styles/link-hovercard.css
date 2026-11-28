@@ -9,10 +9,12 @@
   overflow: auto;
   color: var(--text);
   font-family: var(--font-body);
-  background: var(--card);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--overlay-shadow);
+  border: 1px solid transparent;
+  border-radius: var(--menu-radius);
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+  backdrop-filter: var(--menu-backdrop);
+  corner-shape: superellipse(1.5);
   pointer-events: auto;
 }
 
@@ -85,23 +87,23 @@ a.link-hovercard__open {
   overflow-wrap: anywhere;
 }
 
-.link-hovercard__title {
+.link-hovercard__title,
+.link-hovercard__description {
   display: -webkit-box;
   overflow: hidden;
-  font-size: 14px;
-  font-weight: 600;
-  line-height: 1.4;
   -webkit-line-clamp: 3;
   -webkit-box-orient: vertical;
 }
 
+.link-hovercard__title {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
 .link-hovercard__description {
-  display: -webkit-box;
-  overflow: hidden;
   margin: 7px 0 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.5;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
 }

@@ -32,10 +32,7 @@ enum PermissionRequestBridge {
         }
 
         func canStartRequest() -> Bool {
-            self.lock.lock()
-            let canStart = !self.hasResumed
-            self.lock.unlock()
-            return canStart
+            self.lock.withLock { !self.hasResumed }
         }
     }
 

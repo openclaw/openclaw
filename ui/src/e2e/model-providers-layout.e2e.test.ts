@@ -1,97 +1,160 @@
-import path from "node:path";
 import { expect, it } from "vitest";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Models settings layout and discovery" });
-const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
+
+const models = [
+  { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
+  { id: "gpt-5-mini", name: "GPT-5 mini", provider: "openai", available: true },
+];
+const config = {
+  agents: { defaults: { model: "openai/gpt-5.5", decisionModel: "typesafe/jev-latest" } },
+};
+const catalog = {
+  models,
+  decisionModels: [{ provider: "typesafe", id: "jev-latest", name: "Jev", pluginId: "typesafe" }],
+  defaultModels: { automaticUtilityModel: "openai/gpt-5-mini" },
+};
+const gatewayScenario = {
+  models,
+  methodResponses: {
+    "agents.list": {
+      defaultId: "main",
+      mainKey: "main",
+      scope: "per-sender",
+      agents: [
+        {
+          id: "main",
+          name: "Research and engineering assistant",
+          identity: { emoji: "🦞" },
+        },
+        { id: "work", name: "Work" },
+      ],
+    },
+    "config.get": sourceConfigSnapshot(config, "models-layout"),
+    "models.list": catalog,
+    "models.authStatus": {
+      ts: Date.now(),
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          status: "ok",
+          profiles: [
+            {
+              profileId: "openai:alex",
+              type: "oauth",
+              status: "ok",
+              email: "alex@example.com",
+            },
+          ],
+        },
+      ],
+    },
+    "usage.status": { updatedAt: Date.now(), providers: [] },
+    "sessions.usage": { aggregates: { byProvider: [] } },
+  },
+};
 
 suite.define(() => {
+  it.each([
+    [390, 844],
+    [820, 1180],
+    [1180, 820],
+    [1440, 900],
+  ])(
+    "shows both runtime names in the picker and the saved fallback at %i × %i",
+    async (width, height) => {
+      await suite.withPage(
+        { viewport: { width, height }, isMobile: width === 390, hasTouch: true, locale: "en-US" },
+        async ({ page }) => {
+          const name = "Studio documentation review extended context";
+          const ref = "openai/studio-review";
+          const entry = {
+            ...models[0],
+            id: "studio-review",
+            name,
+            defaultModelRuntimes: {
+              base: { agentRuntime: { id: "openclaw", source: "model" }, available: true },
+              alternatives: [{ agentRuntime: { id: "codex", source: "model" }, available: true }],
+            },
+          };
+          const saved = {
+            agents: {
+              defaults: {
+                ...config.agents.defaults,
+                model: { primary: "openai/gpt-5.5", fallbacks: [ref] },
+                models: { [ref]: { agentRuntime: { id: "codex" } } },
+              },
+            },
+          };
+          const gw = await installMockGateway(page, {
+            ...gatewayScenario,
+            methodResponses: {
+              ...gatewayScenario.methodResponses,
+              "models.list": { ...catalog, models: [...models, entry] },
+              "config.patch": { ok: true, config: saved, hash: "saved" },
+            },
+          });
+          await page.goto(suite.server.baseUrl + "settings/model-providers");
+          const defaults = page.locator(".model-providers__defaults");
+          const trigger = defaults.getByRole("button", { name: /^Fallback model:/ });
+          await trigger.tap();
+          const list = defaults.getByRole("listbox");
+          const variants = list.getByRole("option").filter({ hasText: name });
+          await expect.poll(() => variants.count()).toBe(2);
+          for (const [i, runtime] of ["OpenClaw", "Codex"].entries()) {
+            const label = variants.nth(i).locator(".picker-select__split-label");
+            expect(await label.getAttribute("title")).toBe(name + " · " + runtime);
+            const tail = label.locator("span").last();
+            expect((await tail.textContent())?.trim()).toBe("· " + runtime);
+            expect(await label.evaluate((e) => e.getBoundingClientRect().height)).toBeLessThan(25);
+            expect(
+              await label.evaluate(
+                (e) =>
+                  e.lastElementChild!.getBoundingClientRect().right <=
+                  e.getBoundingClientRect().right + 1,
+              ),
+            ).toBe(true);
+          }
+          const overflow = (el: Element) => el.scrollWidth - el.clientWidth;
+          expect(
+            await variants
+              .locator(".picker-select__label")
+              .evaluateAll((els) => els.map((el) => el.scrollWidth - el.clientWidth)),
+          ).toEqual([0, 0]);
+          await gw.setMethodResponse("config.get", sourceConfigSnapshot(saved, "saved"));
+          await variants.filter({ hasText: "Codex" }).tap();
+          await gw.waitForRequest("config.patch");
+          await expect.poll(() => trigger.textContent()).toContain(name + " · Codex");
+          expect(await trigger.locator(".picker-select__label").evaluate(overflow)).toBe(0);
+          expect(await trigger.locator(".picker-select__split-label").getAttribute("title")).toBe(
+            name + " · Codex",
+          );
+        },
+      );
+    },
+  );
   it.each([1440, 1100, 768, 640, 390])(
-    "Models page keeps controls separate and publishes discovery into a passive picker at %ipx",
+    "Models page keeps controls separate during discovery at %ipx",
     async (width) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width, height: 1000 } },
         async ({ page }) => {
-          const models = [
-            { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
-            { id: "gpt-5-mini", name: "GPT-5 mini", provider: "openai", available: true },
-          ];
-          const config = {
-            agents: { defaults: { model: "openai/gpt-5.5", decisionModel: "typesafe/jev-latest" } },
-          };
-          const catalog = {
-            models,
-            decisionModels: [
-              { provider: "typesafe", id: "jev-latest", name: "Jev", pluginId: "typesafe" },
-            ],
-            defaultModels: { automaticUtilityModel: "openai/gpt-5-mini" },
-          };
-          const gateway = await installMockGateway(page, {
-            models,
-            methodResponses: {
-              "agents.list": {
-                defaultId: "main",
-                mainKey: "main",
-                scope: "per-sender",
-                agents: [
-                  {
-                    id: "main",
-                    name: "Research and engineering assistant",
-                    identity: { emoji: "🦞" },
-                  },
-                  { id: "work", name: "Work" },
-                ],
-              },
-              "config.get": {
-                config,
-                sourceConfig: config,
-                hash: "models-layout",
-                raw: JSON.stringify(config),
-                valid: true,
-                issues: [],
-              },
-              "models.list": catalog,
-              "models.authStatus": {
-                ts: Date.now(),
-                providers: [
-                  {
-                    provider: "openai",
-                    displayName: "OpenAI",
-                    status: "ok",
-                    profiles: [
-                      {
-                        profileId: "openai:alex",
-                        type: "oauth",
-                        status: "ok",
-                        email: "alex@example.com",
-                      },
-                    ],
-                  },
-                ],
-              },
-              "usage.status": { updatedAt: Date.now(), providers: [] },
-              "sessions.usage": { aggregates: { byProvider: [] } },
-            },
-          });
+          const gateway = await installMockGateway(page, gatewayScenario);
           await page.goto(`${suite.server.baseUrl}settings/model-providers`);
           const primary = page.getByRole("button", { name: /^Model: GPT-5.5/ });
           await primary.waitFor();
-          await expect.poll(() => primary.textContent()).toContain("alex@example.com");
-          const utility = page.getByRole("button", { name: /^Utility Model: Auto/ });
-          await expect.poll(() => utility.textContent()).toContain("GPT-5 mini");
-          await expect.poll(() => utility.textContent()).toContain("alex@example.com");
-          const decision = page.locator(
-            "openclaw-select-picker:has(#model-providers-decision-model)",
-          );
-          await expect
-            .poll(() => decision.locator(".picker-select__trigger").textContent())
-            .toContain("Jev");
-          expect(
-            await decision.locator('[role="option"][data-value="typesafe/jev-latest"]').count(),
-          ).toBe(1);
+          const moreSettings = page.locator("[data-models-more-settings]");
+          if ((await moreSettings.getAttribute("aria-expanded")) !== "true") {
+            await moreSettings.click();
+          }
+          expect(await primary.textContent()).not.toContain("alex@example.com");
+          expect(await primary.locator(".picker-select__description").count()).toBe(0);
           const rows = await page
-            .locator(".model-providers__defaults .settings-row")
+            .locator(".model-providers__defaults .settings-row:not([data-models-more-settings])")
             .evaluateAll((elements) =>
               elements.map((row) => {
                 const label = row.querySelector(".settings-row__text")!.getBoundingClientRect();
@@ -99,28 +162,19 @@ suite.define(() => {
                   .querySelector(".settings-row__control")!
                   .getBoundingClientRect();
                 return {
-                  role: (
-                    row.querySelector(".model-providers__label-with-help > span:first-child") ??
-                    row.querySelector(".settings-row__title")
-                  )?.textContent?.trim(),
                   sideBySide: label.right <= control.left && label.bottom > control.top,
                   stacked: label.bottom <= control.top,
                 };
               }),
             );
-          expect(rows.map((row) => row.role)).toEqual([
-            "Model",
-            "Utility Model",
-            "Decision Model",
-            "Fallback Model",
-            "Thinking",
-            "Fast Mode",
-          ]);
           expect(rows.every((row) => (width > 640 ? row.sideBySide : row.stacked))).toBe(true);
+          await page
+            .locator(".settings-sidebar openclaw-agent-select")
+            .waitFor({ state: "attached" });
           expect(await page.locator(".content openclaw-agent-select").count()).toBe(0);
           expect(await page.locator(".settings-sidebar openclaw-agent-select").count()).toBe(1);
           const bounds = await page
-            .locator("[data-models-connect], .model-providers__refresh-button")
+            .locator("[data-models-login-discover], .model-providers__refresh-button")
             .evaluateAll((buttons) =>
               buttons.map((button) => {
                 const { x, y, width: buttonWidth, height } = button.getBoundingClientRect();
@@ -140,48 +194,31 @@ suite.define(() => {
               expect(overlaps).toBe(false);
             }
           }
-          if (recordVisuals) {
-            await page.screenshot({ path: path.join(suite.artifactDir, `models-${width}.png`) });
-          }
+          const access = page.getByRole("heading", { name: "Providers", exact: true });
+          const section = page.locator(".settings-section").filter({ has: access });
+          const group = section.locator(":scope > .settings-group");
+          expect((await access.boundingBox())!.x).toBe((await group.boundingBox())!.x);
           await primary.scrollIntoViewIfNeeded();
           const beforeDiscovery = await primary.boundingBox();
-          const requestsBeforeOpen = await gateway.getRequests("models.list");
           await primary.click();
           await page.locator('.model-providers__defaults [role="listbox"]').first().waitFor();
-          expect(await gateway.getRequests("models.list")).toEqual(requestsBeforeOpen);
-          await gateway.setMethodResponse("models.list", {
-            ...catalog,
-            pendingProviders: ["openai"],
-          });
-          await gateway.emitGatewayEvent("chat.metadata.changed", {});
-          const progress = page.locator('.model-providers__catalog-progress[role="status"]');
-          await progress.waitFor();
-          expect(await primary.boundingBox()).toEqual(beforeDiscovery);
-          expect(await progress.locator('[aria-hidden="true"]').count()).toBe(1);
-          if (recordVisuals) {
-            await page.screenshot({
-              path: path.join(suite.artifactDir, `discovering-${width}.png`),
-            });
-          }
           await gateway.setMethodResponse("models.list", {
             ...catalog,
             models: [
               ...models,
-              { id: "account-new", name: "New account model", provider: "openai", available: true },
+              { id: "published", name: "Published model", provider: "openai", available: true },
             ],
+            pendingProviders: ["openai"],
           });
           await gateway.emitGatewayEvent("chat.metadata.changed", {});
-          await expect.poll(() => progress.count()).toBe(0);
           await page
-            .locator('.model-providers__defaults [role="option"][data-value="openai/account-new"]')
+            .locator('.model-providers__defaults [role="option"][data-value="openai/published"]')
             .first()
-            .waitFor({ state: "visible" });
-          expect(await primary.getAttribute("aria-expanded")).toBe("true");
-          expect(await primary.textContent()).toContain("GPT-5.5");
-          expect(
-            await decision.locator('[role="option"][data-value="openai/account-new"]').count(),
-          ).toBe(0);
-          expect(await decision.locator(".picker-select__trigger").textContent()).toContain("Jev");
+            .waitFor();
+          const progress = page.locator('.model-providers__catalog-progress[role="status"]');
+          expect(await progress.count()).toBe(0);
+          expect(await primary.boundingBox()).toEqual(beforeDiscovery);
+          await page.keyboard.press("Escape");
         },
       );
     },

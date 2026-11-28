@@ -1,6 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-// Connection-failure hint classification shared by the login gate.
 import {
   ConnectErrorDetailCodes,
   readConnectPairingRequiredMessage,
@@ -29,10 +28,7 @@ const AUTH_FAILURE_CODES = new Set<string>([
   ConnectErrorDetailCodes.AUTH_TAILSCALE_IDENTITY_MISMATCH,
 ]);
 
-const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
-
 const INSECURE_CONTEXT_CODES = new Set<string>([
-  BROWSER_WEBSOCKET_SECURITY_ERROR_CODE,
   ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
   ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED,
 ]);
@@ -57,24 +53,8 @@ export function readConnectionAuthReason(details: unknown): string | null {
   return typeof reason === "string" && PROXY_AUTH_REASONS.has(reason) ? reason : null;
 }
 
-type AuthHintKind = "required" | "failed" | "trusted-proxy";
-
-type PairingHint =
-  | {
-      kind: "pairing-required";
-      requestId: string | null;
-    }
-  | {
-      kind: "scope-upgrade-pending" | "role-upgrade-pending" | "metadata-upgrade-pending";
-      requestId: string | null;
-    };
-
-export function resolvePairingHint(
-  connected: boolean,
-  lastError: string | null,
-  lastErrorCode?: string | null,
-): PairingHint | null {
-  if (connected || !lastError) {
+export function resolvePairingHint(lastError: string | null, lastErrorCode?: string | null) {
+  if (!lastError) {
     return null;
   }
   const pairing = readConnectPairingRequiredMessage(lastError);
@@ -98,8 +78,6 @@ export function resolvePairingHint(
 }
 
 /**
- * Return the connection auth hint to show, if any.
- *
  * Keep fallback string matching narrow so generic "connect failed" close reasons
  * do not get misclassified as token/password problems.
  */
@@ -110,7 +88,7 @@ export function resolveAuthHintKind(params: {
   lastErrorAuthReason?: string | null;
   hasToken: boolean;
   hasPassword: boolean;
-}): AuthHintKind | null {
+}): "required" | "failed" | "trusted-proxy" | null {
   if (params.connected || !params.lastError) {
     return null;
   }
@@ -146,11 +124,10 @@ export function resolveAuthHintKind(params: {
 }
 
 export function shouldShowInsecureContextHint(
-  connected: boolean,
   lastError: string | null,
   lastErrorCode?: string | null,
 ): boolean {
-  if (connected || !lastError) {
+  if (!lastError) {
     return false;
   }
   if (lastErrorCode) {

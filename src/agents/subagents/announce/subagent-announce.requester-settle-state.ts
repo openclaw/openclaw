@@ -1,0 +1,183 @@
+import { finishGoalContinuationSettlement } from "../../../auto-reply/reply/goal-continuation-return.js";
+import type { DeliveryContext } from "../../../utils/delivery-context.shared.js";
+import { isSubagentDeliveryClosed } from "../registry/subagent-delivery-state.js";
+import type {
+  RequesterSettleWakeState,
+  SubagentRunRecord,
+} from "../registry/subagent-registry.types.js";
+import { isSubagentObligationRetired } from "../registry/subagent-requester-settle-identity.js";
+import { isSameSubagentRun, isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
+import { finalizeRequesterFinalAttachment } from "../requester-final-attachment.js";
+import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
+
+export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean {
+  return entry.delivery?.status !== "delivered";
+}
+
+type RequesterSettleWakeBatchCallbacks = {
+  recordRequesterDelivery?: (
+    batch: readonly SubagentRunRecord[],
+    fact: NonNullable<NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"]>,
+    onPublished: (entries: readonly SubagentRunRecord[]) => void,
+  ) => Promise<void>;
+  transitionBatch: (
+    batch: readonly SubagentRunRecord[],
+    state: RequesterSettleWakeState,
+    onPublished?: (entries: readonly SubagentRunRecord[]) => void,
+    requesterDelivery?: NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"],
+  ) => void | Promise<void>;
+  completeBatch: (
+    batch: readonly SubagentRunRecord[],
+    rearmGeneration?: number,
+    delivery?: SubagentAnnounceDeliveryResult,
+    onCommitted?: () => void | Promise<void>,
+  ) => void | Promise<void>;
+};
+
+/** Finalize the full cohort only after its outcome's durable commit. */
+export function createRequesterSettleBatchCompletion(params: {
+  completeBatch: RequesterSettleWakeBatchCallbacks["completeBatch"];
+  requesterAgentId?: string;
+  requesterSessionKey: string;
+  pause: boolean;
+}) {
+  return async (
+    batch: readonly SubagentRunRecord[],
+    state: RequesterSettleWakeState,
+    delivery?: SubagentAnnounceDeliveryResult,
+    requesterSessionId?: string,
+  ): Promise<void> => {
+    await params.completeBatch(batch, state.rearmGeneration, delivery, async () => {
+      finalizeRequesterFinalAttachment({
+        requesterAgentId: params.requesterAgentId,
+        requesterSessionKey: params.requesterSessionKey,
+        requesterSessionId,
+        batchRunIds: batch.map((entry) => entry.runId).toSorted(),
+        rearmGeneration: state.rearmGeneration,
+        requesterYieldBatch: state.requesterYieldBatch,
+        pause: params.pause,
+        delivered: delivery?.delivered,
+        finalAssistantVisibleText: delivery?.finalAssistantVisibleText,
+      });
+      if (!params.pause) {
+        await finishGoalContinuationSettlement(batch, delivery?.delivered === true);
+      }
+    });
+  };
+}
+
+export type RequesterSettleWakeParams = RequesterSettleWakeBatchCallbacks & {
+  requesterSessionKey: string;
+  requesterOrigin?: DeliveryContext;
+  settledEntry: SubagentRunRecord;
+  signal?: AbortSignal;
+  onAccepted?: () => void;
+  isSourceCurrent: () => boolean;
+  onDescendantsPending?: (deadline?: number) => void;
+};
+
+export function waitForRequesterDescendants(
+  facts: { unsettled: boolean; active: number; deliveryWaitUntil?: number },
+  frozen: boolean,
+  onPending?: (deadline?: number) => void,
+): boolean {
+  const active = !frozen || facts.active > 0;
+  if (!facts.unsettled || (!active && (facts.deliveryWaitUntil ?? 0) <= Date.now())) {
+    return false;
+  }
+  onPending?.(active ? undefined : facts.deliveryWaitUntil);
+  return true;
+}
+
+export function readSharedBatchState(
+  batch: readonly SubagentRunRecord[],
+): RequesterSettleWakeState {
+  const states = batch
+    .map((entry) => entry.requesterSettleWake)
+    .filter((state): state is RequesterSettleWakeState => Boolean(state));
+  const source = states.find((state) => state.status === "dispatching") ?? states[0];
+  return {
+    status: source?.status ?? "pending",
+    attemptCount: Math.max(0, ...states.map((state) => state.attemptCount ?? 0)),
+    ...(source?.privateInput ? { privateInput: source.privateInput } : {}),
+    ...(source?.nextAttemptAt !== undefined ? { nextAttemptAt: source.nextAttemptAt } : {}),
+    ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
+    ...(source?.progressOperationId ? { progressOperationId: source.progressOperationId } : {}),
+    ...(source?.pauseNotice ? { pauseNotice: source.pauseNotice } : {}),
+    ...(source?.batchRunIds ? { batchRunIds: [...source.batchRunIds] } : {}),
+    ...(source?.requesterRunId ? { requesterRunId: source.requesterRunId } : {}),
+    ...(states.some((state) => state.requesterYieldBatch === true)
+      ? { requesterYieldBatch: true }
+      : {}),
+    ...(states.some((state) => state.afterRequesterYield === true)
+      ? { afterRequesterYield: true }
+      : {}),
+    ...(source?.yieldedFinalDeliverable === true ? { yieldedFinalDeliverable: true } : {}),
+    ...(source?.rearmGeneration !== undefined ? { rearmGeneration: source.rearmGeneration } : {}),
+  };
+}
+
+/** Cancellation closes a wave only after its current task ownership is considered. */
+export function isRequesterSettleDeliveryClosed(params: {
+  requesterRun: SubagentRunRecord | null | undefined;
+  currentRequester: SubagentRunRecord | null | undefined;
+  currentRuns: readonly SubagentRunRecord[];
+  batch: readonly SubagentRunRecord[];
+  requesterYieldBatch: boolean;
+}): boolean {
+  const { requesterRun, currentRequester, currentRuns } = params;
+  const currentBatch = params.batch.map(
+    (entry) => currentRuns.find((current) => isSameSubagentRunOwner(current, entry)) ?? entry,
+  );
+  return (
+    isSubagentDeliveryClosed(requesterRun) ||
+    isSubagentDeliveryClosed(currentRequester) ||
+    // A yielded cohort reports the members it still holds; requester-wide cancellation
+    // already removed its own. An ordinary wave owes nothing once every member retired.
+    (!params.requesterYieldBatch && currentBatch.every(isSubagentObligationRetired))
+  );
+}
+
+export function captureRequesterRunOwner(requesterRun: SubagentRunRecord | null | undefined) {
+  const requesterTaskRunId = requesterRun?.taskRunId ?? requesterRun?.runId;
+  return (currentRequester: SubagentRunRecord | null | undefined, continuationRunId: string) => {
+    if (!currentRequester || !requesterRun) {
+      return !currentRequester && !requesterRun;
+    }
+    if (isSameSubagentRun(currentRequester, requesterRun)) {
+      return isSameSubagentRunOwner(currentRequester, requesterRun);
+    }
+    // Only the admitted continuation may replace its captured task owner.
+    return (
+      currentRequester.runId === continuationRunId &&
+      currentRequester.taskRunId === requesterTaskRunId &&
+      currentRequester.requesterSessionKey === requesterRun.requesterSessionKey &&
+      currentRequester.requesterAgentId === requesterRun.requesterAgentId
+    );
+  };
+}
+
+/**
+ * A yield hands continuation back to the requester, so its own final may reach the
+ * conversation under its normal reply rules; private findings stay wake input. The
+ * policy is fixed when the yield writes the batch: a batch without the marker came
+ * from an earlier build and stays private, so an upgrade cannot republish its input.
+ */
+export function resolveRequesterSettlePolicy(
+  completionRows: readonly SubagentRunRecord[],
+  requesterYielded: boolean,
+  state: RequesterSettleWakeState,
+) {
+  // One private result makes the aggregate private; public siblings keep their own route.
+  const privateRows = completionRows.filter((entry) => entry.completionTarget === "parent");
+  const hasPrivateRows = privateRows.length > 0;
+  const yieldedFinalDeliverable =
+    hasPrivateRows && requesterYielded && state.yieldedFinalDeliverable === true;
+  const parentOnly = hasPrivateRows && !yieldedFinalDeliverable;
+  const requesterBinding = parentOnly ? { completionTarget: "parent" as const } : {};
+  const admissionMarker = yieldedFinalDeliverable ? { yieldedFinalDeliverable: true as const } : {};
+  // A prior wake may already have consumed every result in this yielded cohort.
+  const requireVisibleReply =
+    requesterYielded && !hasPrivateRows && completionRows.some(needsRequesterSettleFindings);
+  return { privateRows, requireVisibleReply, parentOnly, requesterBinding, admissionMarker };
+}

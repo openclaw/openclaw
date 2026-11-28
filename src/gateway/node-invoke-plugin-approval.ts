@@ -9,6 +9,7 @@ import {
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
+import type { PluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.types.js";
 import type { OpenClawPluginNodeInvokePolicyContext } from "../plugins/types.js";
 import type { AgentRuntimeIdentity } from "./agent-runtime-identity-token.js";
 import {
@@ -18,8 +19,8 @@ import {
   type NodeInvokePlacementGrantAuthorization,
 } from "./node-invoke-placement-grant.js";
 import type { NodeSession } from "./node-registry.js";
+import { handlePendingApprovalRequestWithDelivery } from "./server-methods/approval-request-delivery.js";
 import { bindApprovalRequesterMetadata } from "./server-methods/approval-shared.js";
-import { handlePendingPluginApprovalRequest } from "./server-methods/plugin-approval-request-delivery.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 
 function sanitizeOptionalMeta(value?: string | null): string | null {
@@ -34,27 +35,6 @@ function normalizeRouteThreadId(value: unknown): string | number | null {
   return normalizeOptionalString(value) ?? null;
 }
 
-function resolveNodeInvokeTurnSourceFields(
-  turnSource:
-    | {
-        channel?: unknown;
-        to?: unknown;
-        accountId?: unknown;
-        threadId?: unknown;
-      }
-    | undefined,
-): Pick<
-  PluginApprovalRequestPayload,
-  "turnSourceChannel" | "turnSourceTo" | "turnSourceAccountId" | "turnSourceThreadId"
-> {
-  return {
-    turnSourceChannel: normalizeOptionalString(turnSource?.channel) ?? null,
-    turnSourceTo: normalizeOptionalString(turnSource?.to) ?? null,
-    turnSourceAccountId: normalizeOptionalString(turnSource?.accountId) ?? null,
-    turnSourceThreadId: normalizeRouteThreadId(turnSource?.threadId),
-  };
-}
-
 export function createPluginNodeInvokeApprovalRuntime(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;
@@ -65,30 +45,15 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
   nodeSession: NodeSession;
   risk: OpenClawPluginNodeInvokePolicyContext["risk"];
   standingGrantAuthorization: NodeInvokePlacementGrantAuthorization;
-  placementGrantAuthority?: {
-    agentId: string;
-    sessionKey: string;
-    runId: string;
-    assertCurrent: (request: {
-      pluginId: string;
-      command: string;
-      nodeId: string;
-      workspace: {
-        workspaceDir: string;
-        environmentId: string;
-        sessionId: string;
-        ownerEpoch: number;
-        sessionKey: string;
-      };
-    }) => void;
-  };
+  placementGrantAuthority?: NonNullable<
+    PluginRuntimeGatewayRequestScope["nodePlacementGrantAuthority"]
+  >;
   turnSource?: {
     channel?: unknown;
     to?: unknown;
     accountId?: unknown;
     threadId?: unknown;
   };
-  isCurrent: () => boolean;
 }): OpenClawPluginNodeInvokePolicyContext["approvals"] | undefined {
   const manager = params.context.pluginApprovalManager;
   if (!manager) {
@@ -97,15 +62,17 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
   return {
     async request(input) {
       const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
-      const turnSource = resolveNodeInvokeTurnSourceFields(params.turnSource);
+      const turnSource = {
+        turnSourceChannel: normalizeOptionalString(params.turnSource?.channel) ?? null,
+        turnSourceTo: normalizeOptionalString(params.turnSource?.to) ?? null,
+        turnSourceAccountId: normalizeOptionalString(params.turnSource?.accountId) ?? null,
+        turnSourceThreadId: normalizeRouteThreadId(params.turnSource?.threadId),
+      };
       const callerIdentity = params.callerIdentity;
       const invocationSessionKey =
         params.client?.internal?.pluginRuntimeOwnerId === params.pluginId
           ? params.client.internal.nodeInvokeApprovalSessionKey
           : undefined;
-      if (!params.isCurrent()) {
-        throw new Error("agent runtime approval authority is no longer active");
-      }
       const requestedDecisions =
         input.allowedDecisions === undefined
           ? undefined
@@ -132,7 +99,7 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
               }),
           }
         : undefined;
-      const placementGrantResolution = resolveNodeInvokePlacementGrant({
+      const placementGrantResolution = await resolveNodeInvokePlacementGrant({
         runtime: params.context.placementStandingGrants,
         requestedDecisions,
         owner: placementGrantOwner,
@@ -176,10 +143,7 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
           null,
         runId: callerIdentity?.operationalRunInstance.runId ?? scopedAuthority?.runId ?? null,
         placementGrant,
-        turnSourceChannel: turnSource.turnSourceChannel,
-        turnSourceTo: turnSource.turnSourceTo,
-        turnSourceAccountId: turnSource.turnSourceAccountId,
-        turnSourceThreadId: turnSource.turnSourceThreadId,
+        ...turnSource,
       };
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
       if (callerIdentity) {
@@ -197,7 +161,8 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
       bindApprovalRequesterMetadata({ record, client: params.client });
       const respond: RespondFn = () => {};
       const { decision: decisionPromise } = await manager.register(record, timeoutMs);
-      await handlePendingPluginApprovalRequest({
+      await handlePendingApprovalRequestWithDelivery({
+        approvalKind: "plugin",
         manager,
         record,
         respond,
@@ -209,25 +174,21 @@ export function createPluginNodeInvokeApprovalRuntime(params: {
         getIosPushDelivery: () => params.context.pluginApprovalIosPushDelivery,
         source: "node-policy",
       });
-      let decision = manager.projectDecisionIfActive(record.id, await decisionPromise);
-      if (!params.isCurrent()) {
-        return { id: record.id, decision: null };
-      }
+      const decision = manager.projectDecisionIfActive(record.id, await decisionPromise);
       if (
         decision === "allow-once" &&
         !(await manager.consumeAllowOnce(record.id, `plugin.node.invoke:${record.id}`))
       ) {
         return { id: record.id, decision: null };
       }
-      decision = manager.projectDecisionIfActive(record.id, decision);
       if (
-        !retainResolvedNodeInvokePlacementGrant({
+        !(await retainResolvedNodeInvokePlacementGrant({
           runtime: params.context.placementStandingGrants,
           decision,
           binding: placementGrant,
           owner: placementGrantOwner,
           authorization: params.standingGrantAuthorization,
-        })
+        }))
       ) {
         return { id: record.id, decision: null };
       }

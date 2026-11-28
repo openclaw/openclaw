@@ -1,4 +1,3 @@
-// Ollama plugin module implements wsl2 crash loop check behavior.
 import { access } from "node:fs/promises";
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";

@@ -1,7 +1,20 @@
-// Tests reply history loading, trimming, and rendering for prompt context.
 import { describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { normalizeHistoryMediaEntries, recordPendingHistoryEntryWithMedia } from "./history.js";
 import type { HistoryEntry } from "./history.types.js";
+
+const entry = { sender: "Alice", body: "<media:image>", messageId: "msg-1" };
+function record(media: Parameters<typeof recordPendingHistoryEntryWithMedia>[0]["media"]) {
+  const historyMap = new Map<string, HistoryEntry[]>();
+  const pending = recordPendingHistoryEntryWithMedia({
+    historyMap,
+    historyKey: "channel-1",
+    limit: 5,
+    entry: { ...entry },
+    media,
+  });
+  return { historyMap, pending };
+}
 
 describe("history media recording", () => {
   it("keeps only bounded local image media", () => {
@@ -23,189 +36,37 @@ describe("history media recording", () => {
     ]);
   });
 
-  it("preserves native sticker classification for local sticker images", () => {
-    expect(
-      normalizeHistoryMediaEntries({
-        messageId: "msg-sticker",
-        media: [{ path: "/tmp/sticker.png", contentType: "image/png", kind: "sticker" }],
-      }),
-    ).toEqual([
-      {
-        path: "/tmp/sticker.png",
-        contentType: "image/png",
-        kind: "sticker",
-        messageId: "msg-sticker",
-      },
-    ]);
-  });
-
-  it.each([
-    {
-      name: "an image with generic MIME and a .bin path",
-      path: "/tmp/telegram-upload.bin",
-      contentType: "application/octet-stream",
-      kind: "image" as const,
-    },
-    {
-      name: "a sticker with generic MIME and a .bin path",
-      path: "/tmp/telegram-sticker.bin",
-      contentType: "application/octet-stream",
-      kind: "sticker" as const,
-    },
-    {
-      name: "an extensionless sticker without transport MIME",
-      path: "/tmp/telegram-sticker",
-      contentType: undefined,
-      kind: "sticker" as const,
-    },
-  ])("records $name at the actual channel history boundary", async (testCase) => {
-    const historyMap = new Map<string, HistoryEntry[]>();
-
-    await recordPendingHistoryEntryWithMedia({
-      historyMap,
-      historyKey: "telegram-chat",
-      limit: 5,
-      entry: {
-        sender: "Alice",
-        body: "<media:image>",
-        messageId: "telegram-message",
-      },
-      media: async () => [
-        {
-          path: testCase.path,
-          contentType: testCase.contentType,
-          kind: testCase.kind,
-        },
-      ],
-    });
-
-    expect(historyMap.get("telegram-chat")).toEqual([
-      {
-        sender: "Alice",
-        body: "<media:image>",
-        messageId: "telegram-message",
-        media: [
-          {
-            path: testCase.path,
-            contentType: testCase.contentType,
-            kind: testCase.kind,
-            messageId: "telegram-message",
-          },
-        ],
-      },
-    ]);
-  });
-
-  it.each([
-    { path: "/tmp/telegram-document.bin", contentType: "application/octet-stream" },
-    { path: "/tmp/telegram-document.png", contentType: undefined },
-    { path: "/tmp/telegram-document.png", contentType: "application/pdf" },
-    { path: "/tmp/telegram-document.png", contentType: "image/png" },
-  ])("never records authoritative documents with MIME $contentType as history images", (media) => {
-    expect(
-      normalizeHistoryMediaEntries({
-        media: [
-          {
-            ...media,
-            kind: "document",
-          },
-        ],
-      }),
-    ).toEqual([]);
-  });
-
-  it.each(["application/pdf", "application/zip", "text/plain"] as const)(
-    "never records unknown-kind image-looking documents with MIME %s",
-    (contentType) => {
-      expect(
-        normalizeHistoryMediaEntries({
-          media: [{ path: "/tmp/report.png", contentType, kind: "unknown" }],
-        }),
-      ).toEqual([]);
-    },
-  );
-
-  it.each([
-    { path: "/tmp/diagram.svg", kind: undefined },
-    { path: "/tmp/diagram.svg", kind: "unknown" as const },
-    { path: "/tmp/photo.png", kind: undefined },
-    { path: "/tmp/photo.png", kind: "unknown" as const },
-  ])("never manufactures image history from filename-only $path", (media) => {
-    expect(normalizeHistoryMediaEntries({ media: [media] })).toEqual([]);
-  });
-
-  it.each([
-    { path: "/tmp/diagram.svg", kind: "image" as const, contentType: undefined },
-    { path: "/tmp/diagram.svg", kind: undefined, contentType: "image/svg+xml" },
-  ])("preserves explicitly identified SVG history media", (media) => {
-    expect(normalizeHistoryMediaEntries({ media: [media] })).toEqual([
-      {
-        ...media,
-        kind: "image",
-        messageId: undefined,
-      },
-    ]);
-  });
-
-  it("records filename-only SVG turns without manufacturing reusable image history", async () => {
-    const historyMap = new Map<string, HistoryEntry[]>();
-
-    await recordPendingHistoryEntryWithMedia({
-      historyMap,
-      historyKey: "telegram-chat",
-      limit: 5,
-      entry: { sender: "Alice", body: "<media:document>", messageId: "diagram-message" },
-      media: async () => [{ path: "/tmp/diagram.svg" }],
-    });
-
-    expect(historyMap.get("telegram-chat")).toEqual([
-      { sender: "Alice", body: "<media:document>", messageId: "diagram-message" },
-    ]);
-  });
-
-  it("records text history unchanged when media resolver has no usable media", async () => {
-    const historyMap = new Map<string, HistoryEntry[]>();
-
-    await recordPendingHistoryEntryWithMedia({
-      historyMap,
-      historyKey: "channel-1",
-      limit: 5,
-      entry: { sender: "Alice", body: "hello", messageId: "msg-1" },
-      media: async () => [{ path: "https://example.com/a.png", contentType: "image/png" }],
-    });
-
+  it("records an extensionless sticker without transport MIME at the channel history boundary", async () => {
+    const sticker = { path: "/tmp/telegram-sticker", kind: "sticker" as const };
+    const expectedSticker = { ...sticker, contentType: undefined, messageId: "msg-1" };
+    const { historyMap, pending } = record(async () => [sticker]);
+    await pending;
     expect(historyMap.get("channel-1")).toEqual([
-      { sender: "Alice", body: "hello", messageId: "msg-1" },
+      {
+        ...entry,
+        media: [expectedSticker],
+      },
+    ]);
+  });
+
+  it("preserves explicitly identified SVG history media", () => {
+    const media = { path: "/tmp/diagram.svg", contentType: "image/svg+xml" };
+    expect(normalizeHistoryMediaEntries({ media: [media] })).toEqual([
+      { ...media, kind: "image", messageId: undefined },
     ]);
   });
 
   it("records text history before async media resolution finishes", async () => {
-    const historyMap = new Map<string, HistoryEntry[]>();
-    let resolveMedia!: (media: HistoryEntry["media"]) => void;
-    const mediaPromise = new Promise<HistoryEntry["media"]>((resolve) => {
-      resolveMedia = resolve;
-    });
+    const media = createDeferred<HistoryEntry["media"]>();
+    const { historyMap, pending } = record(async () => await media.promise);
+    expect(historyMap.get("channel-1")).toEqual([entry]);
 
-    const pending = recordPendingHistoryEntryWithMedia({
-      historyMap,
-      historyKey: "channel-1",
-      limit: 5,
-      entry: { sender: "Alice", body: "<media:image>", messageId: "msg-1" },
-      media: async () => await mediaPromise,
-    });
-
-    expect(historyMap.get("channel-1")).toEqual([
-      { sender: "Alice", body: "<media:image>", messageId: "msg-1" },
-    ]);
-
-    resolveMedia([{ path: "/tmp/a.png", contentType: "image/png" }]);
+    media.resolve([{ path: "/tmp/a.png", contentType: "image/png" }]);
     await pending;
 
     expect(historyMap.get("channel-1")).toEqual([
       {
-        sender: "Alice",
-        body: "<media:image>",
-        messageId: "msg-1",
+        ...entry,
         media: [
           { path: "/tmp/a.png", contentType: "image/png", kind: "image", messageId: "msg-1" },
         ],

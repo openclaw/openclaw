@@ -13,6 +13,13 @@ function fakeVault(write: () => Promise<void>): {
   return { vault: { write: vi.fn(write), remove } as unknown as FakeVault, remove };
 }
 
+const sourcePageOptions = {
+  pagePath: "sources/page.md",
+  content: "body",
+  pageStat: null,
+  pageLabel: "imported source page",
+};
+
 describe("writeGuardedVaultPage", () => {
   it("recovers from a transient concurrent-rewrite path-mismatch by retrying", async () => {
     let attempts = 0;
@@ -24,15 +31,7 @@ describe("writeGuardedVaultPage", () => {
       }
     });
 
-    await expect(
-      writeGuardedVaultPage({
-        vault,
-        pagePath: "sources/page.md",
-        content: "body",
-        pageStat: null,
-        pageLabel: "imported source page",
-      }),
-    ).resolves.toBeUndefined();
+    await expect(writeGuardedVaultPage({ vault, ...sourcePageOptions })).resolves.toBeUndefined();
     expect(attempts).toBe(3);
   });
 
@@ -41,15 +40,7 @@ describe("writeGuardedVaultPage", () => {
       throw new FsSafeError("path-mismatch", "unable to resolve opened file path");
     });
 
-    await expect(
-      writeGuardedVaultPage({
-        vault,
-        pagePath: "sources/page.md",
-        content: "body",
-        pageStat: null,
-        pageLabel: "imported source page",
-      }),
-    ).rejects.toThrow(
+    await expect(writeGuardedVaultPage({ vault, ...sourcePageOptions })).rejects.toThrow(
       /Refusing to write imported source page \(path-mismatch\): sources\/page\.md/u,
     );
   });
@@ -62,9 +53,8 @@ describe("writeGuardedVaultPage", () => {
     await expect(
       writeGuardedVaultPage({
         vault,
+        ...sourcePageOptions,
         pagePath: "concepts/page.md",
-        content: "body",
-        pageStat: null,
         pageLabel: "OKF concept page",
       }),
     ).rejects.toThrow(/Refusing to write OKF concept page \(not-file\): concepts\/page\.md/u);
@@ -78,15 +68,9 @@ describe("writeGuardedVaultPage", () => {
       throw new FsSafeError("symlink", "page resolved through a symlink");
     });
 
-    await expect(
-      writeGuardedVaultPage({
-        vault,
-        pagePath: "sources/page.md",
-        content: "body",
-        pageStat: null,
-        pageLabel: "imported source page",
-      }),
-    ).rejects.toThrow(/Refusing to write imported source page through symlink: sources\/page\.md/u);
+    await expect(writeGuardedVaultPage({ vault, ...sourcePageOptions })).rejects.toThrow(
+      /Refusing to write imported source page through symlink: sources\/page\.md/u,
+    );
     expect((vault as unknown as { write: ReturnType<typeof vi.fn> }).write).toHaveBeenCalledTimes(
       1,
     );

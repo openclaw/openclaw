@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
-import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   chatSessionListResponse,
@@ -64,10 +64,8 @@ suite.define(() => {
       });
       await spinner.waitFor();
       const previousReads = (await gateway.getRequests("sessions.list")).length;
-      await sidebar.evaluate(async (element) => {
-        const host = element as AppSidebarSessionNavigationElement;
-        await host.sessionData.refreshSidebarSessions();
-        await host.updateComplete;
+      await evaluateControlUiContext(page, async ({ sessions }) => {
+        await sessions.refreshReplacement();
       });
       expect((await gateway.getRequests("sessions.list")).length).toBeGreaterThan(previousReads);
       // Capture the original missing-spinner failure and the repaired state at

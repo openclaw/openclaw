@@ -1,30 +1,17 @@
-/**
- * Channel config schema helpers.
- *
- * Builds common zod/JSON schema shapes and parses runtime config issues for channel plugins.
- */
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
 import { ToolPolicySchema } from "../../config/zod-schema.agent-runtime.js";
 import {
   DmPolicySchema,
   evaluateDmPolicyAllowFromDependency,
 } from "../../config/zod-schema.core.js";
-import {
-  parseJsonSchemaIssuePath,
-  validateJsonSchemaValue,
-} from "../../plugins/schema-validator.js";
-import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
-import type {
-  ChannelConfigRuntimeIssue,
-  ChannelConfigRuntimeParseResult,
-  ChannelConfigSchema,
-  ChannelConfigUiHint,
-} from "./types.config.js";
+import type { ChannelConfigSchema } from "./types.config.js";
 
-/** Shared allowlist entry shape for channel sender/user ids. */
-const AllowFromEntrySchema = z.union([z.string(), z.number()]);
-/** Optional allowlist array used by channel config schema builders. */
-export const AllowFromListSchema = z.array(AllowFromEntrySchema).optional();
+export {
+  buildChannelConfigSchema,
+  buildJsonChannelConfigSchema,
+} from "./config-schema-projection.js";
+
+export const AllowFromListSchema = z.array(z.union([z.string(), z.number()])).optional();
 
 type ChannelDmPolicyFields = {
   dmPolicy?: string;
@@ -82,6 +69,7 @@ type ChannelGroupEntryField = keyof typeof ChannelGroupEntrySchema.shape;
 
 /** Extend the canonical group/room policy shape with channel-owned fields. */
 export function buildGroupEntrySchema<
+  // oxlint-disable-next-line typescript/no-generated-empty-object-type -- A keyless Zod shape preserves named fields without a string index signature.
   T extends ZodRawShape = Record<never, never>,
   const TOmit extends readonly ChannelGroupEntryField[] = [],
 >(extraShape?: T, options?: { omit?: TOmit }) {
@@ -188,121 +176,6 @@ export function buildMultiAccountChannelSchema<
     : channelSchema) as unknown as MultiAccountChannelSchema<T, TAccount, TOptional>;
 }
 
-type BuildChannelConfigSchemaOptions = {
-  uiHints?: Record<string, ChannelConfigUiHint>;
-  /** Select input mode when transforms must expose accepted config values to editors. */
-  jsonSchemaMode?: "input" | "output";
-};
-
-type BuildJsonChannelConfigSchemaOptions = {
-  cacheKey?: string;
-  uiHints?: Record<string, ChannelConfigUiHint>;
-  runtime?: ChannelConfigSchema["runtime"];
-};
-
-function cloneRuntimeIssue(issue: unknown): ChannelConfigRuntimeIssue {
-  const record = issue && typeof issue === "object" ? (issue as Record<string, unknown>) : {};
-  const path = Array.isArray(record.path)
-    ? record.path.filter((segment): segment is string | number => {
-        const kind = typeof segment;
-        return kind === "string" || kind === "number";
-      })
-    : undefined;
-  return {
-    ...record,
-    ...(path ? { path } : {}),
-  };
-}
-
-function safeParseRuntimeSchema(
-  schema: ZodTypeAny,
-  value: unknown,
-): ChannelConfigRuntimeParseResult {
-  const result = schema.safeParse(value);
-  if (result.success) {
-    return {
-      success: true,
-      data: result.data,
-    };
-  }
-  return {
-    success: false,
-    issues: result.error.issues.map((issue) => cloneRuntimeIssue(issue)),
-  };
-}
-
-function safeParseJsonSchema(
-  schema: JsonSchemaObject,
-  cacheKey: string,
-  value: unknown,
-): ChannelConfigRuntimeParseResult {
-  const result = validateJsonSchemaValue({
-    schema,
-    cacheKey,
-    value,
-    applyDefaults: true,
-  });
-  if (result.ok) {
-    return { success: true, data: result.value };
-  }
-  return {
-    success: false,
-    issues: result.errors.map((issue) => ({
-      path: parseJsonSchemaIssuePath(issue.path),
-      message: issue.message,
-    })),
-  };
-}
-
-/** Build a channel config schema from JSON Schema with runtime validation/default support. */
-export function buildJsonChannelConfigSchema(
-  schema: JsonSchemaObject,
-  options?: BuildJsonChannelConfigSchemaOptions,
-): ChannelConfigSchema {
-  return {
-    schema,
-    ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
-    runtime: options?.runtime ?? {
-      safeParse: (value) =>
-        safeParseJsonSchema(schema, options?.cacheKey ?? "channel-config-schema:json", value),
-    },
-  };
-}
-
-/** Build a channel config schema from Zod, exporting JSON Schema when available. */
-export function buildChannelConfigSchema(
-  schema: ZodTypeAny,
-  options?: BuildChannelConfigSchemaOptions,
-): ChannelConfigSchema {
-  if ("_zod" in schema) {
-    return {
-      // Plugin roots can contain newer SDK schemas; the host must own their conversion context.
-      schema: z.toJSONSchema(schema, {
-        target: "draft-07",
-        ...(options?.jsonSchemaMode ? { io: options.jsonSchemaMode } : {}),
-        unrepresentable: "any",
-      }) as JsonSchemaObject,
-      ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
-      runtime: {
-        safeParse: (value) => safeParseRuntimeSchema(schema, value),
-      },
-    };
-  }
-
-  // Compatibility fallback for plugins built against Zod v3 schemas,
-  // where `.toJSONSchema()` is unavailable.
-  return {
-    schema: {
-      type: "object",
-      additionalProperties: true,
-    },
-    ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
-    runtime: {
-      safeParse: (value) => safeParseRuntimeSchema(schema, value),
-    },
-  };
-}
-
 /** Return a channel config schema for channels that intentionally accept no config keys. */
 export function emptyChannelConfigSchema(): ChannelConfigSchema {
   return {
@@ -316,19 +189,15 @@ export function emptyChannelConfigSchema(): ChannelConfigSchema {
         if (value === undefined) {
           return { success: true, data: undefined };
         }
-        if (!value || typeof value !== "object" || Array.isArray(value)) {
-          return {
-            success: false,
-            issues: [{ path: [], message: "expected config object" }],
-          };
-        }
-        if (Object.keys(value as Record<string, unknown>).length > 0) {
-          return {
-            success: false,
-            issues: [{ path: [], message: "config must be empty" }],
-          };
-        }
-        return { success: true, data: value };
+        const message =
+          !value || typeof value !== "object" || Array.isArray(value)
+            ? "expected config object"
+            : Object.keys(value).length > 0
+              ? "config must be empty"
+              : undefined;
+        return message
+          ? { success: false, issues: [{ path: [], message }] }
+          : { success: true, data: value };
       },
     },
   };

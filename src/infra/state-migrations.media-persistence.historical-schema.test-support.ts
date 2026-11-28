@@ -1,8 +1,14 @@
-import { withoutCanonicalSessionValidationSchema } from "../state/openclaw-agent-canonical-validation-schema.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
-import { withoutTranscriptFtsRowSchema } from "../state/openclaw-agent-transcript-fts-schema.js";
+import {
+  agentV19Schema,
+  omitFrozenSqlSection,
+} from "../state/openclaw-historical-imports.test-support.js";
 
-const HISTORICAL_AGENT_LEASE_SCHEMA = `CREATE TABLE IF NOT EXISTS state_leases (
+// Restore the beta.6 lease layout and omit objects introduced by the v19 writer.
+export function historicalV16AgentSchemaSql(): string {
+  let sql = agentV19Schema()
+    .replace(
+      /(?=^CREATE TABLE IF NOT EXISTS session_nodes \()/mu,
+      `CREATE TABLE IF NOT EXISTS state_leases (
   scope TEXT NOT NULL,
   lease_key TEXT NOT NULL,
   owner TEXT NOT NULL,
@@ -21,121 +27,58 @@ CREATE INDEX IF NOT EXISTS idx_agent_state_leases_expiry
 CREATE INDEX IF NOT EXISTS idx_agent_state_leases_owner
   ON state_leases(owner, updated_at DESC);
 
-`;
-
-function restoreHistoricalAgentLeaseSchema(sql: string): string {
-  const marker = "CREATE TABLE IF NOT EXISTS session_nodes (";
-  if (!sql.includes(marker)) {
-    throw new Error(`Historical agent schema marker is missing: ${marker}`);
-  }
-  return sql.replace(marker, `${HISTORICAL_AGENT_LEASE_SCHEMA}${marker}`);
-}
-
-function removeSchemaRange(sql: string, startMarker: string, endMarker?: string): string {
-  const start = sql.indexOf(startMarker);
-  const end = endMarker === undefined ? sql.length : sql.indexOf(endMarker, start);
-  if (start === -1 || end === -1) {
-    throw new Error(`Historical agent schema marker is missing: ${startMarker}`);
-  }
-  return sql.slice(0, start) + sql.slice(end);
-}
-
-/** Exact schema bytes from 509a5f0373764, derived from current SQL with later additions removed. */
-export function historicalV15AgentSchemaSql(): string {
-  const withoutPendingInputs = removeSchemaRange(
-    withoutCanonicalSessionValidationSchema(
-      withoutTranscriptFtsRowSchema(OPENCLAW_AGENT_SCHEMA_SQL),
-    ).replace(
-      "-- No foreign key: node triggers settle key renames and deletion even while a\n-- maintenance owner has disabled foreign-key enforcement.\n",
-      "",
-    ),
-    "\n-- Accepted input stays outside the active transcript until its exact turn owns execution.",
-  );
-  let sql = restoreHistoricalAgentLeaseSchema(withoutPendingInputs)
-    .replace(
-      "-- Legacy ACP provenance is private import evidence carried with its logical session.\n",
-      "",
+`,
     )
-    .replace("  legacy_acp_migration_json TEXT,\n", "")
     .replace("  entry_valid INTEGER NOT NULL DEFAULT 0 CHECK (entry_valid IN (-1, 0, 1)),\n", "")
-    .replace("  project_id TEXT,\n", "")
+    .replace(/^ {2}owner_actor_type TEXT,\n[\s\S]*?(?=^ {2}parent_session_key TEXT,)/mu, "")
     .replace("  route_context_json TEXT,\n", "")
     .replace("  context_eligible INTEGER,\n", "")
     .replace(
-      "CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_active\n  ON session_nodes(session_key)\n  WHERE archived_at IS NULL;\n\n",
+      /^CREATE INDEX IF NOT EXISTS (?:idx_agent_session_nodes_active|idx_agent_session_windows_session_key|idx_agent_transcript_event_identity_sequence|idx_agent_transcript_context_pending)\n[^;]*;\n\n/gmu,
       "",
     )
-    .replace(
-      "  owner_actor_type TEXT,\n  owner_actor_id TEXT,\n  owner_assigned_by_type TEXT,\n  owner_assigned_by_id TEXT,\n  owner_assigned_at INTEGER,\n",
-      "",
-    );
-  sql = removeSchemaRange(
-    sql,
-    "CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_label",
-    "CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_parent_session_key",
-  );
-  sql = removeSchemaRange(
-    sql,
-    "CREATE TABLE IF NOT EXISTS session_progress_cards (",
-    "CREATE TABLE IF NOT EXISTS heartbeat_outcomes (",
-  );
-  sql = removeSchemaRange(
-    sql,
-    "CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_entry_valid_pending",
-    "CREATE TABLE IF NOT EXISTS session_windows (",
-  );
-  sql = removeSchemaRange(
-    sql,
-    "CREATE INDEX IF NOT EXISTS idx_agent_session_windows_session_key",
-    "CREATE INDEX IF NOT EXISTS idx_agent_session_windows_created_at",
-  );
-  sql = removeSchemaRange(
-    sql,
-    "-- Older same-version writers preserve the envelope while updating the association.",
-    "CREATE INDEX IF NOT EXISTS idx_agent_session_conversations_conversation",
-  );
-  sql = removeSchemaRange(
-    sql,
-    "CREATE TABLE IF NOT EXISTS message_tool_run_outcomes (",
-    "CREATE TABLE IF NOT EXISTS transcript_events (",
-  );
-  sql = removeSchemaRange(
-    sql,
-    "CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_identity_sequence",
-    "CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_parent",
-  );
-  sql = removeSchemaRange(
-    sql,
-    "CREATE INDEX IF NOT EXISTS idx_agent_transcript_context_pending",
-    "CREATE VIRTUAL TABLE IF NOT EXISTS session_transcript_fts",
-  );
-  sql = removeSchemaRange(
-    sql,
-    "CREATE TABLE IF NOT EXISTS context_engine_turn_outbox (",
-    "CREATE TABLE IF NOT EXISTS cache_entries (",
-  );
-  sql = removeSchemaRange(
-    sql,
-    "CREATE TABLE IF NOT EXISTS memory_index_chunk_recall_metadata (",
-    "CREATE TABLE IF NOT EXISTS memory_embedding_cache (",
-  );
-  sql = removeSchemaRange(
-    sql,
-    "-- Canonical cold-tier owner for reclaimed transcript generations.",
-    "CREATE TABLE IF NOT EXISTS transcript_rewrite_watermarks (",
-  );
-  return removeSchemaRange(
-    sql,
-    "CREATE TABLE IF NOT EXISTS standing_intents (",
-    "CREATE TABLE IF NOT EXISTS session_transcript_index_state (",
-  );
+    .replace(/\n-- Accepted input stays outside the active transcript[\s\S]*$/u, "");
+
+  const table = "CREATE TABLE IF NOT EXISTS ";
+  for (const [start, end] of [
+    [`${table}session_progress_cards (`, `${table}heartbeat_outcomes (`],
+    [`${table}message_tool_run_outcomes (`, `${table}transcript_events (`],
+    [`${table}context_engine_turn_outbox (`, `${table}cache_entries (`],
+    [`${table}memory_entry_origins (`, `${table}memory_embedding_cache (`],
+    [
+      "CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_entry_valid_pending\n",
+      `${table}session_windows (`,
+    ],
+    [
+      "-- Older same-version writers preserve the envelope",
+      "CREATE INDEX IF NOT EXISTS idx_agent_session_conversations_conversation",
+    ],
+    [
+      "-- Canonical cold-tier owner for reclaimed transcript generations.",
+      `${table}transcript_rewrite_watermarks (`,
+    ],
+  ] as const) {
+    sql = omitFrozenSqlSection(sql, start, end);
+  }
+  return sql;
 }
 
 /** Exact schema bytes from v2026.7.2-beta.4, the first tagged agent schema v14. */
 export function historicalV14AgentSchemaSql(): string {
-  return removeSchemaRange(
-    historicalV15AgentSchemaSql(),
+  let sql = historicalV16AgentSchemaSql();
+  sql = omitFrozenSqlSection(
+    sql,
     "\nCREATE TABLE IF NOT EXISTS session_suggestions (",
     "CREATE TABLE IF NOT EXISTS board_tabs (",
+  );
+  sql = omitFrozenSqlSection(
+    sql,
+    "CREATE TABLE IF NOT EXISTS memory_index_chunk_recall_metadata (",
+    "CREATE TABLE IF NOT EXISTS memory_embedding_cache (",
+  );
+  return omitFrozenSqlSection(
+    sql,
+    "CREATE TABLE IF NOT EXISTS standing_intents (",
+    "CREATE TABLE IF NOT EXISTS session_transcript_index_state (",
   );
 }

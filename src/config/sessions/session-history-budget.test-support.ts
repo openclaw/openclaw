@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { vi } from "vitest";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import * as storeWriterQueue from "../../shared/store-writer-queue.js";
 import type { runQueuedStoreWrite } from "../../shared/store-writer-queue.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import type { TrajectoryEvent } from "../../trajectory/types.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import {
   getSessionKysely,
@@ -27,6 +30,7 @@ export async function joinSessionHistoryBudgetSweeps(
   work: Promise<unknown>[] = [],
 ): Promise<void> {
   let joined = 0;
+  const failures: unknown[] = [];
   for (;;) {
     const pending = spy.mock.calls.flatMap(([params], index) => {
       const outcome = spy.mock.results[index];
@@ -37,17 +41,57 @@ export async function joinSessionHistoryBudgetSweeps(
         : [];
     });
     if (joined === pending.length) {
+      if (failures.length === 1) {
+        throw failures[0];
+      }
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Session history budget sweeps failed");
+      }
       return;
     }
     const next = pending.slice(joined);
     joined = pending.length;
     work.push(...next);
-    await Promise.all(next);
+    const outcomes = await Promise.allSettled(next);
+    failures.push(
+      ...outcomes.flatMap((outcome) => (outcome.status === "rejected" ? [outcome.reason] : [])),
+    );
     // A settled sweep may enqueue its existing pending-force continuation.
     // A single queue barrier can return before that follow-up pass completes.
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
+  }
+}
+
+/** Join the background producer owned by a synthetic mutation before its fixture can close. */
+export async function withSessionHistoryBudgetSweepsForTest<T>(run: () => Promise<T>): Promise<T> {
+  const queueSpy = vi.spyOn(storeWriterQueue, "runQueuedStoreWrite");
+  try {
+    let outcome: { ok: true; value: T } | { ok: false; error: unknown };
+    try {
+      outcome = { ok: true, value: await run() };
+    } catch (error) {
+      outcome = { ok: false, error };
+    }
+    try {
+      await joinSessionHistoryBudgetSweeps(queueSpy);
+    } catch (error) {
+      if (!outcome.ok) {
+        throw new AggregateError(
+          [outcome.error, error],
+          "Fixture mutation and maintenance failed",
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+    if (!outcome.ok) {
+      throw outcome.error;
+    }
+    return outcome.value;
+  } finally {
+    queueSpy.mockRestore();
   }
 }
 
@@ -75,7 +119,7 @@ export function createSessionHistoryBudgetFixture(
       const appended = appendTranscriptMessageInTransaction(owner, resolved, {
         message: { role: "user", content: params.content },
       });
-      assert(appended?.appended, "Historical transcript fixture append was refused");
+      assert(appended?.result.appended, "Historical transcript fixture append was refused");
       writeSessionEntry(owner, resolved.sessionKey, {
         sessionId: params.nextSessionId,
         updatedAt: params.updatedAt + 1,
@@ -154,11 +198,26 @@ export function createSessionHistoryBudgetFixture(
   }
   return {
     createHistoricalTranscript,
+    createTrajectoryEvent,
     database,
     settlePhysicalUsage,
     setSessionUpdatedAt,
     addRouteReference,
     sessionExists,
     readArchiveNames,
+  };
+}
+
+function createTrajectoryEvent(sessionId: string, sessionKey: string): TrajectoryEvent {
+  return {
+    traceSchema: "openclaw-trajectory",
+    schemaVersion: 1,
+    traceId: sessionId,
+    source: "runtime",
+    type: "history.test",
+    ts: "2026-07-18T00:00:00.000Z",
+    seq: 1,
+    sessionId,
+    sessionKey,
   };
 }

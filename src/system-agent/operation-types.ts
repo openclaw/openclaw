@@ -1,11 +1,35 @@
+import type {
+  TemplatesAddReviewedApplyParams,
+  TemplatesAddPlanParams,
+} from "../../packages/gateway-protocol/src/schema/templates.js";
 // Leaf contract for the parsed OpenClaw operation shape. Uses only type imports so
 // gateway server types can reference it without pulling the system-agent
 // runtime graph (operations-parse -> overview -> config -> gateway) into a
 // type-only import cycle.
 import type { AgentRoleId } from "../agents/agent-roles.js";
 
+/** Host-recorded declared-capability review; never accepted from model arguments. */
+export type SystemAgentPluginCapabilityReview = {
+  pluginId: string;
+  reviewToken: string;
+  description: string;
+};
+
+export type SystemAgentTemplateOperation =
+  | ({
+      kind: "template-review";
+      source: { packageName: string; version: string };
+    } & TemplatesAddPlanParams)
+  | ({
+      kind: "template-install";
+      source: { packageName: string; version: string };
+      agentId: string;
+      planIntegrity: string;
+    } & TemplatesAddReviewedApplyParams);
+
 /** Parsed OpenClaw operation before approval/execution. */
 export type SystemAgentOperation =
+  | SystemAgentTemplateOperation
   | { kind: "none"; message: string }
   | { kind: "overview" }
   | { kind: "doctor" }
@@ -15,6 +39,7 @@ export type SystemAgentOperation =
   | { kind: "config-validate" }
   | { kind: "config-get"; path: string }
   | { kind: "config-schema"; path?: string }
+  | { kind: "config-unset"; path: string }
   | { kind: "config-set"; path: string; value: string }
   | {
       kind: "config-set-ref";
@@ -22,6 +47,8 @@ export type SystemAgentOperation =
       source: "env" | "file" | "exec" | "store";
       id: string;
       provider?: string;
+      /** Value the owner supplied; stored as secret-store entry `id` before the ref is written. */
+      secret?: string;
     }
   | { kind: "setup"; workspace?: string; model?: string; agentName?: string }
   | SystemAgentNavigationOperation
@@ -35,7 +62,11 @@ export type SystemAgentOperation =
   | { kind: "models" }
   | { kind: "plugin-list" }
   | { kind: "plugin-search"; query: string }
-  | { kind: "plugin-install"; spec: string }
+  | {
+      kind: "plugin-install";
+      spec: string;
+      capabilityReview?: SystemAgentPluginCapabilityReview;
+    }
   | { kind: "plugin-activate-artifact"; path: string; sha256: string }
   | { kind: "plugin-uninstall"; pluginId: string }
   | { kind: "audit" }
@@ -51,6 +82,13 @@ export type SystemAgentOperation =
     }
   | { kind: "create-team"; coordinatorId?: string; prefix?: string; workspaceRoot?: string }
   | { kind: "set-default-model"; model: string; agentId?: string };
+
+export type SystemAgentOperatorProposal = {
+  operation: SystemAgentOperation;
+  hash: string;
+  /** Host-authored exact review; presentation only, never authority. */
+  description?: string;
+};
 
 /** Interactive actions owned by the host chat, never by delegated model turns. */
 export type SystemAgentNavigationOperation =

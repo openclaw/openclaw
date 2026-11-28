@@ -22,7 +22,8 @@ struct HealthStoreStateTests {
         try Self.requireNetworkDenied()
 
         // The isolated helper runs only this test. Keep detached view tasks on fixtures until process exit.
-        await ConfigStore._testSetOverrides(.init(isRemoteMode: { false }, loadLocal: { [:] }))
+        AppStateStore.shared.connectionMode = .local
+        await ConfigStore._testSetOverrides(.init(loadLocal: { [:] }))
         let tailscale = TailscaleService(
             isInstalled: false,
             isRunning: false,
@@ -131,7 +132,7 @@ struct HealthStoreStateTests {
                 Issue.record("Expected degraded state when probe fails for linked channel")
             }
 
-            #expect(store.summaryLine.contains("probe degraded"))
+            #expect(store.summaryLine.contains("check degraded"))
         }
     }
 

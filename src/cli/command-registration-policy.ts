@@ -1,8 +1,7 @@
-// Decides which built-in and plugin commands need registration for one CLI invocation.
 import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 
-const RESERVED_NON_PLUGIN_COMMAND_ROOTS = new Set(["auth", "tool", "tools"]);
+const RESERVED_NON_PLUGIN_COMMAND_ROOTS = new Set(["auth", "tool"]);
 
 export function isReservedNonPluginCommandRoot(primary: string | null | undefined): boolean {
   return typeof primary === "string" && RESERVED_NON_PLUGIN_COMMAND_ROOTS.has(primary);
@@ -18,21 +17,11 @@ export function shouldSkipPluginCommandRegistration(params: {
   if (params.primary === "help") {
     return invocation.hasHelpOrVersion && invocation.commandPath.length <= 1;
   }
-  if (invocation.hasHelpOrVersion) {
-    return (
-      !params.primary || params.hasBuiltinPrimary || isReservedNonPluginCommandRoot(params.primary)
-    );
-  }
-  if (params.hasBuiltinPrimary) {
-    return true;
-  }
-  if (!params.primary) {
-    return invocation.hasHelpOrVersion;
-  }
-  if (isReservedNonPluginCommandRoot(params.primary)) {
-    return true;
-  }
-  return false;
+  return (
+    params.hasBuiltinPrimary ||
+    isReservedNonPluginCommandRoot(params.primary) ||
+    (!params.primary && invocation.hasHelpOrVersion)
+  );
 }
 
 export function shouldEagerRegisterSubcommands(env: NodeJS.ProcessEnv = process.env): boolean {

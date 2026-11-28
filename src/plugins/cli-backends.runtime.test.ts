@@ -49,7 +49,7 @@ describe("runtime CLI backend consumers", () => {
     expect(isCliProvider(" FIXTURE-CLI ")).toBe(true);
     expect(resolveCliRuntimeCanonicalProvider({ runtime: "fixture-cli" })).toBe("first-provider");
     expect(listCliRuntimeModelBackendBindings()).toEqual([
-      { provider: "first-provider", runtime: "fixture-cli", pluginId: "first-provider" },
+      { provider: "first-provider", runtime: "fixture-cli" },
     ]);
     const retained = resolveCliBackendConfig("fixture-cli");
     expect(retained?.config.command).toBe("first-provider-cli");
@@ -61,7 +61,7 @@ describe("runtime CLI backend consumers", () => {
 
     expect(resolveCliRuntimeCanonicalProvider({ runtime: "fixture-cli" })).toBe("second-provider");
     expect(listCliRuntimeModelBackendBindings()).toEqual([
-      { provider: "second-provider", runtime: "fixture-cli", pluginId: "second-provider" },
+      { provider: "second-provider", runtime: "fixture-cli" },
     ]);
     expect(resolveCliBackendConfig("fixture-cli")?.config.command).toBe("second-provider-cli");
     expect(() => retained?.resolveModelId?.({ modelId: "demo" })).toThrow(

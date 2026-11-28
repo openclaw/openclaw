@@ -2,12 +2,41 @@
 import type { Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import {
-  buildTelegramInboundOriginTarget,
-  buildTelegramRoutingTarget,
   buildTelegramThreadParams,
-  buildTypingThreadParams,
   resolveTelegramMessageThreadSpec,
+  withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
+import { adoptTelegramDmTopicUpdate, createTelegramDmTopicAdoptState } from "./dm-topic-adopt.js";
+
+describe("resolveTelegramMessageThreadSpec client-created DM topics", () => {
+  const chat = { id: 1001, type: "private" };
+  const from = { id: 1001, is_bot: false, first_name: "User" };
+  const topicCreated = {
+    message_id: 500,
+    date: 1_760_000_000,
+    chat,
+    from,
+    message_thread_id: 500,
+    is_topic_message: true,
+    forum_topic_created: { name: "hello", icon_color: 0, is_name_implicit: true },
+  } as unknown as Message;
+  const rootMessage = () =>
+    ({ message_id: 501, date: 1_760_000_000, chat, from, text: "hello" }) as unknown as Message;
+
+  it("keeps the adopted topic on normalized message copies but not in serialized JSON", () => {
+    const state = createTelegramDmTopicAdoptState();
+    adoptTelegramDmTopicUpdate({ message: topicCreated }, state);
+    const message = rootMessage();
+    expect(adoptTelegramDmTopicUpdate({ message }, state)).toBe(500);
+    // Inbound normalization spreads a private message without `is_forum` into a copy.
+    const normalized = withResolvedTelegramForumFlag(message, false);
+    expect(normalized).not.toBe(message);
+    expect(resolveTelegramMessageThreadSpec(normalized)).toEqual({ id: 500, scope: "dm" });
+    // Durable rows carry the fact as explicit payload metadata, never as message state.
+    expect(JSON.stringify(message)).toBe(JSON.stringify(rootMessage()));
+    expect(resolveTelegramMessageThreadSpec(structuredClone(message))).toEqual({ scope: "dm" });
+  });
+});
 
 describe("resolveTelegramMessageThreadSpec", () => {
   it.each([
@@ -71,65 +100,5 @@ describe("buildTelegramThreadParams", () => {
     { input: { id: 42.9, scope: "forum" as const }, expected: { message_thread_id: 42 } },
   ])("builds thread params", ({ input, expected }) => {
     expect(buildTelegramThreadParams(input)).toEqual(expected);
-  });
-});
-
-describe("buildTelegramRoutingTarget", () => {
-  it.each([
-    {
-      name: "keeps General forum topic chat-scoped",
-      chatId: -100123,
-      thread: { id: 1, scope: "forum" as const },
-      expected: "telegram:-100123",
-    },
-    {
-      name: "includes real forum topic ids",
-      chatId: -100123,
-      thread: { id: 42, scope: "forum" as const },
-      expected: "telegram:-100123:topic:42",
-    },
-    {
-      name: "includes channel Direct Messages topic ids with a distinct marker",
-      chatId: -100123,
-      thread: { id: 77, scope: "direct-messages" as const },
-      expected: "telegram:-100123:direct-topic:77",
-    },
-  ])("$name", ({ chatId, thread, expected }) => {
-    expect(buildTelegramRoutingTarget(chatId, thread)).toBe(expected);
-  });
-});
-
-describe("buildTelegramInboundOriginTarget", () => {
-  it.each([
-    {
-      name: "keeps bot-private topic thread ids out of the origin target",
-      chatId: 42,
-      thread: { id: 77, scope: "dm" as const },
-      expected: "telegram:42",
-    },
-    {
-      name: "includes real forum topic ids",
-      chatId: -100123,
-      thread: { id: 42, scope: "forum" as const },
-      expected: "telegram:-100123:topic:42",
-    },
-    {
-      name: "includes channel Direct Messages topics",
-      chatId: -100123,
-      thread: { id: 77, scope: "direct-messages" as const },
-      expected: "telegram:-100123:direct-topic:77",
-    },
-  ])("$name", ({ chatId, thread, expected }) => {
-    expect(buildTelegramInboundOriginTarget(chatId, thread)).toBe(expected);
-  });
-});
-
-describe("buildTypingThreadParams", () => {
-  it.each([
-    { input: undefined, expected: undefined },
-    { input: 1, expected: { message_thread_id: 1 } },
-    { input: 42.9, expected: { message_thread_id: 42 } },
-  ])("builds typing params", ({ input, expected }) => {
-    expect(buildTypingThreadParams(input)).toEqual(expected);
   });
 });

@@ -37,8 +37,17 @@ For the broader model/provider/runtime split, start with
   `~/.openclaw/agents/<agentId>/copilot`.
 
 `openclaw doctor` runs the plugin's [doctor contract](#doctor) for
-session-state ownership and future config migrations. It does not probe the
+session-state ownership and future config migrations. It does not check the
 Copilot CLI environment.
+
+## Model discovery
+
+The model picker queries the Copilot SDK with the agent's configured credential.
+Sign in with `openclaw models auth login-github-copilot` before discovery.
+The native catalog includes account-enabled Fusion routing when the SDK reports
+an available tier. Set `params.fusionTier` for `github-copilot/fusion` to choose
+the routing tier; discovery does not copy account defaults into requests. Disabled models and hidden Fusion
+tiers are excluded from discovery; account policy still applies to each request.
 
 ## Install
 
@@ -68,6 +77,12 @@ The runtime resolves the SDK in this order:
 A missing SDK surfaces one error with code `COPILOT_SDK_MISSING` and the
 reinstall command above.
 
+Setup verification binds the installed SDK and packaged native runtime to the
+verified session. Replacing either implementation invalidates that binding;
+restart OpenClaw after an SDK update and repeat verification. Verified setup
+currently requires the SDK's packaged stdio runtime; a custom `COPILOT_CLI_PATH`
+outside that bundle or an in-process default transport cannot supply this binding.
+
 ## Quickstart
 
 Pin one model (or one provider) to the harness:
@@ -94,9 +109,36 @@ the harness, or on a provider to route every model under that provider.
 account- and organization-policy-dependent; confirm your authenticated
 Copilot CLI actually exposes a model before pinning it.
 
+### Copilot Fusion
+
+Route `github-copilot/fusion` through the Copilot runtime and set its tier in
+the model's `params`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: "github-copilot/fusion",
+      models: {
+        "github-copilot/fusion": {
+          agentRuntime: { id: "copilot" },
+          params: { fusionTier: "high" },
+        },
+      },
+    },
+  },
+}
+```
+
+`fusionTier` accepts `"standard"` (the default), `"high"`, or `"max"`.
+It controls Copilot's model routing, separately from `reasoningEffort`.
+Changing the tier starts a fresh SDK session. New, resumed, and isolated
+completion sessions all receive the selected tier. Fusion availability remains
+subject to your Copilot account and organization policies.
+
 ## Supported providers
 
-The harness supports the canonical `github-copilot` provider (owned by
+The harness supports the standard `github-copilot` provider (owned by
 `extensions/github-copilot`), plus custom `models.providers` entries when the
 model has a non-empty `baseUrl` and one of these `api` shapes:
 
@@ -245,8 +287,8 @@ messages, so user-facing chat history stays consistent.
 turn's messages into the OpenClaw session transcript. Journal identity is
 turn-scoped, not content-scoped: the initial user turn is keyed
 `${runId}:user` and SDK-sourced events are keyed
-`copilot-sdk:${sdkSessionId}:${eventId}`, with claimed event ids plus an
-idempotency scan at the transcript store, so re-emitted prior-turn entries
+`copilot-sdk:${sdkSessionId}:${eventId}`, with claimed event ids plus a
+duplicate check at the transcript store, so re-emitted prior-turn entries
 cannot duplicate.
 
 Assistant turns and their tool results are journaled as structurally complete
@@ -255,29 +297,34 @@ groups, so a crash between groups leaves a valid transcript prefix.
 tool topology; a structurally destructive rewrite suppresses the whole group
 instead of persisting a false replay.
 
-Persistence failures fail closed. The first write failure marks the journal
+Ephemeral helper turns, including setup inference probes, use the caller-owned
+in-memory session manager. The journal retains the same hooks, event identity,
+and complete tool groups without creating durable session state. Ordinary
+persistent attempts still require an exact runtime session target.
+
+Explicitly detached one-shot turns never look up or retain SDK session bindings.
+They create their own native session and delete only that fresh history after
+accepted tool work and background compaction settle, including on failure or
+cancellation. Cleanup failures are reported rather than treated as success.
+Caller-owned in-memory conversations without detached persistence remain
+resumable; they are not disposable merely because their transcript is in memory.
+
+Persistence failures stop the attempt. The first write failure marks the journal
 failed, aborts the in-flight SDK session, and flags the attempt's replay as
 unvalidated so the next run creates a fresh SDK session instead of trusting a
 partial transcript. Only the post-append transcript update notification is
 best-effort and logged.
 
-Native subagent task updates retain their original completion or failure result
-when task persistence fails. A later terminal event or parent cleanup retries
-that same result instead of replacing it with cancellation. Bookkeeping is
-retired only after the tracked task is durably terminal or no longer exists.
-
 ## Side questions (`/btw`)
 
-`/btw` is **not** native on this harness. `createCopilotAgentHarness()`
-deliberately leaves `harness.runSideQuestion` undefined
-(asserted in `extensions/copilot/harness.test.ts`, `describe("runSideQuestion")`),
-so OpenClaw's `/btw` dispatcher (`src/agents/btw.ts`) falls through to the
-same path it uses for every non-Codex runtime: the configured model provider
-is called directly with a short side-question prompt and streamed back via
-`streamSimple` (no CLI session, no extra pool slot).
+`/btw` uses a fresh Copilot SDK session with the selected model and Fusion tier.
+OpenClaw supplies sanitized conversation context, including earlier images and
+the current question's images. The session has no tools, disables remote export
+before sending the prompt, and closes after the answer. It does not resume or
+append to the main Copilot conversation.
 
-This keeps Copilot CLI sessions reserved for the agent's main turn loop, and
-keeps `/btw` behavior identical to other non-Codex runtimes.
+When OpenClaw supplies a session-fork operation, that existing owner handles the
+fork instead of creating another side-question session.
 
 ## Doctor
 
@@ -310,7 +357,7 @@ Permission enforcement for bridged OpenClaw tools happens **inside the tool
 wrapper**, not via the SDK's `onPermissionRequest` callback. The same
 `wrapToolWithBeforeToolCallHook` that PI uses
 (`src/agents/agent-tools.before-tool-call.ts`) is applied by
-`createOpenClawCodingTools` to every coding tool: loop detection, trusted
+`createOpenClawCodingToolsAsync` to every coding tool: loop detection, trusted
 plugin policies, before-tool-call hooks, and two-phase plugin approvals via
 the gateway (`plugin.approval.request`) all run through the exact same code
 path as native PI attempts.
@@ -333,7 +380,7 @@ codex-app-server's own native approval kinds
 (`item/commandExecution/requestApproval`, `item/fileChange/requestApproval`,
 `item/permissions/requestApproval`) route through `plugin.approval.request`
 (`extensions/codex/src/app-server/approval-bridge.ts`). The Copilot SDK
-equivalent — fail-closed `rejectAllPolicy` for any non-`custom-tool` kind
+equivalent — `rejectAllPolicy` that denies any non-`custom-tool` kind
 that ever reaches `onPermissionRequest` — is the same safety net, and it
 never fires in practice because `overridesBuiltInTool: true` displaces every
 built-in.
@@ -345,9 +392,9 @@ and the device allowed to review approvals. This keeps those facts intact
 when selecting a backend or recovering a turn. The Copilot bridge in
 `extensions/copilot/src/tool-bridge.ts` adds its own session and workspace
 mapping, authentication, model context, and execution callbacks before
-calling `createOpenClawCodingTools`.
+awaiting `hostCapabilities.createToolSurfaceAsync`.
 `runAttempt` resolves sandbox context through the shared
-`resolveSandboxContext` seam, passes the SDK an effective working directory,
+`resolveSandboxContext` interface, passes the SDK an effective working directory,
 and forwards `sandbox` plus the subagent-spawn workspace into the tool
 bridge. The bridge also forwards the bounded tool-construction controls it
 can enforce at the SDK boundary: `includeCoreTools`, the runtime tool
@@ -366,7 +413,7 @@ filtering, and catalog cleanup stay in the shared helper.
 
 For Copilot, `tools.toolSearch.mode: "directory"` uses structured `tools`
 semantics: discover with `tool_search` or `tool_describe`, then execute through
-`tool_call` with `id` and `args`. Hidden OpenClaw catalog names are not registered
+`dispatch_action` with `id` and `args`. Hidden OpenClaw catalog names are not registered
 as SDK tool handlers and cannot be called directly. The pinned Copilot SDK
 1.0.13 supports native deferral of registered tool declarations through
 `Tool.defer`; that is a separate SDK catalog, not a resolver for omitted

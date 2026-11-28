@@ -1,4 +1,3 @@
-// Qwen provider module implements model/runtime integration.
 import { buildDashscopeVideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import { isQwenCodingPlanBaseUrl } from "./models.js";
 
@@ -8,12 +7,8 @@ function isQwenVideoEndpointSupported(baseUrl: string | undefined): boolean {
   if (isQwenCodingPlanBaseUrl(baseUrl)) {
     return false;
   }
-  try {
-    const hostname = new URL(baseUrl ?? DEFAULT_QWEN_VIDEO_BASE_URL).hostname;
-    return !/^token-plan\..+\.maas\.aliyuncs\.com\.?$/iu.test(hostname);
-  } catch {
-    return true;
-  }
+  const hostname = URL.parse(baseUrl ?? DEFAULT_QWEN_VIDEO_BASE_URL)?.hostname;
+  return !/^token-plan\..+\.maas\.aliyuncs\.com\.?$/iu.test(hostname ?? "");
 }
 
 function resolveQwenVideoBaseUrl(configuredBaseUrl: string | undefined): string {
@@ -21,11 +16,7 @@ function resolveQwenVideoBaseUrl(configuredBaseUrl: string | undefined): string 
   if (!direct) {
     return DEFAULT_QWEN_VIDEO_BASE_URL;
   }
-  try {
-    return new URL(direct).toString();
-  } catch {
-    return DEFAULT_QWEN_VIDEO_BASE_URL;
-  }
+  return URL.parse(direct)?.toString() ?? DEFAULT_QWEN_VIDEO_BASE_URL;
 }
 
 function resolveDashscopeAigcApiBaseUrl(baseUrl: string): string {

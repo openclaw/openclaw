@@ -1,14 +1,27 @@
+import * as normalization from "@openclaw/normalization-core";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { describe, expect, it } from "vitest";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, expect, it, vi } from "vitest";
+import { markModelPayloadObserver } from "../transports/model-request-body.js";
+import { buildOpenAIResponsesParams } from "../transports/openai-responses-params-internal.js";
 import type { Tool } from "../types.js";
-import {
-  normalizeToolParameterSchema,
-  type ToolSchemaModelCompat,
-} from "./agent-tools-parameter-schema.js";
+import type { ToolSchemaModelCompat } from "./agent-tools-parameter-schema.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
-import { prepareOpenAITools, projectOpenAITools } from "./openai-tool-projection.js";
-import { normalizeOpenAIStrictToolParameters } from "./openai-tool-schema.js";
-import { withPreparedToolSchemaNormalization } from "./tool-schema-normalization-cache.js";
+import { prepareOpenAITools } from "./openai-tool-projection.js";
+import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
+import { normalizeOpenAIToolParameters as normalize } from "./openai-tool-schema.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
+import {
+  getPublishedRuntimeToolInputSchema as publication,
+  projectRuntimeToolInputSchema,
+  publishRuntimeToolInputSchema,
+} from "./tool-schema-json-projection.js";
+import { withPreparedToolSchemaNormalization as withPrepared } from "./tool-schema-normalization-cache.js";
+import { normalizeToolSchema } from "./tool-schema-normalization.js";
+
+const descriptor = { name: "choose", description: "Choose" };
+const choose = (parameters: Tool["parameters"]): Tool => ({ ...descriptor, parameters });
+const stripEnumCompat = { unsupportedToolSchemaKeywords: ["enum"] };
 
 function actionSchema() {
   return {
@@ -19,12 +32,11 @@ function actionSchema() {
   };
 }
 
-function payloadSchema(tools: Tool[], strict = false): Record<string, unknown> {
-  const [tool] = convertResponsesToolPayload(tools, { strict });
-  if (!tool?.parameters) {
-    throw new Error("Expected a function schema");
-  }
-  return tool.parameters;
+function payloadSchema(tools: Tool[]): Record<string, unknown> {
+  return expectDefined(wireTool(tools).parameters, "function schema");
+}
+function wireTool(tools: Tool[]) {
+  return expectDefined(convertResponsesToolPayload(tools, { strict: false })[0], "wire tool");
 }
 
 function actions(schema: Record<string, unknown>): string[] {
@@ -32,198 +44,189 @@ function actions(schema: Record<string, unknown>): string[] {
   return (schema.properties as ReturnType<typeof actionSchema>["properties"]).action.enum;
 }
 
-function normalizePreparedSchema(
-  tools: Tool[],
-  strict: boolean,
-  modelCompat: ToolSchemaModelCompat,
-) {
+function normalizePrepared(tools: Tool[], modelCompat: ToolSchemaModelCompat) {
   const { projection, schemas } = prepareOpenAITools(tools);
-  return withPreparedToolSchemaNormalization(schemas, () =>
-    normalizeOpenAIStrictToolParameters(
-      expectDefined(projection.tools[0], "projected tool").parameters,
-      strict,
-      modelCompat,
-    ),
-  );
+  const parameters = expectDefined(projection.tools[0], "projected tool").parameters;
+  return withPrepared(schemas, () => normalize(parameters, modelCompat));
 }
 
-describe("OpenAI tool schema reuse", () => {
-  it.each([false, true])(
-    "keeps payloads independent and sees in-place source edits with strict=%s",
-    (strict) => {
-      const parameters = actionSchema();
-      const tools = [{ name: "choose", description: "Choose an action", parameters }];
-      const first = payloadSchema(tools, strict);
-      actions(first).push("output-only");
+it("does not traverse admitted request schemas again on normalization cache hits", () => {
+  const tools = [choose(actionSchema())];
+  payloadSchema(tools);
+  const { projection, schemas } = prepareOpenAITools(tools);
+  const parameters = expectDefined(projection.tools[0], "projected tool").parameters;
+  const entries = vi.spyOn(Object, "entries");
+  let traversals: number;
+  try {
+    withPrepared(schemas, () => normalize(parameters));
+    traversals = entries.mock.calls.filter(([value]) => value === parameters).length;
+  } finally {
+    entries.mockRestore();
+  }
+  expect(traversals).toBe(0);
+  // Admission expires with the conversion: direct mutable callers still detect cycles.
+  parameters.properties = { self: parameters };
+  expect(() => normalize(parameters)).toThrow("circular reference");
+});
 
-      const second = payloadSchema(tools, strict);
-      expect(actions(second)).toEqual(["read"]);
-      expect(second).not.toBe(first);
-      parameters.properties.action.enum.push("write");
-      expect(actions(payloadSchema(tools, strict))).toEqual(["read", "write"]);
-      Object.assign(parameters, actionSchema());
-      expect(actions(payloadSchema(tools, strict))).toEqual(["read"]);
-      expect(actions(second)).toEqual(["read"]);
+it("prepares published compatibility and union dialects once without sharing their policy", () => {
+  const source = {
+    type: "object",
+    properties: {
+      action: { description: null, anyOf: [{ const: "read" }, { const: "write" }] },
     },
+  };
+  const { schema } = publishRuntimeToolInputSchema(source);
+  assert(isRecord(schema));
+  const compat = normalizeOpenAIStrictCompatSchema(schema);
+  const moonshot = normalizeToolSchema(schema, "moonshot");
+  expect(compat).not.toHaveProperty("properties.action.description");
+  expect(compat).not.toHaveProperty("properties.action.anyOf.0.type");
+  expect(moonshot).toHaveProperty("properties.action.description", null);
+  expect(moonshot).toHaveProperty("properties.action.anyOf.0.type", "string");
+  expect(normalizeOpenAIStrictCompatSchema(schema)).toBe(compat);
+  expect(normalizeToolSchema(schema, "moonshot")).toBe(moonshot);
+  expect(publication(compat)).toBeDefined();
+  expect(publication(moonshot)).toBeDefined();
+  source.properties.action.anyOf[0] = { const: "delete" };
+  expect(normalizeOpenAIStrictCompatSchema(source)).toHaveProperty(
+    "properties.action.anyOf.0.const",
+    "delete",
   );
-
-  it.each([false, true])("keeps current provider options isolated with strict=%s", (strict) => {
-    const tools = [{ name: "choose", description: "Choose", parameters: actionSchema() }];
-    const modelCompat: ToolSchemaModelCompat = {};
-    for (const stripEnum of [false, true, false, true]) {
-      modelCompat.unsupportedToolSchemaKeywords = stripEnum ? ["enum"] : [];
-      const parameters = normalizePreparedSchema(tools, strict, modelCompat);
-      if (stripEnum) {
-        expect(parameters).not.toHaveProperty("properties.action.enum");
-      } else {
-        expect(parameters).toHaveProperty("properties.action.enum", ["read"]);
-      }
-    }
-  });
-
-  it("rechecks toJSON, quarantine, and recovery while reading each descriptor once", () => {
-    const reads: string[] = [];
-    let maximum = 1;
-    let unreadable = false;
-    const parameters = {
-      toJSON() {
-        reads.push("json");
-        if (unreadable) {
-          throw new Error("unreadable schema");
-        }
-        return { type: "object", properties: { amount: { type: "number", maximum } } };
-      },
-    };
-    const tool = new Proxy(
-      { name: "amount", description: "Choose amount", parameters },
-      {
-        get(target, property, receiver) {
-          if (property === "name" || property === "parameters" || property === "description") {
-            reads.push(property);
-          }
-          return Reflect.get(target, property, receiver);
-        },
-      },
-    );
-    const healthy = { name: "healthy", description: "Healthy sibling", parameters: {} };
-    for (const value of [1, 1, 2, Number.POSITIVE_INFINITY, 3]) {
-      maximum = value;
-      reads.length = 0;
-      const payload = convertResponsesToolPayload([tool, healthy]);
-      expect(reads).toEqual([
-        "name",
-        "parameters",
-        "json",
-        ...(Number.isFinite(value) ? ["description"] : []),
-      ]);
-      if (Number.isFinite(value)) {
-        expect(payload[0]?.parameters).toMatchObject({
-          properties: { amount: { maximum: value } },
-        });
-      } else {
-        expect(payload.map((entry) => entry.name)).toEqual(["healthy"]);
-      }
-    }
-    unreadable = true;
-    expect(convertResponsesToolPayload([tool, healthy]).map((entry) => entry.name)).toEqual([
-      "healthy",
-    ]);
-    unreadable = false;
-    expect(payloadSchema([tool])).toMatchObject({ properties: { amount: { maximum: 3 } } });
-  });
-
-  it.each([false, true])(
-    "preserves the direct-normalizer identity contract alongside projected strict=%s",
-    (strict) => {
-      const wire = actionSchema();
-      const parameters = {
-        properties: { direct: { type: "string" } },
-        required: ["direct"],
-        additionalProperties: false,
-        toJSON: () => wire,
-      };
-      const direct = normalizeOpenAIStrictToolParameters(parameters, strict);
-      const tools = [{ name: "choose", description: "Choose", parameters }];
-      expect(actions(payloadSchema(tools, strict))).toEqual(["read"]);
-      wire.properties.action.enum.push("write");
-      expect(actions(payloadSchema(tools, strict))).toEqual(["read", "write"]);
-      for (let index = 0; index < 8; index++) {
-        normalizePreparedSchema(tools, strict, {
-          unsupportedToolSchemaKeywords: [`synthetic_${index}`],
-        });
-      }
-      expect(normalizeOpenAIStrictToolParameters(parameters, strict)).toBe(direct);
-      expect(direct).toHaveProperty("properties.direct");
-      expect(direct).not.toHaveProperty("properties.action");
-    },
+  const refreshed = publishRuntimeToolInputSchema(source).schema;
+  expect(normalizeOpenAIStrictCompatSchema(refreshed)).toHaveProperty(
+    "properties.action.anyOf.0.const",
+    "delete",
   );
+  expect(compat).toHaveProperty("properties.action.anyOf.0.const", "read");
+});
 
-  it("keeps hostile public projections outside source-cache provenance", () => {
-    const parameters = actionSchema();
-    const tools = [{ name: "choose", description: "Choose", parameters }];
-    expect(actions(payloadSchema(tools))).toEqual(["read"]);
-    const projection = projectOpenAITools(tools);
-    expect(Object.keys(projection)).toEqual(["inputToolCount", "tools", "diagnostics"]);
-    const projected = expectDefined(projection.tools[0], "projected tool").parameters;
-    actions(projected).push("public-edit");
-    Object.defineProperty(projected, "toJSON", {
-      value: () => parameters,
-      enumerable: false,
+it("publishes detached immutable schemas while source edits require a new publication", () => {
+  const source = actionSchema();
+  const projection = publishRuntimeToolInputSchema(source);
+  assert(isRecord(projection.schema));
+  const published = expectDefined(publication(projection.schema), "published schema");
+  expect(publication(source)).toBeUndefined();
+  expect(published.json).toBe(
+    '{"type":"object","properties":{"action":{"type":"string","enum":["read"]}},"required":["action"],"additionalProperties":false}',
+  );
+  source.properties.action.enum.push("write");
+  const tool = choose(projection.schema);
+  const parameters = payloadSchema([tool]);
+  expect(actions(parameters)).toEqual(["read"]);
+  expect(() => actions(parameters).push("delete")).toThrow(TypeError);
+  expect(() => Object.assign(published, { json: "{}" })).toThrow(TypeError);
+  expect(projectRuntimeToolInputSchema(projection.schema)).toBe(projection);
+  expect(payloadSchema([tool])).toBe(parameters);
+  const refreshed = publishRuntimeToolInputSchema(source);
+  assert(isRecord(refreshed.schema));
+  expect(publication(refreshed.schema)?.fingerprint).not.toBe(published.fingerprint);
+  expect(actions(payloadSchema([choose(refreshed.schema)]))).toEqual(["read", "write"]);
+});
+
+it("shares published Responses schemas with observers and isolates writable payload hooks", () => {
+  const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna");
+  const { schema } = publishRuntimeToolInputSchema(actionSchema());
+  assert(isRecord(schema));
+  const context = { messages: [], tools: [choose(schema)] };
+  const build = (onPayload?: () => void) =>
+    expectDefined(buildOpenAIResponsesParams(model, context, { onPayload }).tools, "wire tools");
+  const plain = build();
+  let writable = false;
+  const hook = markModelPayloadObserver(
+    () => {},
+    undefined,
+    () => !writable,
+  );
+  const observed = build(hook);
+  expect(JSON.stringify(observed)).toBe(JSON.stringify(plain));
+  expect(observed[0]).not.toBe(plain[0]);
+  expect(observed[0]).toHaveProperty("type", "function");
+  assert(observed[0]?.type === "function" && plain[0]?.type === "function");
+  expect(observed[0].parameters).toBe(plain[0].parameters);
+
+  writable = true;
+  const edited = build(hook);
+  expect(JSON.stringify(edited)).toBe(JSON.stringify(plain));
+  assert(edited[0]?.type === "function" && edited[0].parameters && plain[0].parameters);
+  actions(edited[0].parameters).push("write");
+  expect(actions(plain[0].parameters)).toEqual(["read"]);
+  expect(JSON.stringify(build())).toBe(JSON.stringify(plain));
+});
+
+it("reuses published provider variants without changing current compatibility options", () => {
+  using stringify = vi.spyOn(normalization, "stableStringify");
+  const source = actionSchema();
+  const projection = publishRuntimeToolInputSchema(source);
+  assert(isRecord(projection.schema));
+  const tools = [choose(projection.schema)];
+  const plain = payloadSchema(tools);
+  // Routes that accept the field send every tool non-strict.
+  expect(wireTool(tools).strict).toBe(false);
+  expect(payloadSchema(tools)).toBe(plain);
+  const stripped = normalizePrepared(tools, stripEnumCompat);
+  expect(stripped).not.toHaveProperty("properties.action.enum");
+  expect(normalizePrepared(tools, stripEnumCompat)).toBe(stripped);
+  expect(payloadSchema(tools)).toHaveProperty("properties.action.enum", ["read"]);
+  expect(stringify).not.toHaveBeenCalled();
+});
+
+it("keeps current provider options isolated", () => {
+  const tools = [choose(actionSchema())];
+  const modelCompat: ToolSchemaModelCompat = {};
+  for (const stripEnum of [false, true, false, true]) {
+    modelCompat.unsupportedToolSchemaKeywords = stripEnum ? ["enum"] : [];
+    const parameters = normalizePrepared(tools, modelCompat);
+    expect(parameters).toHaveProperty("properties.action", {
+      type: "string",
+      ...(stripEnum ? {} : { enum: ["read"] }),
     });
-    expect(normalizeToolParameterSchema(projected)).toHaveProperty("properties.action.enum", [
-      "read",
-      "public-edit",
-    ]);
-    expect(actions(payloadSchema(tools))).toEqual(["read"]);
+  }
+});
 
-    const another = expectDefined(projectOpenAITools(tools).tools[0], "projected tool").parameters;
-    Object.defineProperty(another, "properties", {
-      get: () => {
-        throw new Error("public projection changed");
-      },
-    });
-    expect(() => normalizeToolParameterSchema(another)).toThrow("public projection changed");
-    expect(actions(payloadSchema(tools))).toEqual(["read"]);
-  });
-
-  it.each([false, true])(
-    "retires private facts after return or throw=%s and reentry",
-    (throwing) => {
-      const outer = prepareOpenAITools([
-        { name: "outer", description: "Outer", parameters: actionSchema() },
-      ]);
-      const inner = prepareOpenAITools([
-        { name: "inner", description: "Inner", parameters: actionSchema() },
-      ]);
-      const schema = expectDefined(outer.projection.tools[0], "outer tool").parameters;
-      const convert = () =>
-        withPreparedToolSchemaNormalization(outer.schemas, () => {
-          const first = normalizeToolParameterSchema(schema);
-          expect(() =>
-            withPreparedToolSchemaNormalization(inner.schemas, () => {
-              normalizeToolParameterSchema(
-                expectDefined(inner.projection.tools[0], "inner tool").parameters,
-              );
-              throw new Error("inner");
-            }),
-          ).toThrow("inner");
-          const second = normalizeToolParameterSchema(schema);
-          const third = normalizeToolParameterSchema(schema);
-          expect(second).toEqual(first);
-          expect(second).not.toBe(first);
-          expect(third).toEqual(second);
-          expect(third).not.toBe(second);
-          if (throwing) {
-            throw new Error("outer");
-          }
-        });
-      if (throwing) {
-        expect(convert).toThrow("outer");
-      } else {
-        convert();
+it("rechecks toJSON once per payload through edits, quarantine, and recovery", () => {
+  let reads = 0;
+  let maximum: number | Error = 1;
+  const parameters = {
+    toJSON() {
+      reads++;
+      if (maximum instanceof Error) {
+        throw maximum;
       }
-      const direct = normalizeToolParameterSchema(schema);
-      expect(normalizeToolParameterSchema(schema)).toBe(direct);
+      return { type: "object", properties: { amount: { type: "number", maximum } } };
     },
-  );
+  };
+  const tool = { name: "amount", description: "Choose amount", parameters };
+  const healthy = { name: "healthy", description: "Healthy sibling", parameters: {} };
+  for (const value of [1, 1, 2, Infinity, 3, new Error("unreadable schema"), 3]) {
+    maximum = value;
+    reads = 0;
+    const payload = convertResponsesToolPayload([tool, healthy]);
+    expect(reads).toBe(1);
+    if (Number.isFinite(value)) {
+      expect(payload[0]?.parameters).toMatchObject({
+        properties: { amount: { maximum: value } },
+      });
+    } else {
+      expect(payload.map((entry) => entry.name)).toEqual(["healthy"]);
+    }
+  }
+});
+
+it("preserves direct-normalizer identity across prepared cache eviction", () => {
+  const parameters = {
+    properties: { direct: { type: "string" } },
+    toJSON: actionSchema,
+  };
+  const direct = normalize(parameters);
+  const tools = [choose(parameters)];
+  expect(actions(payloadSchema(tools))).toEqual(["read"]);
+  for (let index = 0; index < 8; index++) {
+    normalizePrepared(tools, {
+      unsupportedToolSchemaKeywords: [`synthetic_${index}`],
+    });
+  }
+  expect(normalize(parameters)).toBe(direct);
+  expect(direct).toHaveProperty("properties.direct");
+  expect(direct).not.toHaveProperty("properties.action");
 });

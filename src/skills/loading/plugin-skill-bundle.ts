@@ -49,10 +49,13 @@ export async function readPluginSkillBundle(params: {
   rootPath: string;
   name: string;
   rejectHardlinks: boolean;
+  path?: string;
 }): Promise<PluginsSkillsReadResult> {
   if (params.rootPath !== ".") {
     validatePluginSkillPath(params.rootPath);
   }
+  const selectedPath = params.path ?? "SKILL.md";
+  validatePluginSkillPath(selectedPath);
   const owner = await root(params.pluginRoot);
   const result: PluginsSkillsReadResult = {
     name: params.name,
@@ -103,29 +106,32 @@ export async function readPluginSkillBundle(params: {
         file.status = "too-large";
         continue;
       }
-      const maxBytes = Math.min(
-        SKILL_LIBRARY_MAX_FILE_BYTES,
-        SKILL_LIBRARY_MAX_BUNDLE_BYTES - bytes,
-      );
-      // Failed reads may consume the full allowance plus fs-safe's overflow probe.
-      // Reserve before reading; only successful reads can refund unused bytes.
-      bytes += maxBytes + 1;
-      try {
-        const read = await owner.read(`${params.rootPath}/${filePath}`, {
-          symlinks: "reject",
-          hardlinks: params.rejectHardlinks ? "reject" : "allow",
-          maxBytes,
-        });
-        bytes -= maxBytes + 1 - read.buffer.length;
-        Object.assign(file, pluginSkillFileFromBytes(filePath, read.buffer));
-      } catch (error) {
-        if (error instanceof FsSafeError && error.code === "too-large") {
-          file.status = "too-large";
-        }
-      }
+      bytes += entry.size;
+      file.status = "deferred";
     }
   }
   await visit("", 0);
+  if (params.path !== undefined && !result.files.some((file) => file.path === selectedPath)) {
+    throw new Error("Plugin skill file not found.");
+  }
   result.files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  const selected = result.files.find((file) => file.path === selectedPath);
+  if (selected?.status === "deferred") {
+    selected.status = "unavailable";
+    try {
+      // Validate the entire inventory before touching a body. A changing file
+      // cannot exceed its reserved inventory size (plus fs-safe's overflow probe).
+      const read = await owner.read(`${params.rootPath}/${selectedPath}`, {
+        symlinks: "reject",
+        hardlinks: params.rejectHardlinks ? "reject" : "allow",
+        maxBytes: selected.sizeBytes,
+      });
+      Object.assign(selected, pluginSkillFileFromBytes(selectedPath, read.buffer));
+    } catch (error) {
+      if (error instanceof FsSafeError && error.code === "too-large") {
+        selected.status = "too-large";
+      }
+    }
+  }
   return result;
 }

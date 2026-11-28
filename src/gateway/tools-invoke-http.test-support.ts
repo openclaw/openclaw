@@ -1,10 +1,26 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
+import {
+  withOpenClawTestState as withTestState,
+  type OpenClawTestState as TestState,
+} from "../test-utils/openclaw-test-state.js";
+import { createTestGatewayHttpServer } from "./http-server.test-support.js";
+import type { GatewayMethodRegistry } from "./methods/registry.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
 import type { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
-/** Shared loopback transport with an independently reset Gateway context for each test. */
+export function withToolsInvokeTestState<T>(
+  options: Parameters<typeof withTestState>[0],
+  run: (state: TestState) => Promise<T>,
+): Promise<T> {
+  return withTestState(options, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
+    return await run(state);
+  });
+}
+
 export function createToolsInvokeHttpTestServer(params: {
   handleToolsInvoke: typeof handleToolsInvokeHttpRequest;
   getPluginHandlers?: () => ReadonlyArray<
@@ -12,45 +28,30 @@ export function createToolsInvokeHttpTestServer(params: {
   >;
 }) {
   let resolveGatewayContext: GatewayContextResolver | undefined;
-  const server = createServer((req, res) => {
-    void (async () => {
-      if (
-        await params.handleToolsInvoke(req, res, {
-          auth: { mode: "none", allowTailscale: false },
-          resolveGatewayContext,
-        })
-      ) {
-        return;
+  const server = createTestGatewayHttpServer(async (req, res) => {
+    if (
+      await params.handleToolsInvoke(req, res, {
+        auth: { mode: "none", allowTailscale: false },
+        resolveGatewayContext,
+      })
+    ) {
+      return true;
+    }
+    for (const handler of params.getPluginHandlers?.() ?? []) {
+      if (await handler(req, res)) {
+        return true;
       }
-      for (const handler of params.getPluginHandlers?.() ?? []) {
-        if (await handler(req, res)) {
-          return;
-        }
-      }
-      res.statusCode = 404;
-      res.end("not found");
-    })().catch((error: unknown) => {
-      res.statusCode = 500;
-      res.end(String(error));
-    });
+    }
+    return false;
   });
   return {
-    async listen() {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected loopback HTTP server address");
+    ...server,
+    setMethodRegistry(this: void, registry: GatewayMethodRegistry) {
+      const context = resolveGatewayContext?.();
+      if (!context) {
+        throw new Error("Expected initialized Gateway context");
       }
-      return address.port;
-    },
-    async close() {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      context.getGatewayMethodRegistry = () => registry;
     },
     resetContext() {
       const context = createGatewayRequestContext(makeContextParams());

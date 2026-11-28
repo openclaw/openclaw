@@ -20,6 +20,18 @@ struct ChatTranscriptExporterTests {
             "provenance": {"kind": "internal_system", "sourceTool": "restart-sentinel"}
           },
           {
+            "role": "user",
+            "content": [{"type": "text", "text": "Context first line.\nContext last line."}],
+            "timestamp": 600,
+            "provenance": {"kind": "internal_system", "sourceTool": "cli_harness_context"}
+          },
+          {
+            "role": "user",
+            "content": [{"type": "text", "text": "Task first line.\nTask last line."}],
+            "timestamp": 700,
+            "provenance": {"kind": "internal_system", "sourceTool": "claude_cli_task_notification"}
+          },
+          {
             "role": "system",
             "content": [],
             "timestamp": 1000,
@@ -49,9 +61,34 @@ struct ChatTranscriptExporterTests {
         #expect(!markdown.contains("private context"))
         #expect(markdown.contains("System · restart recovery"))
         #expect(markdown.contains("[System · gateway restarted] Gateway restarted after an update."))
+        #if os(iOS)
+        #expect(!markdown.contains("Context first line."))
+        #else
+        #expect(markdown.contains("[System · injected context] Context first line.\nContext last line."))
+        #endif
+        #expect(markdown.contains("[System · background task] Task first line.\nTask last line."))
         #expect(markdown.contains("[Compacted history · saved 12.5k tokens]"))
         #expect(markdown.contains("[Session reset — The earlier conversation was cleared.]"))
         #expect(!markdown.contains("Unknown marker body"))
+    }
+
+    @Test(arguments: ["\r\n", "\n"]) func `omits protected runtime context from exported text`(lineEnding: String) {
+        let text = [
+            "Before the runtime context.",
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "Synthetic internal text.",
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+            "After the runtime context.",
+        ].joined(separator: lineEnding)
+        let markdown = ChatTranscriptExporter.markdown(
+            sessionTitle: "Transcript",
+            sessionKey: "main",
+            messages: [self.message(role: "user", text: text, timestamp: 0)])
+
+        #expect(markdown.contains("Before the runtime context."))
+        #expect(markdown.contains("After the runtime context."))
+        #expect(!markdown.contains("Synthetic internal text."))
+        #expect(!markdown.contains("OPENCLAW_INTERNAL_CONTEXT"))
     }
 
     @Test func `formats visible messages and attachments`() {
@@ -244,6 +281,25 @@ struct ChatTranscriptExporterTests {
             messages: [message]) == "# Media chat\n")
     }
 
+    @MainActor
+    @Test func `exports the selected session title for the main alias`() {
+        let model = OpenClawChatViewModel(
+            sessionKey: "main",
+            transport: TestChatTransport(historyResponses: []))
+        defer { model.detachTransport() }
+        model.messages = [self.message(role: "user", text: "Keep this line.", timestamp: 0)]
+        let body = "\n\n### User — 1970-01-01T00:00:00Z\n\nKeep this line.\n"
+
+        model.sessions = [OpenClawChatSessionEntry(key: "agent:main:main", displayName: "A")]
+        #expect(model.exportTranscriptMarkdown() == "# A" + body)
+
+        model.sessions.append(OpenClawChatSessionEntry(key: "main", displayName: "Review / Friday"))
+        #expect(model.exportTranscriptMarkdown() == "# Review / Friday" + body)
+
+        model.sessions = [OpenClawChatSessionEntry(key: "agent:other:other", displayName: "Unrelated")]
+        #expect(model.exportTranscriptMarkdown() == "# main" + body)
+    }
+
     @Test func `sanitizes filename`() {
         #expect(
             ChatTranscriptExporter.filename(
@@ -259,6 +315,14 @@ struct ChatTranscriptExporterTests {
             sessionKey: "fallback")
         #expect(emojiFilename.utf8.count <= 243)
         #expect(emojiFilename.hasSuffix(".md"))
+    }
+
+    @Test func `uses chat for untitled export fallbacks`() {
+        #expect(ChatTranscriptExporter.filename(sessionTitle: nil, sessionKey: "") == "chat.md")
+        #expect(ChatTranscriptExporter.markdown(
+            sessionTitle: nil,
+            sessionKey: "",
+            messages: []) == "# Chat\n")
     }
 
     @Test func `empty transcript contains header only`() {

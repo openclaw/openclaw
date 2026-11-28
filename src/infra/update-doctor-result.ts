@@ -1,27 +1,49 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
-import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-maintenance-context.js";
 import { collectNestedErrorCandidates } from "./error-graph-internal.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   resolvePreferredOpenClawTmpDir,
   type ResolvePreferredOpenClawTmpDirOptions,
 } from "./tmp-openclaw-dir.js";
+import type {
+  UpdateDatabaseGenerations,
+  UpdateDatabaseWriteReceipt,
+} from "./update-database-generations.js";
+import {
+  getUpdateDoctorConfigCapture,
+  runWithUpdateDoctorConfigCapture,
+} from "./update-doctor-config-capture.js";
 import {
   UpdateDoctorConfigChangeSchema,
+  UpdateDoctorConfigFileWriteSchema,
+  UpdateDoctorConfigHashSchema,
   UpdateDoctorConfigWriteRefusalSchema,
 } from "./update-doctor-config-schema.js";
-import type {
-  UpdateDoctorConfigChange,
-  UpdateDoctorConfigWriteRefusal,
-} from "./update-doctor-config.js";
+import type { DoctorConfigCapture, DoctorConfigWriteAuthority } from "./update-doctor-config.js";
+import { UpdateDoctorLintFindingSchema } from "./update-doctor-lint-schema.js";
+import { runWithUpdateDoctorMigrationCapture } from "./update-doctor-migration-attribution.js";
+import {
+  createUpdateDoctorHistoricalScanCapture,
+  UpdateDoctorHistoricalScansSchema,
+} from "./update-doctor-scan-receipts.js";
 import { normalizeUpdateFailureFacts, type UpdateFailureFact } from "./update-failure-facts.js";
 import { UpdateFailureFactSchema } from "./update-run-schema.js";
+
+export type { DoctorConfigCapture } from "./update-doctor-config.js";
+
+export {
+  getUpdateDoctorConfigCapture,
+  getUpdateDoctorConfigWriteAuthority,
+  recordUpdateDoctorConfigMigration,
+  recordUpdateDoctorConfigWriteRefusal,
+  runUpdateDoctorIncludeWrite,
+} from "./update-doctor-config-capture.js";
 
 // IPC contract between package update parents and the post-install doctor child.
 export const UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV =
@@ -41,15 +63,53 @@ export const PACKAGE_POST_INSTALL_DOCTOR_ADVISORY: PackageUpdateStepAdvisory = {
     "Post-install doctor reported a recoverable update-time repair warning after the package install was verified; continuing with post-core plugin convergence.",
 };
 
-const configHashSchema = z.string().regex(/^[0-9a-f]{64}$/u);
+export const UpdateDoctorDeferredInspectionCheckIdsSchema = z
+  .array(UpdateDoctorLintFindingSchema.shape.checkId.max(256))
+  .max(128);
+const DoctorMaintenanceRefusalSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("deferred"),
+    reason: z.enum(["coordinator-contention", "agent-database-in-use", "admission-unavailable"]),
+  }),
+  z.object({
+    kind: z.literal("data-at-risk"),
+    reason: z.enum([
+      "active-mutation",
+      "unreadable-state",
+      "incomplete-migration",
+      "gateway-state-unverified",
+    ]),
+  }),
+]);
+export type DoctorMaintenanceRefusal = z.infer<typeof DoctorMaintenanceRefusalSchema>;
+
 const doctorResultEvidence = {
-  configHash: z.union([z.literal("unchanged"), configHashSchema]).optional(),
-  configInputHash: configHashSchema.optional(),
+  configHash: z.union([z.literal("unchanged"), UpdateDoctorConfigHashSchema]).optional(),
+  configInputHash: UpdateDoctorConfigHashSchema.optional(),
+  configFileWrites: z
+    .record(
+      z.string().refine((filePath) => path.isAbsolute(filePath)),
+      UpdateDoctorConfigFileWriteSchema,
+    )
+    .optional()
+    .catch(undefined),
   warnings: z.array(z.string()).optional(),
+  deferredInspectionCheckIds:
+    UpdateDoctorDeferredInspectionCheckIdsSchema.optional().catch(undefined),
+  maintenanceRefusal: DoctorMaintenanceRefusalSchema.optional(),
   // Invalid optional diagnostics cannot change the child's classified outcome.
   failureFacts: z.array(UpdateFailureFactSchema).catch([]).optional(),
   configChanges: z.array(UpdateDoctorConfigChangeSchema).optional(),
   configWriteRefusal: UpdateDoctorConfigWriteRefusalSchema.optional(),
+  databaseWrites: z
+    .object({
+      unchanged: z.boolean(),
+      fromGenerations: z.record(z.string(), z.string().nullable()).optional(),
+      generations: z.record(z.string(), z.string().nullable()),
+      historicalScans: UpdateDoctorHistoricalScansSchema.optional().catch(undefined),
+    })
+    .optional()
+    .catch(undefined),
 };
 const UpdatePostInstallDoctorResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.enum(["ok", "error"]), ...doctorResultEvidence }),
@@ -80,6 +140,17 @@ export class UpdateDoctorError extends Error {
   }
 }
 
+export class DoctorMaintenanceRefusalError extends UpdateDoctorError {
+  constructor(
+    message: string,
+    readonly refusal: DoctorMaintenanceRefusal,
+    options?: ErrorOptions & { failureFacts?: UpdateFailureFact[] },
+  ) {
+    super(message, options?.failureFacts ?? [], options);
+    this.name = "DoctorMaintenanceRefusalError";
+  }
+}
+
 export function collectUpdateDoctorFailureFacts(error: unknown): UpdateFailureFact[] {
   return normalizeUpdateFailureFacts(
     collectNestedErrorCandidates(error).flatMap((candidate) =>
@@ -90,158 +161,267 @@ export function collectUpdateDoctorFailureFacts(error: unknown): UpdateFailureFa
 
 /** Keep optional health diagnostics bounded across Doctor and its update parent. */
 export function normalizeUpdatePostInstallDoctorWarnings(warnings: readonly string[]): string[] {
-  const normalized: string[] = [];
-  for (const warning of warnings) {
-    const message = truncateUtf16Safe(warning.trim(), 500);
-    if (message) {
-      normalized.push(message);
-      if (normalized.length === 32) {
-        break;
-      }
-    }
-  }
-  return normalized;
+  return [
+    ...new Set(
+      warnings
+        .map((warning) => {
+          const value = warning.trim();
+          if (value.length <= 500) {
+            return value;
+          }
+          const prefix = value.slice(0, 498);
+          const complete =
+            prefix.match(/^[\s\S]*(?:[.!?](?=\s)|\r?\n)/u)?.[0] ??
+            prefix.match(/^[^\r\n]+:\s+\[[^\]\r\n]+\]/u)?.[0] ??
+            prefix.match(/^[^\r\n]+:(?=\s)/u)?.[0];
+          return complete
+            ? `${complete.trimEnd()} …`
+            : "Warning detail omitted because it exceeds the display limit.";
+        })
+        .filter(Boolean),
+    ),
+  ].slice(0, 32);
 }
 
-export type DoctorConfigCapture = {
-  path: string;
-  hash: string;
-  inputHash?: string;
-  configChanges: UpdateDoctorConfigChange[];
-  configWriteRefusal?: UpdateDoctorConfigWriteRefusal;
-};
-export type UpdateDoctorWriteAuthority = {
-  inputHash: string;
-  assertCurrent: () => void;
+/** Runs a policy check under Doctor's held maintenance owner and its open scope. */
+type DoctorPolicyCustodyOwner = { assertCurrent(policy: () => void): void };
+export type UpdateDoctorWriteAuthority = DoctorConfigWriteAuthority & {
+  /** An optional work profile; config preparation still proves eligibility. */
+  retirementOnly?: true;
+  /** Parent Doctor phase deadline for nested managed-service inspection. */
+  serviceInspectionDeadlineAtMs?: number;
+  /** Doctor lends its held maintenance owner to `assertCurrent`; see doctor-policy-custody. */
+  lendPolicyCustody?: (owner: DoctorPolicyCustodyOwner | undefined) => void;
+  commandAuthority?: import("./update-managed-command-custody.js").ManagedCommandProcessAuthority;
   postCoreSchemaRepair?: { runId: string; assertCurrent: () => void };
+  databaseGenerations?: UpdateDatabaseGenerations;
+  databaseWriteCapture?: ReturnType<typeof createUpdateDoctorDatabaseWriteCapture>;
+  databasePluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
+  originalRecoveryCapture?: {
+    runId: string;
+    installRoot: string;
+    ref?: import("./update-recovery-baseline-capture.js").UpdateRecoveryBaselineRef;
+  };
 };
-const doctorConfigWrites = new AsyncLocalStorage<{
-  capture: DoctorConfigCapture;
-  authority?: UpdateDoctorWriteAuthority;
-}>();
+
+/** Receipts describe the caller's existing maintenance interval without owning its lifecycle. */
+export function createUpdateDoctorDatabaseWriteCapture(
+  input: UpdateDatabaseGenerations | undefined,
+  options: {
+    env: NodeJS.ProcessEnv;
+    root?: string;
+    signal: AbortSignal;
+    assertCurrent?: () => void;
+    warn: (message: string) => void;
+    pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
+  },
+) {
+  if (!input) {
+    return undefined;
+  }
+  let expectedGenerations: UpdateDatabaseGenerations | undefined = { ...input };
+  let fromGenerations: UpdateDatabaseGenerations | undefined;
+  let physical = false;
+  let admitted = false;
+  let unchanged = true;
+  let receipt: UpdateDatabaseWriteReceipt | undefined;
+  let rebuiltIndexes: Record<string, string> = {};
+  const openedSqlitePaths = new Set<string>();
+  const historicalScans = createUpdateDoctorHistoricalScanCapture(options);
+  const read = async () => {
+    if (!expectedGenerations) {
+      return undefined;
+    }
+    let observation: import("./update-database-generations.js").UpdateDatabaseGenerationPair;
+    try {
+      const { readUpdateDatabaseGenerationPairIsolated } =
+        await import("./update-candidate-state.js");
+      observation = await readUpdateDatabaseGenerationPairIsolated(
+        Object.keys(expectedGenerations),
+        options,
+      );
+    } catch (error) {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
+      options.assertCurrent?.();
+      expectedGenerations = undefined;
+      receipt = undefined;
+      options.warn(
+        `Database write verification is unavailable; automatic database restoration cannot be confirmed: ${formatErrorMessage(error)}`,
+      );
+      return undefined;
+    }
+    options.assertCurrent?.();
+    return observation;
+  };
+  const acceptNoWriteTransitions = (
+    observation: import("./update-database-generations.js").UpdateDatabaseGenerationPair,
+  ) => {
+    // Share migration admission's no-write equivalence, from this same observation.
+    for (const [pathname, generation] of Object.entries(observation.committed)) {
+      const alternate = observation.emptyReaderAlternates[pathname];
+      if (alternate !== undefined && expectedGenerations?.[pathname] === alternate) {
+        expectedGenerations[pathname] = generation;
+      }
+    }
+    // A rebuilt index carries no alternate of its own; accept the one remembered from
+    // the previous admission before this observation is compared and rebound.
+    for (const [pathname, alternate] of Object.entries(rebuiltIndexes)) {
+      if (expectedGenerations && observation.committed[pathname] === alternate) {
+        expectedGenerations[pathname] = alternate;
+      }
+    }
+  };
+  // Outside readers can rebuild a retained index after this observation; only an index
+  // over the same frames, content, and file identity stays equivalent to it.
+  const bindRebuiltIndexes = (
+    observation: import("./update-database-generations.js").UpdateDatabaseGenerationPair,
+  ) => {
+    rebuiltIndexes = {};
+    for (const [pathname, alternate] of Object.entries(observation.rebuiltIndexAlternates)) {
+      if (expectedGenerations?.[pathname] === observation.committed[pathname]) {
+        rebuiltIndexes[pathname] = alternate;
+      }
+    }
+  };
+  return {
+    get receipt() {
+      return receipt;
+    },
+    run<T>(operation: () => T): T {
+      return runWithUpdateDoctorMigrationCapture(
+        {
+          openedSqlitePaths,
+          expected: (pathname) => expectedGenerations?.[pathname],
+          rebuiltIndex: (pathname) => rebuiltIndexes[pathname],
+          assertCurrent: () => options.assertCurrent?.(),
+          accept(pathname, before, after) {
+            options.assertCurrent?.();
+            const expected = expectedGenerations;
+            if (
+              !expected ||
+              !Object.hasOwn(expected, pathname) ||
+              (!openedSqlitePaths.has(pathname) && expected[pathname] !== before)
+            ) {
+              unchanged = false;
+              return;
+            }
+            expected[pathname] = after;
+          },
+          refuse(message) {
+            unchanged = false;
+            options.warn(
+              `Automatic database restoration cannot attribute migration writes: ${message}`,
+            );
+          },
+        },
+        () => historicalScans.run(operation),
+      );
+    },
+    async admit(interval?: "predecessor-stop") {
+      if (interval === "predecessor-stop") {
+        const maintenance = getOpenClawDatabaseMaintenanceScope();
+        if (!maintenance?.ownsSchemaMaintenance) {
+          throw new Error("Predecessor stop admission requires schema maintenance custody.");
+        }
+        maintenance.assertAdmission();
+      }
+      receipt = undefined;
+      historicalScans.observe(Object.keys(expectedGenerations ?? {}));
+      const observation = await read();
+      if (observation && expectedGenerations) {
+        // Unversioned 9.33-line input is admitted only by an exact whole-inventory
+        // match. From here on, every migration and settlement uses committed proof.
+        if (
+          !admitted &&
+          !isDeepStrictEqual(observation.committed, expectedGenerations) &&
+          isDeepStrictEqual(observation.physical, expectedGenerations)
+        ) {
+          physical = true;
+          expectedGenerations = observation.committed;
+        }
+        const first = !admitted;
+        admitted = true;
+        const generations = observation.committed;
+        historicalScans.admit(generations);
+        const incoming = physical ? observation.physical : { ...expectedGenerations };
+        acceptNoWriteTransitions(observation);
+        const matches = isDeepStrictEqual(generations, expectedGenerations);
+        fromGenerations ??= matches ? incoming : generations;
+        // A changed rollback baseline stays ineligible after forward admission.
+        unchanged &&= matches;
+        if (!matches && (first || interval === "predecessor-stop")) {
+          // A stale rollback baseline does not make the current state unmigratable.
+          // Keep unchanged=false so the parent cannot restore over newer data, while
+          // Doctor attributes its own writes from this admission's observed state.
+          // Accepted edge: foreign writes before predecessor-stop custody also
+          // continue forward, but can never make the stale backup restorable.
+          // Changes after this admission still fail the existing migration checks.
+          expectedGenerations = { ...generations };
+          options.warn(
+            interval === "predecessor-stop"
+              ? "Captured SQLite databases changed while stopping the predecessor Gateway before maintenance custody; continuing Doctor with current state, but automatic database restoration is unavailable for this update."
+              : "Databases changed after the updater captured them; continuing Doctor with current state, but automatic database restoration is unavailable for this update.",
+          );
+        }
+        bindRebuiltIndexes(observation);
+      }
+    },
+    async settle() {
+      let generations: UpdateDatabaseGenerations | undefined;
+      let observation: Awaited<ReturnType<typeof read>>;
+      let cleanScans: ReturnType<typeof historicalScans.settle>;
+      try {
+        observation = await read();
+        generations = observation?.committed;
+      } finally {
+        cleanScans = historicalScans.settle(generations);
+      }
+      if (generations && expectedGenerations) {
+        // Like the native close receipt (#177831), this can absorb raw outside writes
+        // during the update window only for databases this Doctor itself opened.
+        for (const [pathname, generation] of Object.entries(generations)) {
+          if (openedSqlitePaths.has(pathname)) {
+            expectedGenerations[pathname] = generation;
+          }
+        }
+        acceptNoWriteTransitions(observation!);
+        unchanged &&= isDeepStrictEqual(generations, expectedGenerations);
+        receipt = {
+          unchanged,
+          fromGenerations,
+          generations: physical ? observation!.physical : generations,
+          ...(cleanScans.length ? { historicalScans: cleanScans } : {}),
+        };
+      }
+    },
+  };
+}
 
 export function captureUpdateDoctorConfigWrites<T>(
   configPath: string,
   run: (capture: DoctorConfigCapture) => Promise<T>,
   authority?: UpdateDoctorWriteAuthority,
 ): Promise<T> {
-  const capture: DoctorConfigCapture = {
-    path: path.resolve(configPath),
-    hash: "unchanged",
-    configChanges: [],
-  };
-  return doctorConfigWrites.run(
-    {
-      capture,
-      authority: authority
-        ? { inputHash: authority.inputHash, assertCurrent: authority.assertCurrent }
-        : undefined,
-    },
-    () => run(capture),
+  return runWithUpdateDoctorConfigCapture(
+    { path: path.resolve(configPath), hash: "unchanged", configChanges: [] },
+    run,
+    authority,
   );
 }
 
-/** The same authority covers include writers; only the root has a captured input hash. */
-export function getUpdateDoctorConfigWriteAuthority(
-  configPath: string,
-): { assertCurrent: () => void; inputHash?: string } | undefined {
-  const context = doctorConfigWrites.getStore();
-  if (!context?.authority) {
+/** Deferral requires an owned result channel, not just an inherited marker. */
+export function recordUpdateDoctorDeferredInspectionChecks(
+  checkIds: string[],
+): string[] | undefined {
+  const capture = getUpdateDoctorConfigCapture();
+  if (!capture) {
     return undefined;
   }
-  const { capture, authority } = context;
-  return {
-    assertCurrent: authority.assertCurrent,
-    ...(capture.path === path.resolve(configPath)
-      ? { inputHash: capture.hash === "unchanged" ? authority.inputHash : capture.hash }
-      : {}),
-  };
-}
-
-export function assertUpdateDoctorConfigInputHash(configPath: string, inputHash: string): void {
-  const authority = getUpdateDoctorConfigWriteAuthority(configPath);
-  if (authority?.inputHash !== undefined && authority.inputHash !== inputHash) {
-    const message = "Config changed after update validation; Doctor did not promote its changes.";
-    recordUpdateDoctorConfigWriteRefusal({ reason: "config-input-changed", message, keys: [] });
-    throw new ConfigMutationConflictError(message, { retryable: false });
-  }
-}
-
-/** Include publication retains its legacy writer until fs-safe supports final-effect authority. */
-export async function runUpdateDoctorIncludeWrite<T>(
-  configPath: string,
-  inputHash: string,
-  run: () => Promise<T>,
-): Promise<T> {
-  const context = doctorConfigWrites.getStore();
-  if (!context?.authority) {
-    return await run();
-  }
-  context.authority.assertCurrent();
-  assertUpdateDoctorConfigInputHash(configPath, inputHash);
-  const result = await doctorConfigWrites.run({ capture: context.capture }, run);
-  context.authority.assertCurrent();
-  return result;
-}
-
-/** Pair the consumed snapshot with the serialized payload at publication, never a later read. */
-export function recordUpdateDoctorConfigWrite(
-  configPath: string,
-  inputHash: string | null,
-  hash: string,
-  inputConfig: unknown,
-  outputJson: string,
-): void {
-  const capture = doctorConfigWrites.getStore()?.capture;
-  if (capture && capture.path === path.resolve(configPath)) {
-    if (capture.hash === "unchanged") {
-      capture.inputHash = inputHash ?? undefined;
-    } else if (inputHash !== capture.hash) {
-      // An outside write between Doctor passes breaks ownership permanently for this run.
-      delete capture.inputHash;
-    }
-    capture.hash = hash;
-    const before = isRecord(inputConfig) ? inputConfig : {};
-    const after: unknown = JSON.parse(outputJson);
-    if (!isRecord(after)) {
-      throw new Error("Committed Doctor config is not an object.");
-    }
-    const keys = new Set(
-      capture.configChanges.flatMap((change) => (change.kind === "key" ? [change.key] : [])),
-    );
-    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-      if (!isDeepStrictEqual(before[key], after[key])) {
-        keys.add(key);
-      }
-    }
-    capture.configChanges = [
-      ...[...keys].toSorted().map((key): UpdateDoctorConfigChange => ({ kind: "key", key })),
-      ...capture.configChanges.filter((change) => change.kind === "migration"),
-    ];
-  }
-}
-
-/** Record migration notes only after their matching config write has committed. */
-export function recordUpdateDoctorConfigMigration(message: string): void {
-  const capture = doctorConfigWrites.getStore()?.capture;
-  if (
-    capture &&
-    message.trim() &&
-    !capture.configChanges.some(
-      (change) => change.kind === "migration" && change.message === message,
-    )
-  ) {
-    capture.configChanges.push({ kind: "migration", message });
-  }
-}
-
-export function recordUpdateDoctorConfigWriteRefusal(
-  refusal: UpdateDoctorConfigWriteRefusal,
-): void {
-  const capture = doctorConfigWrites.getStore()?.capture;
-  if (capture) {
-    capture.configWriteRefusal ??= { ...refusal, keys: [...new Set(refusal.keys)].toSorted() };
-  }
+  return (capture.deferredInspectionCheckIds = UpdateDoctorDeferredInspectionCheckIdsSchema.parse([
+    ...new Set([...(capture.deferredInspectionCheckIds ?? []), ...checkIds]),
+  ]));
 }
 
 export function createUpdatePostInstallDoctorResultPath(
@@ -285,24 +465,22 @@ export async function writeUpdatePostInstallDoctorResult(params: {
   resultPath: string;
   result: UpdatePostInstallDoctorResult;
 }): Promise<void> {
+  const result = normalizeUpdatePostInstallDoctorResult(params.result);
+  if (params.resultPath === "-") {
+    // Native update owners consume the final classified result after the child settles.
+    const { defaultRuntime } = await import("../runtime.js");
+    defaultRuntime.writeStdout(
+      `${UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV}=${JSON.stringify(result)}`,
+    );
+    return;
+  }
   const resultPath = resolveSafeUpdatePostInstallDoctorResultPath(params.resultPath);
-  const { warnings, failureFacts, ...result } = params.result;
-  const normalizedWarnings = normalizeUpdatePostInstallDoctorWarnings(warnings ?? []);
-  const facts = normalizeUpdateFailureFacts(failureFacts ?? []);
   // Advisory details can contain config-derived IDs; pre-existing paths must fail closed.
-  await fs.writeFile(
-    resultPath,
-    `${JSON.stringify({
-      ...result,
-      ...(normalizedWarnings.length ? { warnings: normalizedWarnings } : {}),
-      ...(facts.length ? { failureFacts: facts } : {}),
-    })}\n`,
-    {
-      encoding: "utf8",
-      mode: 0o600,
-      flag: "wx",
-    },
-  );
+  await fs.writeFile(resultPath, `${JSON.stringify(result)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+    flag: "wx",
+  });
 }
 
 export async function consumeUpdatePostInstallDoctorResult(
@@ -327,10 +505,14 @@ export async function consumeUpdatePostInstallDoctorResult(
 
 function parseUpdatePostInstallDoctorResult(value: unknown): UpdatePostInstallDoctorResult | null {
   const parsed = UpdatePostInstallDoctorResultSchema.safeParse(value);
-  if (!parsed.success) {
-    return null;
-  }
-  const { warnings, failureFacts, ...result } = parsed.data;
+  return parsed.success ? normalizeUpdatePostInstallDoctorResult(parsed.data) : null;
+}
+
+function normalizeUpdatePostInstallDoctorResult({
+  warnings,
+  failureFacts,
+  ...result
+}: UpdatePostInstallDoctorResult): UpdatePostInstallDoctorResult {
   const normalizedWarnings = normalizeUpdatePostInstallDoctorWarnings(warnings ?? []);
   const facts = normalizeUpdateFailureFacts(failureFacts ?? []);
   return {

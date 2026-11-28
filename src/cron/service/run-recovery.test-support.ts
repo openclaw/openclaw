@@ -1,63 +1,17 @@
 import { vi } from "vitest";
-import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import { cronStoreKey } from "../store/key.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
-  claimCronRunReceiptInDatabase,
+  claimCronRunReceiptInDatabaseForTest,
   prepareCronRunReceiptClaim,
-} from "../store/run-receipt-store.js";
-import type { CronRunRecoveryProposal } from "../store/run-recovery-read.types.js";
-import type { CronRunRecoveryResult } from "../store/run-recovery.types.js";
+} from "../store/run-receipt-store.test-support.js";
 import type { CronJob } from "../types.js";
-import { recoverCronRunProposals } from "./run-recovery.js";
-import { createCronServiceState, type CronServiceState, type Logger } from "./state.js";
-
-export async function observeCronRecoveryForTest(
-  state: CronServiceState,
-  jobId: string,
-  queuedAtMs: number | undefined,
-  runningAtMs: number | undefined,
-): Promise<CronRunRecoveryProposal> {
-  const result = await stateRead.executeExistingOpenClawStateRead(
-    {},
-    {
-      type: "cron.observeRunRecovery",
-      storeKey: cronStoreKey(state.deps.storePath),
-      proposals: [{ jobId, queuedAtMs, runningAtMs }],
-    },
-  );
-  if (
-    !result?.ok ||
-    result.type !== "cron.observeRunRecovery" ||
-    result.observation.kind !== "observed"
-  ) {
-    throw new Error("Expected a recovery observation");
-  }
-  return result.observation.proposals[0]!;
-}
-
-export async function recoverCronRunForTest(
-  state: CronServiceState,
-  proposal: CronRunRecoveryProposal,
-  mode: "startup" | "reclaim" = "reclaim",
-): Promise<CronRunRecoveryResult> {
-  let recovered: CronRunRecoveryResult | undefined;
-  await recoverCronRunProposals(state, [proposal], {
-    mode,
-    onRecovery(_proposal, result) {
-      recovered = result;
-    },
-  });
-  if (!recovered) {
-    throw new Error("Expected a recovery result");
-  }
-  return recovered;
-}
+import { createCronServiceState, type CronServiceDeps, type Logger } from "./state.js";
 
 type RecoveryStateOverrides = Partial<
   Pick<
     Parameters<typeof createCronServiceState>[0],
-    "cronConfig" | "enqueueSystemEvent" | "requestHeartbeat" | "sendCronFailureAlert"
+    "cronConfig" | "enqueueSystemEvent" | "enqueueSessionEvent" | "sendCronFailureAlert"
   >
 >;
 
@@ -68,29 +22,34 @@ export function makeCronRecoveryState(
   overrides: RecoveryStateOverrides = {},
 ) {
   return createCronServiceState({
+    scheduler: createTestGatewayScheduler(),
     storePath,
     cronEnabled: true,
     log,
     nowMs: () => nowMs,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
+    enqueueSessionEvent: vi.fn<NonNullable<CronServiceDeps["enqueueSessionEvent"]>>(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...overrides,
   });
 }
 
-export function claimCronRecoveryReceipt(storePath: string, job: CronJob, startedAtMs: number) {
+export function claimCronRecoveryReceipt(
+  storePath: string,
+  job: CronJob,
+  startedAtMs: number,
+  defaultAgentId = "alpha",
+) {
   const prepared = prepareCronRunReceiptClaim({
     storePath,
     job,
-    agentId: job.agentId ?? "alpha",
+    agentId: job.agentId ?? defaultAgentId,
     startedAtMs,
   });
   return runOpenClawStateWriteTransaction(({ db }) =>
-    claimCronRunReceiptInDatabase({
+    claimCronRunReceiptInDatabaseForTest({
       database: db,
       prepared,
-      resolveAgentId: (current) => current.agentId ?? "alpha",
     }),
   );
 }

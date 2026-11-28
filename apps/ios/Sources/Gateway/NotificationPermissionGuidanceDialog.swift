@@ -63,32 +63,14 @@ private struct NotificationPermissionGuidanceCard: View {
             }
 
             VStack(spacing: 10) {
-                Button {
-                    self.onOpenNotifications()
-                } label: {
-                    Text("Open Notifications Settings")
-                        .font(OpenClawType.subheadSemiBold)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
+                approvalDialogButton(Text("Open Notifications Settings"), action: self.onOpenNotifications)
+                    .openClawProminentButton()
 
-                Button(role: .cancel) {
-                    self.onDismiss()
-                } label: {
-                    Text("Not Now")
-                        .font(OpenClawType.subheadSemiBold)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
+                approvalDialogButton(Text("Not Now"), role: .cancel, action: self.onDismiss)
+                    .buttonStyle(.bordered)
 
-                Button {
-                    self.onSuppressFuture()
-                } label: {
-                    Text("Don't show again")
-                        .font(OpenClawType.subheadSemiBold)
-                        .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.bordered)
+                approvalDialogButton(Text("Don't show again"), action: self.onSuppressFuture)
+                    .buttonStyle(.bordered)
             }
             .controlSize(.large)
             .frame(maxWidth: .infinity)
@@ -101,5 +83,18 @@ private struct NotificationPermissionGuidanceCard: View {
 extension View {
     func notificationPermissionGuidanceDialog(openNotifications: @escaping (String) -> Void) -> some View {
         modifier(NotificationPermissionGuidanceDialogModifier(openNotifications: openNotifications))
+    }
+}
+
+@MainActor
+private func approvalDialogButton(
+    _ title: Text,
+    role: ButtonRole? = nil,
+    action: @escaping () -> Void) -> some View
+{
+    Button(role: role, action: action) {
+        title
+            .font(OpenClawType.subheadSemiBold)
+            .frame(maxWidth: .infinity)
     }
 }

@@ -1,13 +1,10 @@
-import type { APIGuildMember, APIMessage } from "discord-api-types/v10";
-import {
-  buildMentionRegexes,
-  formatInboundMediaUnavailableText,
-} from "openclaw/plugin-sdk/channel-inbound";
+import { Routes, type APIGuildMember, type APIMessage } from "discord-api-types/v10";
+import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
 import { isRecentOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-contracts";
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { getGuildMember, listChannelMessages, Message, MessageType } from "../internal/discord.js";
-import { resolveTimestampMs } from "./format.js";
+import { getGuildMember, Message, MessageType } from "../internal/discord.js";
 import {
   createDiscordHistorySenderProvenance,
   filterDiscordHistoryEntriesForContext,
@@ -15,17 +12,12 @@ import {
   type DiscordHistoryEntry,
 } from "./message-handler.history.js";
 import {
-  hasRawDiscordUserMention,
   isBoundThreadBotSystemMessage,
-  matchesActiveDiscordMentionPatterns,
   shouldIgnoreBoundThreadWebhookMessage,
 } from "./message-handler.preflight-helpers.js";
 import { resolveDiscordPreflightPluralKitInfo } from "./message-handler.preflight-pluralkit.js";
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.types.js";
-import {
-  resolveDiscordMessageHistoryText,
-  resolveDiscordMessageMentionDocuments,
-} from "./message-text.js";
+import { resolveDiscordMessageHistoryText } from "./message-text.js";
 import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 
 type HistoryMessage = APIMessage & {
@@ -53,29 +45,21 @@ export async function recoverDiscordChannelHistory(params: {
   // allowing policy exclusions to turn this into an unbounded search for matching senders.
   let remaining = ctx.historyLimit + excludedIds.size - 1;
   let before = ctx.message.id;
-  const triggerTimestamp = resolveTimestampMs(ctx.message.timestamp);
+  const triggerTimestamp = parseDateStringTimestampMs(ctx.message.timestamp);
   const guildId = ctx.data.guild?.id ?? ctx.data.guild_id;
   const cachedMedia = new Map(
     (ctx.guildHistories.get(ctx.messageChannelId) ?? []).map((entry) => [entry.messageId, entry]),
   );
   const members = new Map<string, Pick<APIGuildMember, "roles" | "nick">>();
   const roleAllowList = ctx.channelConfig?.roles ?? ctx.guildInfo?.roles ?? [];
-  const mentionRegexes =
-    ctx.discordConfig?.allowBots === "mentions"
-      ? buildMentionRegexes(ctx.cfg, ctx.route.agentId, {
-          provider: "discord",
-          conversationId: ctx.messageChannelId,
-          providerPolicy: ctx.discordConfig.mentionPatterns,
-        })
-      : [];
   const entries: DiscordHistoryEntry[] = [];
   try {
     while (remaining > 0 && isCurrent()) {
       const limit = Math.min(100, remaining);
-      const page = await listChannelMessages(ctx.client.rest, ctx.messageChannelId, {
+      const page = (await ctx.client.rest.get(Routes.channelMessages(ctx.messageChannelId), {
         before,
         limit,
-      });
+      })) as APIMessage[]; // SAFETY: Discord's list-messages route returns APIMessage[].
       if (!isCurrent()) {
         return [];
       }
@@ -83,7 +67,7 @@ export async function recoverDiscordChannelHistory(params: {
       remaining -= window.length;
       for (const raw of window) {
         const row: HistoryMessage = raw;
-        const timestamp = resolveTimestampMs(row.timestamp);
+        const timestamp = parseDateStringTimestampMs(row.timestamp);
         if (
           row.channel_id !== ctx.messageChannelId ||
           (row.guild_id && row.guild_id !== guildId) ||
@@ -144,25 +128,6 @@ export async function recoverDiscordChannelHistory(params: {
           member: row.member,
           pluralkitInfo,
         });
-        if (row.author.bot && !sender.isPluralKit) {
-          const allowBots = ctx.discordConfig?.allowBots;
-          if (!allowBots) {
-            continue;
-          }
-          if (allowBots === "mentions") {
-            const documents = resolveDiscordMessageMentionDocuments(message);
-            const activeNativeMention =
-              row.mentions.some((user) => user.id === ctx.botUserId) &&
-              (row.type !== MessageType.Reply ||
-                documents.some((text) => hasRawDiscordUserMention(text, ctx.botUserId)));
-            if (
-              !activeNativeMention &&
-              !documents.some((text) => matchesActiveDiscordMentionPatterns(text, mentionRegexes))
-            ) {
-              continue;
-            }
-          }
-        }
         let member = row.member;
         if (
           params.mode !== "all" &&
@@ -227,7 +192,7 @@ export async function recoverDiscordChannelHistory(params: {
       entries: entries.toReversed(),
       mode: params.mode,
       isSenderAllowed: params.isSenderAllowed,
-    }).entries.slice(-ctx.historyLimit);
+    }).slice(-ctx.historyLimit);
   } catch (error) {
     ctx.runtime.error(
       danger(`discord: recent history omitted for ${ctx.messageChannelId}: ${String(error)}`),

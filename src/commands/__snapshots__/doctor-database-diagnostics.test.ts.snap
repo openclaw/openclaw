@@ -1,0 +1,48 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`Doctor per-store output > shows the port remedy for unported SQLite and the legacy migration gate independently 1`] = `
+{
+  "json": {
+    "admittedExtensions": null,
+    "backup": null,
+    "configured": {
+      "default": "postgres",
+      "effective": "postgres",
+      "fixedLocal": false,
+      "override": null,
+    },
+    "connectivity": "local",
+    "custody": "none",
+    "database": null,
+    "degraded": null,
+    "extensions": [],
+    "family": "state",
+    "issues": [
+      "Configured postgres, but the physical store is sqlite.",
+    ],
+    "lease": "none",
+    "legacyMigrations": {
+      "pending": [
+        "matrix/matrix-inbound-dedupe-to-claimable-dedupe (Matrix inbound dedupe markers)",
+      ],
+      "state": "pending",
+    },
+    "mismatch": true,
+    "namespace": null,
+    "nextSteps": [
+      "Stop the Gateway and run openclaw database port --family state --to postgres, or restore the matching engine configuration.",
+      "Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
+    ],
+    "observed": "sqlite",
+    "path": "<state>/matrix/accounts/retained/server__user/1111111111111111/state/openclaw.sqlite",
+    "schema": {
+      "expectedVersion": "<current-state-schema>",
+      "pending": 0,
+      "version": "<current-state-schema>",
+      "versioning": "versioned",
+    },
+    "storeId": null,
+  },
+  "text": "state (<state>/matrix/accounts/retained/server__user/1111111111111111/state/openclaw.sqlite); default=postgres, override=inherit, effective=postgres; observed=sqlite (mismatch); schema=<current-state-schema>, expected=<current-state-schema>, pending=0; connectivity=local; namespace=not applicable; storeId=not applicable; database=local file; extensions=none; admittedExtensions=unknown; degraded=unknown; custody=none, lease=none; backup=unknown; legacy=pending (matrix/matrix-inbound-dedupe-to-claimable-dedupe (Matrix inbound dedupe markers)); Configured postgres, but the physical store is sqlite.; Next: Stop the Gateway and run openclaw database port --family state --to postgres, or restore the matching engine configuration. Run openclaw doctor --fix before database port; enable any named disabled plugin for repair.",
+}
+`;

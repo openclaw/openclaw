@@ -10,7 +10,7 @@ it("creates, restores, and verifies a 256 MiB Git backup with a 256 MiB heap", a
   const home = path.join(root, "home");
   const tmp = path.join(root, "tmp");
   await fs.mkdir(home);
-  await fs.mkdir(tmp);
+  await fs.mkdir(tmp, { mode: 0o700 });
   try {
     const result = spawnSync(
       process.execPath,

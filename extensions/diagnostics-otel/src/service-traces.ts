@@ -6,33 +6,33 @@ import {
   type SpanKind,
   type Tracer,
 } from "@opentelemetry/api";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import {
+  normalizeDiagnosticTraceContext,
+  normalizeDiagnosticValue,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   DiagnosticTraceContext,
-} from "../api.js";
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { redactOtelAttributes } from "./service-attributes.js";
 import { MAX_RETAINED_TRUSTED_SPAN_CONTEXTS } from "./service-constants.js";
-import {
-  contextForTraceContext,
-  normalizedTrustedTraceContext,
-  normalizeTraceContext,
-} from "./service-trace-context.js";
-import type { TrustedSpanAliasOwner } from "./service-types.js";
+import { contextForTraceContext, normalizedTrustedTraceContext } from "./service-trace-context.js";
 
-export function createDiagnosticsTraceRuntime(tracer: Tracer) {
+export function createDiagnosticsTraceRuntime(
+  tracer: Tracer,
+  runtimeOptions: { captureContent?: boolean } = {},
+) {
   const activeTrustedSpans = new Map<string, ReturnType<typeof tracer.startSpan>>();
   const activeTrustedSpanAliases = new Map<
     string,
-    { span: ReturnType<typeof tracer.startSpan>; spanId: string; owner: TrustedSpanAliasOwner }
+    { span: ReturnType<typeof tracer.startSpan>; spanId: string; owner: string }
   >();
   // Keeps a completed lifecycle span's real OTel context for late children.
   // Ended contexts remain valid parents without changing their span duration.
   // Entries live until capacity eviction or service stop.
-  const retainedTrustedSpanContexts = new Map<
-    string,
-    { spanContext: SpanContext; owner?: TrustedSpanAliasOwner }
-  >();
+  const retainedTrustedSpanContexts = new Map<string, SpanContext>();
   const stopActiveTrustedSpans = () => {
     const stopAt = Date.now();
     retainedTrustedSpanContexts.clear();
@@ -63,21 +63,18 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
         : typeof durationMs === "number" && durationMs >= 0
           ? endTimeMs - durationMs
           : undefined;
-    const parentContext =
-      "parentContext" in options ? (options.parentContext ?? undefined) : undefined;
-    const span = tracer.startSpan(
+    return tracer.startSpan(
       name,
       {
         attributes: redactOtelAttributes(attributes),
         ...(options.kind !== undefined ? { kind: options.kind } : {}),
         ...(startTime !== undefined ? { startTime } : {}),
       },
-      parentContext,
+      options.parentContext ?? undefined,
     );
-    return span;
   };
   const trustedTraceContext = (evt: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) =>
-    metadata.trusted ? normalizeTraceContext(evt.trace) : undefined;
+    metadata.trusted ? normalizeDiagnosticTraceContext(evt.trace) : undefined;
   // Internal-dispatcher events are linkable on their own; everything else defers to
   // the shared trusted-trace-context rule, which also accepts an untrusted payload
   // whose trace context came from OpenClaw-owned scope (metadata.trustedTraceContext).
@@ -86,61 +83,36 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     metadata: DiagnosticEventMetadata,
   ) =>
     metadata.internal
-      ? normalizeTraceContext(evt.trace)
+      ? normalizeDiagnosticTraceContext(evt.trace)
       : normalizedTrustedTraceContext(evt, metadata);
-  const trustedSpanAliasOwner = (
-    evt: DiagnosticEventPayload,
-  ): TrustedSpanAliasOwner | undefined => {
-    if ("runId" in evt && evt.runId) {
-      return { kind: "run", id: evt.runId };
-    }
-    return undefined;
-  };
-  const sameTrustedSpanAliasOwner = (
-    left: TrustedSpanAliasOwner | undefined,
-    right: TrustedSpanAliasOwner | undefined,
-  ) => Boolean(left && right && left.kind === right.kind && left.id === right.id);
-  const trustedSpanAliasKey = (spanId: string, owner: TrustedSpanAliasOwner) =>
-    `${spanId}:${owner.kind}:${owner.id}`;
-  const retainedTrustedSpanContextKey = (
-    traceId: string,
-    spanId: string,
-    owner?: TrustedSpanAliasOwner,
-  ) => `${traceId}:${owner ? trustedSpanAliasKey(spanId, owner) : spanId}`;
+  const trustedSpanAliasOwner = (evt: DiagnosticEventPayload): string | undefined =>
+    "runId" in evt ? evt.runId || undefined : undefined;
+  const trustedSpanAliasKey = (spanId: string, owner: string) => `${spanId}:run:${owner}`;
+  const retainedTrustedSpanContextKey = (traceId: string, spanId: string, owner?: string) =>
+    `${traceId}:${owner ? trustedSpanAliasKey(spanId, owner) : spanId}`;
   const retainedTrustedSpanContext = (
     traceContext: DiagnosticTraceContext | undefined,
     spanId: string | undefined,
-    owner?: TrustedSpanAliasOwner,
+    owner?: string,
   ) => {
     if (!traceContext?.traceId || !spanId) {
       return undefined;
     }
-    const retained =
+    // Keys include the diagnostic trace and owner, not the exported OTel trace id.
+    return (
       (owner
         ? retainedTrustedSpanContexts.get(
             retainedTrustedSpanContextKey(traceContext.traceId, spanId, owner),
           )
         : undefined) ??
-      retainedTrustedSpanContexts.get(retainedTrustedSpanContextKey(traceContext.traceId, spanId));
-    // Keys carry the diagnostic trace id, so a hit is already trace-correct; comparing
-    // against the stored OTel trace id would wrongly reject root lifecycle spans.
-    if (!retained) {
-      return undefined;
-    }
-    if (retained.owner && !sameTrustedSpanAliasOwner(retained.owner, owner)) {
-      return undefined;
-    }
-    return retained.spanContext;
+      retainedTrustedSpanContexts.get(retainedTrustedSpanContextKey(traceContext.traceId, spanId))
+    );
   };
-  const activeTrustedSpanAlias = (spanId: string, owner: TrustedSpanAliasOwner | undefined) => {
+  const activeTrustedSpanAlias = (spanId: string, owner: string | undefined) => {
     if (!owner) {
       return undefined;
     }
-    const alias = activeTrustedSpanAliases.get(trustedSpanAliasKey(spanId, owner));
-    if (!alias || !sameTrustedSpanAliasOwner(alias.owner, owner)) {
-      return undefined;
-    }
-    return alias.span;
+    return activeTrustedSpanAliases.get(trustedSpanAliasKey(spanId, owner))?.span;
   };
   const internalOrTrustedParentContext = (
     evt: DiagnosticEventPayload,
@@ -238,17 +210,6 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
   ) =>
     exportedInternalOrTrustedContext(evt, metadata) ??
     internalOrTrustedParentContext(evt, metadata);
-  const trackTrustedSpan = (
-    evt: DiagnosticEventPayload,
-    metadata: DiagnosticEventMetadata,
-    span: ReturnType<typeof tracer.startSpan>,
-  ) => {
-    const spanId = trustedTraceContext(evt, metadata)?.spanId;
-    if (spanId) {
-      activeTrustedSpans.set(spanId, span);
-    }
-    return span;
-  };
   const trackInternalOrTrustedSpan = (
     evt: DiagnosticEventPayload,
     metadata: DiagnosticEventMetadata,
@@ -290,63 +251,40 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
   ) => {
     span.setAttributes?.(redactOtelAttributes(attributes));
   };
-  const retainTrustedSpanContext = (
-    traceId: string,
-    spanId: string,
-    spanContext: SpanContext,
-    owner?: TrustedSpanAliasOwner,
-  ) => {
-    retainedTrustedSpanContexts.set(retainedTrustedSpanContextKey(traceId, spanId, owner), {
-      spanContext,
-      ...(owner ? { owner } : {}),
-    });
-    // Map iteration is insertion-ordered, so this removes the oldest mapping first.
-    while (retainedTrustedSpanContexts.size > MAX_RETAINED_TRUSTED_SPAN_CONTEXTS) {
-      const oldestKey = retainedTrustedSpanContexts.keys().next().value;
-      if (!oldestKey) {
-        break;
-      }
-      retainedTrustedSpanContexts.delete(oldestKey);
-    }
-  };
   // Retention keys on the diagnostic ids the event carries. Taking the whole context
   // (not a bare trace id) makes an OTel SpanContext a type error here; keying by OTel
   // ids instead would silently split every late child into its own trace.
   const completeTrackedLifecycleSpan = (
-    traceContext: DiagnosticTraceContext,
+    traceContext: DiagnosticTraceContext | undefined,
     span: ReturnType<typeof tracer.startSpan>,
     endTimeMs: number,
   ) => {
-    const spanId = traceContext.spanId;
-    if (!spanId) {
+    if (!traceContext?.spanId) {
       span.end(endTimeMs);
       return;
     }
+    const spanId = traceContext.spanId;
     const spanContext = span.spanContext();
-    const retainedKeys: Array<{ spanId: string; owner?: TrustedSpanAliasOwner }> = [{ spanId }];
-    const retainedAliasKeys: string[] = [];
+    const retainedKeys: Array<{ spanId: string; owner?: string }> = [{ spanId }];
     for (const [aliasKey, alias] of activeTrustedSpanAliases) {
       if (alias.span === span) {
         retainedKeys.push({ spanId: alias.spanId, owner: alias.owner });
-        retainedAliasKeys.push(aliasKey);
+        activeTrustedSpanAliases.delete(aliasKey);
       }
     }
     if (activeTrustedSpans.get(spanId) === span) {
       activeTrustedSpans.delete(spanId);
     }
-    for (const aliasKey of retainedAliasKeys) {
-      if (activeTrustedSpanAliases.get(aliasKey)?.span === span) {
-        activeTrustedSpanAliases.delete(aliasKey);
-      }
-    }
     span.end(endTimeMs);
     for (const retainedKey of retainedKeys) {
-      retainTrustedSpanContext(
-        traceContext.traceId,
-        retainedKey.spanId,
+      const traceId = traceContext.traceId;
+      const retainedSpanId = retainedKey.spanId;
+      const owner = retainedKey.owner;
+      retainedTrustedSpanContexts.set(
+        retainedTrustedSpanContextKey(traceId, retainedSpanId, owner),
         spanContext,
-        retainedKey.owner,
       );
+      pruneMapToMaxSize(retainedTrustedSpanContexts, MAX_RETAINED_TRUSTED_SPAN_CONTEXTS);
     }
   };
 
@@ -356,23 +294,38 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
       runId?: string;
       sessionKey?: string;
       sessionId?: string;
+      agentId?: string;
       provider?: string;
       model?: string;
       channel?: string;
       trigger?: string;
     },
   ) => {
-    if (evt.provider) {
-      spanAttrs["openclaw.provider"] = evt.provider;
+    for (const key of ["provider", "model", "channel", "trigger"] as const) {
+      const value = evt[key];
+      if (value) {
+        spanAttrs[`openclaw.${key}`] = value;
+      }
     }
-    if (evt.model) {
-      spanAttrs["openclaw.model"] = evt.model;
+    if (evt.agentId) {
+      spanAttrs["openclaw.agent"] = normalizeDiagnosticValue(evt.agentId);
     }
-    if (evt.channel) {
-      spanAttrs["openclaw.channel"] = evt.channel;
-    }
-    if (evt.trigger) {
-      spanAttrs["openclaw.trigger"] = evt.trigger;
+    // Session identity rides the captureContent gate: a collector trusted with raw
+    // prompt and tool content is trusted with the session identifier, so trace
+    // backends can group spans per conversation. The value is the session id —
+    // the durable identifier assigned at session creation, not the session key.
+    // A /new reset clears history but preserves the durable session id, so reset
+    // continuations stay grouped in the same backend conversation; a fresh id
+    // arises when a session is first created. The raw session key (which can
+    // embed channel peer ids) is never exported.
+    // Metric attributes stay low-cardinality and never carry session
+    // identifiers.
+    if (runtimeOptions.captureContent) {
+      const sessionId = evt.sessionId;
+      if (sessionId) {
+        spanAttrs["gen_ai.conversation.id"] = sessionId;
+        spanAttrs["openclaw.session.id"] = sessionId;
+      }
     }
   };
 
@@ -392,17 +345,14 @@ export function createDiagnosticsTraceRuntime(tracer: Tracer) {
     activeTrustedSpans,
     activeTrustedSpanAliases,
     trustedSpanAliasKey,
-    trustedSpanAliasOwner,
     spanWithDuration,
     trustedTraceContext,
     internalOrTrustedTraceContext,
-    internalOrTrustedParentContext,
     internalOrTrustedExplicitParentContext,
     activeTrustedParentContext,
     activeInternalOrTrustedContext,
     exportedInternalOrTrustedContext,
     exportedSpanContextForDiagnosticTraceContext,
-    trackTrustedSpan,
     trackInternalOrTrustedSpan,
     takeTrackedTrustedSpan,
     getTrackedInternalOrTrustedSpan,

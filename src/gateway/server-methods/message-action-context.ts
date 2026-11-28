@@ -21,7 +21,8 @@ import {
   selectMessageActionRequesterIdentity,
   type MessageActionAuthorization,
 } from "../message-action-turn-capability.js";
-import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
+import { captureAgentRuntimeTurnAssertion } from "./agent-runtime-authority.js";
 import type { GatewayClient, GatewayRequestHandlers } from "./types.js";
 
 /** Redeem host-only message authority from a trusted local agent runtime. */
@@ -51,16 +52,22 @@ export function resolveAgentRuntimeMessageActionConfig(
     : undefined;
 }
 
+export type MessageActionCallerAuthority = {
+  authorize: () => boolean;
+};
+
 /** Retain the live caller and scheduled source through this action's requests. */
 export function createMessageActionRuntimeAuthority(
   params: Pick<
     Parameters<GatewayRequestHandlers["message.action"]>[0],
-    "client" | "context" | "respond" | "sessionMutationCommitGuard"
+    "client" | "sessionMutationCommitGuard"
   > & {
     request: Pick<MessageActionParams, "action" | "accountId" | "params">;
     authorization?: MessageActionAuthorization;
+    assertClientUploadAllowed?: () => void;
   },
 ) {
+  const assertTurnCurrent = captureAgentRuntimeTurnAssertion(params.client);
   const assertScheduledSourceCurrent =
     params.authorization?.scheduled?.assertSourceCurrent ??
     params.authorization?.scheduled?.assertCurrent;
@@ -74,28 +81,55 @@ export function createMessageActionRuntimeAuthority(
     assertReadCurrent ??
     assertScheduledWriteCurrent ??
     params.authorization?.scheduled?.assertCurrent;
+  const assertDeliveryCurrent = !isFencedProviderReadAction(params.request.action)
+    ? params.authorization?.deliveryAttempt?.assertCurrent
+    : undefined;
   const scheduledPolicy =
     assertReadCurrent || assertScheduledWriteCurrent
       ? params.authorization?.scheduled?.policy
       : undefined;
+  const assertAdmissionCurrent =
+    assertTurnCurrent || assertActionCurrent || assertDeliveryCurrent
+      ? () => {
+          assertTurnCurrent?.();
+          params.sessionMutationCommitGuard?.();
+          assertActionCurrent?.();
+          assertDeliveryCurrent?.();
+        }
+      : params.sessionMutationCommitGuard;
+  const assertDirectAdapterHandoff = params.assertClientUploadAllowed
+    ? () => {
+        assertAdmissionCurrent?.();
+        params.assertClientUploadAllowed?.();
+      }
+    : assertAdmissionCurrent;
+  const beforeDeliveryAttempt = () =>
+    isFencedProviderReadAction(params.request.action)
+      ? undefined
+      : params.authorization?.deliveryAttempt?.beforeAttempt();
   return {
+    authorize(): boolean {
+      try {
+        assertAdmissionCurrent?.();
+        return true;
+      } catch (error) {
+        if (error instanceof SessionMutationAuthorizationChangedError) {
+          throw error;
+        }
+        return false;
+      }
+    },
     assertReadCurrent,
     assertScheduledWriteCurrent,
+    beforeDeliveryAttempt,
+    onPlatformSendDispatch: assertDirectAdapterHandoff
+      ? async () => assertDirectAdapterHandoff()
+      : undefined,
     routeAccountId:
       normalizeOptionalString(params.request.accountId) ??
       normalizeOptionalString(params.request.params.accountId) ??
       (scheduledPolicy?.mode === "account" ? scheduledPolicy.ownerAccountId : undefined),
-    agentRuntimeAuthority: createAgentRuntimeAuthorityGuard(
-      params.client,
-      params.context,
-      params.respond,
-      assertActionCurrent
-        ? () => {
-            params.sessionMutationCommitGuard?.();
-            assertActionCurrent();
-          }
-        : params.sessionMutationCommitGuard,
-    ),
+    assertDirectAdapterHandoff,
   };
 }
 

@@ -1,5 +1,3 @@
-// Normalizes repository remotes for cloud-worker project profile selection.
-
 import { parseGitUrl } from "../agents/utils/git.js";
 
 /** Normalize a Git origin URL to a lowercase host/path repository identity. */

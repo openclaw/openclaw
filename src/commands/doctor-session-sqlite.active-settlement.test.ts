@@ -1,38 +1,52 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it } from "vitest";
-import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
+import { expect, it, vi } from "vitest";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { importSqliteSessionRowsBatch } from "../config/sessions/session-accessor.sqlite-import.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
+import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
+import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
+import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
+import {
+  createSessionSqliteMigrationRun,
+  listSessionSqliteMigrationManifestPaths,
+  readSessionSqliteMigrationManifest,
+  recordCompletedMigrationMoves,
+  recordPlannedMigrationMoves,
+  updateMigrationManifestTarget,
+  writeSessionSqliteMigrationManifest,
+} from "../infra/session-sqlite-migration-manifest.js";
+import {
+  createTranscriptEventReader,
+  resolveTargetSqlitePath,
+} from "../infra/session-sqlite-migration-readers.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import {
-  listSessionSqliteMigrationManifestPaths,
-  readSessionSqliteMigrationManifest,
-} from "./doctor-session-sqlite-migration-run.js";
-import { createTranscriptEventReader } from "./doctor-session-sqlite-readers.js";
+import { jsonl, messageEvent } from "./doctor-session-sqlite.fixtures.test-support.js";
 import {
   runDoctorSessionSqlite,
   settleRetainedDoctorSessionSources,
 } from "./doctor-session-sqlite.js";
+import { retainedHistoryMove } from "./doctor-session-sqlite.recovery-fixtures.test-support.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 
 const pluginId = "session-fixture";
 type History =
   | "equal"
   | "sqlite-ahead"
+  | "sqlite-subset"
+  | "opaque"
   | "missing-delta"
   | "missing-middle"
-  | "changed-content"
   | "invalid"
   | "clean";
 
-function transcriptEvents(sessionId: string): TranscriptEvent[] {
+function transcriptEvents(sessionId: string): Array<Record<string, unknown> & { id: string }> {
   return [
     {
       type: "session",
@@ -41,12 +55,7 @@ function transcriptEvents(sessionId: string): TranscriptEvent[] {
       timestamp: "2026-06-01T00:00:00.000Z",
       cwd: "/synthetic-june-workspace",
     },
-    {
-      type: "message",
-      id: `${sessionId}-user`,
-      parentId: null,
-      message: { role: "user", content: "Retained June history" },
-    },
+    messageEvent(`${sessionId}-user`, "user", "Retained June history"),
     {
       type: "message",
       id: `${sessionId}-assistant`,
@@ -59,6 +68,7 @@ function transcriptEvents(sessionId: string): TranscriptEvent[] {
 async function seedImportedHistory(
   state: OpenClawTestState,
   scenarios: Readonly<Record<string, History>>,
+  pendingPlugin = true,
 ) {
   const cfg: OpenClawConfig = {
     agents: { entries: Object.fromEntries(Object.keys(scenarios).map((id) => [id, {}])) },
@@ -72,22 +82,40 @@ async function seedImportedHistory(
     const sessionId = `${agentId}-june`;
     const scope = { agentId, env: state.env, storePath, sessionKey: `agent:${agentId}:june` };
     const original = transcriptEvents(sessionId);
+    if (history === "opaque") {
+      original.push({ type: "future_event", id: `${sessionId}-opaque`, payload: "preserved" });
+    }
+    if (history === "missing-delta") {
+      for (const id of ["four", "five"]) {
+        original.push({
+          type: "message",
+          id: `${sessionId}-${id}`,
+          parentId: original.at(-1)!.id,
+          message: { role: "user", content: id },
+        });
+      }
+    }
     const canonical =
       history === "missing-delta"
-        ? original.slice(0, 2)
+        ? original.slice(0, 3)
         : history === "missing-middle"
           ? [original[0]!, original[2]!]
           : [...original];
     if (history === "sqlite-ahead") {
-      canonical.push({
-        type: "message",
-        id: `${sessionId}-newer`,
-        parentId: `${sessionId}-assistant`,
-        message: { role: "user", content: "New SQLite-only conversation" },
-      });
+      while (canonical.length < 95) {
+        canonical.push({
+          type: "message",
+          id: `${sessionId}-newer-${canonical.length}`,
+          parentId: canonical.at(-1)!.id,
+          message: { role: "user", content: "New SQLite-only conversation" },
+        });
+      }
+    }
+    if (history === "sqlite-subset") {
+      canonical.splice(1, 2, original[2]!, original[1]!);
     }
     const sourcePath = path.join(directory, `${sessionId}.jsonl`);
-    fs.writeFileSync(sourcePath, canonical.map((event) => JSON.stringify(event)).join("\n") + "\n");
+    fs.writeFileSync(sourcePath, jsonl(...canonical));
     await importSqliteSessionRowsBatch([
       {
         ...scope,
@@ -97,17 +125,6 @@ async function seedImportedHistory(
     ]);
     fs.unlinkSync(sourcePath);
     const sourceEvents = [...original];
-    if (history === "changed-content") {
-      sourceEvents[2] = {
-        type: "message",
-        id: `${sessionId}-assistant`,
-        parentId: `${sessionId}-user`,
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Different content with the same event ID" }],
-        },
-      };
-    }
     if (history === "invalid") {
       sourceEvents[0] = { type: "session", version: 3, id: "another-session" };
     }
@@ -118,22 +135,24 @@ async function seedImportedHistory(
       canonical: loadTranscriptEventsSync({ ...scope, sessionId }),
       sourceEvents,
       sourcePath,
-      bytes: Buffer.from(sourceEvents.map((event) => JSON.stringify(event)).join("\n") + "\n"),
+      bytes: Buffer.from(jsonl(...sourceEvents)),
       entryBefore: loadExactSessionEntry(scope)?.entry,
     });
   }
-  recordDeferredPluginMigrations({
-    env: state.env,
-    pending: [{ pluginId, reason: "Plugin migration pending", command: "openclaw doctor --fix" }],
-  });
-  // The later plugin receipt does not know about June's already-imported originals.
-  await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+  if (pendingPlugin) {
+    await recordDeferredPluginMigrations({
+      env: state.env,
+      pending: [{ pluginId, reason: "Plugin migration pending", command: "openclaw doctor --fix" }],
+    });
+    // The later plugin receipt does not know about June's already-imported originals.
+    await runDoctorSessionSqlite({ cfg, env: state.env, allAgents: true, mode: "import" });
+  }
   for (const session of sessions) {
     if (session.history !== "clean") {
       fs.writeFileSync(session.sourcePath, session.bytes);
     }
   }
-  return { cfg, sessions };
+  return { options: { cfg, env: state.env, allAgents: true }, sessions };
 }
 
 function completedTranscriptMoves(state: OpenClawTestState, sourcePath: string) {
@@ -144,86 +163,265 @@ function completedTranscriptMoves(state: OpenClawTestState, sourcePath: string) 
   );
 }
 
-it.each(["import", "recover"] as const)(
-  "%s settles already-imported June originals and missing deltas without replacing current sessions",
-  async (mode) => {
+it.each([
+  ["import", true],
+  ["recover", true],
+  ["import", false],
+  ["recover", false],
+] as const)(
+  "%s settles imported originals without replacing current sessions (plugin receipt=%s)",
+  async (mode, pendingPlugin) => {
     await withOpenClawTestState({ label: `active-june-${mode}` }, async (state) => {
-      const { cfg, sessions } = await seedImportedHistory(state, {
-        main: "equal",
-        diana: "sqlite-ahead",
-        frieren: "missing-delta",
-      });
-      await withDoctorSqliteMaintenanceLock({
-        env: state.env,
-        operation: "settle June originals",
-        run: async (authority) => {
-          const report = await runDoctorSessionSqlite({
-            cfg,
+      const { options: baseOptions, sessions } = await seedImportedHistory(
+        state,
+        pendingPlugin
+          ? {
+              main: "equal",
+              diana: "sqlite-ahead",
+              frieren: "missing-delta",
+              subset: "sqlite-subset",
+              opaque: "opaque",
+            }
+          : { main: "sqlite-ahead" },
+        pendingPlugin,
+      );
+      const options = { ...baseOptions, mode };
+      const duplicateArchives: string[] = [];
+      const duplicateBytes = jsonl(...transcriptEvents("unrelated-history"));
+      if (pendingPlugin && mode === "import") {
+        const target = {
+          agentId: "main",
+          storePath: sessions[0]!.storePath,
+          sqlitePath: resolveTargetSqlitePath(sessions[0]!, state.env),
+        };
+        const archiveDir = path.join(
+          path.dirname(state.sessionsDir()),
+          "session-sqlite-import-archive",
+        );
+        fs.mkdirSync(archiveDir, { recursive: true });
+        const old = createSessionSqliteMigrationRun(state.env, [target]);
+        for (const copy of [1, 2]) {
+          const archivePath = path.join(archiveDir, `unrelated-history.jsonl.imported-${copy}`);
+          fs.writeFileSync(archivePath, duplicateBytes);
+          duplicateArchives.push(archivePath);
+          const move = retainedHistoryMove(
+            path.join(state.sessionsDir(), "unrelated-history.jsonl"),
+            archivePath,
+          );
+          recordPlannedMigrationMoves(old, target, [move]);
+          recordCompletedMigrationMoves(old, target, [move]);
+        }
+        updateMigrationManifestTarget(old, target, [], { validationBeforeArchive: "passed" });
+        old.manifest.completedAt = old.manifest.startedAt;
+        writeSessionSqliteMigrationManifest(old);
+      }
+      const report = pendingPlugin
+        ? await withDoctorSqliteMaintenanceLock({
             env: state.env,
-            allAgents: true,
-            mode,
-          });
-          await settleRetainedDoctorSessionSources(report, [pluginId], authority, () =>
-            authority.assertCurrent(),
-          );
-          expect(report.targets.flatMap((target) => target.issues)).not.toContainEqual(
-            expect.objectContaining({ code: "active_sqlite_transcript_jsonl" }),
-          );
-          for (const session of sessions) {
-            expect(fs.existsSync(session.sourcePath)).toBe(false);
-            const moves = completedTranscriptMoves(state, session.sourcePath);
-            expect(moves).toHaveLength(1);
-            expect(fs.readFileSync(moves[0]!.archivePath)).toEqual(session.bytes);
-            expect(loadExactSessionEntry(session)?.entry).toEqual(session.entryBefore);
-            expect(loadTranscriptEventsSync(session)).toEqual(
-              session.history === "missing-delta" ? session.sourceEvents : session.canonical,
-            );
-          }
-        },
-      });
+            operation: "settle June originals",
+            run: async (authority) => {
+              const settled = await runDoctorSessionSqlite(options);
+              await settleRetainedDoctorSessionSources(settled, [pluginId], authority, () =>
+                authority.assertCurrent(),
+              );
+              return settled;
+            },
+          })
+        : await runDoctorSessionSqlite(options);
+      if (pendingPlugin) {
+        expect(report.totals.importedTranscriptEvents).toBe(2);
+      } else {
+        expect(report.totals.issues).toBe(0);
+        expect(report.supportIssue).toBeUndefined();
+      }
+      expect(report.targets.flatMap((target) => target.issues)).not.toContainEqual(
+        expect.objectContaining({ code: "active_sqlite_transcript_jsonl" }),
+      );
+      if (pendingPlugin && mode === "import") {
+        expect(report.targets.flatMap((target) => target.issues)).toEqual([
+          {
+            code: "historical_duplicate_settled",
+            message: expect.stringContaining("Retired 1 byte-identical duplicate archive(s)"),
+          },
+        ]);
+        const survivingArchives = duplicateArchives.filter((file) => fs.existsSync(file));
+        expect(survivingArchives).toHaveLength(1);
+        expect(fs.readFileSync(survivingArchives[0]!, "utf8")).toBe(duplicateBytes);
+        for (const session of sessions) {
+          expect(fs.existsSync(session.storePath)).toBe(false);
+          const indexes = completedTranscriptMoves(state, session.storePath);
+          expect(indexes).toHaveLength(1);
+          expect(indexes[0]!.artifact?.classification).toBe("imported");
+          expect(fs.readFileSync(indexes[0]!.archivePath, "utf8")).toBe("{}");
+        }
+      }
+      for (const session of sessions) {
+        expect(fs.existsSync(session.sourcePath)).toBe(false);
+        const moves = completedTranscriptMoves(state, session.sourcePath);
+        expect(moves).toHaveLength(1);
+        expect(fs.readFileSync(moves[0]!.archivePath)).toEqual(session.bytes);
+        expect(moves[0]!.artifact?.verification).toBe(
+          pendingPlugin
+            ? `superseded by SQLite (${session.sourceEvents.length} of ${Math.max(session.canonical.length, session.sourceEvents.length)} events present)`
+            : "superseded by SQLite (3 of 95 events present)",
+        );
+        expect(loadExactSessionEntry(session)?.entry).toEqual(session.entryBefore);
+        expect(loadTranscriptEventsSync(session)).toEqual(
+          session.history === "missing-delta" ? session.sourceEvents : session.canonical,
+        );
+      }
+      if (!pendingPlugin) {
+        const session = sessions[0]!;
+        const moves = completedTranscriptMoves(state, session.sourcePath);
+        const repeated = await runDoctorSessionSqlite(options);
+        expect(repeated.totals).toMatchObject({
+          issues: 0,
+          importedTranscriptEvents: 0,
+          archivedTranscriptFiles: 0,
+        });
+        expect(repeated.supportIssue).toBeUndefined();
+        expect(completedTranscriptMoves(state, session.sourcePath)).toEqual(moves);
+      }
     });
   },
 );
 
-it.each(["changed-content", "missing-middle"] as const)(
-  "preserves conflicting history without committing an invalid merge (%s)",
-  async (history) => {
-    await withOpenClawTestState({ label: "active-june-content" }, async (state) => {
+it("preserves missing-middle history without committing an invalid merge", async () => {
+  await withOpenClawTestState({ label: "active-june-content" }, async (state) => {
+    const {
+      options,
+      sessions: [session],
+    } = await seedImportedHistory(state, { main: "missing-middle" }, false);
+    expect(session).toBeDefined();
+    await withDoctorSqliteMaintenanceLock({
+      env: state.env,
+      operation: "settle changed June content",
+      run: async () => {
+        const report = await runDoctorSessionSqlite({ ...options, mode: "import" });
+        expect(report.targets.flatMap((target) => target.issues)).toContainEqual(
+          expect.objectContaining({
+            code: "sqlite_transcript_count_mismatch",
+            message: expect.stringContaining(`${session!.sessionId}-user`),
+          }),
+        );
+        expect(loadTranscriptEventsSync(session!)).toEqual(session!.canonical);
+        expect(loadExactSessionEntry(session!)?.entry).toEqual(session!.entryBefore);
+        expect(fs.readFileSync(session!.sourcePath)).toEqual(session!.bytes);
+        expect(completedTranscriptMoves(state, session!.sourcePath)).toEqual([]);
+      },
+    });
+  });
+});
+
+it.each(["retained", "skipped", "rebound"] as const)(
+  "restores cold-archived history before reimporting a %s legacy original",
+  async (kind) => {
+    await withOpenClawTestState({ label: "import-cold-restore" }, async (state) => {
       const {
-        cfg,
+        options,
         sessions: [session],
-      } = await seedImportedHistory(state, { main: history });
+      } = await seedImportedHistory(
+        state,
+        { main: kind === "retained" ? "equal" : "clean" },
+        false,
+      );
       expect(session).toBeDefined();
-      await withDoctorSqliteMaintenanceLock({
-        env: state.env,
-        operation: "settle changed June content",
-        run: async (authority) => {
-          const report = await runDoctorSessionSqlite({
-            cfg,
-            env: state.env,
-            allAgents: true,
-            mode: "import",
-          });
-          await expect(
-            settleRetainedDoctorSessionSources(report, [pluginId], authority, () =>
-              authority.assertCurrent(),
-            ),
-          ).rejects.toThrow(session!.sourcePath);
-          const events = loadTranscriptEventsSync(session!);
-          expect(events).toEqual(session!.canonical);
-          expect(loadExactSessionEntry(session!)?.entry).toEqual(session!.entryBefore);
-          expect(fs.readFileSync(session!.sourcePath)).toEqual(session!.bytes);
-          const moves = completedTranscriptMoves(state, session!.sourcePath);
-          expect(moves).toEqual([]);
-        },
-      });
+      // A later update cold-archives the already-imported June history (issue #204834).
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      database.db
+        .prepare(
+          "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+        )
+        .run(session!.sessionId);
+      await expect(
+        runSessionColdStorageMaintenance({
+          config: {
+            agents: { entries: { main: {} } },
+            session: {
+              store: database.path,
+              maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+            },
+          },
+        }),
+      ).resolves.toMatchObject({ archivedTranscripts: 1 });
+      const archive = readSessionColdTranscript(database.db, session!.sessionId);
+      expect(archive).toBeDefined();
+      if (kind === "skipped") {
+        // The archive payload is gone while its row remains; the missing legacy file
+        // means doctor would skip this already-imported session without reading it.
+        fs.unlinkSync(resolveSessionColdArchivePath(database.path, archive!.archive_name));
+      }
+      // The legacy index still points at the original transcript, retained or already gone.
+      fs.writeFileSync(
+        session!.storePath,
+        JSON.stringify({
+          [session!.sessionKey]: {
+            sessionId: session!.sessionId,
+            sessionFile: path.basename(session!.sourcePath),
+            updatedAt: 123456,
+          },
+        }),
+      );
+      const coldStorage = await import("../config/sessions/session-cold-storage.js");
+      // The clean seed already removed the legacy original; a custody rebound must
+      // still abort the batch instead of letting doctor skip the session.
+      const restoreSpy =
+        kind === "rebound"
+          ? vi.spyOn(coldStorage, "restoreSessionColdTranscript").mockRejectedValue(
+              new coldStorage.SessionColdTurnReboundError({
+                appendedMessages: [],
+                rejectedReason: "session-rebound",
+                sessionEntry: undefined,
+                sessionFile: "",
+              }),
+            )
+          : undefined;
+      let report: Awaited<ReturnType<typeof runDoctorSessionSqlite>> | undefined;
+      let importError: unknown;
+      try {
+        report = await withDoctorSqliteMaintenanceLock({
+          env: state.env,
+          operation: "reimport cold June history",
+          run: async () => await runDoctorSessionSqlite({ ...options, mode: "import" }),
+        });
+      } catch (error) {
+        importError = error;
+      } finally {
+        restoreSpy?.mockRestore();
+      }
+      if (kind === "rebound") {
+        expect(importError).toBeInstanceOf(coldStorage.SessionColdTurnReboundError);
+        const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+        expect(readSessionColdTranscript(reopened.db, session!.sessionId)).toBeDefined();
+        expect(loadExactSessionEntry(session!)?.entry.sessionId).toBe(session!.sessionId);
+        return;
+      }
+      expect(importError).toBeUndefined();
+      const issues = report!.targets.flatMap((target) => target.issues);
+      for (const code of [
+        "sqlite_import_failed",
+        "legacy_import_deferred",
+        "sqlite_transcript_count_mismatch",
+      ]) {
+        expect(issues).not.toContainEqual(expect.objectContaining({ code }));
+      }
+      // Doctor may close cached handles; reopen before inspecting the restored state.
+      const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      if (kind === "retained") {
+        expect(readSessionColdTranscript(reopened.db, session!.sessionId)).toBeUndefined();
+        expect(loadTranscriptEventsSync(session!)).toEqual(session!.canonical);
+      } else {
+        expect(readSessionColdTranscript(reopened.db, session!.sessionId)).toBeDefined();
+        expect(report!.targets.some((target) => target.validatedEntries > 0)).toBe(true);
+      }
+      expect(loadExactSessionEntry(session!)?.entry.sessionId).toBe(session!.sessionId);
     });
   },
 );
 
 it("preserves an invalid main transcript without assigning its failure to a clean agent", async () => {
   await withOpenClawTestState({ label: "active-june-agent-scope" }, async (state) => {
-    const { cfg, sessions } = await seedImportedHistory(state, {
+    const { options, sessions } = await seedImportedHistory(state, {
       main: "invalid",
       frieren: "clean",
     });
@@ -232,12 +430,7 @@ it("preserves an invalid main transcript without assigning its failure to a clea
       env: state.env,
       operation: "verify per-agent June settlement",
       run: async (authority) => {
-        const report = await runDoctorSessionSqlite({
-          cfg,
-          env: state.env,
-          allAgents: true,
-          mode: "import",
-        });
+        const report = await runDoctorSessionSqlite({ ...options, mode: "import" });
         try {
           await settleRetainedDoctorSessionSources(report, [pluginId], authority, () =>
             authority.assertCurrent(),

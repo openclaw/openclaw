@@ -1,4 +1,6 @@
 import {
+  createServer as createHttpServer,
+  request as httpRequest,
   ServerResponse,
   type ClientRequest,
   type IncomingHttpHeaders,
@@ -6,6 +8,7 @@ import {
 } from "node:http";
 import { request as httpsRequest, type Agent as HttpsAgent } from "node:https";
 import { PassThrough, Writable, type Readable } from "node:stream";
+import { toForwardableResponseHeaders } from "./response-headers.js";
 import {
   createSecretEgressBodyTransform,
   SecretEgressSubstitutionError,
@@ -15,6 +18,8 @@ import {
 
 export const REFUSAL_BODY = "Secret egress proxy refused the request.\n";
 const UPSTREAM_ERROR_BODY = "Secret egress proxy could not reach the upstream host.\n";
+const UPSTREAM_RESPONSE_ERROR_BODY =
+  "Secret egress proxy could not forward the upstream response.\n";
 const MAX_BUFFERED_REQUEST_BODY_BYTES = 100 * 1024 * 1024;
 const BUFFERED_REQUEST_WRITE_BYTES = 64 * 1024;
 const MAX_BUFFERED_UPGRADE_BYTES = 64 * 1024;
@@ -42,7 +47,7 @@ export function sendHttpRefusal(res: ServerResponse, status = 502, body = REFUSA
   res.end(body);
 }
 
-export function handleUpgradeRequest(
+function handleUpgradeRequest(
   handler: RequestHandler,
   request: IncomingMessage,
   head: Buffer,
@@ -104,7 +109,13 @@ export function handleUpgradeRequest(
   handler(request, response, { stream, stopBuffering });
 }
 
-/** Forwards one authorized HTTPS request, retaining ownership across a WebSocket upgrade. */
+export function createRequestServer(handleRequest: RequestHandler) {
+  return createHttpServer(handleRequest).on("upgrade", (request, _socket, head) =>
+    handleUpgradeRequest(handleRequest, request, head),
+  );
+}
+
+/** Forwards one authorized request, retaining ownership across a WebSocket upgrade. */
 type ForwardRequest = {
   request: IncomingMessage;
   response: ServerResponse;
@@ -114,6 +125,7 @@ type ForwardRequest = {
   host: string;
   substituted: boolean;
   upstreamTlsAgent: HttpsAgent;
+  upstreamHttpAgent?: HttpsAgent;
   isActive: () => boolean;
   ownResource: <T extends Readable | Writable>(resource: T) => T;
   releaseResponse: () => void;
@@ -145,15 +157,16 @@ function sendSecretEgressRequest(
   }
   let refused = false;
   let upgraded = false;
+  const secure = target.protocol === "https:";
   const upstream = forward.ownResource(
-    httpsRequest(
+    (secure ? httpsRequest : httpRequest)(
       {
-        hostname: target.hostname,
-        port: target.port || 443,
+        hostname: secure ? target.hostname : host,
+        port: target.port || (secure ? 443 : 80),
         path: `${target.pathname}${target.search}`,
         method: forward.request.method,
         headers,
-        agent: forward.upstreamTlsAgent,
+        agent: secure ? forward.upstreamTlsAgent : (forward.upstreamHttpAgent ?? false),
       },
       (upstreamResponse) => {
         forward.ownResource(upstreamResponse);
@@ -162,13 +175,41 @@ function sendSecretEgressRequest(
           return;
         }
         upstreamResponse.once("error", () => forward.response.destroy());
-        forward.response.writeHead(upstreamResponse.statusCode ?? 502, upstreamResponse.headers);
+        const statusCode = upstreamResponse.statusCode ?? 502;
+        try {
+          forward.response.writeHead(
+            statusCode,
+            toForwardableResponseHeaders(upstreamResponse.headers),
+          );
+          forward.response.flushHeaders();
+        } catch {
+          // This callback runs outside any caller's try block; a throw here
+          // would exit the Gateway. Keep the failure on this one request.
+          refused = true;
+          upstreamResponse.destroy();
+          // Node may already have marked 1xx/204/304 heads bodyless, so a
+          // refusal body cannot be framed reliably; close those instead.
+          if (statusCode < 200 || statusCode === 204 || statusCode === 304) {
+            forward.response.destroy();
+          } else {
+            sendHttpRefusal(forward.response, 502, UPSTREAM_RESPONSE_ERROR_BODY);
+          }
+          return;
+        }
         upstreamResponse.pipe(forward.response);
       },
     ),
   );
+  upstream.once("socket", () => {
+    // An agent can queue prepared credentials; recheck before Node flushes them.
+    if (!forward.isActive()) {
+      upstream.destroy();
+      forward.response.destroy();
+    }
+  });
   const bodyTransform = forward.ownResource(
     createSecretEgressBodyTransform({
+      isActive: forward.isActive,
       onSubstitution: () => {
         substituted = true;
       },
@@ -245,7 +286,7 @@ function sendSecretEgressRequest(
     // not HTTP bodies. Forward them opaquely, including both parsers' head buffers.
     forward.response.off("close", onResponseClose);
     upgraded = true;
-    forward.response.writeHead(101, response.headers);
+    forward.response.writeHead(101, toForwardableResponseHeaders(response.headers));
     forward.response.end();
     forward.response.detachSocket(clientSocket);
     forward.releaseResponse();
@@ -332,13 +373,6 @@ export function createSecretEgressBodyBudget(): (length: number) => (() => void)
   };
 }
 
-function allocateBufferedRequestBody(length: number): Buffer {
-  if (!Number.isSafeInteger(length) || length < 0 || length > MAX_BUFFERED_REQUEST_BODY_BYTES) {
-    throw new RangeError("Invalid buffered request body length");
-  }
-  return Buffer.allocUnsafeSlow(length);
-}
-
 /** Collect original bytes, then authorize/substitute synchronously at the send boundary. */
 export function forwardSecretEgressRequest(
   forward: Omit<ForwardRequest, "target" | "headers" | "substituted"> & {
@@ -365,21 +399,26 @@ export function forwardSecretEgressRequest(
     clearTimeout(timer);
     releaseBudget?.();
   };
-  const refuse = (reason: SecretEgressRefusalReason, status = 502, message = REFUSAL_BODY) => {
-    if (refused) {
-      return;
-    }
+  const cancel = (drainRequest: boolean) => {
     refused = true;
     if (collector) {
       forward.request.unpipe(collector);
       collector.destroy();
     }
-    forward.request.resume();
+    if (drainRequest) {
+      forward.request.resume();
+    }
     if (upstream) {
       upstream.destroy();
     } else {
       release();
     }
+  };
+  const refuse = (reason: SecretEgressRefusalReason, status = 502, message = REFUSAL_BODY) => {
+    if (refused) {
+      return;
+    }
+    cancel(true);
     // An early refusal need not consume the declared body. Close the incoming
     // message after the reply too, so the registration releases that resource.
     forward.response.once("close", () => forward.request.destroy());
@@ -413,6 +452,11 @@ export function forwardSecretEgressRequest(
                 substituted = true;
               },
             });
+      // Revocation can arrive from the Gateway while this Worker scans a body.
+      if (!forward.isActive()) {
+        release();
+        return;
+      }
       upstream = sendSecretEgressRequest(
         { ...forward, ...prepared, substituted, isActive: () => !refused && forward.isActive() },
         output,
@@ -434,18 +478,7 @@ export function forwardSecretEgressRequest(
     return;
   }
   forward.request.once("error", () => forward.response.destroy());
-  forward.response.once("close", () => {
-    refused = true;
-    if (collector) {
-      forward.request.unpipe(collector);
-      collector.destroy();
-    }
-    if (upstream) {
-      upstream.destroy();
-    } else {
-      release();
-    }
-  });
+  forward.response.once("close", () => cancel(false));
   if (!releaseBudget) {
     refuse(
       "upload-capacity",
@@ -457,7 +490,7 @@ export function forwardSecretEgressRequest(
   try {
     // One exact backing store: chunk count, BufferList nodes and shared slabs
     // cannot amplify retained memory. Every byte is initialized before scanning.
-    body = allocateBufferedRequestBody(length);
+    body = Buffer.allocUnsafeSlow(length);
     let received = 0;
     collector = forward.ownResource(
       new Writable({

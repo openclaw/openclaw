@@ -53,7 +53,7 @@ struct OnboardingModeSelectionSections: View {
                     .font(OpenClawType.subheadSemiBold)
             }
             .disabled(self.selectedMode == nil || self.isConnecting)
-            .buttonStyle(OpenClawPrimaryActionButtonStyle(height: 48))
+            .buttonStyle(OpenClawPrimaryActionButtonStyle())
             .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
             .listRowBackground(Color.clear)
             .listRowSeparator(.hidden)
@@ -61,24 +61,11 @@ struct OnboardingModeSelectionSections: View {
     }
 
     private var developerModeToggleRow: some View {
-        self.onboardingButtonToggle(
-            "Developer mode",
-            symbol: "wrench.and.screwdriver",
-            isOn: self.developerModeEnabled)
-    }
-
-    private func onboardingButtonToggle(
-        _ title: LocalizedStringKey,
-        symbol: String? = nil,
-        isOn: Binding<Bool>) -> some View
-    {
-        Toggle(isOn: isOn) {
+        Toggle(isOn: self.developerModeEnabled) {
             HStack(spacing: 12) {
-                if let symbol {
-                    OnboardingModeIcon(symbol: symbol, selected: false)
-                }
+                OnboardingModeIcon(symbol: "wrench.and.screwdriver", selected: false)
 
-                Text(title)
+                Text("Developer mode")
                     .font(OpenClawType.subheadSemiBold)
                     .foregroundStyle(.primary)
             }
@@ -88,7 +75,7 @@ struct OnboardingModeSelectionSections: View {
         .contentShape(Rectangle())
         .overlay {
             Button {
-                isOn.wrappedValue.toggle()
+                self.developerModeEnabled.wrappedValue.toggle()
             } label: {
                 Rectangle()
                     .fill(.clear)
@@ -276,6 +263,7 @@ struct OnboardingDiscoveredGatewaysSection: View {
                     .font(OpenClawType.subheadSemiBold)
             }
             .font(OpenClawType.subheadSemiBold)
+            .tint(.primary)
             .disabled(self.connectingGateway != nil)
         } header: {
             Text("Discovered Gateways")

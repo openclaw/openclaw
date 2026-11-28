@@ -2,16 +2,18 @@ import type {
   PluginCredentialDescriptor,
   PluginCredentialInspection,
 } from "../../packages/gateway-protocol/src/schema/plugin-credentials.js";
+import type { PluginsInspectResult } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { hasUnresolvedConfigPath, resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
 
-/** Projection only: never call a secret resolver or return a literal from sourceConfig. */
+/** Never resolve references; authored literals require the explicit administrator reveal flow. */
 export function inspectPluginCredentialValue(
   config: OpenClawConfig,
   descriptor: PluginCredentialDescriptor,
   env: NodeJS.ProcessEnv,
+  reveal = false,
 ): PluginCredentialInspection {
   let value: unknown = config;
   for (const segment of descriptor.path) {
@@ -32,11 +34,29 @@ export function inspectPluginCredentialValue(
     return { kind: "reference", ref, unresolved: hasUnresolvedConfigPath(config, path) };
   }
   if (typeof value === "string" && value.length) {
-    return { kind: "literal" };
+    return { kind: "literal", ...(reveal ? { value } : {}) };
   }
   if (value !== undefined && value !== "") {
     return { kind: "invalid" };
   }
   const envVar = descriptor.envVars.find((name) => Boolean(env[name]?.trim()));
   return envVar ? { kind: "environment", envVar } : { kind: "missing" };
+}
+
+export function inspectPluginCredentialPresence(
+  config: OpenClawConfig,
+  descriptor: PluginCredentialDescriptor,
+  env: NodeJS.ProcessEnv,
+): NonNullable<PluginsInspectResult["credentials"]>[number] {
+  const credential = inspectPluginCredentialValue(config, descriptor, env);
+  // Public inspection carries presence. The administrator editor owns values and references.
+  const status =
+    credential.kind === "reference"
+      ? credential.unresolved
+        ? "unresolved"
+        : "configured"
+      : credential.kind === "literal" || credential.kind === "environment"
+        ? "configured"
+        : credential.kind;
+  return { ...descriptor, status };
 }

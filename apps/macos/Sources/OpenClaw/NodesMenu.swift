@@ -6,10 +6,6 @@ struct NodeMenuEntryFormatter {
         entry.nodeId == "gateway"
     }
 
-    static func isConnected(_ entry: NodeInfo) -> Bool {
-        entry.isConnected
-    }
-
     static func primaryName(_ entry: NodeInfo) -> String {
         if self.isGateway(entry) {
             return entry.displayName?.nonEmpty ?? "Gateway"
@@ -58,10 +54,6 @@ struct NodeMenuEntryFormatter {
         return role
     }
 
-    static func headlineRight(_ entry: NodeInfo) -> String? {
-        self.platformText(entry)
-    }
-
     static func detailRightVersion(_ entry: NodeInfo) -> String? {
         let labels = self.versionLabels(entry, compact: false)
         if labels.isEmpty { return nil }
@@ -105,16 +97,11 @@ struct NodeMenuEntryFormatter {
 
     private static func versionLabels(_ entry: NodeInfo, compact: Bool = true) -> [String] {
         let (core, ui) = self.resolveVersions(entry)
-        var labels: [String] = []
-        if let core {
-            let label = compact ? self.compactVersion(core) : self.shortVersionLabel(core)
-            labels.append("core \(label)")
+        return [("core", core), ("ui", ui)].compactMap { kind, version in
+            guard let version else { return nil }
+            let label = compact ? self.compactVersion(version) : self.shortVersionLabel(version)
+            return "\(kind) \(label)"
         }
-        if let ui {
-            let label = compact ? self.compactVersion(ui) : self.shortVersionLabel(ui)
-            labels.append("ui \(label)")
-        }
-        return labels
     }
 
     private static func resolveVersions(_ entry: NodeInfo) -> (core: String?, ui: String?) {
@@ -132,8 +119,7 @@ struct NodeMenuEntryFormatter {
 
     private static func isHeadlessPlatform(_ entry: NodeInfo) -> Bool {
         let raw = entry.platform?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
-        if raw == "darwin" || raw == "linux" || raw == "win32" || raw == "windows" { return true }
-        return false
+        return raw == "darwin" || raw == "linux" || raw == "win32" || raw == "windows"
     }
 
     static func leadingSymbol(_ entry: NodeInfo) -> String {
@@ -144,15 +130,15 @@ struct NodeMenuEntryFormatter {
         }
         if let family = entry.deviceFamily?.lowercased() {
             if family.contains("mac") {
-                return self.safeSystemSymbol("laptopcomputer", fallback: "laptopcomputer")
+                return "laptopcomputer"
             }
-            if family.contains("iphone") { return self.safeSystemSymbol("iphone", fallback: "iphone") }
-            if family.contains("ipad") { return self.safeSystemSymbol("ipad", fallback: "ipad") }
+            if family.contains("iphone") { return "iphone" }
+            if family.contains("ipad") { return "ipad" }
         }
         if let platform = entry.platform?.lowercased() {
-            if platform.contains("mac") { return self.safeSystemSymbol("laptopcomputer", fallback: "laptopcomputer") }
-            if platform.contains("ios") { return self.safeSystemSymbol("iphone", fallback: "iphone") }
-            if platform.contains("android") { return self.safeSystemSymbol("cpu", fallback: "cpu") }
+            if platform.contains("mac") { return "laptopcomputer" }
+            if platform.contains("ios") { return "iphone" }
+            if platform.contains("android") { return "cpu" }
         }
         return "cpu"
     }
@@ -186,7 +172,7 @@ struct NodeMenuRowView: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .firstTextBaseline, spacing: 8) {
                     Text(NodeMenuEntryFormatter.primaryName(self.entry))
-                        .font(.callout.weight(NodeMenuEntryFormatter.isConnected(self.entry) ? .semibold : .regular))
+                        .font(.callout.weight(self.entry.isConnected ? .semibold : .regular))
                         .foregroundStyle(self.palette.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
@@ -195,7 +181,7 @@ struct NodeMenuRowView: View {
                     Spacer(minLength: 8)
 
                     HStack(alignment: .firstTextBaseline, spacing: 6) {
-                        if let right = NodeMenuEntryFormatter.headlineRight(self.entry) {
+                        if let right = NodeMenuEntryFormatter.platformText(self.entry) {
                             Text(right)
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(self.palette.secondary)

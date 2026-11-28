@@ -7,10 +7,8 @@ const inboundDropWarnings = createDedupeCache({ ttlMs: 0, maxSize: 512 });
  * Shared channel diagnostic formatters exposed through the plugin SDK.
  * Keep messages compact and stable enough for plugin logs without making them machine contracts.
  */
-/** Minimal logger callback shape exposed through channel SDK helpers. */
 export type LogFn = (message: string) => void;
 
-/** Emits a normalized inbound-drop diagnostic for channel plugins. */
 export function logInboundDrop(params: {
   log: LogFn;
   channel: string;
@@ -32,7 +30,6 @@ export function logInboundDrop(params: {
   params.log(`${params.channel}: drop ${params.reason}${target}${hint}`);
 }
 
-/** Emits a normalized typing-indicator failure diagnostic for channel plugins. */
 export function logTypingFailure(params: {
   log: LogFn;
   channel: string;
@@ -45,7 +42,6 @@ export function logTypingFailure(params: {
   params.log(`${params.channel} typing${action} failed${target}: ${String(params.error)}`);
 }
 
-/** Emits a normalized acknowledgement-cleanup failure diagnostic for channel plugins. */
 export function logAckFailure(params: {
   log: LogFn;
   channel: string;

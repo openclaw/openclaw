@@ -7,6 +7,60 @@ import Testing
 
 @Suite("iOS managed media artifact loader")
 struct IOSMediaArtifactLoaderTests {
+    @Test(arguments: ["application/pdf", "text/csv", "application/zip", "text/html"])
+    @MainActor func `downloads documents using the pinned authenticated bounded route`(mimeType: String) async throws {
+        let tls = GatewayTLSParams(
+            required: true, expectedFingerprint: "sha256:fixture", allowTOFU: false, storeKey: "fixture")
+        let config = try Self.config(url: #require(URL(string: "wss://gateway.example/gw")), tls: tls)
+        let loader = IOSMediaArtifactLoader(
+            connectionProvider: {
+                IOSMediaArtifactLoader.Connection(
+                    config: config, gatewayID: config.effectiveStableID, customHeaders: ["X-Proxy-Token": "proxy"])
+            },
+            requestFactory: { receivedTLS, maximumBytes in
+                #expect(receivedTLS == tls)
+                #expect(maximumBytes == 100 * 1024 * 1024)
+                return { request in
+                    #expect(request.url?.absoluteString == "https://gateway.example/gw" + Self.ticketedPath)
+                    #expect(request.value(forHTTPHeaderField: "Accept") == "*/*")
+                    #expect(request.value(forHTTPHeaderField: "Authorization") == nil)
+                    #expect(request.value(forHTTPHeaderField: "X-Proxy-Token") == "proxy")
+                    return try Self.response(for: request, mimeType: mimeType, data: Data("fixture".utf8))
+                }
+            })
+        let loaded = try await loader.load(
+            response: Self.downloadResult(mimeType: mimeType),
+            kind: .file,
+            expectedGatewayID: config.effectiveStableID)
+        guard case let .data(file) = loaded else {
+            Issue.record("Documents must be buffered for system file sharing, never streamed or rendered")
+            return
+        }
+        #expect(file.data == Data("fixture".utf8))
+        #expect(file.mimeType == mimeType)
+    }
+
+    @Test(arguments: [403, 404, 410])
+    @MainActor func `does not export denied missing or expired documents`(statusCode: Int) async throws {
+        let config = Self.config()
+        let loader = IOSMediaArtifactLoader(
+            connectionProvider: {
+                IOSMediaArtifactLoader.Connection(
+                    config: config, gatewayID: config.effectiveStableID, customHeaders: [:])
+            },
+            requestFactory: { _, _ in
+                { request in
+                    try Self.response(for: request, statusCode: statusCode, mimeType: "text/html", data: Data())
+                }
+            })
+        await #expect(throws: IOSMediaArtifactLoader.LoadError.requestFailed(statusCode: statusCode)) {
+            try await loader.load(
+                response: Self.downloadResult(mimeType: "application/pdf"),
+                kind: .file,
+                expectedGatewayID: config.effectiveStableID)
+        }
+    }
+
     @Test(arguments: Self.gatewayRoutes)
     @MainActor func `loads ticketed image with proxy headers and without a gateway bearer`(
         route: (gateway: String, media: String)) async throws
@@ -305,6 +359,63 @@ struct IOSMediaArtifactLoaderTests {
                     url: "/api/chat/media/outgoing/main/id/full"),
                 kind: .image,
                 expectedGatewayID: config.effectiveStableID)
+        }
+    }
+
+    @Test @MainActor func `tile preview uses only the ticketed thumbnail and the small byte limit`() async throws {
+        let config = try Self.config(url: #require(URL(string: "wss://gateway.example/mounted%20gateway")))
+        let loader = IOSMediaArtifactLoader(connectionProvider: {
+            .init(config: config, gatewayID: "test", customHeaders: ["X-Proxy-Token": "proxy"])
+        }, requestFactory: { _, limit in
+            #expect(limit == 96 * 1024)
+            return { request in
+                #expect(request.url?.absoluteString == "https://gateway.example/mounted%20gateway" +
+                    "/api/chat/media/outgoing/agent%3Amain%3Amain/abc/thumbnail?mediaTicket=grant%2Fticket&width=480" ||
+                    request.url?.absoluteString == "https://gateway.example/mounted%20gateway" +
+                    "/api/chat/media/outgoing/agent%3Amain%3Amain/abc/thumbnail?mediaTicket=grant/ticket&width=480")
+                #expect(request.value(forHTTPHeaderField: "X-Proxy-Token") == "proxy")
+                return try Self.response(for: request, mimeType: "image/webp", data: Data([1, 2]))
+            }
+        })
+        let item = ArtifactSummary(
+            id: "abc",
+            type: "image",
+            title: "Tile",
+            mimetype: "image/png",
+            download: ["mode": AnyCodable("url")])
+        let response = ArtifactsDownloadResult(
+            artifact: item,
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/abc/full?mediaTicket=grant%2Fticket")
+        #expect(try await loader.tileThumbnail(from: response, expectedGatewayID: "test") == Data([1, 2]))
+        for url in ["https://external.test/full", "/api/chat/media/outgoing/main/abc/full", "/arbitrary/full"] {
+            await #expect(throws: IOSMediaArtifactLoader.LoadError.invalidSource) {
+                try await loader.tileThumbnail(from: .init(artifact: item, url: url), expectedGatewayID: "test")
+            }
+        }
+    }
+
+    @Test func `tile preview rejects inline originals and oversized renditions without HTTP`() async throws {
+        let loader = IOSMediaArtifactLoader(connectionProvider: { nil }, requestFactory: { _, _ in
+            Issue.record("Inline preview must never request the original")
+            return { _ in throw CancellationError() }
+        })
+        func inline(_ mime: String, _ bytes: Int) -> ArtifactsDownloadResult {
+            .init(
+                artifact: ArtifactSummary(
+                    id: "a",
+                    type: "image",
+                    title: "Tile",
+                    mimetype: mime,
+                    download: ["mode": AnyCodable("bytes")]),
+                encoding: "base64",
+                data: Data(repeating: 1, count: bytes).base64EncodedString())
+        }
+        #expect(try await loader.tileThumbnail(from: inline("image/webp", 2), expectedGatewayID: "g") == Data([1, 1]))
+        await #expect(throws: IOSMediaArtifactLoader.LoadError.invalidResponse) {
+            try await loader.tileThumbnail(from: inline("image/png", 2), expectedGatewayID: "g")
+        }
+        await #expect(throws: IOSMediaArtifactLoader.LoadError.payloadTooLarge) {
+            try await loader.tileThumbnail(from: inline("image/webp", 96 * 1024 + 1), expectedGatewayID: "g")
         }
     }
 

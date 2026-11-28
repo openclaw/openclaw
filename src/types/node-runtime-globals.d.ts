@@ -18,3 +18,8 @@ declare namespace WebAssembly {
 
   function compile(bytes: ArrayBuffer | ArrayBufferView): Promise<Module>;
 }
+
+// Supported Node and Bun runtimes implement raw JSON; ES2023 omits its type.
+interface JSON {
+  rawJSON(text: string): { readonly rawJSON: string };
+}

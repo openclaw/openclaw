@@ -1,9 +1,10 @@
 import Foundation
+import Swabble
 import XCTest
 
 @available(macOS 26.0, *)
 final class CLIProcessTests: XCTestCase {
-    func testExecutablePathPreservesHealthAndCommandErrors() throws {
+    func testExecutableDispatchPreservesOptionsAndCommandErrors() throws {
         let executable = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
             .appendingPathComponent("swabble")
         XCTAssertTrue(FileManager.default.isExecutableFile(atPath: executable.path))
@@ -11,8 +12,20 @@ final class CLIProcessTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
+        let hookOutput = directory.appendingPathComponent("hook-output.txt")
+        let hookConfig = directory.appendingPathComponent("hook-config.json")
+        var hookSettings = SwabbleConfig()
+        hookSettings.hook.command = "/bin/sh"
+        hookSettings.hook.args = ["-c", #"printf '%s\n' "$SWABBLE_TEXT" >> "$SWABBLE_TEST_OUTPUT""#]
+        hookSettings.hook.env = ["SWABBLE_TEST_OUTPUT": hookOutput.path]
+        try ConfigLoader.save(hookSettings, at: hookConfig)
+
+        let config = directory.appendingPathComponent("config.json")
         let cases: [([String], Int32, String, String)] = [
             (["health"], 0, "ok\n", ""),
+            (["test-hook", "hello world", "--config", hookConfig.path], 0, "hook invoked\n", ""),
+            (["setup", "--config", config.path], 0, "wrote config to \(config.path)\n", ""),
+            (["mic", "set", "37", "--config", config.path], 0, "saved device index 37\n", ""),
             (["unknown-command"], 1, "", "error: Unknown subcommand 'unknown-command' for command 'swabble'\n"),
             (["mic"], 1, "", "error: Command 'mic' requires a subcommand\n"),
         ]
@@ -43,5 +56,44 @@ final class CLIProcessTests: XCTestCase {
                 String(decoding: error.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self),
                 expectedError)
         }
+        XCTAssertEqual(try ConfigLoader.load(at: config).audio.deviceIndex, 37)
+        XCTAssertEqual(try String(contentsOf: hookOutput, encoding: .utf8), "hello world\n")
+    }
+
+    func testServeLeavesUnreadableConfigUntouched() throws {
+        let executable = Bundle(for: Self.self).bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("swabble")
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // A hand edit that drops the closing brace must not be replaced with defaults.
+        let config = directory.appendingPathComponent("config.json")
+        var settings = SwabbleConfig()
+        settings.hook.command = "/usr/bin/say"
+        try ConfigLoader.save(settings, at: config)
+        let saved = try String(contentsOf: config, encoding: .utf8)
+        let edited = String(saved.dropLast())
+        try edited.write(to: config, atomically: true, encoding: .utf8)
+
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = ["serve", "--config", config.path]
+        process.currentDirectoryURL = directory
+        process.environment = ["HOME": directory.path, "TMPDIR": directory.path, "PATH": "/usr/bin:/bin"]
+        process.standardInput = FileHandle.nullDevice
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        let completed = self.expectation(description: "swabble serve exits")
+        process.terminationHandler = { _ in completed.fulfill() }
+        try process.run()
+        self.wait(for: [completed], timeout: 10)
+        if process.isRunning {
+            process.terminate()
+        }
+        process.waitUntilExit()
+
+        XCTAssertEqual(process.terminationStatus, 1)
+        XCTAssertEqual(try String(contentsOf: config, encoding: .utf8), edited)
     }
 }
