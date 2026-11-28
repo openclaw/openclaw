@@ -4,6 +4,7 @@ import path from "node:path";
 import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
 import type { WorkerHeartbeatResult } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { CLEARED_GITHUB_CREDENTIALS } from "../agents/github-host-runtime.js";
+import { GITHUB_PUBLIC_HOST } from "../agents/github-host.js";
 import { managedGitHubIdentityEnvironment } from "../agents/github-tool-identity-env.js";
 import {
   removeManagedGitHubProfile,
@@ -190,10 +191,10 @@ export async function prepareWorkerGitHubEnvironment(params: {
   const localIdentityEnv = managedGitHubIdentityEnvironment({
     profileDir,
     gitAuthor: binding.gitAuthor,
-    // Reset inherited helpers so paired-device credentials cannot override the turn identity.
+    // Reset inherited helpers only for GitHub so other HTTPS remotes keep their own credentials.
     gitConfig: [
-      ["credential.helper", ""],
-      ["credential.helper", "!gh auth git-credential"],
+      [`credential.https://${GITHUB_PUBLIC_HOST}.helper`, ""],
+      [`credential.https://${GITHUB_PUBLIC_HOST}.helper`, "!gh auth git-credential"],
     ],
   });
   if (os.platform() === "win32") {
