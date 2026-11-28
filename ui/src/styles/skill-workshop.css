@@ -271,26 +271,29 @@
   min-width: 0;
 }
 
+.sw-row__name,
+.sw-row__desc,
+.sw-row__change,
+.sw-row__meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sw-row__name {
   min-width: 0;
-  overflow: hidden;
   color: var(--text-strong);
   font-size: var(--control-ui-text-md);
   font-weight: 550;
   line-height: 20px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .sw-row__desc,
 .sw-row__change,
 .sw-row__meta {
-  overflow: hidden;
   color: var(--muted);
   font-size: 12.5px;
   line-height: 1.45;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .sw-row__change {
@@ -348,6 +351,11 @@
   font-size: 11px;
   font-weight: 500;
   white-space: nowrap;
+}
+
+.sw-tag--new {
+  background: var(--info-subtle);
+  color: var(--info);
 }
 
 .sw-badge {
@@ -488,13 +496,26 @@
 .sw-row__preview {
   max-height: 340px;
   overflow: auto;
-  border-radius: calc(12px * var(--openclaw-corner-radius-scale));
-}
-
-.sw-row__preview .sw-diff,
-.sw-row__preview .sw-well {
   background: var(--card);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.sw-row__preview,
+.sw-well,
+.sw-diff,
+.sw-file {
+  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
+}
+
+.sw-row__preview::-webkit-scrollbar-track {
+  margin-block: 10px;
+}
+
+.sw-row__preview > .sw-diff,
+.sw-row__preview > .sw-well,
+.sw-row__preview > .sw-file {
+  border-radius: 0;
+  background: none;
 }
 
 .sw-row__foot {
@@ -611,7 +632,6 @@
 .sw-well {
   min-width: 0;
   padding: 22px 24px;
-  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
   background: var(--sw-tone);
 }
 
@@ -678,7 +698,6 @@
 /* Diffs sit on a quiet tonal block; the legend reads inside it. */
 .sw-diff {
   overflow: hidden;
-  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
   background: var(--sw-tone);
 }
 
@@ -756,7 +775,6 @@
 .sw-file {
   margin: 0;
   padding: 14px 16px;
-  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
   background: var(--sw-tone);
   font-family: var(--mono);
   font-size: 12.5px;
@@ -847,8 +865,14 @@
 }
 
 .sw-file-chip {
+  max-width: 100%;
   height: 28px;
   padding: 0 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /* Clip the directory prefix before the identifying end of the filename. */
+  direction: rtl;
   border: 0;
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--text) 6%, transparent);
@@ -931,23 +955,6 @@
   color: var(--text-strong);
   font-size: var(--control-ui-text-md);
   font-weight: 550;
-}
-
-.sw-timeline__why {
-  flex: 1 1 100%;
-  order: 1;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 13.5px;
-  line-height: 1.5;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sw-timeline__item--open .sw-timeline__why {
-  color: var(--text);
-  white-space: normal;
 }
 
 .sw-timeline__when {
@@ -1136,13 +1143,9 @@
 
   /* One slot width on a phone too, so every row's text ends at the same line. */
   .sw-grid .sw-row__aside {
+    align-self: center;
     width: 92px;
     padding-inline-end: 8px;
-  }
-
-  .sw-grid .sw-row__aside,
-  .sw-row__aside--history {
-    align-self: center;
   }
 
   .sw-row--history .sw-row__main {
@@ -1172,10 +1175,6 @@
     grid-area: 3 / 2 / 4 / 3;
     justify-self: start;
     padding-inline-start: 0;
-  }
-
-  .sw-row__aside--history {
-    padding-inline-end: 10px;
   }
 
   .sw-row__aside .btn,

@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { getAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -194,6 +195,29 @@ async function startAbortableQueuedRun() {
 }
 
 describe("AgentSession queue and next-turn lifecycle correctness", () => {
+  it("keeps a tool loaded during the first tool batch for the run's later requests", async () => {
+    const loaded = makeTool("loaded_later");
+    const lookup = makeTool("lookup", async () => {
+      getAgentToolExecutionContext()?.loadTool?.(loaded);
+      return toolResult("loaded");
+    });
+    const requests = recordRequests((model, index) =>
+      index === 1 ? toolStream(model, "lookup") : textStream(model),
+    );
+    const { session } = await createTestSession({ customTools: [lookup] });
+    // Like the embedded runner, resend the session's own tool list on every continuation.
+    session.agent.prepareNextTurn = async () => ({
+      prepareContinuation: (context) => ({
+        systemPrompt: context.systemPrompt,
+        tools: session.agent.state.tools.slice(),
+      }),
+    });
+    await session.prompt("look it up");
+    expect(requests).toHaveLength(2);
+    expect(requests[0]?.tools).not.toContain("loaded_later");
+    expect(requests[1]?.tools).toContain("loaded_later");
+  });
+
   it.each(["queued", "steering"] as const)(
     "preserves %s custom context envelopes across transcript replay",
     async (delivery) => {

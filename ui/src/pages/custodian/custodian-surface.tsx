@@ -88,6 +88,7 @@ function TranscriptEntry(props: {
   actions: CustodianActions["session"];
   message: CustodianMessage;
   activeWizardMessage: CustodianMessage | undefined;
+  onSkip: (message: CustodianMessage) => void;
 }) {
   const question = () => props.message.question;
   const questionKey = () => `${props.message.id}:${question()?.id}`;
@@ -131,7 +132,7 @@ function TranscriptEntry(props: {
                 !props.store().canSend ||
                 props.store().answeredQuestions.has(questionKey()),
               onSelect: (label: string) => props.actions.answerQuestion(props.message, label),
-              onSkip: () => props.actions.dismissQuestion(props.message),
+              onSkip: () => props.onSkip(props.message),
             }}
           />
         </div>
@@ -314,25 +315,30 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
     },
   });
   let revealedMessages = false;
-  createScrollPosition(() => {
-    const initialMessageId = store().messages.at(-1)?.id ?? null;
-    return {
-      reveal: {
-        identity: [initialMessageId],
-        target: () => {
-          // Initial empty chrome does not reveal; clearing an existing transcript still does.
-          if (initialMessageId === null && !revealedMessages) {
-            return undefined;
-          }
-          revealedMessages = true;
-          const lastMessage = host.contains(transcriptNode)
-            ? transcriptNode?.lastElementChild
-            : undefined;
-          return lastMessage instanceof HTMLElement ? lastMessage : undefined;
+  // Only a new message schedules a reveal; drafts and status updates must not cancel it.
+  const latestMessageId = createMemo(() => store().messages.at(-1)?.id ?? null);
+  createScrollPosition(
+    () => {
+      const initialMessageId = latestMessageId();
+      return {
+        reveal: {
+          identity: [initialMessageId],
+          target: () => {
+            // Initial empty chrome does not reveal; clearing an existing transcript still does.
+            if (initialMessageId === null && !revealedMessages) {
+              return undefined;
+            }
+            revealedMessages = true;
+            const lastMessage = host.contains(transcriptNode)
+              ? transcriptNode?.lastElementChild
+              : undefined;
+            return lastMessage instanceof HTMLElement ? lastMessage : undefined;
+          },
         },
-      },
-    };
-  });
+      };
+    },
+    { revealTiming: "animation-frame" },
+  );
   const handleKeydown = (event: KeyboardEvent) => {
     if (event.key !== "Enter" || event.shiftKey || isComposingKeyboardEvent(event)) {
       return;
@@ -470,6 +476,12 @@ function CustodianSurfaceView(props: CustodianSurfaceProps, host: CustodianSurfa
                 actions={actions().session}
                 message={message()}
                 activeWizardMessage={activeWizardMessage()}
+                onSkip={(entry) => {
+                  if (entry.question?.skipAction !== "exit") {
+                    textarea?.focus({ preventScroll: true });
+                  }
+                  actions().session.dismissQuestion(entry);
+                }}
               />
             )}
           </For>

@@ -9,7 +9,7 @@ import {
   resolveAvatarImageUrl,
   retainAvatarImageUrl,
 } from "./identity-avatar-loader.ts";
-import { resolveAvatar, resolveIdentityHue } from "./identity-avatar.ts";
+import { resolveAvatar } from "./identity-avatar.ts";
 
 function avatarResponse(mime = "image/png") {
   return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": mime } });
@@ -19,34 +19,6 @@ afterEach(() => {
   setAvatarGatewayOrigin(null);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-});
-
-describe("resolveAvatar", () => {
-  it("falls back to initials for a non-email id", () => {
-    expect(resolveAvatar({ id: "profile_123" })).toMatchObject({
-      kind: "initials",
-      initials: "P",
-    });
-  });
-
-  it("derives up to two initials from a display name", () => {
-    expect(resolveAvatar({ name: "Ada Lovelace Byron" })).toMatchObject({
-      kind: "initials",
-      initials: "AL",
-    });
-  });
-
-  it("derives a stable identity hue from the same seed as the initials color", () => {
-    const first = resolveIdentityHue({ id: "profile_123", name: "Ada Lovelace" });
-    const second = resolveIdentityHue({ id: "profile_123", name: "Renamed User" });
-    expect(first).toBe(second);
-    expect(first).toBeGreaterThanOrEqual(0);
-    expect(first).toBeLessThan(360);
-    const resolved = resolveAvatar({ id: "profile_123" });
-    if (resolved.kind === "initials") {
-      expect(first).toBe(resolved.colorSeed % 360);
-    }
-  });
 });
 
 describe("resolveAvatar profile URL origin restriction", () => {

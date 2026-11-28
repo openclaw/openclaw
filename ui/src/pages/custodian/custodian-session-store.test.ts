@@ -678,7 +678,7 @@ it.each([false, true])("allows only configured models or setup utilities (%s)", 
   expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "onboarding" });
   expect(context.agents.state.agentsList?.agents[0]?.model?.primary).toBeUndefined();
   store.exitSetup();
-  expect(context.navigate).toHaveBeenCalledWith("model-setup", { search: "?firstRun=1" });
+  expect(context.navigate).toHaveBeenCalledWith("model-providers", { search: "?firstRun=1" });
 });
 
 it.each(["chat", "channels", "model-setup"] as const)("leaves for %s", async (destination) => {

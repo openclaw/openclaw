@@ -349,12 +349,13 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     // Automatic naming is independent of the failed worktree run's settlement.
     await sessionTitleRequests.get({ ...target, sessionId: beforeTitle.sessionId });
     const failed = loadSessionEntry(target)!;
-    expect(failed.displayName).toMatch(/^[a-z]+-[a-z]+$/);
+    expect(failed).not.toHaveProperty("displayName");
     expect(failed.updatedAt).toBeGreaterThanOrEqual(beforeTitle.updatedAt);
     expect(failed).toMatchObject({
       status: "failed",
       lastRunError: expect.stringContaining("has no commits"),
       pendingWorktree: { workspace },
+      titleFallbackReady: true,
     });
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     const transcriptScope = { ...target, sessionId: failed.sessionId };
@@ -371,9 +372,10 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     const recovered = await directSessionReq("sessions.create", selection, options);
     expect(recovered.ok, JSON.stringify(recovered.error)).toBe(true);
     const bound = loadSessionEntry(target)!;
+    expect(bound).not.toHaveProperty("displayName");
     expect(bound).toMatchObject({
       sessionId: failed.sessionId,
-      displayName: failed.displayName,
+      titleFallbackReady: true,
       projectId: project.id,
       lastRunError: failed.lastRunError,
       worktree: { repoRoot: repository },

@@ -27,6 +27,7 @@ import {
   getSessionMcpRequestSignal,
   runWithSessionMcpRequestSignal,
 } from "./agent-bundle-mcp-request-context.js";
+import { createMcpRunView } from "./agent-bundle-mcp-run-view.js";
 import type {
   BundleMcpToolRuntime,
   McpAppRequesterIdentity,
@@ -39,7 +40,7 @@ import {
 import {
   projectMcpCallToolResult,
   projectMcpGetPromptResult,
-  setMcpCodeModeGuestResult,
+  projectMcpJsonAgentToolResult,
 } from "./mcp-content.js";
 import { prepareMcpAppFormUpload } from "./mcp-form-resource-upload.js";
 import { captureMcpFormRequester } from "./mcp-form-tool-approval.js";
@@ -51,43 +52,10 @@ import {
   type McpAppFormOrigin,
 } from "./mcp-ui-resource.js";
 import { recordAgentCleanupFailure } from "./run-cleanup-timeout.js";
-import type { AgentToolResult } from "./runtime/index.js";
 import { neutralizePromptControlMarkers } from "./sanitize-for-prompt.js";
-import { toToolSearchJsonSafe } from "./tool-search-json.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const MAX_MCP_SERVER_INSTRUCTIONS_CHARS = 2_000;
-
-function toJsonAgentToolResult(params: {
-  serverName: string;
-  operation: string;
-  value: unknown;
-}): AgentToolResult<unknown> {
-  const publicValue = toToolSearchJsonSafe(
-    params.operation === "resources_list" && Array.isArray(params.value)
-      ? { resources: params.value }
-      : params.operation === "prompts_list" && Array.isArray(params.value)
-        ? { prompts: params.value }
-        : params.value,
-  );
-  if (isRecord(publicValue)) {
-    delete publicValue._meta;
-  }
-  const result: AgentToolResult<unknown> = {
-    content: [
-      {
-        type: "text",
-        text: JSON.stringify(publicValue),
-      },
-    ],
-    details: {
-      mcpServer: params.serverName,
-      mcpOperation: params.operation,
-      untrustedMcpOutput: true,
-    },
-  };
-  return setMcpCodeModeGuestResult(result, publicValue);
-}
 
 function requireStringArg(input: unknown, key: string): string {
   const value = isRecord(input) ? input[key] : undefined;
@@ -352,6 +320,8 @@ export function buildBundleMcpToolsFromCatalog(params: {
 
 export async function materializeBundleMcpToolsForRun(params: {
   runtime: SessionMcpRuntime;
+  /** One run's authenticated requester, independent of the cached runtime's lifetime. */
+  assertRequesterCurrent?: () => void;
   agentId?: string;
   appRequester?: McpAppRequesterIdentity;
   operatorConnect?: OperatorMcpConnectContext;
@@ -360,15 +330,21 @@ export async function materializeBundleMcpToolsForRun(params: {
   releaseLease?: () => void;
   disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
-  const runtime = params.runtime;
+  const viewLifetime = params.assertRequesterCurrent ? new AbortController() : undefined;
+  const runtime = createMcpRunView(
+    params.runtime,
+    params.assertRequesterCurrent,
+    viewLifetime?.signal,
+  );
   let disposal: Promise<void> | undefined;
   let allowedAppToolsByServer: Map<string, Set<string>> | undefined;
   let releaseLease: (() => void) | undefined;
   const dispose = async () => {
+    viewLifetime?.abort(new Error("Requester MCP view has been released."));
     disposal ??= (async () => {
       // Failure to release the lease cannot strand this view's private runtime.
       try {
-        await releaseSessionMcpRuntime({ runtime, releaseLease });
+        await releaseSessionMcpRuntime({ runtime: params.runtime, releaseLease });
       } finally {
         await params.disposeRuntime?.();
       }
@@ -406,7 +382,7 @@ export async function materializeBundleMcpToolsForRun(params: {
         ? (serverName) => (_toolCallId, _input, signal) =>
             runWithSessionMcpRequestSignal(signal, async () => {
               runtime.markUsed();
-              return toJsonAgentToolResult({
+              return projectMcpJsonAgentToolResult({
                 serverName,
                 operation,
                 value: await runtime[method]?.(serverName),
@@ -564,7 +540,7 @@ export async function materializeBundleMcpToolsForRun(params: {
             runWithSessionMcpRequestSignal(signal, async () => {
               const uri = requireStringArg(input, "uri");
               runtime.markUsed();
-              return toJsonAgentToolResult({
+              return projectMcpJsonAgentToolResult({
                 serverName,
                 operation: "resources_read",
                 value: await runtime.readResource?.(serverName, uri),
@@ -635,7 +611,7 @@ export async function materializeBundleMcpToolsForRun(params: {
     }
 
     return {
-      tools,
+      tools: connectSurface.withSignIn(tools),
       appTools: appTools.toSorted((a, b) => a.name.localeCompare(b.name)),
       ...(catalog.diagnostics && catalog.diagnostics.length > 0
         ? { diagnostics: catalog.diagnostics }

@@ -13,7 +13,10 @@ import {
   hasPendingInputConsumptionColumn,
   hasSessionPendingInputsSchema,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import { getExactSessionEntryQueries } from "./session-accessor.sqlite-entry-query.js";
+import { parseReadableSessionEntryData } from "./session-accessor.sqlite-entry-read.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { pendingInputAudienceEligibility } from "./session-pending-input-audience.js";
 import type {
   PendingInputHistoryQuery,
   PendingInputHistorySnapshot,
@@ -47,24 +50,45 @@ export function readPendingInputHistoryInDatabase(
     return readPendingInputPageInDatabase(database, query, hasConsumption);
   }
   return runSqliteReadSnapshotSync(database.db, () => {
+    // Read the persisted run and queue in one native snapshot, including an empty queue.
+    const row = query.includeQueueObservation
+      ? getExactSessionEntryQueries(database.db).canonical(query.sessionKey, "list", false)
+      : undefined;
+    const entry = row && parseReadableSessionEntryData(database, row, "list");
+    const runState =
+      entry?.sessionId === query.sessionId
+        ? { status: entry.status, lastRunId: entry.lastRunId }
+        : undefined;
     const db = getSessionKysely(database.db);
     let base = db
       .selectFrom("session_pending_inputs")
       .where("session_key", "=", query.sessionKey)
       .where("session_id", "=", query.sessionId)
-      .where(pendingInputHistoryEligibility(query));
+      .where(pendingInputHistoryEligibility(query))
+      .$if(Boolean(query.audience), (selection) =>
+        selection.where(pendingInputAudienceEligibility(database, query.audience!)),
+      );
     if (hasConsumption) {
       base = base.where("consumed_event_id", "is", null);
     }
-    const total =
-      executeSqliteQueryTakeFirstSync(
-        database.db,
-        base.select(db.fn.count<number>("input_id").as("total")),
-      )?.total ?? 0;
-    if (total === 0) {
-      return { rows: [], total };
+    const counts = executeSqliteQueryTakeFirstSync(
+      database.db,
+      base
+        .select((eb) => eb.fn.countAll<number>().as("total"))
+        .$if(query.includeQueueObservation === true, (selection) =>
+          selection.select((eb) =>
+            eb.fn.countAll<number>().filterWhere("state", "=", "queued").as("queued"),
+          ),
+        ),
+    );
+    if (!counts?.total) {
+      return { rows: [], total: 0, ...(runState && { runState }) };
     }
-    return { ...readPendingInputPageInDatabase(database, query, hasConsumption), total };
+    return {
+      ...readPendingInputPageInDatabase(database, query, hasConsumption),
+      total: counts.total,
+      ...(counts.queued !== undefined && { hasQueuedInput: counts.queued > 0, runState }),
+    };
   });
 }
 
@@ -88,6 +112,9 @@ function readPendingInputPageInDatabase(
           .where("session_id", "=", query.sessionId)
           .$if(hasConsumption, (selection) => selection.where("consumed_event_id", "is", null))
           .where(pendingInputHistoryEligibility(query))
+          .$if(Boolean(query.audience), (selection) =>
+            selection.where(pendingInputAudienceEligibility(database, query.audience!)),
+          )
           .$if(query.before !== undefined, (selection) =>
             selection.where("seq", "<", query.before!),
           )

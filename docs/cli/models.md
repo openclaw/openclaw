@@ -33,7 +33,7 @@ openclaw models scan
 
 For `models status`, `OPENCLAW_AGENT_DIR` overrides the inspected auth directory when `--agent` is omitted. A matching configured `agentDir` retains that agent's ownership during credential refresh. An explicit `--agent <id>` takes precedence over the environment override.
 
-`set`, `set-image`, `scan`, `refresh`, `aliases`, and `fallbacks`/`image-fallbacks` `add`, `remove`, and `clear` operate on global defaults and reject `--agent`.
+`set`, `set-image`, `scan`, `refresh`, `aliases`, and `fallbacks`/`image-fallbacks` `add`, `remove`, `clear`, and `list` operate on global defaults and reject `--agent`.
 
 `models set`, `models set-image`, `models aliases add`, `models fallbacks add`, and `models image-fallbacks add` require a known provider: an installed plugin declaration, a prepared runtime provider alias, or a `models.providers` entry. An unknown provider exits nonzero without changing config. If the plugin inventory is unavailable or the retained runtime generation has no providers loaded, the commands save with a warning because provider ownership cannot be verified.
 
@@ -346,7 +346,7 @@ To configure system/agent credentials for a remote server, run `models auth` on 
 openclaw models accounts list
 openclaw models accounts login
 openclaw models accounts login anthropic --method api-key
-openclaw models accounts login openai --method device-code
+openclaw models accounts login openai --method oauth
 openclaw models accounts login xai --method api-key
 openclaw models accounts use <account-id>
 openclaw models accounts clear-default <provider>
@@ -364,7 +364,7 @@ If no person is identified, the command stops before provider sign-in and explai
 
 `login`, `use`, and `clear-default` need `operator.write`. `login` requires an interactive terminal and offers the same provider and sign-in methods as **Add account** in the Control UI. Omit the provider to choose from the Gateway's catalog; use `--method <id>` to select a method directly. The catalog includes only methods enabled for personal accounts by their provider plugin, not every system/agent setup method.
 
-Anthropic uses an API key for personal setup, not a Claude subscription token. OpenAI offers API key, browser sign-in, and device-code methods; Grok (`xai`) offers API key and device sign-in. Follow the steps shown by the selected Gateway. Credentials and authorization codes go into protected inputs, never command arguments or chat. During browser sign-in, the CLI keeps checking for completion even while a redirect prompt is open.
+Anthropic uses an API key for personal setup, not a Claude subscription token. OpenAI offers API key, Codex login (device code), and Sign in with ChatGPT methods; Grok (`xai`) offers API key and device sign-in. Follow the steps shown by the selected Gateway. Credentials and authorization codes go into protected inputs, never command arguments or chat. During browser sign-in, the CLI keeps checking for completion even while a redirect prompt is open.
 
 Keep the command running until it reports a terminal result. Ctrl-C cancels that exact sign-in attempt and waits for the Gateway's acknowledgment; a closed connection must start a fresh attempt. Saving an account does not by itself prove that a model request will succeed.
 
@@ -412,6 +412,13 @@ Omit the provider or method to choose from the available flows. An unavailable
 or ambiguous plugin method is not silently replaced with a different login.
 The menu reads the selected local configuration, including `plugins.load.paths`,
 and honors plugin disablement and allowlists.
+
+Provider menus keep onboarding's preferred providers first, then list other
+providers alphabetically. The Gateway groups sign-in methods by provider and
+shows their descriptions in priority order. Type to filter by label, hint,
+or ID. Use the arrow keys and Enter to select a match. If `--provider` and
+`--method` identify one available flow, the menu is skipped. Keep both flags on
+the same shell command. Use a trailing backslash to split it across lines.
 
 For these online logins, `--profile-id`, `--force`, `--set-default`, and Copilot
 `--yes` are refused before starting sign-in because the Gateway login API does
@@ -469,9 +476,9 @@ openclaw models auth order clear --provider <id>
 
 `models auth add` is the interactive auth helper. It can launch a provider auth flow (OAuth/API key) or guide you into manual token paste, depending on the provider you choose.
 
-`models auth list` lists saved auth profiles for the selected agent without printing token, API-key, or OAuth secret material. Active cooldown and disable entries include their reason and recovery action. Active subscription blocks include their reason, source, expiry, and whether they apply to the whole profile or one model; expired blocks are omitted. Legacy Gemini CLI OAuth cooldowns direct you to the supported Google AI Studio API-key setup instead of offering an unavailable Gemini CLI login flow. Use `--provider <id>` to filter to one provider, such as `openai`, and `--json` for scripting.
+`models auth list` lists saved auth profiles for the selected agent without printing token, API-key, or OAuth secret material. Active cooldown and disable entries include their reason and recovery action. Active subscription blocks include their reason, source, expiry, and whether they apply to the whole profile or one model; expired blocks are omitted. Legacy Gemini CLI OAuth cooldowns direct you to the supported Gemini API key setup instead of offering an unavailable Gemini CLI login flow. Use `--provider <id>` to filter to one provider, such as `openai`, and `--json` for scripting.
 
-`models auth login` runs a provider plugin's auth flow (OAuth/API key). Use `openclaw plugins list` to see which providers are installed. `login` accepts `--profile-id <id>` for providers that support named profiles during login (use this to keep multiple logins for the same provider separate), `--method <id>` to pick a specific auth method, `--device-code` as a shortcut for `--method device-code`, `--set-default` to apply the provider's recommended default model, and `--force` to remove existing profiles for that provider first (use when a cached OAuth profile is stuck or you want to switch accounts).
+`models auth login` runs a provider plugin's auth flow (OAuth/API key). Use `openclaw plugins list` to see which providers are installed. `login` accepts `--profile-id <id>` for providers that support named profiles during login (use this to keep multiple logins for the same provider separate), `--method <id>` to pick a specific auth method, `--device-code` to pick the provider's device-code sign-in (method `device-code`, or the declared device-code sign-in such as OpenAI Codex login or xAI OAuth), `--set-default` to apply the provider's recommended default model, and `--force` to remove existing profiles for that provider first (use when a cached OAuth profile is stuck or you want to switch accounts).
 
 Saving credentials for a provider makes its models visible. When a model restriction (`modelPolicy.allow`) hides every model of that provider, OpenClaw adds `<provider>/*` to the restriction that governs the agent and reports "Added `<provider>/*` to allowed models." A restriction that already names some of the provider's models, by exact ref or a narrower wildcard, stays unchanged, and so does a configuration with no restriction. The CLI (`login`, `paste-api-key`, `paste-token`), private-chat login, and Control UI follow the same rule. Provider plugin setup defaults cannot change restrictions.
 

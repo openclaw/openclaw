@@ -27,6 +27,9 @@ import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sq
 import {
   boundSessionTranscriptSearchSnippet,
   compareSessionTranscriptSearchHits,
+  SESSION_SEARCH_MATCH_MARKERS,
+  SESSION_SEARCH_SNIPPET_MAX_CHARS,
+  SESSION_SEARCH_SNIPPET_TOKENS,
   sessionTranscriptSearchFtsQuery,
   sessionTranscriptSearchLimit,
   validateSessionTranscriptSearchQuery,
@@ -208,19 +211,16 @@ function* readSessionTranscriptSearch(
         ));
     const ranking = fullText.rank(textIndex, literalQuery);
     const expression = expressionBuilder<DB, "session_transcript_fts">();
+    const substringPositions = substringTerms.map((term) =>
+      engineStringPosition(
+        database.db,
+        expression.fn<string>("lower", ["text"]),
+        expression.val(term.toLowerCase()),
+      ),
+    );
     const match = expression.and([
       ...(useFts ? [fullText.match(textIndex, literalQuery)] : []),
-      ...substringTerms.map((term) =>
-        expression(
-          engineStringPosition(
-            database.db,
-            expression.fn<string>("lower", ["text"]),
-            expression.val(term.toLowerCase()),
-          ),
-          ">",
-          0,
-        ),
-      ),
+      ...substringPositions.map((position) => expression(position, ">", 0)),
     ]);
     const order =
       params.order === "recent"
@@ -296,9 +296,36 @@ function* readSessionTranscriptSearch(
       .$if(useFts || postgres, (builder) =>
         builder.orderBy(order).orderBy(fullText.identity(textIndex)),
       );
+    const nativeSnippet = (markers?: typeof SESSION_SEARCH_MATCH_MARKERS) =>
+      fullText.snippet(
+        textIndex,
+        "text",
+        SESSION_SEARCH_SNIPPET_TOKENS,
+        literalQuery,
+        undefined,
+        markers,
+      );
     const snippet = substringTerms.length
       ? expression.ref("text").as("snippet")
-      : fullText.snippet(textIndex, "text", 48, literalQuery).as("snippet");
+      : nativeSnippet().as("snippet");
+    // UTF-8 bytes bound the source's UTF-16 units. SQLite can add two omission
+    // markers. Short messages only need the plain native snippet.
+    const snippetFocus =
+      substringPositions[0]?.as("snippet_focus") ??
+      (postgres
+        ? expression.lit(null).as("snippet_focus")
+        : expression
+            .case()
+            .when(
+              expression.fn<number>("octet_length", ["text"]),
+              ">",
+              SESSION_SEARCH_SNIPPET_MAX_CHARS - 2 * " … ".length,
+            )
+            .then(nativeSnippet(SESSION_SEARCH_MATCH_MARKERS))
+            .else(null)
+            .end()
+            .as("snippet_focus"));
+    const snippets = [snippet, snippetFocus] as const;
     const stream =
       filtered && !postgres && useFts && substringTerms.length === 0
         ? db
@@ -309,8 +336,8 @@ function* readSessionTranscriptSearch(
             .where((eb) => eb(fullText.identity(textIndex), "=", eb.ref("ordered.fts_rowid")))
             .where(match)
             .selectAll("ordered")
-            .select(snippet)
-        : ordered.select(snippet);
+            .select(snippets)
+        : ordered.select(snippets);
     const decode = (
       row: Omit<InferResult<typeof stream>[number], "fts_rowid">,
     ): SessionTranscriptSearchResult["hits"][number] | undefined => {
@@ -324,13 +351,21 @@ function* readSessionTranscriptSearch(
         return undefined;
       }
       const timestamp = Number(row.timestamp);
+      const focus = row.snippet_focus;
       return {
         sessionKey: row.session_key,
         sessionId: row.session_id,
         messageId: row.message_id,
         role: row.role,
         timestamp: Number.isFinite(timestamp) ? timestamp : 0,
-        snippet: boundSessionTranscriptSearchSnippet(row.snippet, substringTerms[0]),
+        snippet: boundSessionTranscriptSearchSnippet(
+          row.snippet,
+          typeof focus === "string"
+            ? { markedSnippet: focus }
+            : typeof focus === "number"
+              ? { scalarPosition: focus, length: substringTerms[0]?.toLowerCase().length ?? 0 }
+              : undefined,
+        ),
         score: ranking.toRank(row.rank),
       };
     };
@@ -422,9 +457,7 @@ function* readSessionTranscriptSearch(
             "role",
             "timestamp",
             "hits.rank as rank",
-            substringTerms.length
-              ? expression.ref("text").as("snippet")
-              : fullText.snippet(textIndex, "text", 48, literalQuery).as("snippet"),
+            ...snippets,
           ])
           .orderBy(order),
       ).rows;

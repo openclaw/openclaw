@@ -1,15 +1,20 @@
-import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import { expectDefined } from "@openclaw/normalization-core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createOpenClawCodingToolsInternal as createOpenClawCodingTools } from "./agent-tools.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
+import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
+import { prepareParticipationTestRun } from "./participation-ceiling.test-support.js";
+import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
+import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const shellSpies = vi.hoisted(() => ({
   defaults: vi.fn<(defaults?: ExecToolDefaults) => void>(),
+  processDefaults: vi.fn<(defaults?: ProcessToolDefaults) => void>(),
   exec: vi.fn(async () => ({ content: [], details: {} })),
   process: vi.fn(async () => ({ content: [], details: {} })),
 }));
@@ -35,12 +40,15 @@ vi.mock("./bash-tools.js", () => ({
       execute: shellSpies.exec,
     };
   },
-  createProcessTool: () => ({
-    name: "process",
-    description: "process test double",
-    parameters: { type: "object", properties: {} },
-    execute: shellSpies.process,
-  }),
+  createProcessTool: (defaults?: ProcessToolDefaults) => {
+    shellSpies.processDefaults(defaults);
+    return {
+      name: "process",
+      description: "process test double",
+      parameters: { type: "object", properties: {} },
+      execute: shellSpies.process,
+    };
+  },
 }));
 
 const scheduledToolPolicy = {
@@ -59,6 +67,69 @@ function scheduledExec(options: Parameters<typeof createOpenClawCodingTools>[0] 
 
 describe("createOpenClawCodingTools scheduled exec target", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  it("keeps participation exec approvals in-turn, disables exit wakes, and makes process observational", async () => {
+    const tools = createOpenClawCodingTools({
+      ...prepareParticipationTestRun({
+        kind: "send",
+        profileId: "guest",
+        sessionKey: "agent:main:test",
+      }),
+      sessionPermissionPolicy: { mode: "full", root: process.cwd() },
+      exec: { notifyOnExit: true, approvalFollowupMode: "agent" },
+      approvalReviewerDeviceId: "participant-device",
+    });
+    await tools
+      .find((tool) => tool.name === "exec")!
+      .execute("participation-exec", { command: "true" });
+    await tools
+      .find((tool) => tool.name === "process")!
+      .execute("participation-process", { action: "list" });
+    expect(shellSpies.defaults).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        notifyOnExit: false,
+        approvalFollowupMode: undefined,
+        approvalReviewerDeviceId: undefined,
+        mode: "ask",
+        bypassHostApprovalFloors: false,
+      }),
+    );
+    expect(shellSpies.processDefaults).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnly: true, includeAncestors: false }),
+    );
+  });
+
+  it("projects participant containment into the verified sandbox workspace", async () => {
+    const hostRoot = "/tmp/participant-original";
+    const sandboxRoot = "/tmp/participant-sandbox";
+    const tools = createOpenClawCodingTools({
+      ...prepareParticipationTestRun({
+        kind: "send",
+        profileId: "guest",
+        sessionKey: "agent:main:invited",
+        source: {
+          agentId: "main",
+          sessionId: "invited",
+          lifecycleRevision: null,
+          creatorProfileId: "creator",
+          root: hostRoot,
+        },
+      }),
+      workspaceDir: hostRoot,
+      sandbox: createSandboxTestContext({
+        overrides: {
+          workspaceDir: sandboxRoot,
+          agentWorkspaceDir: hostRoot,
+          fsBridge: createHostSandboxFsBridge(sandboxRoot),
+        },
+      }),
+      sessionPermissionPolicy: { mode: "full", root: hostRoot },
+    });
+    await tools.find((tool) => tool.name === "exec")!.execute("sandbox-exec", { command: "true" });
+    expect(shellSpies.defaults).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: sandboxRoot, participationRoot: sandboxRoot }),
+    );
+  });
 
   it("uses the scheduled Gateway pin when no target is requested", async () => {
     const execTool = scheduledExec();

@@ -15,9 +15,11 @@ import { isRetryableAssistantError } from "../../../../src/llm/utils/retry.js";
 import { createEmptyPluginRegistry } from "../../../../src/plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../../../src/plugins/runtime/generation-scope.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { writerState } from "../provider-state.test-support.js";
+import { PROVIDER_STATE_SCOPE } from "../provider-types.js";
 import { createOpenAIResponsesClient as createClient } from "../providers/openai-provider-client.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
-import { cleanupSessionResources } from "../session-resources.js";
+import { claimConversationProviderState, cleanupSessionResources } from "../session-resources.js";
 import {
   OpenAIResponsesWebSocketSafeRetryError,
   responsesPromptObserver,
@@ -257,6 +259,7 @@ async function run(
   const options = {
     apiKey: "test-key",
     sessionId: "session-1",
+    [PROVIDER_STATE_SCOPE]: claimConversationProviderState("session-1"),
     transport: "websocket-cached" as const,
     reasoningEffort: "low" as const,
     ...requestOptions,
@@ -393,6 +396,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
         apiKey: "synthetic-key",
         transport: "websocket-cached" as const,
         sessionId: "tier-recovery-session",
+        [PROVIDER_STATE_SCOPE]: claimConversationProviderState("tier-recovery-session"),
         ...(shape.endsWith("hook") ? { onActiveResponse } : {}),
         onPayload: (payload: unknown) => {
           if (!isRecord(payload)) {
@@ -517,6 +521,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     const responseStream = await createStreamFn()(model, history(user("hello", 1)), {
       apiKey: "test-key",
       sessionId: "session-1",
+      ...writerState("session-1"),
       transport: "auto",
       onResponse,
     });

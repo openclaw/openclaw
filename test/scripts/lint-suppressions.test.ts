@@ -194,7 +194,6 @@ describe("production lint suppressions", () => {
         "scripts/lib/control-ui-talk-fixture.ts|typescript/unbound-method|5",
         "scripts/lib/plain-gh.mjs|no-warning-comments|1",
         // Aggregate logs strip only SGR color and reject other control bytes that could hide errors.
-        "scripts/lib/release-validation-waivers.mjs|no-control-regex|2",
         "scripts/lib/sqlite-reliability-process.ts|typescript/prefer-promise-reject-errors|1",
         "scripts/lib/usage-bench-observer.mjs|typescript/unbound-method|1",
         // The frame census retains native methods and supplies their original receivers through .call.
@@ -306,6 +305,8 @@ describe("production lint suppressions", () => {
         "src/agents/session-dirs.ts|unicorn/no-array-sort|1",
         // Binary output must escape C0/C1 bytes while preserving tab, LF and CR.
         "src/agents/shell-utils.ts|no-control-regex|1",
+        // Swarm summaries sort only their freshly materialized private arrays.
+        "src/agents/subagents/registry/subagent-session-swarm-summary.ts|unicorn/no-array-sort|2",
         "src/agents/tool-schema-hints.ts|unicorn/no-array-sort|1",
         // MCP catalog metadata is snapshotted through JSON so undefined members are dropped.
         "src/agents/tool-search-prepared-catalog.ts|unicorn/prefer-structured-clone|1",
@@ -335,7 +336,6 @@ describe("production lint suppressions", () => {
         "src/config/sessions/session-accessor.sqlite-worker-request.ts|no-warning-comments|1",
         // Reflect.apply forwards the intercepted native database receiver in the worker probe.
         "src/config/sessions/session-model-context-compacted.test-support.ts|typescript/unbound-method|1",
-        "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
         "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
         // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
         "src/config/sessions/transcript-json-normalize.ts|unicorn/prefer-structured-clone|1",
@@ -364,9 +364,11 @@ describe("production lint suppressions", () => {
         "src/gateway/session-event-projection.ts|typescript/prefer-for-of|1",
         // Session presentation keys, event fields, and sharing aliases sort fresh private arrays.
         "src/gateway/session-event-projection.ts|unicorn/no-array-sort|1",
+        // Sidebar packing avoids per-row iterators and fills one output slot per input row.
+        "src/gateway/session-list-view-cache.ts|typescript/prefer-for-of|1",
+        "src/gateway/session-list-view-cache.ts|unicorn/no-new-array|1",
         "src/gateway/session-row-presentation.ts|unicorn/no-array-sort|1",
         "src/gateway/session-sharing-read.ts|unicorn/no-array-sort|1",
-        "src/gateway/session-swarm-summary.ts|unicorn/no-array-sort|2",
         // Node worker ports do not accept a browser target origin.
         "src/gateway/system-ca-warmup.worker.ts|unicorn/require-post-message-target-origin|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
@@ -418,7 +420,7 @@ describe("production lint suppressions", () => {
         "src/plugins/plugin-return-value.ts|typescript/prefer-promise-reject-errors|1",
         "src/plugins/plugin-return-value.ts|typescript/unbound-method|1",
         "src/plugins/plugin-return-value.ts|unicorn/no-thenable|1",
-        "src/plugins/provider-login-options.ts|unicorn/no-array-sort|2",
+        "src/plugins/provider-login-options.ts|unicorn/no-array-sort|1",
         "src/plugins/provider-registry-selection.ts|unicorn/no-array-sort|1",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
         // Admission records original factory identities; executable views bind their receivers.

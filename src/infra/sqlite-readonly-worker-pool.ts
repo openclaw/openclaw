@@ -43,7 +43,7 @@ export function createSqliteReadOnlyWorkerPool(
   // Process reuse is bounded independently of request scopes. Each slot serializes
   // its requests; cancellation retires only the active child, never another slot.
   const scopedReadWorkers: Array<{
-    launch: SqliteReadOnlyWorkerLaunch;
+    launch?: SqliteReadOnlyWorkerLaunch;
     session?: SqliteReadOnlyWorkerSession;
     tail: Promise<void>;
     queued: number;
@@ -87,7 +87,10 @@ export function createSqliteReadOnlyWorkerPool(
     const worker = slot.session;
     try {
       await worker?.close();
-      slot.session = undefined;
+      if (slot.session === worker) {
+        slot.session = undefined;
+        settleSlot(slot);
+      }
     } catch (error) {
       // An unconfirmed native exit still occupies capacity, but must not poison
       // compatible reads that can use another healthy slot.
@@ -114,7 +117,7 @@ export function createSqliteReadOnlyWorkerPool(
       }
       const retained = statefulReadWorkers.get(scope);
       if (retained) {
-        if (!isSameSqliteReadOnlyWorkerLaunch(retained.launch, launch)) {
+        if (!retained.launch || !isSameSqliteReadOnlyWorkerLaunch(retained.launch, launch)) {
           throw new Error("Database page-cache warm worker launch changed during its scope");
         }
         return retained;
@@ -129,9 +132,11 @@ export function createSqliteReadOnlyWorkerPool(
       const available = scopedReadWorkers.filter(
         (candidate) => !candidate.leased && !candidate.quarantined,
       );
-      let slot = available.find((candidate) =>
-        isSameSqliteReadOnlyWorkerLaunch(candidate.launch, launch),
+      let slot = available.find(
+        (candidate) =>
+          candidate.launch && isSameSqliteReadOnlyWorkerLaunch(candidate.launch, launch),
       );
+      slot ??= available.find((candidate) => !candidate.launch);
       if (!slot && scopedReadWorkers.length < SCOPED_READ_WORKER_LIMIT) {
         slot = { launch, tail: Promise.resolve(), queued: 0 };
         scopedReadWorkers.push(slot);
@@ -142,6 +147,8 @@ export function createSqliteReadOnlyWorkerPool(
         undefined,
       );
       if (slot) {
+        // Reserve a vacant slot before run() resumes so simultaneous matching reads share its tail.
+        slot.launch ??= launch;
         if (stateful && scope) {
           const retained = slot;
           const lease = { started: false };
@@ -159,15 +166,7 @@ export function createSqliteReadOnlyWorkerPool(
               retained.leased = undefined;
               statefulReadWorkers.delete(scope);
               scope.releaseReadWorker = undefined;
-              if (
-                !retained.quarantined &&
-                retained.queued === 0 &&
-                retained.session &&
-                !retained.session.isRetired()
-              ) {
-                retained.session.setIdle(true);
-                armScopedReadWorkerIdle(retained);
-              }
+              settleSlot(retained);
               for (const released of readWorkerReleaseWaiters) {
                 released();
               }
@@ -202,6 +201,19 @@ export function createSqliteReadOnlyWorkerPool(
     }
   }
 
+  function settleSlot(slot: (typeof scopedReadWorkers)[number]) {
+    if (slot.queued || slot.leased || slot.quarantined) {
+      return;
+    }
+    if (!slot.session) {
+      // Keep the slot and its queue: a selector may already be resuming with it.
+      slot.launch = undefined;
+    } else if (!slot.session.isRetired()) {
+      slot.session.setIdle(true);
+      armScopedReadWorkerIdle(slot);
+    }
+  }
+
   function retireIdleSlot(slot: (typeof scopedReadWorkers)[number]): Promise<void> {
     clearTimeout(slot.idle);
     slot.idleSince = undefined;
@@ -216,7 +228,7 @@ export function createSqliteReadOnlyWorkerPool(
 
   function armScopedReadWorkerIdle(slot: (typeof scopedReadWorkers)[number]) {
     if (
-      slot.launch.transport.kind === "broker" &&
+      slot.launch?.transport.kind === "broker" &&
       closingBrokers.has(slot.launch.transport.owner)
     ) {
       void retireIdleSlot(slot);
@@ -241,11 +253,14 @@ export function createSqliteReadOnlyWorkerPool(
     const stateful =
       options.mode === "operation" &&
       (options.command.type === "pageCache.begin" || options.command.type === "pageCache.step");
-    let selected: (typeof scopedReadWorkers)[number];
+    let selected: (typeof scopedReadWorkers)[number] | undefined;
     try {
       selected = await selectScopedReadWorker(options, launch);
       assertBrokerOpen(launch);
     } catch (error) {
+      if (selected && !selected.session) {
+        settleSlot(selected);
+      }
       observation.completed();
       throw error;
     }
@@ -270,10 +285,7 @@ export function createSqliteReadOnlyWorkerPool(
         ) {
           selected.leased.started = true;
         }
-        if (
-          !isSameSqliteReadOnlyWorkerLaunch(selected.launch, launch) ||
-          selected.session?.isRetired()
-        ) {
+        if (selected.session && !selected.session.compatible(launch)) {
           await closeSlot(selected);
         }
         options.signal?.throwIfAborted();
@@ -316,16 +328,7 @@ export function createSqliteReadOnlyWorkerPool(
       .finally(() => {
         observation.completed();
         selected.queued--;
-        if (
-          !selected.leased &&
-          !selected.quarantined &&
-          selected.queued === 0 &&
-          selected.session &&
-          !selected.session.isRetired()
-        ) {
-          selected.session?.setIdle(true);
-          armScopedReadWorkerIdle(selected);
-        }
+        settleSlot(selected);
       });
     selected.tail = runInDetachedAsyncContext(() =>
       Promise.allSettled([previous, operation]).then(() => {}),
@@ -341,7 +344,7 @@ export function createSqliteReadOnlyWorkerPool(
         scopedReadWorkers
           .filter(
             (slot) =>
-              slot.launch.transport.kind === "broker" &&
+              slot.launch?.transport.kind === "broker" &&
               slot.launch.transport.owner === broker &&
               slot.session &&
               slot.queued === 0 &&

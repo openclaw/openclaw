@@ -1,8 +1,10 @@
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathEntryExists } from "./path-existence.js";
 import {
   relocateRuntimeLauncher,
+  resolveLauncherShellFile,
   resolveRuntimeLauncherTargets,
 } from "./update-runtime-relocation.js";
 
@@ -25,19 +27,23 @@ function findStageDirectory(target: string): string | undefined {
   }
 }
 
+type StaleLauncher = {
+  stat: Stats;
+  content: string;
+  stage: string;
+  projectRoot: string;
+};
+
 /**
- * Repair a published pnpm launcher that still executes a removed update stage.
- * Earlier updaters published launchers from the stage without relocating pnpm 12.15+
- * quoted targets, so the CLI fails once activation moves the stage away. Only a launcher
- * that is provably this installation's is touched: its `cmd-shim-target` comment names
- * `root`'s entry, and its stage sits beside that live project. Ownership and relocation
- * use the same bytes, and the rename is skipped if the launcher changed meanwhile.
+ * Read-only half of {@link repairStagedRuntimeLauncher}: a launcher is stale when it is
+ * provably this installation's (its `cmd-shim-target` comment names `root`'s entry, and its
+ * removed stage sat beside that live project) and an exec target is gone.
  */
-async function repairStagedRuntimeLauncher(
+async function inspectStagedRuntimeLauncher(
   file: string,
   root: string,
   entryName = "openclaw.mjs",
-): Promise<StagedLauncherRepair> {
+): Promise<{ outcome: "current" | "not-ours" } | { outcome: "stale"; launcher: StaleLauncher }> {
   // pnpm writes regular files; reading a FIFO or device on PATH would block Doctor.
   const stat = await fs.lstat(file).catch(() => undefined);
   if (!stat?.isFile()) {
@@ -72,6 +78,35 @@ async function repairStagedRuntimeLauncher(
   if (path.dirname(projectRoot) !== (await fs.realpath(path.dirname(stage)))) {
     return { outcome: "not-ours" };
   }
+  return { outcome: "stale", launcher: { stat, content, stage, projectRoot } };
+}
+
+/**
+ * Repair a published pnpm launcher that still executes a removed update stage.
+ * Earlier updaters published launchers from the stage without relocating pnpm 12.15+
+ * quoted targets, so the CLI fails once activation moves the stage away. Only a launcher
+ * that is provably this installation's is touched: its `cmd-shim-target` comment names
+ * `root`'s entry, and its stage sits beside that live project. Ownership and relocation
+ * use the same bytes, and the rename is skipped if the launcher changed meanwhile.
+ */
+async function repairStagedRuntimeLauncher(
+  file: string,
+  root: string,
+  entryName = "openclaw.mjs",
+): Promise<StagedLauncherRepair> {
+  const inspection = await inspectStagedRuntimeLauncher(file, root, entryName);
+  if (inspection.outcome !== "stale") {
+    return inspection;
+  }
+  const { stat, content, stage, projectRoot } = inspection.launcher;
+  // Only the launcher's owner may replace it: the rename would hand another account's file
+  // to this one. Leave it as it is and report why.
+  const uid = process.getuid?.();
+  if (uid !== undefined && stat.uid !== uid) {
+    throw new Error(
+      `The launcher belongs to uid ${stat.uid}, not this account (uid ${uid}); it was left unchanged`,
+    );
+  }
   // Relocate the analyzed content in a private directory beside the launcher, verify it,
   // then replace the launcher in one rename. The exclusive directory keeps another account
   // from planting a link where the repair writes.
@@ -79,9 +114,9 @@ async function repairStagedRuntimeLauncher(
   const temporary = path.join(staging, path.basename(file));
   try {
     await fs.writeFile(temporary, content, { flag: "wx", mode: 0o600 });
-    // pnpm 12 resolves the shim's directory physically; relocate from that same base.
-    const physical = path.join(await fs.realpath(path.dirname(file)), path.basename(file));
-    await relocateRuntimeLauncher(temporary, physical, physical, [
+    // Relocate from the base the shim's shell resolves, as detection did above.
+    const shellFile = await resolveLauncherShellFile(file, content);
+    await relocateRuntimeLauncher(temporary, shellFile, shellFile, [
       { sourceRoot: stage, destinationRoot: projectRoot },
     ]);
     const relocated = await fs.readFile(temporary, "utf8");
@@ -97,7 +132,8 @@ async function repairStagedRuntimeLauncher(
     if (repaired.length === 0) {
       throw new Error("The repaired launcher names no executable target");
     }
-    await fs.chmod(temporary, stat.mode & 0o7777);
+    // Permission bits only: set-ID and sticky bits never carry into a rewritten launcher.
+    await fs.chmod(temporary, stat.mode & 0o777);
     // A package manager may have replaced the shim since it was inspected; leave its write.
     if ((await fs.readFile(file, "utf8").catch(() => undefined)) !== content) {
       throw new Error("The launcher changed while it was being repaired; it was left as is");
@@ -138,6 +174,23 @@ export async function repairPublishedPnpmLaunchers(params: {
     }
   }
   return { repaired, failed };
+}
+
+/** Read-only: whether {@link repairPublishedPnpmLaunchers} would rewrite a launcher. */
+export async function hasPublishedPnpmLauncherRepairWork(params: {
+  root: string;
+  env?: NodeJS.ProcessEnv;
+}): Promise<boolean> {
+  const root = await fs.realpath(params.root).catch(() => undefined);
+  if (!root || process.platform === "win32") {
+    return false;
+  }
+  for (const file of new Set(listPnpmLauncherCandidates(params.root, params.env ?? process.env))) {
+    if ((await inspectStagedRuntimeLauncher(file, root)).outcome === "stale") {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**

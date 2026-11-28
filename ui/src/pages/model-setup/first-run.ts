@@ -42,7 +42,7 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
   const { context } = params;
   const isStillDefaultLanding = () => sameRouteLocation(params.history.location(), initialLocation);
   const redirect =
-    params.redirect ?? (() => context.replace("model-setup", { search: "?firstRun=1" }));
+    params.redirect ?? (() => context.replace("model-providers", { search: "?firstRun=1" }));
   let initialDecisionSettled = false;
   const settleInitialDecision = () => {
     if (!initialDecisionSettled) {
@@ -80,16 +80,18 @@ export async function startModelSetupFirstRunRedirectAfterLocation(params: {
             void import("./first-run-activation-receipt.ts")
               .then(({ readFirstRunActivationReceipt }) => {
                 const current = context.gateway.snapshot;
-                if (
+                const receipt =
                   !initialDecisionSettled &&
                   current.phase === "connected" &&
                   current.client === snapshot.client &&
                   current.hello === snapshot.hello &&
                   context.gateway.connectionRevision === ownerRevision &&
                   (context.agentSelection.state.selectedId?.trim() || null) === selectedAgentId &&
-                  isStillDefaultLanding() &&
-                  readFirstRunActivationReceipt(context) !== null
-                ) {
+                  isStillDefaultLanding()
+                    ? readFirstRunActivationReceipt(context)
+                    : null;
+                // A Models sign-in record reopens its own dialog, not first-run setup.
+                if (receipt && receipt.kind !== "provider-login") {
                   redirect();
                 }
                 settleInitialDecision();

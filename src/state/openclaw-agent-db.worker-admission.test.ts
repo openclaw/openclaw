@@ -364,7 +364,7 @@ it.each([
       await writeAgent({ ...options, agentId: "sibling" }, () => undefined);
       if (change === "idle-revoked") {
         expect(revokedProof).toBeDefined();
-        invalidateValidation(database.path);
+        invalidateValidation(database.path, "a maintenance write");
         expect(getValidation(database)).toBeUndefined();
       }
       retainedExecution = captureExecution(options);
@@ -543,7 +543,7 @@ it.each(["before-entry", "source-revoked", "after-entry"] as const)(
       publications += 1;
       if (failure !== "after-entry") {
         // Revoke actual captured proof at the worker-to-host publication boundary.
-        invalidateValidation(pathname);
+        invalidateValidation(pathname, "a maintenance write");
         if (failure === "source-revoked") {
           current = false;
         }

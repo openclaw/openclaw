@@ -1,7 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
-import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
+import { isMemoryPressureHigh } from "../infra/host-memory.js";
 import type { PageCacheProgress } from "../infra/sqlite-page-cache.worker.js";
 import {
   runSqliteReadOnlyOperation,
@@ -23,7 +23,7 @@ export async function warmGatewayDatabasePageCache(params: {
   startupTrace?: GatewayStartupTrace;
   log: { info: (message: string) => void; warn: (message: string) => void };
 }): Promise<void> {
-  if (process.platform !== "linux" || isConstrainedProcessLowOnMemory()) {
+  if (process.platform !== "linux" || isMemoryPressureHigh()) {
     return;
   }
   const statePath = resolveOpenClawStateSqlitePath();
@@ -53,7 +53,7 @@ export async function warmGatewayDatabasePageCache(params: {
   ];
   let remaining = MAX_PASS_BYTES;
   for (const [index, target] of targets.entries()) {
-    if (params.signal.aborted || remaining <= 0 || isConstrainedProcessLowOnMemory()) {
+    if (params.signal.aborted || remaining <= 0 || isMemoryPressureHigh()) {
       return;
     }
     // Best-effort maintenance never retains a worker beyond its bounded warm window.
@@ -107,7 +107,7 @@ export async function warmGatewayDatabasePageCache(params: {
           let chunkStarted = performance.now();
           while (!progress.complete) {
             // Page warming is optional; release its worker when requests need the memory.
-            if (isConstrainedProcessLowOnMemory()) {
+            if (isMemoryPressureHigh()) {
               return;
             }
             // Idle/startup time must not accumulate credit for an unpaced burst of disk reads.
@@ -122,7 +122,7 @@ export async function warmGatewayDatabasePageCache(params: {
               undefined,
               { signal },
             );
-            if (isConstrainedProcessLowOnMemory()) {
+            if (isMemoryPressureHigh()) {
               return;
             }
             target.assertCurrent();

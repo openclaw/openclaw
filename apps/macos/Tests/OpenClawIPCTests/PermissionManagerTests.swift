@@ -1,5 +1,6 @@
 import CoreLocation
 import OpenClawIPC
+import OpenClawWebKitTestSupport
 import Speech
 import Testing
 import UserNotifications
@@ -56,6 +57,15 @@ struct PermissionManagerTests {
         #expect(!PermissionManager.isNotificationAuthorized(status: .denied))
         let ephemeral = try #require(UNAuthorizationStatus(rawValue: 4))
         #expect(!PermissionManager.isNotificationAuthorized(status: ephemeral))
+    }
+
+    @Test func `speech authorization completion can enter from a background queue`() async throws {
+        try #require(OpenClawInstallSpeechAuthorizationFixture())
+        defer { OpenClawRestoreSpeechAuthorizationFixture() }
+        let result = await PermissionManager.ensure([.speechRecognition], interactive: true)
+        MainActor.assertIsolated()
+        #expect(result[.speechRecognition] == true)
+        #expect(OpenClawSpeechAuthorizationRequestCount() == 1)
     }
 
     @Test func `voice wake permission helpers match status`() async {

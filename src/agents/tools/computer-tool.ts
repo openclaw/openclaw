@@ -427,9 +427,10 @@ export function createComputerTool(options?: {
   const tool: AnyAgentTool = {
     label: "Computer",
     name: "computer",
-    // Catalog bridges serialize nested results as JSON, which strips the
-    // model-visible screenshot block that coordinate actions depend on.
-    catalogMode: "direct-only",
+    // Catalog bridges serialize nested results as JSON, which strips the model-visible
+    // screenshot block that coordinate actions depend on. On-demand keeps every call direct
+    // without sending this definition before the session first uses it.
+    catalogMode: "on-demand",
     executionMode: "sequential",
     // Observing a desktop repeats by design; input actions still count.
     repeatable: { actions: ["screenshot", "wait"] },

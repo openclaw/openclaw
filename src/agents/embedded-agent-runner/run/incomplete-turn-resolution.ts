@@ -2,6 +2,7 @@ import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { POSSIBLE_TOOL_SIDE_EFFECTS_NOTE } from "../../../shared/assistant-error-format.js";
 import {
   hasAcceptedSessionSpawn,
   hasCompletionMessageSessionSpawn,
@@ -198,9 +199,16 @@ export function resolveIncompleteTurnPayloadText(params: {
           code: failureFacts.code,
         }))
       : undefined);
+  const providerRefusalText =
+    assistant && isProviderRefusalAssistantError(assistant)
+      ? formatUserFacingAssistantErrorText(assistant, {
+          cfg: params.terminalFailure?.runParams.config,
+        })
+      : undefined;
   if (params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects) {
-    return promptFailureText
-      ? `${promptFailureText} Note: some tool actions may have already been executed — please verify before retrying.`
+    const failureText = promptFailureText ?? providerRefusalText;
+    return failureText
+      ? `${failureText} ${POSSIBLE_TOOL_SIDE_EFFECTS_NOTE}`
       : MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT;
   }
   if (textToolCallFailureText) {
@@ -209,10 +217,8 @@ export function resolveIncompleteTurnPayloadText(params: {
   if (preflightFailureText !== undefined) {
     return preflightFailureText;
   }
-  if (assistant && isProviderRefusalAssistantError(assistant)) {
-    return formatUserFacingAssistantErrorText(assistant, {
-      cfg: params.terminalFailure?.runParams.config,
-    });
+  if (providerRefusalText !== undefined) {
+    return providerRefusalText;
   }
   const authFailure = params.terminalFailure;
   const reason = authFailure?.assistantProfileFailureReason;
@@ -277,6 +283,7 @@ interface YieldContinuationAttempt {
   acceptedSessionSpawns?: readonly AcceptedSessionSpawn[];
   runtimeContinuationStarted?: boolean;
   yieldMessageWaitRegistered?: boolean;
+  yieldExecWakeArmed?: boolean;
   messagingToolSentTexts?: readonly string[];
   messagingToolSentMediaUrls?: readonly string[];
   messagingToolSentTargets?: readonly MessagingToolSend[];
@@ -294,6 +301,8 @@ export function hasRunContinuationEvidence(attempt: YieldContinuationAttempt): b
     hasCompletionMessageSessionSpawn(attempt.acceptedSessionSpawns) ||
     attempt.runtimeContinuationStarted === true ||
     attempt.yieldMessageWaitRegistered === true ||
+    // Set only when the yield claim armed a command; a "running" exec result alone is not a wake.
+    attempt.yieldExecWakeArmed === true ||
     hasAsyncActivity(attempt.toolMetas)
   );
 }

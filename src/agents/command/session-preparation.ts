@@ -27,7 +27,8 @@ import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.
 import { recordSessionHumanDirectMessage } from "../../sessions/session-state-events.js";
 import { resolveEffectiveAgentSkillFilter } from "../../skills/discovery/agent-filter.js";
 import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
-import { resolveMessageChannel } from "../../utils/message-channel.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
+import { isInternalMessageChannel, resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentWorkspaceDir } from "../agent-scope-config.js";
 import { isSyntheticSourceReplyTurn } from "../reply-completion.js";
 import { loadExecDefaultsRuntime, loadSkillsRuntime } from "./runtime-loaders.js";
@@ -198,7 +199,6 @@ export async function prepareEmbeddedSessionState(params: {
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       params.opts.abortSignal?.throwIfAborted();
       params.opts.assertSourceCurrent?.();
-      params.opts.operatorAuthority?.assertCurrent();
     };
     await recordSessionHumanDirectMessage(
       {
@@ -248,34 +248,47 @@ export async function prepareEmbeddedSessionState(params: {
       runContext.currentChannelId = trimmedTo;
     }
   }
+  const conversationTurn =
+    !isSubagentSessionKey(sessionKey) &&
+    !isCronSessionKey(sessionKey) &&
+    isSyntheticSourceReplyTurn(opts);
+  const delivering = opts.deliver === true || opts.sourceReplyDeliveryMode === "message_tool_only";
+  // sessions_send and subagent completions run on the internal channel, which has no route, or
+  // keep their reply private. Like other lifecycle turns, their prompt describes the session's
+  // own conversation so a resumed session keeps its system prompt; this turn's routing stays in
+  // runContext.
+  const storedRoute =
+    conversationTurn &&
+    (!delivering || isInternalMessageChannel(opts.replyChannel ?? runContext.messageChannel))
+      ? deliveryContextFromSession(sessionEntry)
+      : undefined;
   const deliveryFormat =
-    (opts.deliver === true || opts.sourceReplyDeliveryMode === "message_tool_only") &&
+    (delivering || storedRoute !== undefined) &&
     buildDeliveryFormatPrompt({
       cfg,
-      channel: opts.replyChannel ?? runContext.messageChannel,
-      accountId: opts.replyAccountId ?? runContext.accountId,
+      channel: storedRoute ? storedRoute.channel : (opts.replyChannel ?? runContext.messageChannel),
+      accountId: storedRoute
+        ? storedRoute.accountId
+        : (opts.replyAccountId ?? runContext.accountId),
       agentId: sessionAgentId,
       allowBootstrap: true,
     });
   let conversationPrompt: string | undefined;
   // Reuse conversation guidance without borrowing the originating sender's authority.
-  if (
-    sessionEntry &&
-    !isSubagentSessionKey(sessionKey) &&
-    !isCronSessionKey(sessionKey) &&
-    isSyntheticSourceReplyTurn(opts)
-  ) {
+  if (sessionEntry && conversationTurn) {
+    // With no current route, the stored conversation fills every field.
+    const currentRoute = storedRoute ? undefined : runContext;
     const conversation = prepareReplyConversation({
       sessionEntry,
       ctx: {
         InternalTurnSource: "event",
-        Provider: runContext.messageChannel,
-        Surface: runContext.messageChannel,
+        Provider: currentRoute?.messageChannel,
+        Surface: currentRoute?.messageChannel,
         ChatType: sessionEntry.delivery?.kind === "internal" ? sessionEntry.chatType : undefined,
-        OriginatingChannel: runContext.messageChannel,
-        OriginatingTo: runContext.currentChannelId,
-        AccountId: runContext.accountId,
-        MessageThreadId: runContext.currentThreadTs,
+        OriginatingChannel: currentRoute?.messageChannel,
+        OriginatingTo: currentRoute?.currentChannelId,
+        AccountId: currentRoute?.accountId,
+        MessageThreadId: currentRoute?.currentThreadTs,
       },
     });
     const ctx = { ...conversation.fields, CommandAuthorized: false };

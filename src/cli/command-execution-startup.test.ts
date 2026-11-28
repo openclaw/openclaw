@@ -96,81 +96,74 @@ describe("command-execution-startup", () => {
     );
   });
 
-  it.each([
-    { commandPath: ["gateway"] },
-    { commandPath: ["gateway", "run"] },
-    { commandPath: ["doctor"] },
-  ])(
-    "prepares fresh $commandPath snapshots asynchronously without runtime activation ownership",
-    async ({ commandPath }) => {
-      const root = tempDirs.make("openclaw-cli-snapshot-preparation-");
-      const configPath = path.join(root, "openclaw.json");
-      const env = {
-        HOME: root,
-        USERPROFILE: root,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_STATE_DIR: path.join(root, "state"),
-        VITEST: "true",
-      };
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
-      const [{ createConfigIoContext }, snapshots, metadata, runtime, lifecycle, state] =
-        await Promise.all([
-          import("../config/io.context.js"),
-          import("../config/io.snapshot.js"),
-          import("../config/io.plugin-metadata.js"),
-          import("../config/runtime-snapshot.js"),
-          import("../plugins/plugin-metadata-lifecycle.js"),
-          import("../state/openclaw-state-db.js"),
-        ]);
-      const context = createConfigIoContext({
-        configPath,
-        env,
-        homedir: () => root,
-        observe: false,
-      });
-      const prepare = vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync");
-      ensureConfigReadyMock.mockImplementationOnce(async () => {
-        expect(runtime.hasManagedRuntimeConfigWriteOwner(configPath)).toBe(false);
-        await expect(
-          runtime.preflightManagedRuntimeConfigWrite(
-            configPath,
-            {},
-            { requireImmediateApplication: true },
-          ),
-        ).rejects.toThrow("The Gateway cannot apply this activation");
-        for (const port of [19001, 19002]) {
-          fs.writeFileSync(
-            configPath,
-            JSON.stringify({ gateway: { mode: "local", port }, plugins: { enabled: false } }),
-          );
-          const result = await snapshots.readConfigFileSnapshotWithPluginMetadataFromContext(
-            context,
-            {
-              allowCurrentPluginMetadata: false,
-            },
-          );
-          expect(result.snapshot).toMatchObject({
-            issues: [],
-            valid: true,
-            config: { gateway: { port } },
-          });
-          expect(result.pluginMetadataSnapshot).toBeDefined();
-        }
-      });
-      try {
-        await mod.ensureCliExecutionBootstrap({
-          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-          commandPath,
-          startupPolicy: startupPolicy({ hideBanner: true, pluginRegistry: { scope: "all" } }),
+  it("prepares fresh snapshots asynchronously without runtime activation ownership", async () => {
+    const root = tempDirs.make("openclaw-cli-snapshot-preparation-");
+    const configPath = path.join(root, "openclaw.json");
+    const env = {
+      HOME: root,
+      USERPROFILE: root,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: path.join(root, "state"),
+      VITEST: "true",
+    };
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    const [{ createConfigIoContext }, snapshots, metadata, runtime, lifecycle, state] =
+      await Promise.all([
+        import("../config/io.context.js"),
+        import("../config/io.snapshot.js"),
+        import("../config/io.plugin-metadata.js"),
+        import("../config/runtime-snapshot.js"),
+        import("../plugins/plugin-metadata-lifecycle.js"),
+        import("../state/openclaw-state-db.js"),
+      ]);
+    const context = createConfigIoContext({
+      configPath,
+      env,
+      homedir: () => root,
+      observe: false,
+    });
+    const prepare = vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync");
+    ensureConfigReadyMock.mockImplementationOnce(async () => {
+      expect(runtime.hasManagedRuntimeConfigWriteOwner(configPath)).toBe(false);
+      await expect(
+        runtime.preflightManagedRuntimeConfigWrite(
+          configPath,
+          {},
+          { requireImmediateApplication: true },
+        ),
+      ).rejects.toThrow("The Gateway cannot apply this activation");
+      for (const port of [19001, 19002]) {
+        fs.writeFileSync(
+          configPath,
+          JSON.stringify({ gateway: { mode: "local", port }, plugins: { enabled: false } }),
+        );
+        const result = await snapshots.readConfigFileSnapshotWithPluginMetadataFromContext(
+          context,
+          {
+            allowCurrentPluginMetadata: false,
+          },
+        );
+        expect(result.snapshot).toMatchObject({
+          issues: [],
+          valid: true,
+          config: { gateway: { port } },
         });
-        expect(prepare).toHaveBeenCalledTimes(2);
-      } finally {
-        prepare.mockRestore();
-        vi.unstubAllEnvs();
-        lifecycle.clearPluginMetadataLifecycleCaches();
-        state.closeOpenClawStateDatabaseForTest();
+        expect(result.pluginMetadataSnapshot).toBeDefined();
       }
-    },
-  );
+    });
+    try {
+      await mod.ensureCliExecutionBootstrap({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        commandPath: ["doctor"],
+        startupPolicy: startupPolicy({ hideBanner: true, pluginRegistry: { scope: "all" } }),
+      });
+      expect(prepare).toHaveBeenCalledTimes(2);
+    } finally {
+      prepare.mockRestore();
+      vi.unstubAllEnvs();
+      lifecycle.clearPluginMetadataLifecycleCaches();
+      state.closeOpenClawStateDatabaseForTest();
+    }
+  });
 });

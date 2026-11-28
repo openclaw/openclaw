@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import "../agents/openclaw-tools.js";
 import type {
   ChannelMessageActionContext,
   ChannelPlugin,
@@ -67,13 +68,12 @@ it.each(["trigger", "payload"] as const)(
             },
           },
         ]);
-        plugins.setActivePluginRegistry(registry);
         const runtime = createCronScriptRuntime({ config, loadPluginRegistry: () => registry });
         const signal = new AbortController().signal;
         const invoke = async (accountId: string, channel?: string) => {
           const script = `await message({ action: "send", channel: "telegram", accountId: ${JSON.stringify(accountId)}, target: "123", message: "Scheduled report" }); return { fire: false };`;
           const jobId = `account-${entry}-${accountId}`;
-          const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+          const marker = markCronJobActive(jobId);
           const ownerSessionKey = `agent:main:telegram:${accountId}:direct:123`;
           const job: CronStoredJob = makeCronJob({
             id: jobId,
@@ -118,6 +118,16 @@ it.each(["trigger", "payload"] as const)(
             clearCronJobActive(jobId, marker);
           }
         };
+        plugins.setActivePluginRegistry(createTestRegistry([]));
+        const scopedOnly = await invoke("work", "telegram");
+        expect(scopedOnly).toMatchObject({
+          kind: "error",
+          error: expect.stringContaining(
+            'Scheduled account "work" is unavailable on channel "telegram". Process registry: plugin not loaded; scoped registry: account listed.',
+          ),
+        });
+        expect(sendText).not.toHaveBeenCalled();
+        plugins.setActivePluginRegistry(registry);
         const expected =
           entry === "trigger" ? { kind: "evaluated", fire: false } : { kind: "completed" };
         for (const [accountId, channel, error, sends] of [
@@ -221,7 +231,7 @@ it("reuses hydrated creator origin for script admission across warm cache change
       });
       const jobId = "script-delete-origin";
       const invoke = async (callerOrigin?: CronScheduledToolCallerOrigin) => {
-        const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+        const marker = markCronJobActive(jobId);
         const job: CronStoredJob = makeCronJob({
           id: jobId,
           agentId: "main",
@@ -316,7 +326,7 @@ it("flags reauthorization exactly when script preparation reaches the missing-ch
       ] as const;
       for (const [index, [entry, toolsAllow, script, blocked]] of cases.entries()) {
         const jobId = `reauthorization-${index}`;
-        const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true });
+        const marker = markCronJobActive(jobId);
         const job: CronStoredJob = makeCronJob({
           id: jobId,
           agentId: "main",

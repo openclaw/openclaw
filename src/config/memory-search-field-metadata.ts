@@ -9,6 +9,7 @@ export const MEMORY_SEARCH_FIELD_LABELS: Record<string, string> = {
   "memory.search.extraPaths.*.evergreen": "Evergreen Extra Memory Path",
   "memory.search.multimodal": "Memory Search Multimodal",
   "memory.search.multimodal.enabled": "Enable Memory Search Multimodal",
+  "memory.search.multimodal.allowPartial": "Allow Partial Media Indexing",
   "memory.search.multimodal.modalities": "Memory Search Multimodal Modalities",
   "memory.search.multimodal.maxFileBytes": "Memory Search Multimodal Max File Bytes",
   "memory.search.experimental.sessionMemory": "Memory Search Session Index (Experimental)",

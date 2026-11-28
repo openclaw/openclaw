@@ -28,14 +28,18 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.SemanticsNodeInteraction
+import androidx.compose.ui.test.assert
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
+import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasScrollAction
 import androidx.compose.ui.test.hasTestTag
@@ -49,6 +53,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Density
@@ -71,6 +76,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicReference
 
 /** Measures text laid out by real screens, not source-token spelling or replacement widgets. */
 @RunWith(RobolectricTestRunner::class)
@@ -80,6 +86,7 @@ class ScreenTypographyLayoutTest {
   @get:Rule val composeRule = createComposeRule()
   private val store = ViewModelStore()
   private val mounted = mutableStateOf(true)
+  private val sessionList = AtomicReference<String?>()
   private lateinit var app: NodeApp
   private lateinit var prefs: SecurePrefs
   private lateinit var runtime: NodeRuntime
@@ -95,7 +102,7 @@ class ScreenTypographyLayoutTest {
     prefs = SecurePrefs(app, app.getSharedPreferences("screen-type-" + UUID.randomUUID(), Context.MODE_PRIVATE))
     prefs.setOnboardingCompleted(true)
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
-    runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
+    runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture, screenshotSessionList = sessionList::get)
     bindNodeRuntimeTestFixture(app, runtime)
     model = MainViewModel(app, prefs, SavedStateHandle()).also { store.put("typography", it) }
     model.enterScreenshotFixtureMode(AndroidScreenshotScene.Home)
@@ -384,6 +391,91 @@ class ScreenTypographyLayoutTest {
     assertTextStyle(composeRule.onAllNodesWithText("OpenClaw thread", useUnmergedTree = true)[0], type.caption)
     composeRule.onNodeWithContentDescription("Toggle thread layout").performScrollTo().performClick()
     composeRule.onNodeWithText("Layout: Compact").assertIsDisplayed()
+  }
+
+  @Test
+  @Config(sdk = [34], qualifiers = "w1000dp-h1000dp-mdpi")
+  fun threadsExposeOnlyTheActiveFilterAsSelected() {
+    show { SessionsScreen(model, showSidebarButton = false, onOpenSidebar = {}, onOpenChat = {}) }
+    val filters = listOf("Recent", "Current", "Snoozed", "Archived", "Automations")
+
+    fun filterPill(label: String) =
+      composeRule.onNode(
+        SemanticsMatcher.expectValue(SemanticsProperties.Text, listOf(AnnotatedString(label))),
+      )
+
+    fun assertSelectedFilter(selected: String) {
+      for (label in filters) {
+        val pill = filterPill(label)
+        pill.assertIsDisplayed()
+        if (label == selected) {
+          pill.assertIsSelected()
+        } else {
+          pill.assertIsNotSelected()
+        }
+      }
+    }
+
+    assertSelectedFilter("Recent")
+    for (label in filters.drop(1) + "Recent") {
+      filterPill(label).performClick()
+      composeRule.waitForIdle()
+      assertSelectedFilter(label)
+    }
+  }
+
+  @Test
+  @Config(sdk = [34], qualifiers = "w1000dp-h1000dp-mdpi")
+  fun threadsAnnounceUnreadStateInBothLayoutsAndRetireItWhenRead() {
+    val unreadKey = "agent:main:unread-proof"
+
+    fun publishUnread(unread: Boolean?) {
+      // Supply the screen's refresh with the same rows as the explicit transition.
+      val unreadField = unread?.let { """, "unread": $it""" }.orEmpty()
+      sessionList.set(
+        """
+        { "sessions": [
+          { "key": "$unreadKey", "displayName": "New reply thread", "updatedAt": 2$unreadField },
+          { "key": "agent:main:read-proof", "displayName": "Read control thread", "updatedAt": 1, "unread": false }
+        ], "totalCount": 2 }
+        """.trimIndent(),
+      )
+      model.refreshChatSessions()
+      composeRule.waitUntil(timeoutMillis = 5_000) {
+        val sessions = runtime.chat.sessions.value
+        sessions.any { it.key == unreadKey && it.unread == unread }
+      }
+      composeRule.waitForIdle()
+    }
+
+    show { SessionsScreen(model, showSidebarButton = false, onOpenSidebar = {}, onOpenChat = {}) }
+    publishUnread(true)
+    val unreadRow = composeRule.onNode(hasText("New reply thread") and hasClickAction())
+    val readRow = composeRule.onNode(hasText("Read control thread") and hasClickAction())
+    val unreadState = SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Unread")
+    val noUnreadState = SemanticsMatcher.keyNotDefined(SemanticsProperties.StateDescription)
+
+    for (compact in listOf(false, true)) {
+      if (compact) {
+        val toggle = composeRule.onNodeWithContentDescription("Toggle thread layout")
+        toggle.performScrollTo()
+        toggle.performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Layout: Compact").assertIsDisplayed()
+      }
+      unreadRow.performScrollTo()
+      unreadRow.assertIsDisplayed()
+      unreadRow.assert(unreadState)
+      readRow.performScrollTo()
+      readRow.assert(noUnreadState)
+
+      for (readValue in listOf(false, null)) {
+        publishUnread(readValue)
+        unreadRow.assert(noUnreadState)
+      }
+      publishUnread(true)
+      unreadRow.assert(unreadState)
+    }
   }
 
   @Test

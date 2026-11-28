@@ -7,6 +7,7 @@ import type {
   ControlUiSettingsView,
   MemorySearchResponse,
 } from "openclaw/plugin-sdk/control-ui";
+import { asNullableRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createMemo,
   createSignal,
@@ -92,7 +93,7 @@ function MemoryMemories(props: MemoryMemoriesProps) {
   const searchResult = createMemo(() => searchRead()?.result);
   const [openResultKey, setOpenResultKey] = createSignal<string | null>(null);
   let searchRequest: object | null = null;
-  const detailRequests = new Map<string, string | Promise<string | undefined>>();
+  const detailRequests = new Map<string, string | Promise<string | null | undefined>>();
 
   onSettled(() => () => {
     searchRequest = null;
@@ -164,7 +165,8 @@ function MemoryMemories(props: MemoryMemoriesProps) {
           return undefined;
         }
         if (response.file.encoding !== "utf8") {
-          throw new Error(t("memoryPage.memories.fileUnsupported"));
+          detailRequests.delete(path);
+          return null;
         }
         detailRequests.set(path, response.file.content);
         return response.file.content;
@@ -189,16 +191,32 @@ function MemoryMemories(props: MemoryMemoriesProps) {
       <div id={detailProps.panelId} class="memory-memories__detail">
         <Loading fallback={loading()}>
           <Errored
-            fallback={(error) => (
-              <p class="memory-memories__detail-error" role="alert">
-                {t("memoryPage.memories.fileError", {
-                  message: props.context.formatError(error()),
-                })}
-              </p>
-            )}
+            fallback={(error) => {
+              const details = asNullableRecord(asNullableRecord(error())?.details);
+              const reason = readStringField(details, "type");
+              const key =
+                reason === "workspace_file_not_found"
+                  ? "memoryPage.memories.fileNotFound"
+                  : reason === "workspace_file_too_large"
+                    ? "memoryPage.memories.fileTooLarge"
+                    : reason === "workspace_file_unsupported"
+                      ? "memoryPage.memories.fileUnsupported"
+                      : "memoryPage.memories.fileOpenFailed";
+              return (
+                <p class="memory-memories__detail-error" role="alert">
+                  {t(key)}
+                </p>
+              );
+            }}
           >
             <Show when={detail() !== undefined} fallback={loading()}>
-              <FileContent content={detail() ?? ""} result={detailProps.result} />
+              {detail() === null ? (
+                <p class="memory-memories__detail-error" role="alert">
+                  {t("memoryPage.memories.fileUnsupported")}
+                </p>
+              ) : (
+                <FileContent content={detail() ?? ""} result={detailProps.result} />
+              )}
             </Show>
           </Errored>
         </Loading>
@@ -232,7 +250,10 @@ function MemoryMemories(props: MemoryMemoriesProps) {
           <span class="settings-row__text">
             <span class="memory-memories__snippet">{rowProps.result.snippet}</span>
             <span class="settings-row__desc memory-memories__meta">
-              <code>{rowProps.result.path}</code> · {details()}
+              <code title={rowProps.result.path}>
+                <bdi>{rowProps.result.path}</bdi>
+              </code>
+              <span>{details()}</span>
             </span>
           </span>
           {expandable() ? (
@@ -324,14 +345,10 @@ function MemoryMemories(props: MemoryMemoriesProps) {
         fallback={<Empty status>{t("memoryPage.memories.searching")}</Empty>}
       >
         <Errored
-          fallback={(error, reset) => (
+          fallback={(_error, reset) => (
             <div class="settings-group">
               <div class="settings-row memory-memories__error" role="alert">
-                <p>
-                  {t("memoryPage.memories.error", {
-                    message: props.context.formatError(error()),
-                  })}
-                </p>
+                <p>{t("memoryPage.memories.searchFailed")}</p>
                 <button
                   class="btn btn--sm"
                   disabled={!props.snapshot.connected || !props.snapshot.agentId}

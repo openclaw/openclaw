@@ -89,12 +89,15 @@ describe("re-login identity boundaries", () => {
     });
     expect(result.validateCurrentCredential).toBeTypeOf("function");
     expect(() => result.validateCurrentCredential?.("fixture:new", undefined)).not.toThrow();
+    // The Control UI shows this too, so it names no CLI-only flag.
+    const collision =
+      "A different account is already saved under this sign-in's profile. Remove that account, then sign in again.";
     expect(() => result.validateCurrentCredential?.("fixture:new", credential("b"))).toThrow(
-      "already in use",
+      collision,
     );
     expect(() =>
       result.validateCurrentCredential?.("fixture:new", { ...credential("a"), provider: "other" }),
-    ).toThrow("already in use");
+    ).toThrow(collision);
   });
 
   it("rejects a vanished identity unless the login explicitly purged it", () => {
@@ -106,5 +109,40 @@ describe("re-login identity boundaries", () => {
     expect(() => result.validateCurrentCredential?.("fixture:old", undefined)).toThrow(
       "identity changed",
     );
+  });
+
+  it.each([false, true])("keeps a verified same-account name (force=%s)", (force) => {
+    const existing = { ...credential("a"), displayName: "Personal" };
+    const result = resolveReloginProfileIdentity({
+      profiles,
+      existingProfiles: { "fixture:work": existing },
+      method: { matchesSharedAccount: matchesPersonalAccount, matchesPersonalAccount: () => false },
+      allowMissingReusedProfile: force,
+    });
+    expect(result.profiles).toEqual([
+      {
+        profileId: "fixture:work",
+        credential: { ...profiles[0]!.credential, displayName: "Personal" },
+      },
+    ]);
+    if (force) {
+      expect(() => result.validateCurrentCredential?.("fixture:work", undefined)).not.toThrow();
+    } else {
+      expect(() => result.validateCurrentCredential?.("fixture:work", existing)).not.toThrow();
+    }
+  });
+
+  it.each([
+    ["a", "Personal"],
+    ["b", undefined],
+  ])("keeps a name in an explicit slot only for the same account (%s)", (account, displayName) => {
+    const existing = { ...credential(account), displayName: "Personal" };
+    const result = resolveReloginProfileIdentity({
+      profiles,
+      existingProfiles: { "fixture:new": existing },
+      requestedProfileId: "fixture:new",
+      method: { matchesSharedAccount: matchesPersonalAccount },
+    });
+    expect(result.profiles[0]?.credential.displayName).toBe(displayName);
   });
 });

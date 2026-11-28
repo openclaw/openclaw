@@ -8,7 +8,7 @@ export function createApiKeyCredential(provider: string, key: string) {
 export function oauthCred(
   params: Pick<
     OAuthCredential,
-    "provider" | "access" | "refresh" | "expires" | "accountId" | "email"
+    "provider" | "access" | "refresh" | "expires" | "accountId" | "idToken" | "email"
   >,
 ): OAuthCredential {
   return { type: "oauth", ...params };
@@ -32,6 +32,8 @@ export function createAuthProfileUsageStore(
         refresh: "codex-refresh-token",
         expires: 4_102_444_800_000,
         accountId: "acct_test_123",
+        idToken: oidcIdentity({ "https://api.openai.com/auth": { chatgpt_user_id: "user-a" } })
+          .idToken,
       }),
       "openrouter:default": createApiKeyCredential("openrouter", "sk-or-test"),
       "kilocode:default": createApiKeyCredential("kilocode", "sk-kc-test"),

@@ -26,9 +26,9 @@ import * as providerPersistence from "../../plugins/provider-auth-persistence.js
 import { createNonExitingRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
 import { refreshModelAuthStateAfterMutation } from "../model-auth-refresh.js";
 import { disconnectGatewayClient } from "../test-helpers.e2e.js";
-import type { GatewayClient as ServerGatewayClient } from "./client-types.js";
 import { modelsAuthLoginHandlers } from "./models-auth-login.js";
 import { writeCatalogPlugin } from "./models-catalog-fixture.test-support.js";
 import {
@@ -173,7 +173,7 @@ it.for([
     await using state = await createState();
     const oauth = mode.startsWith("shared");
     const shared = oauth || ["unknown-agent", "mismatched-owner"].includes(mode);
-    const atCredentialWrite = createDeferred();
+    const atCredentialWrite = createDeferred<unknown>();
     const prepared = createDeferred();
     const release = createDeferred();
     let requests = 0;
@@ -202,7 +202,7 @@ it.for([
       }
     });
     await using listening = await serveModelsEndpoint(endpoint, true);
-    let requester: ServerGatewayClient | null | undefined;
+    let revokeRequester: (() => void) | undefined;
     const login = modelsAuthLoginHandlers["models.authLogin"];
     if (!login) {
       throw new Error("Missing registered login handler");
@@ -210,27 +210,32 @@ it.for([
     const captureRequester = vi
       .spyOn(modelsAuthLoginHandlers, "models.authLogin")
       .mockImplementation((options) => {
-        requester = options.client;
+        const deviceId = options.client?.connect.device?.id;
+        if (deviceId) {
+          revokeRequester = () => invalidateGatewayDeviceRevocation(options.context, deviceId);
+        }
         return login(options);
       });
     const persist = providerPersistence.persistProviderAuthProfilesAfterLogin;
-    // Keep real writers; revoke at the prepared-lock boundary before their authority check.
-    const revoke = vi
+    // Keep real writers and observe the prepared-lock boundary.
+    const observeWrite = vi
       .spyOn(providerPersistence, "persistProviderAuthProfilesAfterLogin")
       .mockImplementation((input) =>
         persist({
           ...input,
           beforeWrite: () => {
             if (mode === "revoked" || mode === "shared-revoked") {
-              if (!requester) {
-                throw new Error("The real login requester was not captured");
+              if (!revokeRequester) {
+                throw new Error("The login must be admitted as an identified device");
               }
-              requester.invalidated = true;
+              revokeRequester();
             }
             try {
               input.beforeWrite?.();
-            } finally {
-              atCredentialWrite.resolve();
+              atCredentialWrite.resolve(undefined);
+            } catch (error) {
+              atCredentialWrite.resolve(error);
+              throw error;
             }
           },
         }),
@@ -384,15 +389,15 @@ it.for([
             const completion = settleModelsWork(finishLogin(client));
             await withinTest(prepared.promise, signal);
             release.resolve();
-            await withinTest(atCredentialWrite.promise, signal);
-            if (mode === "revoked" || mode === "shared-revoked") {
+            const writeRefusal = await withinTest(atCredentialWrite.promise, signal);
+            if (mode !== "allowed") {
+              expect(writeRefusal).toBeInstanceOf(Error);
               await disconnectGatewayClient(client);
             }
             const outcome = await withinTest(completion, signal);
             if (mode === "allowed") {
+              expect(writeRefusal).toBeUndefined();
               expect(outcome).toMatchObject({ result: { status: "done" } });
-            } else {
-              expect(outcome.error).toBeDefined();
             }
           }
           await gateway.close();
@@ -447,8 +452,8 @@ it.for([
       });
     } finally {
       release.resolve();
+      observeWrite.mockRestore();
       captureRequester.mockRestore();
-      revoke.mockRestore();
     }
   },
 );

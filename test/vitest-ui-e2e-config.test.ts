@@ -40,12 +40,13 @@ const serialGatewayFiles =
       "required-human-action",
       "model-provider-remove-offline",
       "provider-browser-login-first-model",
+      "provider-browser-login-leave",
     )
     .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
     .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
 const sharedSerialGatewayFiles = [
   "ui/src/e2e/home-readonly.real-gateway.e2e.test.ts",
-  "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
+  "ui/src/e2e/guest-sidebar-pins.real-gateway.e2e.test.ts",
   "ui/src/e2e/guest-typing.real-gateway.e2e.test.ts",
   "ui/src/e2e/slack-inline-identity.e2e.test.ts",
 ];
@@ -60,7 +61,7 @@ const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecyc
   chat-reconnect-continuity.real-gateway chat-stop-finished-run.real-gateway
   chat-stop-long-turn.real-gateway
   chat-thinking-metadata.real-gateway chat-widget-sandbox.real-gateway
-  chat-incognito-send.real-gateway
+  chat-incognito-send.real-gateway chat-new-session-readers.real-gateway
   chat-stop-owned-exec.real-gateway chat-wait-clock.real-gateway
   command-palette-catalog.real-gateway command-palette-search.real-gateway
   control-ui-auth-transports cron-duration-save.real-gateway cron-human-owner.real-gateway
@@ -68,6 +69,7 @@ const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecyc
   model-catalog-partial-refresh.real-gateway model-connection-check.real-gateway
   model-add-provider-to-chat.real-gateway
   model-key-save-check.real-gateway
+  model-provider-disconnect.real-gateway
   model-provider-remove-in-use.real-gateway
   model-picker-search.real-gateway
   model-setup-provider-errors.real-gateway profile-page.real-gateway
@@ -543,7 +545,7 @@ describe("Control UI E2E resource ownership", () => {
         ].toSorted((left, right) => left.file.localeCompare(right.file)),
       );
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(61);
+      expect(parallel).toHaveLength(63);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {

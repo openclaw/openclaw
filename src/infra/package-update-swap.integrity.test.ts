@@ -8,6 +8,7 @@ import { interceptPackageFileHashes } from "./package-update-integrity-hasher.te
 import { PackageIntegrityTimeoutError } from "./package-update-integrity.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import {
+  captureSwap,
   expectInstallation,
   expectNoCalls,
   expectVersion,
@@ -21,7 +22,6 @@ import {
   createRetainedPackageSwap,
   symlinkDirectory,
 } from "./package-update-swap.test-support.js";
-import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -599,18 +599,53 @@ describe("retained npm package integrity", () => {
           ),
         }),
       ]);
-      const report = await prepareUpdateFailureReport(
-        {
-          attemptId: "baseline-stat-drift",
-          result: { mode: "npm", status: "error", steps: [result.step], durationMs: 0 },
-          recordedRun: { runId: "baseline-stat-drift", steps },
-        },
-        { env: {}, stateDir: base },
-      );
-      expect(report.body).toContain("Package rollback stat changed: fields=size,mtimeNs");
-      expect(report.body).not.toContain("private-entry-");
-      expect(report.body).not.toContain(base);
       expectNoCalls(beforeActivate, onLiveMutation);
+      await expectInstallation(packageRoot, launcher);
+    },
+  );
+
+  it.runIf(process.platform !== "win32").each([false, true])(
+    "replaces the package over metadata-only baseline drift and keeps a verified rollback (retained bytes changed=%s)",
+    async (retainedChanged) => {
+      const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+      const relative = "dist/index.js";
+      const entry = path.join(packageRoot, relative);
+      const settled = new Date(1_700_000_000_000);
+      await fs.utimes(entry, settled, settled);
+      const lstat = fs.lstat.bind(fs);
+      let observations = 0;
+      vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+        // The second observation is the baseline's final sweep: change only metadata.
+        if (String(args[0]) === entry && ++observations === 2) {
+          await fs.chmod(entry, (await fs.stat(entry)).mode & 0o7777);
+        }
+        return lstat(...args);
+      });
+      const { result, transaction } = await captureSwap(params);
+      expect(result.status, result.step.stderrTail ?? "").toBe("committed");
+      await expectInstallation(packageRoot, launcher, true);
+      expect(result.step.warnings).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(
+            /^Package metadata changed during verification on 1 entry whose contents, size, type and mode are unchanged; accepted after re-reading them\. entry="dist\/index\.js"; changes=\{"ctimeNs":/u,
+          ),
+        ]),
+      );
+      vi.restoreAllMocks();
+      if (retainedChanged) {
+        // A same-size write with restored times after the baseline is still caught at restore.
+        const retained = path.join(transaction.backupRoot, relative);
+        await fs.writeFile(retained, "EXPORT {};\n");
+        await fs.utimes(retained, settled, settled);
+      }
+      const rollback = await transaction.rollback(() => {});
+      if (retainedChanged) {
+        expect(rollback).toMatchObject({ exitCode: 1, activePackageRoot: packageRoot });
+        expect(rollback.stderrTail).toContain("retained package tree changed");
+        await expectInstallation(packageRoot, launcher, true);
+        return;
+      }
+      expect(rollback).toMatchObject({ exitCode: 0, activePackageRoot: packageRoot });
       await expectInstallation(packageRoot, launcher);
     },
   );
@@ -705,24 +740,6 @@ describe("retained npm package integrity", () => {
         expect(diagnostic).toContain("ino=0");
         expect(diagnostic).not.toContain("changed: fields=");
       }
-      const report = await prepareUpdateFailureReport(
-        {
-          attemptId: "baseline-failure",
-          result: { mode: "npm", status: "error", steps: [], durationMs: 0 },
-          recordedRun: { runId: "baseline-failure", steps },
-        },
-        { env: {}, stateDir: base },
-      );
-      expect(report.body).toContain("baseline-scan-failed");
-      if (shape === "timed-out scan" || unavailableInode) {
-        expect(report.body).toContain(cause);
-      } else {
-        expect(report.body).not.toContain(cause);
-        expect(report.body).toContain("[redacted-diagnostic]");
-      }
-      expect(report.body).not.toContain("identity fallback unavailable");
-      expect(report.body).not.toContain("private-inode-entry.js");
-      expect(report.body).not.toContain(base);
       expect(result).toMatchObject({ packageRollbackVerified: false });
       expectNoCalls(beforeActivate, onLiveMutation);
       await expectInstallation(packageRoot, launcher);

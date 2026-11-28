@@ -71,15 +71,14 @@ export type ValidateConfigWithPluginsParams = {
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
 };
 
+type ChannelSchema = { schema: Record<string, unknown>; pluginId?: string; origin: PluginOrigin };
+
 type RegistryInfo = {
   registry: PluginManifestRegistry;
   knownIds?: Set<string>;
   overriddenPluginIds?: Set<string>;
   channelSchemaSelection?: ReadonlySet<string>;
-  channelSchemas?: Map<
-    string,
-    { schema?: Record<string, unknown>; pluginId?: string; origin: PluginOrigin }
-  >;
+  channelSchemas?: Map<string, ChannelSchema>;
 };
 
 export function validatePreparedConfigWithPlugins(
@@ -228,31 +227,30 @@ export function validatePreparedConfigWithPlugins(
     return info.channelSchemaSelection;
   };
 
-  const ensureChannelSchemas = (): NonNullable<RegistryInfo["channelSchemas"]> => {
+  const resolveChannelSchema = (channelId: string): ChannelSchema | undefined => {
     const info = ensureRegistry();
     if (!info.channelSchemas) {
-      info.channelSchemas = new Map(
-        GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
-          (entry) => [entry.channelId, { schema: entry.schema, origin: "bundled" }] as const,
-        ),
-      );
+      info.channelSchemas = new Map();
       const selection = ensureChannelSchemaSelection();
       for (const entry of collectChannelSchemaMetadataWithOwnership(info.registry, selection)) {
-        const current = info.channelSchemas.get(entry.id);
         if (entry.configSchema) {
           info.channelSchemas.set(entry.id, {
             schema: entry.configSchema,
             pluginId: entry.schemaPluginOrigin === "bundled" ? undefined : entry.schemaPluginId,
             origin: entry.schemaPluginOrigin,
           });
-        } else if (!current) {
-          info.channelSchemas.set(entry.id, {
-            origin: entry.schemaPluginOrigin,
-          });
         }
       }
     }
-    return info.channelSchemas;
+    const selected = info.channelSchemas.get(channelId);
+    if (selected) {
+      return selected;
+    }
+    // A manifest without a schema keeps the generated fallback for this channel.
+    const fallback = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.findLast(
+      (entry) => entry.channelId === channelId,
+    );
+    return fallback && { schema: fallback.schema, origin: "bundled" };
   };
 
   // Generic DM-policy/allowFrom dependency check on the raw user config (pre-defaults)
@@ -544,8 +542,8 @@ export function validatePreparedConfigWithPlugins(
       if (preserveUnavailableConfig(`channels.${trimmed}`)) {
         continue;
       }
-      const channelSchema = ensureChannelSchemas().get(trimmed);
-      if (!channelSchema?.schema) {
+      const channelSchema = resolveChannelSchema(trimmed);
+      if (!channelSchema) {
         continue;
       }
       const deferredChannelWarning = resolveDeferredChannelConfigWarning({

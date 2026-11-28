@@ -652,6 +652,12 @@ it("retains the imported profile and allows its models after direct refresh fail
   });
 });
 
+it("reports the provider's recommended model from a credential-only login without applying it", async () => {
+  currentConfig = { agents: { defaults: { model: "other/current" } } };
+  expect((await loginFlow({ credentialOnly: true })).defaultModel).toBe("openai/gpt-5.5");
+  expect(currentConfig.agents?.defaults?.model).toBe("other/current");
+});
+
 it("refreshes saved credentials when the settings write fails and preserves its cause", async () => {
   const cause = new Error("config write failed");
   runProviderAuth.mockResolvedValueOnce({
@@ -746,6 +752,7 @@ it("prompts when a provider exposes multiple non-OAuth login methods", async () 
 
   expect(select).toHaveBeenCalledWith({
     message: "Auth method for Anthropic",
+    searchable: true,
     options: [
       { value: "api-key", label: "Anthropic API Key", hint: undefined },
       { value: "cli", label: "Claude CLI", hint: undefined },
@@ -766,7 +773,7 @@ it("routes OAuth login and refresh to the explicit agent", async () => {
       "Scope: System / agent",
       "Agent: coder",
       "Location: the machine running OpenClaw",
-      "For personal model accounts on a Gateway, run openclaw models accounts login --help.",
+      "Personal model accounts are managed in Settings → Profile → Connected accounts.",
     ].join("\n"),
     "Provider sign-in",
   );
@@ -845,6 +852,8 @@ it("keeps workspace plugins untrusted while applying the selected login model", 
     expect(ctx.prompter.select).toBe(select);
     expect(ctx.runtime).toBe(runtime);
     expect(ctx.env).toBe(process.env);
+    // Offline CLI login runs outside the Gateway, so it has no node runtime.
+    expect(ctx.nodes).toBeUndefined();
     await ctx.openUrl("https://example.com/auth");
     expect(mocks.openUrl).toHaveBeenCalledWith("https://example.com/auth");
     expect(ctx.oauth.createVpsAwareHandlers).toBeTypeOf("function");
@@ -943,13 +952,14 @@ it("rejects unknown auth methods before a forced login can purge profiles", asyn
   expectNoCalls(mocks.removeProviderAuthProfilesWithLock, runOauthAuth, runApiKeyAuth);
 });
 
-it("opens the provider picker when a CLI backend has no provider auth method", async () => {
+it("opens an ordered searchable provider picker when a CLI backend has no auth method", async () => {
   const prompter = usePrompter(vi.fn(async () => "openai"));
   mocks.isCliProvider.mockImplementation((provider: string) => provider === "claude-cli");
   const openaiProvider = createProvider("openai", "OpenAI Codex");
+  const alpha = createProvider("alpha", "Alpha", [{ ...openaiProvider.auth[0]!, run: vi.fn() }]);
   mocks.resolvePluginProvidersCore.mockImplementation(
     (params: ResolvePluginProvidersCall | undefined) =>
-      params?.providerRefs?.includes("claude-cli") ? [] : [openaiProvider],
+      params?.providerRefs?.includes("claude-cli") ? [] : [alpha, openaiProvider],
   );
 
   await loginCommand({ provider: "claude-cli" });
@@ -958,18 +968,15 @@ it("opens the provider picker when a CLI backend has no provider auth method", a
     'Provider "claude-cli" uses its own CLI login. Select a provider with an OpenClaw auth flow.',
     "Provider auth",
   );
-  expect(prompter.select).toHaveBeenCalledWith(
-    expect.objectContaining({ message: "Select a provider" }),
-  );
+  expect(prompter.select.mock.calls[0]?.[0]).toMatchObject({
+    message: "Select a provider",
+    searchable: true,
+    options: [{ value: "openai" }, { value: "alpha" }],
+  });
   expect(runProviderAuth).toHaveBeenCalledOnce();
-  expect(mocks.resolvePluginProvidersCore).toHaveBeenNthCalledWith(
-    1,
-    expect.objectContaining({ providerRefs: ["claude-cli"] }),
-  );
-  expect(mocks.resolvePluginProvidersCore).toHaveBeenNthCalledWith(
-    2,
-    expect.not.objectContaining({ providerRefs: expect.anything() }),
-  );
+  expect(
+    mocks.resolvePluginProvidersCore.mock.calls.map(([params]) => params?.providerRefs),
+  ).toEqual([["claude-cli"], undefined]);
 });
 
 it("writes pasted Anthropic setup-tokens to the selected profile", async () => {

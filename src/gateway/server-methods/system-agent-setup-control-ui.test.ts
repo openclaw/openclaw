@@ -6,7 +6,7 @@ import {
   createFirstRunContext,
   useFirstRunFixtures,
 } from "../../../ui/src/pages/model-setup/model-setup-first-run.test-support.ts";
-import { page as modelSetupRoute } from "../../../ui/src/pages/model-setup/route.ts";
+import { FirstRunModelSetup } from "../../../ui/src/pages/model-setup/model-setup-page.tsx";
 import { createApplicationContextProvider } from "../../../ui/src/test-helpers/application-context.ts";
 import { cleanupSolid, mountSolid } from "../../../ui/src/test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../ui/src/test-helpers/solid-application-context.tsx";
@@ -77,7 +77,7 @@ afterEach(async () => {
   await vi.dynamicImportSettled();
 });
 
-it("uses server-owned opt-in and inference providers for the selected agent", async () => {
+it("uses server-owned inference providers without requesting a history choice", async () => {
   fixture.config = initializeNativeSessionCatalogPreferences({
     agents: { ownership: "explicit", entries: { main: {}, research: {} } },
   });
@@ -97,9 +97,8 @@ it("uses server-owned opt-in and inference providers for the selected agent", as
   });
   const provider = createApplicationContextProvider(context);
   document.body.append(provider);
-  const route = await modelSetupRoute.component();
-  const props = { data: { firstRun: true }, loaderPending: false, presented: true };
-  const { container: page } = mountSolid(() => route.renderSolid(props), {
+  // First-run Models opens this setup's local discovery dialog from "Find local models".
+  const { container: page } = mountSolid(() => FirstRunModelSetup({ discoveryOpen: true }), {
     container: provider,
     wrapper: createSolidApplicationContextProvider(context).wrapper,
   });
@@ -109,9 +108,6 @@ it("uses server-owned opt-in and inference providers for the selected agent", as
     expect(page.querySelector('[data-auth-choice="custom-api-key"] button')).not.toBeNull(),
   );
   expect(request.mock.calls[0]?.slice(0, 2)).toEqual(["openclaw.setup.detect", { agentId }]);
-  const checkbox = page.querySelector<HTMLInputElement>(".model-setup__native-discovery input");
-  expect(checkbox?.checked).toBe(false);
-  expect(page.textContent).toContain("Fixture archive");
   for (const [choice, present] of [
     ["model", true],
     ["legacy", true],
@@ -132,6 +128,6 @@ it("uses server-owned opt-in and inference providers for the selected agent", as
   expect(activation).toMatchObject({
     authChoice: "custom-api-key",
     agentId,
-    nativeSessionCatalogsEnabled: false,
   });
+  expect(activation).not.toHaveProperty("nativeSessionCatalogsEnabled");
 });

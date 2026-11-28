@@ -14,8 +14,6 @@ const enModelSetup = {
       otherSoftware: "Other detected software",
     },
     heading: "Set up a model",
-    intro:
-      "OpenClaw finds saved accounts and local models on the computer running OpenClaw. Choose one to begin; nothing is selected, tested, installed, or saved automatically.",
     loading: "Loading models…",
     testing: "Asking the selected model for a quick reply…",
     retry: "Retry",
@@ -27,14 +25,9 @@ const enModelSetup = {
       useCurrent: "Verify & use selected model",
     },
     verify: {
-      title: "Selected model",
       button: "Check model",
       retry: "Try again",
-      checkAgain: "Check again",
       checkingButton: "Checking…",
-      checking: "Asking {modelRef} for a quick reply…",
-      ready: "Ready",
-      readyIn: "Ready · {latencyMs} ms",
       providerUnavailable: "{provider} isn’t responding.",
     },
     access: {
@@ -50,23 +43,8 @@ const enModelSetup = {
       retry: "Retry test",
       testingButton: "Testing…",
     },
-    nativeDiscovery: {
-      title: "Find existing sessions",
-      body: "Show sessions from installed agents on the computer running OpenClaw in OpenClaw. This doesn’t import or copy them.",
-      enable: "Show existing sessions",
-      decline:
-        "Leave unchecked to keep these sessions hidden when you add an account. Existing installations aren’t changed.",
-    },
     nativeModels: {
-      title: "Use an installed agent",
-      body: "Choose a model from an installed agent. It keeps its own sign-in and tools. Use saves your choice without running the setup test.",
       choose: "Choose a model",
-      use: "Use",
-      saving: "Saving…",
-      loading: "Loading installed agents…",
-      empty:
-        "No models from installed agents yet. Check the installed app, then open the picker again.",
-      unconfirmed: "Availability not confirmed",
     },
     empty: {
       title: "Recommended installs",
@@ -161,13 +139,18 @@ const enModelSetup = {
       prepareStarting: "Starting local model setup…",
       checking: "Checking your model setup…",
       working: "Working…",
+      controlsLoadFailed: "Couldn’t load this step. Reload the page to start over.",
       continue: "Continue",
       submit: "Submit",
       openSignIn: "Open sign-in",
       copy: "Copy",
       copyCode: "Copy code",
       copyLink: "Copy link",
-      manualEntry: "Use manual entry",
+      pasteDescription:
+        "Approve access in your browser. It then opens a page that may not load: copy that page’s address and paste it here.",
+      openSignInPage: "Open sign-in page",
+      pasteLabel: "Address of the page your browser opened",
+      finishSignIn: "Finish sign-in",
       browserInstructions: "Complete sign-in in your browser, then return here.",
       waiting: "Waiting for sign-in…",
       signInTitle: "Continue in your browser",
@@ -195,6 +178,11 @@ const enModelSetup = {
       expires: "Expires in {count} minutes",
       expiresSoon: "Expires in less than a minute",
       cancelled: "Sign-in canceled",
+      retryStep: "Retry this step",
+      startAgain: "Start sign-in again",
+      openSettings: "Open settings",
+      waitThenRetry: "Wait a few minutes, then start sign-in again.",
+      askAdmin: "Ask your administrator to allow this sign-in.",
       finishingStep: "Setup is finishing the current step. You can cancel when it finishes.",
       cancelFailed: "Couldn’t confirm cancellation. Try again. {error}",
       sessionExpired:
@@ -204,7 +192,7 @@ const enModelSetup = {
       gatewayReconnecting: "Disconnected. Waiting to reconnect…",
       notComplete: "You’re signed in, but model setup isn’t complete yet.",
     },
-    providerConnected: "{provider} is ready",
+    providerConnected: "{provider} connected",
   },
 } satisfies TranslationMap;
 

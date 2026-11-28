@@ -16,6 +16,7 @@ import type { SkillsProps } from "./view-types.ts";
 export function SkillPageShell(props: {
   view: SkillsProps;
   name: string;
+  headingContent?: JSX.Element;
   icon: JSX.Element;
   identity?: JSX.Element;
   actions?: JSX.Element;
@@ -28,7 +29,20 @@ export function SkillPageShell(props: {
     <div class="skill-page">
       <PluginDetailShell
         id="skill-page"
+        registerHeading={(heading) => {
+          const document = heading.ownerDocument;
+          const active = document.activeElement;
+          // A late detail may replace the loading shell after the user has moved on.
+          if (
+            active === document.body ||
+            (active?.classList.contains("skills-detail-surface") && active.contains(heading))
+          ) {
+            heading.tabIndex = -1;
+            heading.focus();
+          }
+        }}
         name={props.name}
+        headingContent={props.headingContent}
         summary={props.summary}
         backHref={props.view.listHref}
         backLabel={t("tabs.skills")}

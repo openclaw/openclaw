@@ -4,6 +4,7 @@ import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { createUpdateFailureFact } from "./update-failure-facts.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+import { failedUpdateRun } from "./update-failure-report.test-support.js";
 
 const context = { env: {}, stateDir: "/report-config-test" };
 
@@ -32,25 +33,17 @@ async function renderConfigFailure(raw: unknown, candidate: boolean) {
     : (failure.failureFacts ?? []);
   return (
     await prepareUpdateFailureReport(
-      {
-        attemptId: "config-report",
-        result: {
-          mode: "npm",
-          status: "error",
-          reason: "invalid-config",
-          durationMs: 1,
-          steps: [
-            {
-              name: "invalid-config",
-              command: "",
-              cwd: "",
-              durationMs: 1,
-              exitCode: 1,
-              failureFacts: facts.map((fact) => createUpdateFailureFact(fact, {})),
-            },
-          ],
-        },
-      },
+      failedUpdateRun({
+        reason: "invalid-config",
+        steps: [
+          {
+            step: "invalid-config",
+            status: "failed",
+            exitCode: 1,
+            failureFacts: facts.map((fact) => createUpdateFailureFact(fact, {})),
+          },
+        ],
+      }),
       context,
     )
   ).body;
@@ -137,24 +130,16 @@ it("keeps scrubbed candidate details local while publishing the fixed config cau
   });
   expect(fact.message).toContain("Configuration unavailable");
   const report = await prepareUpdateFailureReport(
-    {
-      attemptId: "private-config-cause",
-      result: {
-        mode: "npm",
-        status: "error",
-        durationMs: 1,
-        steps: [
-          {
-            name: "candidate-config",
-            command: "config validate",
-            cwd: "",
-            durationMs: 1,
-            exitCode: 1,
-            failureFacts: [fact],
-          },
-        ],
-      },
-    },
+    failedUpdateRun({
+      steps: [
+        {
+          step: "candidate-config",
+          status: "failed",
+          exitCode: 1,
+          failureFacts: [fact],
+        },
+      ],
+    }),
     context,
   );
   expect(report.body).toContain("gateway.port: Invalid configuration field");

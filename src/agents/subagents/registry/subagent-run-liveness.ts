@@ -1,7 +1,9 @@
 import { hasLiveAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
+import { hasSubagentKill } from "./subagent-control-kill-intent.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
@@ -64,20 +66,18 @@ export function hasSubagentRunEnded<T extends { execution: { endedAt?: number } 
 
 export function isYieldedSubagentRun(entry: SubagentRunRecord): boolean {
   return (
-    entry.pauseReason === "sessions_yield" &&
-    !entry.killIntent &&
-    !entry.killReconciliation &&
+    isSubagentPausedByYield(entry) &&
+    !hasSubagentKill(entry) &&
     entry.suppressAnnounceReason !== "killed" &&
     entry.endedReason !== "subagent-killed"
   );
 }
 
-/** An ended message wait owns a continuation, not a finished result. */
-export function isEndedSubagentMessageWait(entry: SubagentRunRecord): boolean {
+/** A finished result a requester can receive; a yielded pause owns a continuation instead. */
+export function isRequesterSettleMemberReady(entry: SubagentRunRecord): boolean {
   return (
-    entry.execution.status === "terminal" &&
-    isYieldedSubagentRun(entry) &&
-    entry.waitForMessage === true &&
+    entry.execution.status !== "running" &&
+    !isSubagentPausedByYield(entry) &&
     hasSubagentRunEnded(entry)
   );
 }

@@ -132,6 +132,7 @@ export type SidebarSessionNavigationState = {
   selectedAgentId: string;
   activeRowKey: string | null;
   visibleSessionRows: GatewaySessionRow[];
+  routeOnlyRow?: GatewaySessionRow;
   toSidebarSession: (row: SessionRow, isChild?: boolean) => SidebarRecentSession;
 };
 
@@ -217,14 +218,6 @@ export function buildSidebarSessionNavigationState(input: {
       ],
       () => {
         const channelInfo = resolveChannelSessionInfo(row.key, row.channel);
-        let runtimeSampledAt = row.runtimeSampledAt;
-        if (row.runtimeMs != null && runtimeSampledAt == null) {
-          runtimeSampledAt = input.rowProjection.runtimeSampledAtByRow.get(row);
-          if (runtimeSampledAt == null) {
-            runtimeSampledAt = Date.now();
-            input.rowProjection.runtimeSampledAtByRow.set(row, runtimeSampledAt);
-          }
-        }
         return {
           key: row.key,
           agentId: resolveUiSessionRowAgentId(row, defaultAgentId),
@@ -318,8 +311,6 @@ export function buildSidebarSessionNavigationState(input: {
           startedAt: row.startedAt,
           updatedAt: row.updatedAt,
           endedAt: row.endedAt,
-          runtimeMs: row.runtimeMs,
-          runtimeSampledAt,
           childSessionKeys:
             row.archived === true
               ? []
@@ -338,6 +329,7 @@ export function buildSidebarSessionNavigationState(input: {
     selectedAgentId: navigation.selectedAgentId,
     activeRowKey: navigation.activeRowKey,
     visibleSessionRows: navigation.visibleSessions,
+    routeOnlyRow: navigation.routeOnlyRow,
     toSidebarSession,
   };
 }
@@ -477,16 +469,16 @@ export function handleSidebarSessionRowClick(
   }
   if (!session.isChild && event.shiftKey) {
     event.preventDefault();
-    selection.extend(session.key, session.selectionKey);
+    selection.extend(session.key);
     return;
   }
   if (!session.isChild && event.altKey) {
     event.preventDefault();
-    selection.toggle(session.key, session.selectionKey);
+    selection.toggle(session.key);
     return;
   }
   event.preventDefault();
-  selection.clear(session.selectionKey ?? session.key);
+  selection.clear(session.key);
   selectSession(session.key);
 }
 
@@ -501,7 +493,7 @@ export function createSidebarSessionSelection(
     get selectedKeys() {
       return selectedKeys;
     },
-    toggle(key: string, selectionKey = key) {
+    toggle(key: string) {
       const next = new Set(selectedKeys);
       if (next.has(key)) {
         next.delete(key);
@@ -509,18 +501,18 @@ export function createSidebarSessionSelection(
         next.add(key);
       }
       selectedKeys = next;
-      anchor = next.has(key) ? selectionKey : null;
+      anchor = next.has(key) ? key : null;
       publish();
     },
-    extend(key: string, selectionKey = key) {
+    extend(key: string) {
       const rows = readRows();
       const active = rows.find((row) => row.visuallyActive || row.active);
-      anchor ??= active?.selectionKey ?? active?.key ?? selectionKey;
-      const anchorIndex = rows.findIndex((row) => (row.selectionKey ?? row.key) === anchor);
-      const targetIndex = rows.findIndex((row) => (row.selectionKey ?? row.key) === selectionKey);
+      anchor ??= active?.key ?? key;
+      const anchorIndex = rows.findIndex((row) => row.key === anchor);
+      const targetIndex = rows.findIndex((row) => row.key === key);
       if (anchorIndex === -1 || targetIndex === -1) {
         selectedKeys = new Set([key]);
-        anchor = selectionKey;
+        anchor = key;
       } else {
         const [start, end] =
           anchorIndex <= targetIndex ? [anchorIndex, targetIndex] : [targetIndex, anchorIndex];
@@ -528,8 +520,8 @@ export function createSidebarSessionSelection(
       }
       publish();
     },
-    clear(this: void, selectionKey: string | null = null) {
-      anchor = selectionKey;
+    clear(this: void, key: string | null = null) {
+      anchor = key;
       if (selectedKeys.size > 0) {
         selectedKeys = new Set();
         publish();
@@ -615,9 +607,12 @@ export function findSidebarSessionRow(input: {
   sessionKey: string;
   navigationState: SidebarSessionNavigationState;
   sessionResultsByAgent: Readonly<Record<string, SessionsListResult>>;
+  backingOnly?: boolean;
 }): GatewaySessionRow | undefined {
   const active = input.navigationState.visibleSessionRows.find(
-    (candidate) => candidate.key === input.sessionKey,
+    (candidate) =>
+      candidate.key === input.sessionKey &&
+      (!input.backingOnly || candidate !== input.navigationState.routeOnlyRow),
   );
   if (active) {
     return active;

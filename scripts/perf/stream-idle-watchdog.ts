@@ -27,6 +27,7 @@ import type { AssistantMessage, AssistantMessageEvent, Model } from "@openclaw/l
 import type { streamWithIdleTimeout } from "../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
 import type { StreamFn } from "../../src/agents/runtime/index.js";
 import { createSessionControllerWatchdog } from "../../src/sessions/session-controller.watchdog.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.js";
 
 const { values } = parseArgs({
@@ -151,12 +152,7 @@ await run(Math.min(turns, 8));
 globalThis.gc?.();
 const inspector = values.mode === "allocation" ? new Session() : undefined;
 if (inspector) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 4096);
 }
 const originalSetTimeout = globalThis.setTimeout;
 let timerCreations = 0;

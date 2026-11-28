@@ -17,6 +17,15 @@ config snapshot. Rows owned by native model selection set `nativeRuntime` to
 the harness ID and omit host `api` and `baseUrl` claims. Core does not enrich
 these rows with transport or capabilities from a host route.
 
+Set `modelCatalogProviderIds` when the providers listed by a harness differ from
+its configured execution providers. Provider-scoped refreshes use this declaration
+to select catalog owners without invoking unrelated runtimes. Without a declaration,
+OpenClaw infers providers from configured routes and probes unconfigured harnesses.
+
+When `params.providerIds` is present, restrict discovery to those providers before
+resolving credentials or contacting native services. An omitted scope requests the
+full picker inventory; `configuredModelRefs` is context, not a discovery filter.
+
 Return `{ entries, outcomes }` to report secret-free discovery outcomes alongside
 the rows. Outcomes use the provider catalog statuses `ready`, `auth-rejected`,
 and `unavailable`; a catalog-only auth rejection sets `rejectionScope: "catalog"`.

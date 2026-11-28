@@ -46,6 +46,7 @@ The weekly Skill Workshop curator (declaration key `skill-collection-review:<age
 </ParamField>
 <ParamField path="--thinking" type="string">
   Thinking level override (`off|minimal|low|medium|high|xhigh|adaptive|max|ultra`). Available levels still depend on the selected model and agent runtime.
+  When the model catalog lists supported levels, the Control UI asks you to choose one before saving a new model and level combination. If an existing job has a level the model no longer offers, you can still pause it or edit other settings.
 </ParamField>
 <ParamField path="--clear-thinking" type="boolean">
   On `automations edit`, removes the per-job thinking override. Cannot combine with `--thinking`.
@@ -143,6 +144,17 @@ The link names the creating conversation by key. After a message edit, branch
 switch, or reset, a linked detached job keeps that conversation's workspace,
 memory, and sandbox requirement. A new occurrence checks the creator's device and grant.
 A removed or archived conversation pauses the job.
+
+An agent-created job cannot use another conversation’s saved workspace or
+worktree, even when the same person owns both conversations. OpenClaw rejects
+that target when you create, retarget, edit the execution, or enable the job.
+Create the automation from an authenticated turn in the target conversation
+with `sessionTarget: "session:<that conversation’s session key>"` instead.
+Existing invalid jobs can still be paused, renamed, or removed; recreate them
+from their intended conversation rather than changing workspace paths or
+relaxing filesystem restrictions. Named sessions without a saved workspace
+binding and operator-created jobs retain their existing behavior. The run-time
+check remains in place if a target acquires a workspace binding after creation.
 
 Stored jobs are unchanged: a source is never inferred for an existing job, so
 jobs created before this behavior keep their recorded ownership check. Binding
@@ -267,6 +279,23 @@ scheduled model falls back without retaining that model's account.
 
 To change an account deliberately, update the job with a model/profile selection,
 for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
+To list accounts while the Gateway runs, use `openclaw gateway call models.authStatus`.
+
+A run that reaches a removed, signed-out or replaced recorded account, and that no
+fallback on another provider could finish, auto-disables the job once with reason
+`account-unavailable`. A fallback that failed for a reason that can pass keeps the
+normal retry schedule. The notice names the repair: sign in again if needed, record
+the account with `model@profile`, then run `openclaw automations enable <jobId>`. The
+notice does not name the account; run history keeps the full refusal.
+
+If the recorded account was removed or signed out, an explicit plain-model edit
+such as `openclaw automations edit <jobId> --model openai/gpt-4.1` can release the
+dead binding when that model selects a key in the environment or provider config.
+The edit preserves the job and its history, and cannot change its recorded runtime
+on the same provider. A remaining stored account still requires an explicit
+`model@profile` selection. Valid bindings, unrelated edits, and
+`--clear-model` keep the recorded account.
+
 For legacy jobs without a recorded inference owner, `openclaw doctor --fix` records
 the account the job's next unbound run would use: an explicit selection, or else the
 first account in the run's normal account order, ignoring temporary rate-limit
@@ -285,9 +314,9 @@ can be valid when credentials are inherited from the shared store; Doctor checks
 effective credentials before reporting a missing profile. It does not remove a
 missing profile from account order or recreate its credentials automatically.
 
-Managed updates and the standard container entrypoint run repairing Doctor before
-activation. A manual source upgrade must include `openclaw doctor --fix` before
-starting the Gateway. Startup checks potentially unmigrated host-account jobs in the background without
+Gateway boot and `openclaw doctor --fix` use the same account-adoption owner for
+legacy host-account jobs, including after a container image replacement.
+Startup checks potentially unmigrated host-account jobs in the background without
 delaying cron readiness or operations. The scan has a five-second aggregate budget;
 if it expires, one warning reports how many jobs were not checked and points to
 `openclaw doctor --lint` for a complete check. Startup does not capture credentials
@@ -323,7 +352,7 @@ An explicit update from an authorized native creator can adopt its runtime autho
 An authorized `--model anthropic/<model>@anthropic:claude-cli` edit can replace a
 stored account with Claude CLI’s native login when the job’s execution route uses
 that CLI. This preserves the job’s identity, history and tool cap; ordinary
-model or default changes never clear a stored account.
+model or default changes never clear an available stored account.
 Moving a job to an agent with a different credential owner requires explicit account adoption.
 Tool and delivery accounts remain separate from the inference account.
 
@@ -392,7 +421,9 @@ Use a normal final reply for a visible result and `NO_REPLY` for silence.
 or `needs_attention`). `no_change` needs no summary; every other outcome requires
 a trimmed summary of 1–2000 characters. Repeating the accepted result returns it
 again; a different second result is rejected. It records the result without
-sending a notification by itself. Structured results are retained in run history. After a
+sending a notification by itself. In the Control UI, run history shows each recorded outcome.
+An enabled job that reports `blocked` or `needs_attention` keeps its summary visible in
+Automations through quiet checks. Reporting `progress` or `done` clears that notice. After a
 successful run, the last meaningful result is saved with the job and included as
 bounded context in its next prompt, even when the final reply is silent. Quiet
 checks and execution failures do not overwrite that result or append result
@@ -473,6 +504,11 @@ The script may return an object with these optional fields:
 - `nextCheck`: A duration such as `"15m"`. It is valid only for jobs with pacing enabled and uses the same pacing clamp as agent-turn proposals.
 
 Throws, timeouts, exhausted tool budgets, invalid results, and `nextCheck` without pacing are normal automation run errors: they enter run history, backoff, and failure-alert handling without persisting returned state.
+
+Before starting a script or condition check that reuses a prepared Docker sandbox,
+OpenClaw checks the container's state. If it has stopped, sandbox provisioning starts
+the existing container before the evaluation begins. A stop during an evaluation
+can still fail that run. Recovery happens before the next evaluation begins.
 
 Plugin reloads invalidate cached script preparation. If a plugin retires during setup,
 OpenClaw refreshes the tools once before starting the script, within the original

@@ -39,10 +39,9 @@ export async function postWebhookJson(params: {
   url: string;
   payload: string;
   secret?: string;
-  timeoutMs?: number;
 }): Promise<Response> {
   const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), params.timeoutMs ?? 5_000);
+  const timer = setTimeout(() => abort.abort(), 5_000);
   try {
     return await fetch(params.url, {
       method: "POST",
@@ -58,9 +57,7 @@ export async function postWebhookJson(params: {
   }
 }
 
-export async function postWebhookHeadersOnly(
-  params: WebhookRequest & { timeoutMs?: number },
-): Promise<WebhookResponse> {
+export async function postWebhookHeadersOnly(params: WebhookRequest): Promise<WebhookResponse> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   return await new Promise<WebhookResponse>((resolve, reject) => {
     const req = webhookRequest({ ...params, secret: params.secret || undefined }, (payload) => {
@@ -68,11 +65,9 @@ export async function postWebhookHeadersOnly(
       req.destroy();
     });
     timeout = setTimeout(() => {
-      req.destroy(
-        new Error(`webhook header-only post timed out after ${params.timeoutMs ?? 5_000}ms`),
-      );
+      req.destroy(new Error("webhook header-only post timed out after 5000ms"));
       reject(new Error("timed out waiting for webhook response"));
-    }, params.timeoutMs ?? 5_000);
+    }, 5_000);
 
     req.on("error", reject);
     req.flushHeaders();
@@ -96,7 +91,6 @@ export async function postWebhookPayloadWithChunkPlan(params: {
   path: string;
   payload: string;
   secret: string;
-  mode: "single" | "random-chunked";
   timeoutMs?: number;
 }): Promise<WebhookResponse> {
   const payloadBuffer = Buffer.from(params.payload, "utf-8");
@@ -118,11 +112,6 @@ export async function postWebhookPayloadWithChunkPlan(params: {
     req.on("error", reject);
 
     const writeAll = async () => {
-      if (params.mode === "single") {
-        req.end(payloadBuffer);
-        return;
-      }
-
       let rngState = 26156;
       let offset = 0;
       while (offset < payloadBuffer.length) {

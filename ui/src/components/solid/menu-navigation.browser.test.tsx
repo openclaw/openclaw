@@ -395,7 +395,9 @@ describe("Solid menu navigation", () => {
       expect(document.activeElement).toBe(item("Ada Rivera", "people-assign"));
       await keyPhase("{ArrowRight}", "hidden", "people-assign");
       expect(document.activeElement).toBe(trigger("people-assign"));
-      await press("{ArrowDown}", trigger("people-move"));
+      await userEvent.keyboard("{ArrowDown}");
+      await vi.dynamicImportSettled();
+      expect(document.activeElement).toBe(trigger("people-move"));
     },
   );
 
@@ -619,6 +621,7 @@ it("defers cold button pointer focus until click without suppressing context men
   const { handle, button } = mountColdMenu();
   const down = (mouseButton: number) => {
     const event = new PointerEvent("pointerdown", {
+      pointerType: "mouse",
       button: mouseButton,
       bubbles: true,
       cancelable: true,

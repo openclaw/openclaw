@@ -19,7 +19,7 @@ function transcriptPair(question: string, reply: string) {
   ];
 }
 
-function context(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
+function context(overrides: Partial<FinalizedMsgContext>): FinalizedMsgContext {
   return {
     Body: "continue",
     SessionKey: "agent:main:slack:channel:c1",
@@ -43,7 +43,7 @@ describe("session transcript inbound context", () => {
   });
 
   async function merged(
-    overrides: Partial<FinalizedMsgContext> = {},
+    overrides: Partial<FinalizedMsgContext>,
     agentId = "main",
     recordSessionKey?: string,
   ) {

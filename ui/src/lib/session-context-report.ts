@@ -1,6 +1,7 @@
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import type { SessionSystemPromptReport } from "../../../src/config/sessions/session-system-prompt-report.js";
 import { createChangeListeners } from "../../../src/shared/listeners.js";
+import { promptCacheHitRate } from "../../../src/shared/prompt-cache-hit-rate.js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { createGatewayConnectionLifecycle } from "./gateway-connection-lifecycle.ts";
@@ -10,7 +11,7 @@ import { createGatewayRetryOwner } from "./gateway-retry.ts";
 import { formatMissingOperatorReadScopeMessage } from "./permission-error.ts";
 import { listen } from "./reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "./sessions/session-key.ts";
-import { promptCacheHitRate, requestSessionUsage } from "./sessions/usage.ts";
+import { requestSessionUsage } from "./sessions/usage.ts";
 
 type SessionContextReportTarget = {
   sessionKey: string;

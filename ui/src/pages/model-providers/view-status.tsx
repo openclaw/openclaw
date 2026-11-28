@@ -132,7 +132,8 @@ export function renderProviderStatus(card: ModelProviderCard, result?: ModelsPro
     return <SettingsStatus kind={"warn"} label={t("modelProviders.status.modelsUnavailable")} />;
   }
   // A successful catalog lists models; it does not prove inference access.
-  const checked = result && probeStatus(result);
+  // No inference was attempted without a model; keep the known setup status.
+  const checked = result && result.status !== "no_model" && probeStatus(result);
   if (checked && checked.kind !== "ok") {
     return <SettingsStatus {...checked} />;
   }
@@ -175,23 +176,5 @@ export function renderMutationMessage(message: ModelProviderRowMessage | undefin
         </InlineAlert>
       ) : undefined}
     </>
-  );
-}
-
-export function ModelProviderConnectAction(props: {
-  onConnect: () => void;
-  connectDisabled: boolean;
-  primary?: boolean;
-  compact?: boolean;
-}) {
-  return (
-    <button
-      class={["btn", { primary: props.primary, "btn--sm": props.compact }]}
-      data-models-connect
-      disabled={props.connectDisabled}
-      onClick={() => props.onConnect()}
-    >
-      {t("modelProviders.login.action")}
-    </button>
   );
 }

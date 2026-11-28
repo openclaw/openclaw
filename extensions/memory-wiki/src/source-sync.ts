@@ -1,9 +1,11 @@
+import { runInDetachedAsyncContext } from "openclaw/plugin-sdk/concurrency-runtime";
 import type { OpenClawConfig } from "../api.js";
 import { syncMemoryWikiBridgeSources } from "./bridge.js";
 import {
   refreshMemoryWikiIndexesAfterImport,
   type RefreshMemoryWikiIndexesResult,
 } from "./compile.js";
+import { setMemoryWikiDashboardState } from "./compiled-cache.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import {
   resolveMemoryWikiVaultMutationKey,
@@ -126,5 +128,22 @@ export async function waitForMemoryWikiImportedSourceSyncs(): Promise<void> {
     [...activeImportedSourceSyncs.values()].flatMap((entries) =>
       [...entries].map((entry) => entry.promise),
     ),
+  );
+}
+
+/** Service-owned refresh. The caller answers from the current index. */
+export function refreshMemoryWikiImportedSources(
+  params: { config: ResolvedMemoryWikiConfig; appConfig?: OpenClawConfig; signal: AbortSignal },
+  onError: (error: unknown) => void,
+): void {
+  // Detach from the request's async scope, which closes once the response is sent.
+  void runInDetachedAsyncContext(() => syncMemoryWikiImportedSources(params)).catch(
+    (error: unknown) => {
+      if (params.signal.aborted) {
+        return;
+      }
+      setMemoryWikiDashboardState(params.config, { state: "failed" });
+      onError(error);
+    },
   );
 }

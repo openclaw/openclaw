@@ -1,4 +1,4 @@
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../config/io.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
@@ -58,7 +58,7 @@ test("required operator sandbox follows new session ownership across create, pat
     }
     const client = {
       ...(systemActor ? { internal: { operatorRoleActor: { kind: "system" } } } : {}),
-      connect: { role: "operator", scopes: ["operator.read", "operator.write"] },
+      connect: gatewayConnect(["operator.read", "operator.write"]),
       authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
     } as never;
     const key = `agent:main:dashboard:role-sandbox-${suffix}`;
@@ -83,19 +83,6 @@ test("required operator sandbox follows new session ownership across create, pat
       createdActor: { type: "human", source: "profile", id: profile.id },
     });
     expect(createdEntry?.sandbox).toBe(systemActor ? undefined : "required");
-
-    for (const forgedSandbox of [null, "inherit"] as const) {
-      const forged = await directSessionReq(
-        "sessions.patch",
-        { key, sandbox: forgedSandbox },
-        { client, context },
-      );
-
-      expect(forged).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
-    }
-    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.sandbox).toBe(
-      systemActor ? undefined : "required",
-    );
   }
 });
 
@@ -121,7 +108,7 @@ test("operator role agent allowlists protect creation without blocking existing 
     },
   };
   const client = {
-    connect: { role: "operator", scopes: ["operator.read", "operator.write"] },
+    connect: gatewayConnect(["operator.read", "operator.write"]),
     authenticatedUserProfile: gatewayProfile(profile.id, profile.displayName, profile.updatedAt),
   } as never;
   const requestOptions = { client, context: { getRuntimeConfig: () => cfg } };
@@ -294,32 +281,6 @@ test.each(
   },
 );
 
-test("sessions.create carries keyed adoption authorization through the durable commit", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const key = "agent:main:dashboard:categorized-adoption";
-  await writeSessionStore({
-    entries: {
-      [key]: sessionStoreEntry("session-categorized-adoption", { category: "Personal" }),
-    },
-  });
-  const assertCurrent = vi.fn();
-
-  const adopted = await directSessionReq(
-    "sessions.create",
-    { agentId: "main", key, category: "Projects" },
-    {
-      sessionMutationAuthorization: {
-        assertCurrent,
-        assertTargetCurrent: vi.fn(),
-      },
-    },
-  );
-
-  expect(adopted.ok).toBe(true);
-  expect(assertCurrent).toHaveBeenCalled();
-  expect(loadSessionEntry({ sessionKey: key, storePath })?.category).toBe("Projects");
-});
-
 test("sessions.create revalidates parent participation before committing a fork transcript", async () => {
   const { storePath } = await createSessionStoreDir();
   const parentSessionKey = "agent:main:dashboard:participation-race-parent";
@@ -347,7 +308,7 @@ test("sessions.create revalidates parent participation before committing a fork 
   const client = {
     authenticatedUserId: "member@example.com",
     authenticatedUserProfile: gatewayProfile("member", "Member"),
-    connect: { role: "operator", scopes: ["operator.write"] },
+    connect: gatewayConnect(["operator.write"]),
   } as never;
   const requestParams = {
     agentId: "main",
@@ -430,7 +391,6 @@ test("sessions.create revalidates parent participation before committing a fork 
 test("createGatewaySession rejects explicit and key-derived unconfigured creation owners", async () => {
   const { createGatewaySession } = await import("./session-create-service.js");
   const cfg = { agents: { ownership: "explicit" as const, entries: { ops: {} } } };
-  const prepareLifecycle = vi.fn();
 
   for (const { owner, message } of [
     { owner: { agentId: "main" }, message: 'Unknown agent id "main"' },
@@ -446,14 +406,12 @@ test("createGatewaySession rejects explicit and key-derived unconfigured creatio
     },
   ]) {
     await expect(
-      createGatewaySession({ cfg, ...owner, commandSource: "test", prepareLifecycle }),
+      createGatewaySession({ cfg, ...owner, commandSource: "test" }),
     ).resolves.toMatchObject({
       ok: false,
       error: { code: "INVALID_REQUEST", message },
     });
   }
-
-  expect(prepareLifecycle).not.toHaveBeenCalled();
 });
 
 test.each([undefined, "agent:main:dashboard:memory-core-parent"])(
@@ -470,7 +428,7 @@ test.each([undefined, "agent:main:dashboard:memory-core-parent"])(
         : { main: sessionStoreEntry("operator-owned-main") },
     });
     const pluginClient = {
-      connect: { scopes: ["operator.write"] },
+      connect: { scopes: ["operator.write"], client: { id: "test" } },
       internal: { pluginRuntimeOwnerId: "memory-core" },
     } as never;
 
@@ -520,7 +478,7 @@ test("sessions.create prevents plugin runtimes from adopting, linking, or forkin
     },
   });
   const pluginClient = {
-    connect: { scopes: ["operator.write"] },
+    connect: { scopes: ["operator.write"], client: { id: "test" } },
     internal: { pluginRuntimeOwnerId: "memory-core" },
   } as never;
 

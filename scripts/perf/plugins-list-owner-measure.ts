@@ -22,6 +22,7 @@ import { listManagedPlugins } from "../../src/plugins/management-service.js";
 import type { PluginManifestRecord } from "../../src/plugins/manifest-registry.types.js";
 import { finalizePluginMetadataSnapshot } from "../../src/plugins/plugin-metadata-snapshot.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const [mode = "timing", rawIterations = "2000"] = process.argv.slice(2);
 const iterations = Number(rawIterations);
@@ -105,12 +106,7 @@ const originalRealpath = fs.realpathSync;
 let realpathCalls = 0;
 try {
   if (mode === "allocation") {
-    inspector.connect();
-    await inspector.post("HeapProfiler.startSampling", {
-      samplingInterval: 4096,
-      includeObjectsCollectedByMajorGC: true,
-      includeObjectsCollectedByMinorGC: true,
-    });
+    await startCollectedHeapSampling(inspector, 4096);
   } else if (mode === "counts") {
     function counted<T extends typeof fs.realpathSync.native>(fn: T): T {
       return new Proxy(fn, {

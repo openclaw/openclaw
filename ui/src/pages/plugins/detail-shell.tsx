@@ -92,9 +92,10 @@ export function PluginReadmeWell(props: {
 }
 
 export function renderPluginDetailShell(props: {
-  registerRemovalHeading?: (heading: HTMLHeadingElement) => () => void;
+  registerHeading?: (heading: HTMLHeadingElement) => void | (() => void);
   id: string;
   name: string;
+  headingContent?: JSX.Element;
   summary?: string;
   backHref: string;
   backLabel: string;
@@ -112,7 +113,7 @@ export function renderPluginDetailShell(props: {
   rail?: boolean;
 }): JSX.Element {
   let heading!: HTMLHeadingElement;
-  onSettled(() => props.registerRemovalHeading?.(heading));
+  onSettled(() => props.registerHeading?.(heading));
   const titleId = () => `${props.id}-title`;
   const summary = () =>
     props.summary ? <p class="plugin-catalog-detail__summary">{props.summary}</p> : undefined;
@@ -140,8 +141,12 @@ export function renderPluginDetailShell(props: {
         <div class="plugin-catalog-detail__heading">
           <div class="plugin-catalog-detail__name">
             <div class="plugin-catalog-detail__title-row">
-              <h1 id={titleId()} ref={(element) => (heading = element)}>
-                {props.name}
+              <h1
+                id={titleId()}
+                ref={(element) => (heading = element)}
+                aria-label={props.headingContent ? props.name : undefined}
+              >
+                {props.headingContent ?? props.name}
               </h1>
             </div>
             {props.identity}

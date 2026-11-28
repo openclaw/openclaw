@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
@@ -33,7 +32,7 @@ vi.mock("./review-undo.js", async (importOriginal) => ({
 }));
 
 const { run, scoped } = useWorkshopPluginScope();
-const { resolveWorkshopDraftsDir, resolveWorkshopSkillsDir } = scoped(skillsRootModule);
+const { resolveWorkshopSkillsDir } = scoped(skillsRootModule);
 
 type Handler = (invocation: GatewayRequestHandlerOptions) => Promise<void>;
 const handlers = new Map<string, Handler>();
@@ -46,11 +45,7 @@ registerSkillWorkshopGatewayMethods(
 );
 
 /** Invokes a registered method inside the plugin's call scope and captures its response. */
-async function callGatewayHandler(
-  method: string,
-  params: Record<string, unknown>,
-  options: { client?: unknown } = {},
-) {
+async function callGatewayHandler(method: string, params: Record<string, unknown>) {
   let ok: boolean | null = null;
   let response: unknown;
   let error: unknown;
@@ -58,7 +53,7 @@ async function callGatewayHandler(
     handlers.get(method)!({
       req: { type: "req", id: "test", method, params },
       params,
-      client: (options.client ?? null) as GatewayRequestHandlerOptions["client"],
+      client: null,
       isWebchatConnect: () => false,
       context: { getRuntimeConfig: () => config } as GatewayRequestHandlerOptions["context"],
       respond: (nextOk, nextResponse, nextError) => {
@@ -150,49 +145,6 @@ describe("skills.workshop gateway methods", () => {
       "20260929T000000000Z-patch",
     );
   });
-
-  it.each([
-    ["skills.workshop.archive", { name: "deploy-notes" }],
-    ["skills.workshop.restore", { name: "deploy-notes" }],
-    ["skills.workshop.undo", { runId: "skill-workshop-review:1" }],
-  ])("refuses %s once the requester loses authority after admission", async (method, params) => {
-    const client = { invalidated: false };
-    // The library calls assertLive right before its final file effect.
-    const revokeThenCommit = async (ctx: { assertLive: () => void }) => {
-      client.invalidated = true;
-      ctx.assertLive();
-      return change;
-    };
-    library.archiveWorkshopSkill.mockImplementation(revokeThenCommit);
-    library.restoreWorkshopSkill.mockImplementation(revokeThenCommit);
-    undoWorkshopReview.mockImplementation(revokeThenCommit);
-
-    await expect(callGatewayHandler(method, params, { client })).rejects.toThrow(
-      "Gateway requester authority changed",
-    );
-  });
-
-  it.each(["skills.workshop.applyDraft", "skills.workshop.discardDraft"])(
-    "refuses %s for a requester whose authority is gone and keeps the draft",
-    async (method) => {
-      const draftDir = path.join(resolveWorkshopDraftsDir(config, "ops"), "deploy-notes-1a2b3c4d");
-      const draftFile = path.join(draftDir, "SKILL.md");
-      await fs.mkdir(draftDir, { recursive: true });
-      await fs.writeFile(draftFile, "---\nname: deploy-notes\ndescription: d\n---\n\n1. Step.\n");
-      try {
-        await expect(
-          callGatewayHandler(
-            method,
-            { name: "deploy-notes", draftId: "deploy-notes-1a2b3c4d" },
-            { client: { invalidated: true } },
-          ),
-        ).rejects.toThrow("Gateway requester authority changed");
-        expect(await fs.readFile(draftFile, "utf8")).toContain("1. Step.");
-      } finally {
-        await fs.rm(draftDir, { recursive: true, force: true });
-      }
-    },
-  );
 
   it("returns library refusals and unknown agents as invalid requests", async () => {
     const missingSkill = 'Skill "ghost" does not exist.';

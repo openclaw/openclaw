@@ -16,14 +16,12 @@ import { registerChatCommandsEnglish } from "../../i18n/locales/en-chat-commands
 import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
-import { registerSessionMenuEnglish } from "../../i18n/locales/en-session-menu.ts";
 import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import { registerEnglishCatalog } from "../reactive/i18n.ts";
 
 registerChatCommandsEnglish();
 registerEnglishCatalog(registerChatComposerEnglish);
 registerEnglishCatalog(registerChatGoalsEnglish);
-registerEnglishCatalog(registerSessionMenuEnglish);
 registerEnglishCatalog(registerSessionOrganizationSharedEnglish);
 registerEnglishCatalog(registerModelControlsEnglish);
 
@@ -310,8 +308,20 @@ export function buildFallbackSlashCommands(): SlashCommandDef[] {
   return [...builtins, ...UI_ONLY_COMMANDS];
 }
 
+const slashCommandListeners = new Set<() => void>();
+
+export function subscribeSlashCommands(listener: () => void) {
+  slashCommandListeners.add(listener);
+  return () => {
+    slashCommandListeners.delete(listener);
+  };
+}
+
 export function replaceSlashCommands(next: SlashCommandDef[]) {
   SLASH_COMMANDS.splice(0, SLASH_COMMANDS.length, ...next);
+  for (const listener of slashCommandListeners) {
+    listener();
+  }
 }
 
 export function buildSlashCommandsFromEntries(entries: CommandEntry[]): SlashCommandDef[] {

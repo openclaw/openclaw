@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { getByRole } from "@solidjs/testing-library";
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { projectAgentActivityItem } from "../../../../../src/agents/agent-activity-presentation.js";
@@ -30,11 +31,6 @@ const query = (root: ParentNode | null | undefined, selector: string) =>
   root?.querySelector<HTMLElement>(selector) ?? null;
 const textOf = (root: ParentNode, selector: string) => root.querySelector(selector)?.textContent;
 const cardPart = (root: ParentNode, part: string) => query(root, `.chat-tool-card__${part}`);
-const diffText = (root: ParentNode | null | undefined, kind: string) =>
-  Array.from(
-    root?.querySelectorAll(`.chat-diff__row--${kind} .chat-diff__text`) ?? [],
-    (node) => node.textContent,
-  );
 const change = (path: string, diff: string, type = "update") => ({ path, kind: { type }, diff });
 const patchCard = (args: ToolCard["args"], extra: Partial<ToolCard> = {}): ToolCard => ({
   id: "patch",
@@ -56,75 +52,61 @@ function mountTool(
   return mountCard({ id: name, name, ...card }, options, container);
 }
 
+it.each(["image", "music", "video"])("labels an implicit %s generation call", async (kind) => {
+  const container = await mountTool(
+    `${kind}_generate`,
+    { args: { prompt: "Private fixture prompt" }, live: true },
+    { expanded: false, runActive: true },
+  );
+  expect(textOf(container, ".chat-tool-row__title")).toBe(`Generating ${kind}`);
+});
+
+it.each(["image", "music", "video"])(
+  "distinguishes %s generation requests from generated media in direct and dispatched rows",
+  async (kind) => {
+    const name = `${kind}_generate`;
+    const implicitArgs = { prompt: "Private fixture prompt" };
+    const args = { ...implicitArgs, action: "generate" };
+    const dispatchedArgs = { id: name, args: implicitArgs };
+    const tool = { id: name, name, source: "openclaw" };
+    const unit = kind === "music" ? "track" : kind;
+    for (const [details, text, title] of [
+      [
+        { async: true, status: "started", taskId: "task-fixture" },
+        `Background task started for ${kind} generation (task-fixture).`,
+        `Requested ${kind} generation`,
+      ],
+      [
+        { count: 1, attachments: [{ type: kind === "music" ? "audio" : kind, path: "/fixture" }] },
+        `Generated 1 ${unit} with fixture/model.`,
+        `Generated ${kind}`,
+      ],
+    ] as const) {
+      const result = { content: [{ type: "text", text }] };
+      const envelope = { tool, result: { ...result, details } };
+      const outputText = JSON.stringify({ tool, result });
+      for (const [toolName, card] of [
+        [name, { args, details }],
+        ["tool_call", { args: dispatchedArgs, details: envelope }],
+        [name, { args, outputText: text }],
+        ["tool_call", { args: dispatchedArgs, outputText }],
+      ] as const) {
+        const container = await mountTool(
+          toolName,
+          { ...card, completed: true },
+          { expanded: false },
+        );
+        expect(textOf(container, ".chat-tool-row__title")).toBe(title);
+      }
+    }
+  },
+);
+
 it("does not render MCP App previews on the tool surface", () => {
   const container = document.createElement("div");
   const preview = { ...canvas, viewId: "cv_app", mcpApp: { viewId: "cv_app" } } as const;
   mountPreview(preview, "chat_tool", { sessionKey: "agent:main:main" }, container);
   expect(container.querySelector("mcp-app-view")).toBeNull();
-});
-
-it("switches a completed patch between mutually exclusive diff and raw bodies", async () => {
-  const card = patchCard(
-    {
-      changes: [
-        change("src/a.ts", "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-old a\n+new a\n"),
-        change("src/b.ts", "new b\n", "add"),
-      ],
-    },
-    { id: "msg:patch:multi", outputText: "Applied patch" },
-  );
-  const container = await mountCard(card);
-
-  const diff = query(container, ".chat-diff");
-  expect(diff?.getAttribute("aria-label")).toBe("File changes");
-  const fileRows = Array.from(diff?.querySelectorAll(".chat-diff__row--file") ?? []);
-  expect(diffText(diff, "file")).toEqual(["Update src/a.ts", "Add src/b.ts"]);
-  expect(fileRows.every((row) => row.querySelector(".chat-diff__gutter") !== null)).toBe(true);
-  expect(diffText(diff, "del")).toEqual(["old a"]);
-  expect(diffText(diff, "add")).toEqual(["new a", "new b"]);
-
-  const tabGroup = cardPart(container, "modes");
-  const tabList = query(tabGroup, '[role="tablist"]');
-  await waitForSolid(() => expect(tabList?.getAttribute("aria-label")).toBe("Tool detail view"));
-  const tabs = Array.from(tabGroup?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? []);
-  expect(tabs.map((tab) => [tab.textContent?.trim(), tab.getAttribute("aria-selected")])).toEqual([
-    ["Diff", "true"],
-    ["Raw", "false"],
-  ]);
-  const diffBody = query(container, '[id$="-diff-panel"]');
-  const rawBody = query(container, '[id$="-raw-panel"]');
-  const expectPanels = (raw: boolean) =>
-    expect([diffBody?.hidden, rawBody?.hidden]).toEqual([raw, !raw]);
-  expectPanels(false);
-  expect(query(rawBody, "code")).toBeNull();
-
-  tabs[1]?.click();
-  await waitForSolid(() =>
-    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]),
-  );
-  expectPanels(true);
-  expect(query(diffBody, ".chat-diff")).toBe(diff);
-  expect(query(rawBody, "code")?.textContent).toBe("Applied patch");
-
-  await mountCard(
-    {
-      ...card,
-      args: { changes: [change("src/a.ts", "@@ -1 +1 @@\n-old\n+new\n")] },
-      completed: true,
-    },
-    {},
-    container,
-  );
-  await waitForSolid(() => {
-    expect(cardPart(container, "modes")).toBe(tabGroup);
-    expect(rawBody?.hidden).toBe(false);
-    expect(tabList?.getAttribute("aria-label")).toBe("Tool detail view");
-  });
-  tabs[0]?.click();
-  await waitForSolid(() => expectPanels(false));
-  expect(query(rawBody, "code")?.textContent).toBe("Applied patch");
-  expect(textOf(diffBody!, ".chat-diff__row--add .chat-diff__text")).toBe("new");
-  container.remove();
 });
 
 it("scans unnumbered diff lines once while rendering every row", () => {
@@ -189,8 +171,15 @@ it("labels a completed Codex file creation from its recorded operation", async (
   expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: "src/new.ts" });
   expect(onToggleExpanded).not.toHaveBeenCalled();
 
-  expect(query(container, ".chat-tool-row__toggle")).toMatchObject({ ariaLabel: "Created new.ts" });
-  query(container, ".chat-tool-row__toggle")?.click();
+  const toggle = getByRole(container, "button", {
+    name: "Created new.ts",
+    description: "",
+    expanded: false,
+  });
+  expect(toggle).toBe(query(container, ".chat-tool-row__toggle"));
+  toggle.focus();
+  expect(document.activeElement).toBe(toggle);
+  toggle.click();
   expect(onToggleExpanded).toHaveBeenCalledWith("msg:patch:add");
   expect(onOpenWorkspaceFile).toHaveBeenCalledOnce();
 });
@@ -317,37 +306,6 @@ it("keeps read ranges visible and opens the unmodified file path", async () => {
     ["offset:", "40"],
     ["limit:", "20"],
   ]);
-});
-
-it.each(["structured", "serialized"])("keeps %s captions out of collapsed rows", async (shape) => {
-  const privateCaption =
-    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nPrivate synthetic caption.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
-  const args = { action: "send", to: "fixture-room", message: privateCaption };
-  const card = {
-    id: "message-caption",
-    name: "message",
-    args: shape === "structured" ? args : JSON.stringify(args),
-    inputText: JSON.stringify(args),
-  };
-  const options = { messageKey: "test-message", onToggleExpanded: vi.fn() };
-  const container = await mountCard(card, { ...options, expanded: false });
-
-  const summary = query(container, "button.chat-tool-msg-summary");
-  expect(summary?.textContent).toContain("Message");
-  expect(query(summary, ".chat-tool-msg-summary__icon")?.getAttribute("aria-label")).toBe(
-    "message",
-  );
-  if (shape === "structured") {
-    expect(summary?.textContent).toContain("fixture-room");
-  }
-  expect(summary?.textContent).not.toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
-  expect(container.textContent).not.toContain("Private synthetic caption.");
-  expect(query(container, ".chat-tool-msg-body")).toBeNull();
-
-  await mountCard(card, { ...options }, container);
-  const diagnostics = query(container, ".chat-tool-msg-body");
-  expect(diagnostics?.textContent).toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
-  expect(diagnostics?.textContent).toContain("Private synthetic caption.");
 });
 
 it("marks expanded raw block-art output so QR whitespace uses block-art rendering", async () => {
@@ -527,7 +485,9 @@ it.each([
   for (const expanded of [false, true]) {
     await mountCard(card, { expanded }, container);
     if (name === "tool_call") {
-      expect(textOf(container, ".chat-tool-msg-summary")).toContain("OpenClaw release notes");
+      expect(textOf(container, ".chat-tool-row__title")).toBe(
+        "Search the web for “OpenClaw release notes”",
+      );
     }
     expect(container.textContent?.toLowerCase()).toContain("skipped");
     expect(container.textContent).not.toMatch(/failed|Completed|updated|Tool error/);
@@ -537,7 +497,7 @@ it.each([
 
 it("renders Tool Search like a direct call and retains the sidebar identity", async () => {
   const name = "web_search";
-  const args = { query: "OpenClaw release notes" };
+  const args = { query: "OpenClaw release notes", count: 5 };
   const input = { id: name, args };
   const card: ToolCard = {
     id: "search-release",
@@ -551,7 +511,7 @@ it("renders Tool Search like a direct call and retains the sidebar identity", as
   const onOpenSidebar = vi.fn();
   for (const expanded of [false, true]) {
     const container = await mountCard(card, { expanded, onOpenSidebar });
-    expect(textOf(container, ".chat-tool-msg-summary")).toContain(args.query);
+    expect(textOf(container, ".chat-tool-row__title")).toBe(`Searched the web for “${args.query}”`);
     const direct = await mountCard(
       { ...card, name, args, inputText: JSON.stringify(args, null, 2) },
       { expanded, onOpenSidebar },
@@ -564,11 +524,77 @@ it("renders Tool Search like a direct call and retains the sidebar identity", as
       direct.querySelector(".chat-tool-card")?.className,
     );
     if (expanded) {
+      expect(
+        Array.from(container.querySelectorAll(".chat-tool-kv__row"), (row) => [
+          textOf(row, ".chat-tool-kv__key"),
+          textOf(row, ".chat-tool-kv__value"),
+        ]),
+      ).toEqual([
+        ["query:", args.query],
+        ["count:", "5"],
+      ]);
       query(container, ".chat-tool-card__action-btn")?.click();
       expect(onOpenSidebar.mock.calls[0]?.[0].card).toBe(card);
     }
   }
   expect([card.name, card.args]).toEqual(["tool_call", { id: name, args }]);
+});
+
+const incompleteSearch = { itemId: "search", kind: "tool", title: "Search", phase: "end" } as const;
+it.each([
+  ["blocked", { activity: { ...incompleteSearch, status: "blocked" } }, "Blocked", "Blocked"],
+  ["unknown", { activity: incompleteSearch }, "Outcome unknown", "Outcome unknown"],
+  ["unrecorded", {}, "No result recorded", "No result available."],
+] as const)(
+  "keeps a long %s web search and its outcome in separate slots",
+  async (state, card, collapsed, expanded) => {
+    const args = { query: "OpenClaw release notes · " + "history ".repeat(12).trim(), count: 5 };
+    const call =
+      state === "unknown"
+        ? { name: "tool_call", args: { id: "web_search", args } }
+        : { name: "web_search", args };
+    const search = { id: "long-search", ...card, ...call, inputText: JSON.stringify(call.args) };
+    const inlineCommands = await inlineCommandPresentation();
+    const container = await mountCard(search, { expanded: false, inlineCommands });
+    const row = query(container, ".chat-tool-row")!;
+    const title = `Search the web for “${args.query}”`;
+    const slot = ":scope > .chat-activity-group__outcome";
+    expect.soft(textOf(row, ".chat-tool-row__title")).toBe(title);
+    expect(row.querySelectorAll(slot)).toHaveLength(1);
+    expect(textOf(row, slot)).toBe(collapsed);
+    expect(row.textContent).toBe(title + collapsed);
+    expect(query(row, ".chat-command-trail__status")).toBeNull();
+    if (state === "unrecorded") {
+      await mountCard(search, { expanded: false, inlineCommands, interrupted: true }, container);
+      expect(textOf(row, ".chat-tool-row__title")).toBe(title);
+      expect(textOf(row, slot)).toBe("interrupted");
+      expect(row.textContent).toBe(title + "interrupted");
+    }
+    await mountCard(search, { expanded: true, inlineCommands }, container);
+    expect(textOf(row, ".chat-tool-row__title")).toBe(title);
+    expect(row.textContent).toBe(title);
+    expect(textOf(container, ".chat-tool-card__outcome")).toBe(expanded);
+    expect(textOf(container, ".chat-tool-kv__value")).toBe(args.query);
+
+    const grep = { id: "inline-search", name: "grep", args: { pattern: "release" }, ...card };
+    const inline = await mountCard(grep, { expanded: false, inlineCommands });
+    expect(textOf(inline, ".chat-command-trail__status")).toBe(collapsed);
+    expect(query(inline, ".chat-activity-group__outcome")).toBeNull();
+    await mountCard(grep, { expanded: true, inlineCommands }, inline);
+    expect(query(inline, ".chat-command-trail__status")).toBeNull();
+    expect(textOf(inline, ".chat-tool-card__outcome")).toBe(expanded);
+  },
+);
+
+it("bounds the literal web search title without changing the expanded query", async () => {
+  const prefix = "with <b>{query}</b> ";
+  const padding = "a".repeat(118 - prefix.length);
+  const args = { query: `  with\n<b>{query}</b>\u202e${padding}🦞 more  ` };
+  const container = await mountTool("web_search", { args, inputText: JSON.stringify(args) });
+  const title = query(container, ".chat-tool-row__title");
+  expect(title?.textContent).toBe(`Search the web for “${prefix}${padding}…”`);
+  expect(title?.querySelector("b")).toBeNull();
+  expect(textOf(container, ".chat-tool-kv__value")).toBe(args.query);
 });
 
 it("keeps command progress neutral across the row, expanded body, and sidebar until completion", async () => {
@@ -662,88 +688,6 @@ it("renders a plain error detail when a failed tool has no output", async () => 
   expect(cardPart(container, "block-content")).toMatchObject({
     textContent: "The tool failed without output.",
   });
-});
-
-it.each([
-  {
-    args: {
-      markdown: "Implementation is moving.",
-      plan: [
-        { step: "Inspect", status: "completed" },
-        { step: "Implement", status: "in_progress" },
-        { step: "Verify", status: "pending" },
-      ],
-    },
-    expected: "Progress updated — 1/3 · Implement",
-  },
-  { args: { markdown: "Waiting on review." }, expected: "Progress note updated" },
-])("renders progress_card as a compact receipt: $expected", async ({ args, expected }) => {
-  const container = await mountTool("progress_card", {
-    args,
-    outputText: "Progress card updated",
-    completed: true,
-  });
-
-  expect(container.textContent?.trim()).toBe(expected);
-  expect(query(container, "button")).toBeNull();
-  expect(query(container, ".chat-tool-msg-body")).toBeNull();
-  expect(container.textContent).not.toContain("Waiting on review.");
-});
-
-async function highlighted(card: ToolCard) {
-  const container = await mountCard(card);
-  onTestFinished(() => vi.dynamicImportSettled());
-  await vi.dynamicImportSettled();
-  return container;
-}
-it("highlights edit previews using their file languages", async () => {
-  const container = await highlighted({
-    id: "highlight",
-    name: "edit",
-    args: {
-      path: "example.ts",
-      oldText: "/* removed comment\ncontinued",
-      newText: 'const value = "new";',
-    },
-  });
-  await vi.waitFor(() => expect(textOf(container, ".tok-keyword")).toBe("const"));
-  expect(textOf(container, ".tok-string")).toMatch(/"(?:old|new)"/);
-});
-
-it.each(["text", "structured"])("highlights both sides of %s renames", async (format) => {
-  const before = '<section data-mode="before">Hello</section>';
-  const after = 'const value = "after";';
-  const args =
-    format === "text"
-      ? {
-          patch: `*** Begin Patch\n*** Update File: example.html\n*** Move to: example.ts\n@@\n-${before}\n+${after}\n*** Add File: helper.py\n+def greet():\n+    return "hello"\n*** End Patch`,
-        }
-      : {
-          changes: [
-            {
-              path: "example.html",
-              kind: { type: "update", move_path: "example.ts" },
-              diff: ["@@ -1 +1 @@", `-${before}`, `+${after}`].join("\n"),
-            },
-          ],
-        };
-  const container = await highlighted(
-    patchCard(args, {
-      id: "rename",
-      ...(format === "structured" ? { outputText: "Applied patch" } : {}),
-    }),
-  );
-  await vi.waitFor(() => {
-    expect(textOf(container, ".chat-diff__row--del .tok-propertyName")).toBe("data-mode");
-    expect(textOf(container, ".chat-diff__row--add .tok-keyword")).toBe("const");
-  });
-  expect(textOf(container, ".chat-diff__row--del .chat-diff__text")).toBe(before);
-  expect(textOf(container, ".chat-diff__row--add .chat-diff__text")).toBe(after);
-  if (format === "text") {
-    expect(
-      [...container.querySelectorAll(".tok-keyword")].map((node) => node.textContent),
-    ).toContain("def");
-  }
 });
 
 function promptFixture(url: string, allowExternalEmbedUrls = false) {

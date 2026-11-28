@@ -42,6 +42,7 @@ const targets = [
   "runtime-process-scripts.generated.mjs",
   "node-version.mjs",
   "openclaw.mjs",
+  "release-launcher-forward.mjs",
   "standalone-runtime-profile.mjs",
   "tsdown.ai.config.ts",
   "tsdown.config.ts",

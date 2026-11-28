@@ -287,7 +287,13 @@ export function createWorkboardTools(params: {
         const childId = readStringParam(record, "childId", { required: true });
         const token = record.token as string | undefined;
         return jsonResult({
-          card: redactClaimToken(await store.linkCards(parentId, childId, { ownerId, token })),
+          card: redactClaimToken(
+            await store.linkCards(
+              (await store.requireCardByIdOrPrefix(parentId)).id,
+              (await store.requireCardByIdOrPrefix(childId)).id,
+              { ownerId, token },
+            ),
+          ),
         });
       },
     },
@@ -300,7 +306,9 @@ export function createWorkboardTools(params: {
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
         const id = readStringParam(record, "id", { required: true });
-        const { card, workerContext } = await store.readWithWorkerContext(id);
+        const { card, workerContext } = await store.readWithWorkerContext(id, {
+          allowPrefix: true,
+        });
         return jsonResult({
           card: redactClaimToken(card),
           workerContext,
@@ -316,7 +324,8 @@ export function createWorkboardTools(params: {
       execute: async (_toolCallId, rawParams) => {
         const record = rawParams as Record<string, unknown>;
         const id = readStringParam(record, "id", { required: true });
-        const claimed = await store.claim(id, {
+        const card = await store.requireCardByIdOrPrefix(id);
+        const claimed = await store.claim(card.id, {
           ownerId,
           ttlSeconds: record.ttlSeconds,
         });

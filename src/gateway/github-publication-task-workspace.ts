@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { ok } from "@openclaw/normalization-core/result";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
   captureWorkspaceFilesystemEvidence,
   createWorkspaceFilesystemSource,
@@ -9,6 +10,7 @@ import {
 import { commandError, requireGit, runGit } from "../agents/worktrees/git.js";
 import { resolveRepositoryIdentity } from "../agents/worktrees/repository-paths.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-entry-children-read.js";
+import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import {
@@ -17,8 +19,7 @@ import {
 } from "./github-publication-requester.js";
 import type { PublicationSessionRead } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
-import { resolveRequesterProject } from "./project-access.js";
+import { projectRequesterForProfile, resolveRequesterProject } from "./project-access.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import { createGatewaySession } from "./session-create-service.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
@@ -28,6 +29,7 @@ import { prepareSessionWorktree } from "./session-worktree-preparation.js";
 export async function prepareGitHubPublicationTaskWorkspace(params: {
   options: GatewayRequestHandlerOptions;
   parent: PublicationSessionRead & { entry: InternalSessionEntry };
+  operatorAuthority: AdmittedRunOperatorAuthority | undefined;
   requester: GitHubPublicationRequesterV2;
   source: string;
   idempotencyKey: string;
@@ -61,7 +63,10 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
   };
   // One task owns each checkout's publication for this conversation, so later
   // publications from the checkout update the same branch and PR.
-  const hash = createHash("sha256").update(`${origin.sessionKey}\0${source}`).digest("hex");
+  const participant = requester.snapshot.participation?.ceiling.profileId;
+  const hash = createHash("sha256")
+    .update(`${origin.sessionKey}\0${source}${participant ? `\0${participant}` : ""}`)
+    .digest("hex");
   const label = `github-publication-${hash.slice(0, 32)}`;
   const incognito = parent.entry.incognito === true || isIncognitoSessionKey(parent.canonicalKey);
   // Accepted retries retain their original task, including renamed and older tasks.
@@ -77,6 +82,7 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
       entry.parentSessionKey !== origin.sessionKey ||
       entry.createdVia !== "spawn" ||
       entry.projectId !== parent.entry.projectId ||
+      (participant && sessionCreatorProfileId(entry.createdActor) !== participant) ||
       (receipt && entry.sessionId !== receipt.session_id) ||
       (entry.worktree?.canonicalWorkspaceDir !== source && entry.spawnedCwd !== source)
     ) {
@@ -112,6 +118,7 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     const matches = children.filter(
       ({ entry }) =>
         entry.createdVia === "spawn" &&
+        (!participant || sessionCreatorProfileId(entry.createdActor) === participant) &&
         entry.label?.startsWith("github-publication-") &&
         (entry.worktree?.canonicalWorkspaceDir === source || entry.spawnedCwd === source),
     );
@@ -135,10 +142,16 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
   }
   const gitOptions = { signal: options.signal, beforeRun: assertPreparationCurrent };
   if (parent.entry.projectId) {
+    const { actor } = requester.snapshot;
     const project = await resolveRequesterProject(
       getConfig(),
       parent.entry.projectId,
-      { kind: "operator", scopes: requester.snapshot.scopes },
+      projectRequesterForProfile(
+        getConfig(),
+        requester.snapshot.scopes,
+        actor.kind === "operator" ? actor.profileId : undefined,
+        requester.snapshot.openclawIdPrincipal,
+      ),
       { fresh: true },
     );
     const [projectRoot, repository] = await Promise.all([
@@ -242,7 +255,10 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     return { agentId: parent.agentId, sessionKey: existing.canonicalKey };
   }
   const checkoutCommit = await requireGit(source, ["rev-parse", "HEAD"], gitOptions);
-  const captured = await captureGatewayOperatorRunAuthority(options);
+  const authority = params.operatorAuthority;
+  const captured = authority
+    ? { authority, release: authority.retain?.() ?? (() => {}) }
+    : undefined;
   using _ = { [Symbol.dispose]: () => captured?.release() };
   assertPreparationCurrent();
   const actor = requester.snapshot.actor;

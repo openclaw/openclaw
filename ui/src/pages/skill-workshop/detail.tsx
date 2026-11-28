@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createUniqueId, Errored, For, Loading, Show } from "solid-js";
+import { parseFrontmatterBlock } from "../../../../packages/markdown-core/src/frontmatter.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
@@ -78,6 +79,24 @@ export function Detail(props: {
   const versions = createMemo(
     () => snapshot().list.archived.find((entry) => entry.name === target().name)?.versions ?? [],
   );
+  // An older list can omit the open live skill. Restore belongs to a selected archived copy.
+  const canRestore = () => {
+    const { target: selected, result, current } = viewer();
+    return (
+      selected.versionId !== undefined &&
+      result !== undefined &&
+      current === undefined &&
+      versions().some((version) => version.id === selected.versionId)
+    );
+  };
+  const moving = () => {
+    const move = props.view().membership;
+    return move?.name === target().name ? move : null;
+  };
+  const archiving = () => {
+    const move = moving();
+    return move ? move.destination === "archived" : Boolean(skill());
+  };
   const history = createMemo(() =>
     snapshot().changes.filter((change) => change.skillName === target().name),
   );
@@ -89,12 +108,14 @@ export function Detail(props: {
   };
   const supportFiles = createMemo(() => files().filter((file) => file !== "SKILL.md"));
   const description = createMemo(() => {
+    const catalogDescription = target().versionId ? undefined : skill()?.description;
+    if (catalogDescription) {
+      return catalogDescription;
+    }
     const current = viewer();
-    const own =
-      current.result && current.target.filePath === "SKILL.md"
-        ? splitFrontmatter(current.result.content).description
-        : undefined;
-    return target().versionId ? own : skill()?.description || own;
+    return current.result && current.target.filePath === "SKILL.md"
+      ? parseFrontmatterBlock(current.result.content).description
+      : undefined;
   });
   const byline = () => {
     const created = history().findLast((entry) => entry.action === "create");
@@ -138,17 +159,20 @@ export function Detail(props: {
       summary={description()}
       byline={byline()}
       actions={
-        <MutationButton
-          view={props.view}
-          label={t(skill() ? "skillWorkshop.viewer.archive" : "skillWorkshop.viewer.restore")}
-          title={skill() ? t("skillWorkshop.viewer.archiveTitle") : undefined}
-          mutation={{
-            method: skill() ? "skills.workshop.archive" : "skills.workshop.restore",
-            name: target().name,
-          }}
-          actionKey={`${skill() ? "archive" : "restore"}:${target().name}`}
-          icon={skill() ? "archive" : "archiveRestore"}
-        />
+        <Show when={Boolean(moving() || skill() || canRestore())}>
+          <MutationButton
+            view={props.view}
+            label={t(archiving() ? "skillWorkshop.viewer.archive" : "skillWorkshop.viewer.restore")}
+            title={archiving() ? t("skillWorkshop.viewer.archiveTitle") : undefined}
+            mutation={{
+              method: archiving() ? "skills.workshop.archive" : "skills.workshop.restore",
+              name: target().name,
+            }}
+            actionKey={`${archiving() ? "archive" : "restore"}:${target().name}`}
+            destination={archiving() ? "archived" : "active"}
+            icon={archiving() ? "archive" : "archiveRestore"}
+          />
+        </Show>
       }
       panel={
         <>
@@ -369,14 +393,12 @@ function Instructions(props: { view: WorkshopView; reads: WorkshopReads }) {
   );
 }
 
-/** Support files grouped by their folder; root files come first without a label. */
+/** Support files grouped by folder in encounter order; root files have no label. */
 function fileGroups(files: readonly string[]) {
-  const groups = new Map<string, string[]>();
-  for (const file of files) {
+  const groups = Map.groupBy(files, (file) => {
     const slash = file.lastIndexOf("/");
-    const folder = slash === -1 ? "" : file.slice(0, slash);
-    groups.set(folder, [...(groups.get(folder) ?? []), file]);
-  }
+    return slash === -1 ? "" : file.slice(0, slash);
+  });
   return [...groups].map(([folder, entries]) => ({ folder, entries }));
 }
 
@@ -437,17 +459,19 @@ function FileContent(props: { reads: WorkshopReads }) {
     <Loading on={props.reads.viewerRequest()} fallback={<LoadState />}>
       <Errored fallback={(error) => <LoadState error={error()} />}>
         <Show when={props.reads.viewer()}>
-          {(viewer) =>
-            viewer().target.filePath.endsWith(".md") ? (
-              <MarkdownHtml
-                class="sw-markdown chat-text"
-                markdown={viewer().result.content}
-                options={{ mode: "document" }}
-              />
-            ) : (
-              <pre class="sw-file">{viewer().result.content}</pre>
-            )
-          }
+          {(viewer) => (
+            <>
+              {viewer().target.filePath.endsWith(".md") ? (
+                <MarkdownHtml
+                  class="sw-markdown chat-text"
+                  markdown={viewer().result.content}
+                  options={{ mode: "document" }}
+                />
+              ) : (
+                <pre class="sw-file">{viewer().result.content}</pre>
+              )}
+            </>
+          )}
         </Show>
       </Errored>
     </Loading>

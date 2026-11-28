@@ -79,7 +79,7 @@ export function createRealtimePlaybackFixture(
     playbackQueue: Promise.resolve(),
     processingQueue: Promise.resolve(),
     conversations: new DiscordVoiceConversationQueue(),
-    audioInputBudget: { enabled: false },
+    readAudioInputBudget: () => ({ enabled: false }),
     ttsStreamFallbackWarned: false,
     capture: new Map(),
     realtimeLifecycle: { status: "inactive" },

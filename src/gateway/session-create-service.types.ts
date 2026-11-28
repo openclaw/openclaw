@@ -93,7 +93,7 @@ export type GatewaySessionCommitResult =
       key: string;
       agentId: string;
       entry: SessionEntry;
-      resolved: { modelProvider: string; model: string };
+      resolved: { modelProvider?: string; model?: string };
       resetExisting: boolean;
     }
   | { ok: false; error: ErrorShape; initializationNotCommitted?: true };
@@ -225,6 +225,7 @@ export type CreateGatewaySessionParams = {
   creation?: {
     via: SessionCreatedVia;
     surface?: SessionEntry["createdSurface"];
+    createdIndependently?: true;
     actor?: SessionCreatedActor;
     /** Host-verified human requester for matching spawn-owner inheritance. */
     requesterProfileId?: string;

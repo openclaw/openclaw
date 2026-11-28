@@ -1,17 +1,8 @@
-import { createUniqueId } from "solid-js";
+import { Show, createSignal, createUniqueId } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu, type MenuEntry } from "../../components/solid/menu.tsx";
 import { copyToClipboard } from "../../lib/clipboard.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { showToast } from "../../lib/toast.ts";
-
-async function copyAgentId(id: string) {
-  const copied = await copyToClipboard(id);
-  showToast({
-    severity: copied ? "success" : "error",
-    message: t(copied ? "common.copied" : "common.copyFailed"),
-  });
-}
 
 // Holds the selected agent's actions. New agent and Refresh join them on the phone.
 export function AgentsPageMenu(props: {
@@ -35,6 +26,7 @@ export function AgentsPageMenu(props: {
   onRefresh: () => void;
 }) {
   const id = createUniqueId();
+  const [copyResult, setCopyResult] = createSignal<boolean | null>(null);
   const items = (): MenuEntry[] => [
     ...(props.showPhoneActions && props.canCreateAgent
       ? [
@@ -47,7 +39,22 @@ export function AgentsPageMenu(props: {
       : []),
     ...(props.agentId
       ? [
-          { id: "copy", label: t("agents.copyId") },
+          {
+            id: "copy",
+            label: t("agents.copyId"),
+            content: (
+              <span role="status">
+                <Show
+                  when={copyResult() === false}
+                  fallback={t(copyResult() ? "common.copied" : "agents.copyId")}
+                >
+                  <span class="sr-only">{t("common.copyFailed")}</span>
+                  <span aria-hidden="true">{t("common.retry")}</span>
+                </Show>
+              </span>
+            ),
+            closeOnSelect: false,
+          },
           ...(props.canSetDefault
             ? [{ id: "default", label: props.defaultLabel, disabled: props.defaultDisabled }]
             : []),
@@ -80,6 +87,7 @@ export function AgentsPageMenu(props: {
       triggerClass="btn btn--sm agents-page-menu__trigger"
       trigger={<Icon name="moreHorizontal" />}
       items={items()}
+      onBeforeShow={() => setCopyResult(null)}
       onSelect={(item) => {
         const agentId = props.agentId;
         if (item.id === "create") {
@@ -87,7 +95,7 @@ export function AgentsPageMenu(props: {
         } else if (item.id === "refresh") {
           props.onRefresh();
         } else if (agentId && item.id === "copy") {
-          void copyAgentId(agentId);
+          void copyToClipboard(agentId).then(setCopyResult);
         } else if (agentId && item.id === "default") {
           props.onSetDefault(agentId);
         } else if (agentId && item.id === "pin") {

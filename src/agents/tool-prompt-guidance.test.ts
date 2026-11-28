@@ -21,7 +21,6 @@ function registerGuidedTools(order: readonly string[]) {
       .registerTool(() => null, { name: `${id}_tool`, promptGuidance: `## ${id} guidance` });
   }
   setActivePluginRegistry(builder.registry);
-  return builder.registry;
 }
 
 afterEach(() => {

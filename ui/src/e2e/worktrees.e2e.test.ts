@@ -40,7 +40,24 @@ suite.define(() => {
       expect(title).not.toBeNull();
       expect(tabs).not.toBeNull();
       expect(tabs!.y).toBeGreaterThan(title!.y + title!.height);
-      expect(Math.abs(tabs!.x - title!.x)).toBeLessThan(12);
+      const firstTab = await page
+        .getByRole("tab", { name: "Sessions", exact: true })
+        .evaluate((tab) => {
+          const label = document.createRange();
+          label.selectNodeContents(tab);
+          const box = tab.getBoundingClientRect();
+          return {
+            labelLeft: label.getBoundingClientRect().left,
+            leadingEdgeClickable: tab.contains(
+              document.elementFromPoint(box.left + 1, box.top + box.height / 2),
+            ),
+          };
+        });
+      const readingEdge = await page
+        .locator(".page-subtitle")
+        .evaluate((text) => text.getBoundingClientRect().left);
+      expect(Math.abs(firstTab.labelLeft - readingEdge)).toBeLessThanOrEqual(1);
+      expect(firstTab.leadingEdgeClickable).toBe(true);
       for (const [name, subtitle] of [
         ["Sessions", "Active sessions and defaults."],
         ["Worktrees", "Isolated agent task checkouts and recovery snapshots."],
@@ -50,6 +67,87 @@ suite.define(() => {
         expect(await page.locator(".page-subtitle").textContent()).toContain(subtitle);
       }
     }),
+  );
+
+  it.each([
+    [390, 844],
+    [820, 1180],
+    [1180, 820],
+    [1440, 900],
+  ])(
+    "distinguishes matching checkout names and returns focus when deletion is canceled at %i × %i",
+    (width, height) =>
+      suite.withPage(
+        { viewport: { width, height }, hasTouch: true, reducedMotion: "reduce" },
+        async ({ page }) => {
+          const name = "regionalaccessibilityandinterpretationserviceintegrationreview01";
+          // oxlint-disable-next-line oxc/no-map-spread -- each record must be an independent copy of the shared fixture.
+          const records = ["/synthetic/team/project", "/synthetic/archive/project"].map(
+            (repoRoot, index) => ({
+              ...restorableWorktree,
+              id: "worktree-" + index,
+              repoFingerprint: "0123456789abcde" + index,
+              removedAt: undefined,
+              repoRoot,
+              path: repoRoot + "/.worktrees/" + name,
+              name,
+              branch: "openclaw/" + name,
+            }),
+          );
+          const gateway = await installMockGateway(page, {
+            methodResponses: { "worktrees.list": { worktrees: records } },
+          });
+          await page.goto(suite.server.baseUrl + "worktrees");
+          const buttons = page.getByRole("button", { name: "Delete: " + name, exact: true });
+          await buttons.last().waitFor();
+          expect(await buttons.count()).toBe(2);
+          for (const [index, record] of records.entries()) {
+            const row = page.locator("openclaw-worktrees-page .settings-row").filter({
+              has: page.locator(`[aria-describedby="worktree-repository-${record.id}"]`),
+            });
+            const button = row.getByRole("button", { name: "Delete: " + name, exact: true });
+            const details = row.locator(".worktree-row__details");
+            const summary = details.locator("summary");
+            expect(await summary.textContent()).toBe(
+              index === 0 ? "team/project" : "archive/project",
+            );
+            expect(await row.locator(".worktree-row__name").getAttribute("title")).toBe(name);
+            await summary.press("Enter");
+            // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the opened text is rendered, not just present.
+            expect(await details.innerText()).toContain(record.repoRoot);
+            // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the opened text is rendered, not just present.
+            expect(await details.innerText()).toContain(record.branch);
+            await summary.press("Enter");
+            expect
+              .soft(
+                await button.evaluate((node) => {
+                  const id = node.getAttribute("aria-describedby");
+                  return id ? document.getElementById(id)?.textContent : null;
+                }),
+              )
+              .toBe(record.repoRoot);
+            await button.focus();
+            await button.press("Enter");
+            const dialog = page.getByRole("dialog", { name: /Snapshot and delete/ });
+            await dialog.waitFor();
+            // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText proves the opened text is rendered, not just present.
+            expect.soft(await dialog.innerText()).toContain(record.path);
+            for (const item of await dialog.locator("h2,.exec-approval-command").all()) {
+              expect
+                .soft(await item.evaluate((node) => node.scrollWidth <= node.clientWidth + 1))
+                .toBe(true);
+            }
+            if (index === 0) {
+              await dialog.getByRole("button", { name: "Cancel", exact: true }).tap();
+            } else {
+              await page.keyboard.press("Escape");
+            }
+            await dialog.waitFor({ state: "hidden" });
+            expect.soft(await button.evaluate((node) => node.matches(":focus"))).toBe(true);
+          }
+          expect(await gateway.getRequests("worktrees.remove")).toHaveLength(0);
+        },
+      ),
   );
 
   it("uses the remote default until a base branch is explicitly selected", () =>
@@ -112,9 +210,7 @@ suite.define(() => {
       const dialog = page.getByRole("dialog");
       await dialog.getByRole("button", { name: "Delete", exact: true }).click();
       await gateway.waitForRequest("worktrees.remove");
-      await expect
-        .poll(() => dialog.textContent())
-        .not.toContain("Snapshot and delete restorable-test?");
+      await dialog.getByRole("heading", { name: "Retry", exact: true }).waitFor();
       const action = dialog.getByRole("button", { name: /^(Delete|Retry)$/ });
       const frame = await takeControlUiScreenshotFrame(page, dialog, [action], {
         elements: [action],

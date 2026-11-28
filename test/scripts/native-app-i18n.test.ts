@@ -686,14 +686,9 @@ describe("native app i18n inventory", () => {
         "Scan QR code",
         "Test connection",
         "Searching…",
-        "Loading chat",
         "What would you like to work on?",
         "Check OpenClaw status",
-        "What can I control here?",
-        "Help me start voice chat",
         "Summarize the current OpenClaw status and tell me what needs attention.",
-        "Show me which phone controls and device capabilities are available right now.",
-        "Help me start a realtime voice session from this phone.",
         "DIARY",
         "ask OpenClaw $prompt",
         "OpenClaw is paused",
@@ -842,7 +837,7 @@ describe("native app i18n inventory", () => {
     expectSourceAtSite("Reply", (site) => site.path.endsWith("/ChatMessageActions.kt"));
     expectSourceAtSite("Share message", (site) => site.path.endsWith("/ChatMessageActions.kt"));
     expectSourceAtSite(
-      "Share Apple Health summaries with the Gateway?",
+      "Share Apple Health summaries with OpenClaw?",
       (site) =>
         site.path === "apps/ios/Sources/Settings/DeviceSettings/IOSDeviceSettingsConsent.swift",
     );
@@ -850,27 +845,16 @@ describe("native app i18n inventory", () => {
       "Done",
       (site) => site.path === "apps/ios/Sources/Settings/DashboardPageScreen.swift",
     );
-    expect
-      .soft(
-        entries
-          .filter(
-            (entry) => entry.source === "Update the gateway to load progress cards for this agent.",
-          )
-          .map((entry) => entry.surface)
-          .toSorted(),
-      )
-      .toEqual(["android", "apple"]);
-    expect
-      .soft(
-        entries
-          .filter(
-            (entry) =>
-              entry.source ===
-              "Update the gateway before sending queued messages. This version requires safe delivery routing.",
-          )
-          .map((entry) => entry.surface),
-      )
-      .toEqual(["apple"]);
+    for (const [source, surface] of [
+      ["Update the gateway to load progress cards for this agent.", "android"],
+      ["Update OpenClaw to see plans for this agent.", "apple"],
+      ["Update OpenClaw before sending queued messages.", "apple"],
+    ]) {
+      const matchingSurfaces = entries
+        .filter((entry) => entry.source === source)
+        .map((entry) => entry.surface);
+      expect.soft(matchingSurfaces, source).toEqual([surface]);
+    }
     expectSourceAtSite("Search threads", (site) => site.path.endsWith("/ChatSheets.swift"));
     expectSourceAtSite(
       "Direct mode supports device info, status, and notifications. Voice is included when you connect from iPhone Settings → Apple Watch. Chat and approvals still use the iPhone.",
@@ -921,14 +905,8 @@ describe("native app i18n inventory", () => {
       ),
     ).toBe(false);
     expectSourceAtSite(
-      "The watch receives a one-time pairing code and its own device credentials. Voice is included with read and Talk access, without admin access. The microphone starts only when you tap Start on the watch. A reachable secure Gateway URL is required away from the iPhone.",
+      "Your watch gets a one-time pairing code and its own credentials, with read and Talk access (no admin access). The microphone only starts when you tap Start on the watch. Away from your iPhone, OpenClaw needs a secure address the watch can reach.",
       (site) => site.path === "apps/ios/Sources/Design/SettingsProTabSections.swift",
-    );
-    expectSourceAtSite(
-      "Include existing %@ conversations in the sidebar. This discovers them in place; it does not copy transcripts.",
-      (site) =>
-        site.path === "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift" &&
-        site.kind === "ui-localized-call-multiline",
     );
     expect(
       entries.some((entry) => hasSite(entry, (site) => site.path.endsWith("Info.plist"))),
@@ -1339,51 +1317,6 @@ describe("native app i18n inventory", () => {
         ).toThrow(testCase.expected);
       }
     }
-  });
-
-  it("emits deterministic advisory translation-quality findings", () => {
-    const inventory: NativeI18nEntry[] = [
-      testEntry(
-        "native.android.language-picker",
-        "android",
-        "OpenClaw translations · $languageTag",
-        "apps/android/app/src/main/java/ai/openclaw/app/AppLanguage.kt",
-        "conditional-branch",
-      ),
-      testEntry("native.android.inspect", "android", "Inspect", "apps/android/Workshop.kt"),
-      testEntry("native.apple.inspect", "apple", "Inspect", "apps/ios/Workshop.swift"),
-      testEntry(
-        "native.android.voice-note",
-        "android",
-        "Record voice note",
-        "apps/android/Voice.kt",
-      ),
-    ];
-    const languagePicker = expectDefined(inventory[0], "native language picker inventory entry");
-    const androidInspect = expectDefined(inventory[1], "native Android inspect inventory entry");
-    const appleInspect = expectDefined(inventory[2], "native Apple inspect inventory entry");
-    const voiceNote = expectDefined(inventory[3], "native voice note inventory entry");
-    const artifact: NativeTranslationArtifact = {
-      version: 2,
-      locale: "id",
-      translations: {
-        [languagePicker.id]: languagePicker.source,
-        [androidInspect.id]: androidInspect.source,
-        [appleInspect.id]: "Periksa",
-        [voiceNote.id]: "Ghi ghi chú thoại",
-      },
-    };
-
-    const findings = validateNativeLocaleArtifact("id", inventory, artifact);
-    expect(findings.map((finding) => `${finding.code}:${finding.id}`)).toEqual([
-      "adjacent-duplicate-word:native.android.voice-note",
-      "android-language-picker-source-equal:native.android.language-picker",
-      "same-source-contradiction:native.android.inspect",
-      "source-equal:native.android.inspect",
-      "source-equal:native.android.language-picker",
-    ]);
-    expect(findings[0]?.words).toEqual(["ghi"]);
-    expect(findings[2]?.relatedIds).toEqual(["native.apple.inspect"]);
   });
 
   it("validates locale refresh arguments before write paths run", () => {

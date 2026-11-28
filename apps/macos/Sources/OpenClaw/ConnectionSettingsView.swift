@@ -9,8 +9,7 @@ struct ConnectionSettingsView: View {
     let isActive: Bool
     private let healthStore = HealthStore.shared
     private let gatewayManager = GatewayProcessManager.shared
-    @State private var gatewayDiscovery = GatewayDiscoveryModel(
-        localDisplayName: InstanceIdentity.displayName)
+    @State private var gatewayDiscovery: GatewayDiscoveryModel
     @State private var localHostingError: String?
     @State private var remoteStatus: RemoteStatus = .idle
     @State private var showConnectionEditor = false
@@ -24,10 +23,16 @@ struct ConnectionSettingsView: View {
         self.gatewayManager.environmentStatus
     }
 
-    init(state: AppState, isActive: Bool = true, openClawID: OpenClawIDSettingsModel = OpenClawIDSettingsModel()) {
+    init(
+        state: AppState,
+        isActive: Bool = true,
+        openClawID: OpenClawIDSettingsModel = OpenClawIDSettingsModel(),
+        gatewayDiscovery: GatewayDiscoveryModel = GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
+    {
         self.state = state
         self.isActive = isActive
         _openClawID = State(initialValue: openClawID)
+        _gatewayDiscovery = State(initialValue: gatewayDiscovery)
     }
 
     var body: some View {
@@ -70,6 +75,10 @@ struct ConnectionSettingsView: View {
         .onChange(of: self.isActive) { _, active in
             self.updateActiveWork(active: active)
         }
+        .onChange(of: self.state.connectionMode) { _, _ in
+            guard !self.isPreview else { return }
+            self.updateNearbyDiscovery(active: self.isActive)
+        }
         .onDisappear { self.gatewayDiscovery.stop() }
         .sheet(isPresented: self.$showConnectionEditor) {
             PrimaryGatewayConnectionEditor(state: self.state) {
@@ -80,8 +89,13 @@ struct ConnectionSettingsView: View {
 
     private func updateActiveWork(active: Bool) {
         guard !self.isPreview else { return }
-        if active {
-            self.refreshGatewayStatus()
+        if active { self.refreshGatewayStatus() }
+        self.updateNearbyDiscovery(active: active)
+    }
+
+    private func updateNearbyDiscovery(active: Bool) {
+        // Only Remote shows Nearby Gateways; browsing makes macOS ask for Local Network access.
+        if active, self.state.connectionMode == .remote {
             self.gatewayDiscovery.start()
         } else {
             self.gatewayDiscovery.stop()

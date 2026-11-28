@@ -55,14 +55,6 @@ export function SessionsCard(props: {
   const isTokenMode = createMemo(() => props.usage.display.chartMode === "tokens");
   // The page leads with the costliest sessions; the rest of the page stays one click away.
   const [showAll, setShowAll] = createSignal(false);
-  const averageLabel = createMemo(() => {
-    i18nRevision();
-    const count = props.overview?.tableSessionCount ?? 0;
-    const totals = props.overview?.tableTotals;
-    const value = (isTokenMode() ? totals?.tokens : totals?.cost) ?? 0;
-    const average = count ? value / count : 0;
-    return isTokenMode() ? formatUsageTokens(average) : formatAnalysisCost(average);
-  });
   const sortDirectionLabel = () =>
     t(
       props.usage.display.sessionSortDir === "desc"
@@ -78,17 +70,6 @@ export function SessionsCard(props: {
             {props.totalSessions !== props.sessions.length
               ? ` · ${t("usage.sessions.total", { count: props.totalSessions.toLocaleString() })}`
               : ""}
-          </div>
-        </div>
-        <div class="sessions-card-meta">
-          <div class="sessions-card-stats">
-            <span>
-              {averageLabel()} {t("usage.sessions.avg")}
-            </span>
-            <span>
-              {(props.overview?.tableTotals.errors ?? 0).toLocaleString()}{" "}
-              {normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}
-            </span>
           </div>
           <label class="sessions-sort">
             <span>{t("usage.sessions.sort")}</span>
@@ -235,9 +216,12 @@ function SessionRows(props: {
         const valueLabel = createMemo(() => {
           i18nRevision();
           const usage = session().usage;
+          if (!usage) {
+            return t("usage.common.emptyValue");
+          }
           return props.isTokenMode
-            ? formatUsageTokens(usage?.totalTokens ?? 0)
-            : formatAnalysisCost(usage?.totalCost ?? 0);
+            ? formatUsageTokens(usage.totalTokens)
+            : formatAnalysisCost(usage.totalCost);
         });
         const copyIdentity = createMemo(() => ({ label: label() }), {
           equals: (previous, next) => previous.label === next.label,

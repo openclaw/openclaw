@@ -1,3 +1,5 @@
+@import "../pages/plugins/skill-preview.css";
+
 /* Plugins and Skills presentation layered on the settings design language:
  * art tiles, row messages, catalog details, and install/consent dialogs.
  * Structural layout comes from .settings-page/.settings-row. */
@@ -49,13 +51,6 @@
   }
 }
 
-.installed-plugins-card__head {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: var(--space-3);
-}
-
 .installed-plugins-card__art,
 .plugin-catalog-card__art,
 .plugins-tile {
@@ -81,28 +76,6 @@
   object-fit: contain;
 }
 
-.installed-plugins-card__identity {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-content: center;
-  gap: 0;
-}
-
-.installed-plugins-card__identity :is(h2, h3),
-.installed-plugins-card__summary {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.installed-plugins-card__identity :is(h2, h3) {
-  margin: 0;
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-md);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
 .plugin-card-title-row {
   display: flex;
   min-width: 0;
@@ -111,7 +84,6 @@
 }
 
 .plugin-card-title-row :is(h2, h3),
-.plugin-catalog-card__head > .installed-plugins-card__head,
 .plugin-catalog-detail__heading,
 .plugin-catalog-detail__readme-section,
 .plugin-catalog-detail__panel {
@@ -162,7 +134,9 @@
 .installed-plugins-card__summary {
   min-height: calc(2 * 1.4em);
   margin: 0;
+  overflow: hidden;
   line-height: 1.4;
+  text-overflow: ellipsis;
 }
 
 .plugins-hub-header .plugins-hub-header__secondary.btn.btn--icon {
@@ -180,17 +154,17 @@
   background: transparent;
   box-shadow: none;
   color: var(--muted);
-}
 
-.plugins-hub-header .plugins-hub-header__secondary.btn.btn--icon:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  background: var(--bg-hover);
-  color: var(--text);
-}
+  &:hover:not(:disabled) {
+    border-color: var(--border-strong);
+    background: var(--bg-hover);
+    color: var(--text);
+  }
 
-.plugins-hub-header .plugins-hub-header__secondary.btn.btn--icon svg {
-  width: 18px;
-  height: 18px;
+  & svg {
+    width: 18px;
+    height: 18px;
+  }
 }
 
 .plugin-catalog-results {
@@ -388,10 +362,6 @@
   outline-offset: 2px;
 }
 
-.plugin-catalog-card__head {
-  min-width: 0;
-}
-
 .plugin-catalog-card__action {
   position: relative;
   z-index: 3;
@@ -439,15 +409,6 @@
   width: 52px;
   height: 26px;
   border-radius: var(--radius-md);
-}
-
-.plugin-catalog-card__skeleton-summary {
-  display: grid;
-  align-content: start;
-  gap: 8px;
-  min-height: calc(2 * 1.4em);
-  padding-top: 2px;
-  font-size: var(--control-ui-text-sm);
 }
 
 .plugin-catalog-card__skeleton-line {
@@ -613,36 +574,6 @@
   background: var(--bg-hover);
 }
 
-.clawhub-skill-icon {
-  width: 40px;
-  height: 40px;
-  flex: 0 0 40px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--brand-logo-chip-bg);
-  object-fit: contain;
-}
-
-.clawhub-skill-detail__identity {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: var(--space-3);
-}
-
-.clawhub-skill-detail__body {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-content: start;
-  gap: var(--space-3);
-  overflow-wrap: anywhere;
-  font-size: var(--control-ui-text-md);
-}
-
-.clawhub-skill-detail__meta {
-  font-size: var(--control-ui-text-sm);
-}
-
 .clawhub-skill-detail__changelog {
   border-top: 1px solid var(--border);
   padding-top: var(--space-3);
@@ -650,17 +581,6 @@
 
 .clawhub-skill-detail__changelog :where(table) {
   overflow-wrap: normal;
-}
-
-.clawhub-skill-icon--detail {
-  width: 56px;
-  height: 56px;
-  flex-basis: 56px;
-}
-
-.clawhub-skill-icon--profile {
-  border-radius: var(--radius-full);
-  object-fit: cover;
 }
 
 .plugins-version {
@@ -1150,8 +1070,7 @@
   }
 }
 .plugin-metadata__facts,
-.plugin-metadata__section,
-.plugin-metadata__links {
+.plugin-metadata__section {
   margin: 0;
   padding: 0;
 }
@@ -1194,33 +1113,6 @@
   flex-wrap: wrap;
   gap: 6px;
   text-transform: capitalize;
-}
-.plugin-metadata__links {
-  display: grid;
-  gap: var(--space-2);
-  list-style: none;
-}
-.plugin-metadata__links a {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  color: var(--text-strong);
-  font-weight: 500;
-  text-decoration: none;
-  overflow-wrap: anywhere;
-}
-.plugin-metadata__links a:hover {
-  text-decoration: underline;
-}
-.plugin-metadata__links a:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-}
-.plugin-metadata__links svg {
-  width: 14px;
-  height: 14px;
-  flex: 0 0 14px;
 }
 .plugin-catalog-detail__security-heading {
   display: flex;
@@ -1274,10 +1166,6 @@
 }
 .plugin-catalog-detail__readme-section > h2 {
   margin-bottom: var(--space-3);
-}
-/* Headings stay left on a phone, where the shared header stacks and centers its copy. */
-.plugin-capabilities .settings-section__header.oc-settings-section-header {
-  align-items: stretch;
 }
 .plugin-capability__disclosure > summary {
   list-style: none;
@@ -1612,8 +1500,8 @@
     padding: 0;
   }
 
-  /* Refresh sits beside the page menu here, not at the end of the row. */
-  openclaw-skills-page .skill-library-search__action .refresh-button {
+  /* Center beside an inline menu; with the menu in the header, use the trailing refresh line. */
+  openclaw-skills-page .skill-library-search__action:not(:last-child) .refresh-button {
     justify-items: center;
   }
 
@@ -2011,6 +1899,48 @@
   margin-inline-start: 0;
 }
 
+/* Skills and Templates share the card surface, but only plugin entries pair a
+   package name and badge with a separately actionable publisher handle. */
+.plugin-catalog-entry {
+  .plugin-catalog-row__main {
+    flex-wrap: wrap;
+  }
+
+  .plugin-catalog-row__text {
+    flex-basis: 9em;
+  }
+
+  .plugin-card-title-row {
+    flex-wrap: wrap;
+    gap: 3px 8px;
+    line-height: calc(20px * var(--control-ui-text-scale));
+  }
+
+  .plugin-catalog-row__name {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+    max-width: 100%;
+
+    /* Names such as “Workspace Synchronization Amber” differ at the end. */
+    h3 {
+      direction: rtl;
+      text-align: match-parent;
+    }
+  }
+
+  .plugin-card-title-row .plugin-card-author {
+    flex: none;
+    margin-inline-start: 0;
+    font-size: calc(12.5px * var(--control-ui-text-scale));
+  }
+
+  .plugin-catalog-card__action {
+    margin-inline-start: auto;
+  }
+}
+
 .settings-page.oc-app-surface .plugin-catalog-results--rows .btn.plugin-catalog-card__install {
   height: 28px;
   min-height: 28px;
@@ -2070,16 +2000,11 @@
     gap: 2px;
   }
 
+  /* Row previews show six cards on tablets; the base grid already hides later cards. */
   .plugin-catalog-results--rows
     .plugin-catalog-section--expandable
-    .plugin-catalog-card:nth-child(n + 5) {
+    .plugin-catalog-card:nth-child(-n + 6) {
     display: grid;
-  }
-
-  .plugin-catalog-results--rows
-    .plugin-catalog-section--expandable
-    .plugin-catalog-card:nth-child(n + 7) {
-    display: none;
   }
 }
 
@@ -2087,12 +2012,6 @@
 @media (max-width: 640px) {
   .plugin-catalog-results--rows .plugin-catalog-results__body {
     gap: 26px;
-  }
-
-  .plugin-catalog-results--rows
-    .plugin-catalog-section--expandable
-    .plugin-catalog-card:nth-child(n + 3) {
-    display: grid;
   }
 
   .plugin-catalog-results--rows
@@ -2113,6 +2032,11 @@
   .plugin-catalog-results--rows .plugin-catalog-row__main {
     align-items: flex-start;
     gap: 12px;
+  }
+
+  /* Refillable phone rows reserve the title, its gap and both allowed summary lines. */
+  .plugin-catalog-grid--continuable .plugin-catalog-row__main {
+    min-height: calc(20px + 1px + 2.8 * var(--control-ui-text-md));
   }
 
   .plugin-catalog-results--rows .plugin-catalog-card__art {
@@ -2267,14 +2191,11 @@
   background: transparent;
   box-shadow: none;
   color: var(--muted);
-}
 
-.settings-page.oc-app-surface
-  .plugin-catalog-detail--rail
-  .plugin-catalog-detail__actions
-  .btn.oc-action-icon:hover {
-  background: var(--plugin-detail-tone);
-  color: var(--text-strong);
+  &:hover {
+    background: var(--plugin-detail-tone);
+    color: var(--text-strong);
+  }
 }
 
 .plugin-catalog-detail__actions-divider {
@@ -2387,7 +2308,7 @@
   align-self: center;
 }
 
-.plugin-catalog-detail--rail .plugin-capability__icon {
+.plugin-catalog-detail--rail .settings-row > .plugin-capability__icon {
   flex: 0 0 36px;
   border: 0;
   border-radius: calc(10px * var(--openclaw-corner-radius-scale));
@@ -2395,7 +2316,7 @@
   color: var(--muted-strong);
 }
 
-.plugin-catalog-detail--rail .plugin-capability__icon svg {
+.plugin-catalog-detail--rail .settings-row > .plugin-capability__icon svg {
   width: 16px;
   height: 16px;
 }

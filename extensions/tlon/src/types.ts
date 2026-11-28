@@ -6,7 +6,7 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
 import type { ResolvedChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { z } from "zod";
-import type { TlonConfigSchema } from "./config-schema.js";
+import type { TlonConfigSchema, TlonClubPolicy, TlonClubRules } from "./config-schema.js";
 
 type TlonAccountConfig = z.input<typeof TlonConfigSchema> & {
   implicitMentions?: Partial<ResolvedChannelImplicitMentions>;
@@ -25,6 +25,8 @@ export type TlonResolvedAccount = {
   dangerouslyAllowPrivateNetwork: boolean | null;
   groupChannels: string[];
   dmAllowlist: string[];
+  clubPolicy: TlonClubPolicy | null;
+  clubRules: TlonClubRules;
   /** Ships allowed to invite us to groups (security: prevent malicious group invites) */
   groupInviteAllowlist: string[];
   autoDiscoverChannels: boolean | null;
@@ -92,6 +94,8 @@ export function resolveTlonAccount(
     dangerouslyAllowPrivateNetwork: merged.network?.dangerouslyAllowPrivateNetwork ?? null,
     groupChannels: merged.groupChannels ?? [],
     dmAllowlist: merged.dmAllowlist ?? [],
+    clubPolicy: merged.clubPolicy ?? null,
+    clubRules: merged.clubRules ?? {},
     groupInviteAllowlist: merged.groupInviteAllowlist ?? [],
     autoDiscoverChannels: merged.autoDiscoverChannels ?? null,
     crossChannelCitations: merged.crossChannelCitations ?? null,

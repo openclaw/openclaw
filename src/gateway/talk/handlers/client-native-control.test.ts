@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { getActiveNativeAttempt } from "../../../agents/embedded-agent-runner/run-state.js";
 import * as workspace from "../../../agents/workspace.js";
@@ -74,6 +74,28 @@ function holdWorkspacePreparation() {
 
 describe("native Talk through the public OpenAI plugin registration", () => {
   installNativePluginTestHooks();
+
+  describe("fixture teardown", () => {
+    const release = createDeferredCore();
+    afterEach(() => release.resolve());
+
+    it("restores the state directory even when the test stops waiting for its fixture", async ({
+      onTestFinished,
+    }) => {
+      const original = process.env.OPENCLAW_STATE_DIR;
+      const entered = createDeferredCore();
+      const fixture = withNativePlugin(async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      onTestFinished(async () => {
+        const restored = process.env.OPENCLAW_STATE_DIR;
+        await fixture;
+        expect(restored).toBe(original);
+      });
+      await Promise.race([entered.promise, fixture]);
+    });
+  });
 
   it("dispatches each subscription delegation once and accepts fresh IDs", async () => {
     upstream.runEmbeddedAgent.mockImplementation(nativeConsult("Replay completed."));
@@ -447,6 +469,16 @@ describe("native Talk through the public OpenAI plugin registration", () => {
               socket.serverEvent(transcript);
             }
             await settleNativeBackend(finishModel.resolve);
+            if (control !== "cancel") {
+              // The typed-turn owner finalizes the chat turn before the consult answer returns.
+              await vi.waitFor(
+                () =>
+                  expect(socket.sent.map((frame): unknown => JSON.parse(frame))).toContainEqual(
+                    nativeCompletion("real-runner-request"),
+                  ),
+                { timeout: 5_000 },
+              );
+            }
             const frames = socket.sent.map((frame): unknown => JSON.parse(frame));
             if (control === "cancel") {
               expect(frames).not.toContainEqual(
@@ -574,8 +606,10 @@ describe("native Talk through the public OpenAI plugin registration", () => {
       expect(transcriptEvents()).toHaveLength(1);
       upstream.runEmbeddedAgent.mockImplementation(nativeConsult("Legacy provider consultation."));
       socket.serverEvent(nativeDelegation("legacy-status", "Status?"));
-      await vi.waitFor(() =>
-        expect(socket.sent.join("\n")).toContain("Legacy provider consultation."),
+      // The consult runs as a typed chat turn, whose preparation loads cold in this fixture.
+      await vi.waitFor(
+        () => expect(socket.sent.join("\n")).toContain("Legacy provider consultation."),
+        { timeout: 5_000 },
       );
       expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
     });

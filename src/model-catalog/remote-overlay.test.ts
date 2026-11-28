@@ -102,6 +102,34 @@ describe("remote model catalog overlay", () => {
     expect(createModelPickerRecommendationRank(disabledConfig)(current)).toBeUndefined();
   });
 
+  it("carries hosted recommendations to matching ClawRouter model IDs", async () => {
+    stageBundle({
+      schemaVersion: 2,
+      generatedAt: 200,
+      sourceCommit: "routed-recommendation-test",
+      providers: { anthropic: { recommendedModels: ["claude-opus-5-5"] } },
+      models: [
+        {
+          provider: "anthropic",
+          id: "claude-opus-5-5",
+          pricing: {
+            status: "known",
+            currency: "USD",
+            unit: "million_tokens",
+            input: 9,
+            output: 18,
+          },
+        },
+      ],
+    });
+    await prepareStartup();
+    const rank = createModelPickerRecommendationRank({});
+    expect(rank({ provider: "anthropic", id: "claude-opus-5-5" })).toBe(0);
+    expect(rank({ provider: "clawrouter", id: "anthropic/claude-opus-5-5" })).toBe(0);
+    expect(rank({ provider: "clawrouter", id: "openai/gpt-5.5" })).toBeUndefined();
+    expect(rank({ provider: "other", id: "anthropic/claude-opus-5-5" })).toBeUndefined();
+  });
+
   it.each([false, true])(
     "publishes valid rows and prices, skipping duplicates while retaining startup absence=%s",
     async (absent) => {
@@ -248,7 +276,10 @@ describe("remote model catalog overlay", () => {
   });
 
   it("passes the same startup rows and prices to later workers", async () => {
+    const model = { id: "new", name: "日本語 🦊" };
+    stageBundle({ ...bundle, providers: { anthropic: { models: [model] } } });
     await prepareStartup();
+    expect(overlay()?.models).toEqual([model]);
     const expected = { overlay: overlay(), pricing: activeCatalog({})?.pricing };
     const worker = new Worker(new URL("./remote-overlay.worker.test-support.ts", import.meta.url), {
       execArgv: ["--import", "tsx"],

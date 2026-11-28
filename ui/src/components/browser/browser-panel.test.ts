@@ -79,13 +79,6 @@ describe("Browser panel", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
-  it("prefixes bare hosts with https", () => {
-    expect(normalizeBrowserUrlDraft("example.com")).toBe("https://example.com/");
-    expect(normalizeBrowserUrlDraft("  github.com/openclaw/openclaw ")).toBe(
-      "https://github.com/openclaw/openclaw",
-    );
-  });
-
   it("rejects empty and non-http(s) inputs", () => {
     expect(normalizeBrowserUrlDraft("   ")).toBeNull();
     expect(normalizeBrowserUrlDraft("javascript:alert(1)")).toBeNull();

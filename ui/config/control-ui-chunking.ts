@@ -85,17 +85,19 @@ export function controlUiStableChunkName(id: string): string | undefined {
 
   if (
     normalized.endsWith("/ui/src/styles/settings.css") ||
-    normalized.endsWith("/ui/src/styles/hub-tabs.css")
+    normalized.endsWith("/ui/src/styles/hub-tabs.css") ||
+    normalized.endsWith("/ui/src/components/solid/model-settings-rows.css")
   ) {
     // Share document CSS without coupling style-only consumers to page chrome or inline CSS text.
     return "route-chrome-styles";
   }
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/components/solid/registry-category-icon.tsx":
     case "ui/src/pages/plugins/catalog-grid.tsx":
     case "ui/src/pages/plugins/plugin-card.tsx":
     case "ui/src/pages/plugins/catalog-skeleton.tsx":
-      // Catalogs load their grid, cards, and loading state together.
+      // Catalogs load these together; shared category icons must not pull in either page.
       return "plugin-catalog-runtime";
     case "ui/src/components/sandbox-host.ts":
     case "ui/src/lib/widget-sandbox-host.ts":
@@ -153,6 +155,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "node_modules/@tanstack/virtual-core/dist/esm/utils.js":
       return "virtual-core-runtime";
     case "ui/src/pages/templates/creator-flow.ts":
+    case "ui/src/pages/templates/creator-sign-in.ts":
     case "ui/src/i18n/locales/en-template-creator.ts":
       return "template-creator-runtime";
     case "ui/src/pages/templates/draft-navigation.ts":
@@ -172,7 +175,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/session-git-diff.tsx":
     case "ui/src/lib/sessions/usage.ts":
     case "src/shared/weak-owner-map.ts":
-    case "src/shared/assistant-display-content.ts":
     case "src/shared/agent-run-status.ts":
     case "ui/src/app/assistant-media.ts":
     case "ui/src/lib/image-download.ts":
@@ -191,7 +193,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/confirm-dialog.ts":
     case "ui/src/components/confirm-dialog-loading.tsx":
     case "ui/src/components/menu-surface.ts":
-    case "ui/src/components/session-menu-access.ts":
     case "ui/src/components/session-menu-data.ts":
     case "ui/src/components/session-placement-action.ts":
     case "ui/src/lib/editor-links.ts":
@@ -312,7 +313,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/components/chat-message-attachment-availability.ts":
     case "ui/src/pages/chat/components/chat-media-playback.ts":
     case "ui/src/pages/chat/components/chat-message-image-loading.ts":
-      return "chat-message-media-runtime";
+      return "chat-transcript-runtime";
     case "ui/src/pages/chat/chat-provider-review-controller.tsx":
       return "chat-provider-review";
     // Keep optional compression groups separate from code evaluated by text-only Chat.
@@ -324,7 +325,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/chat-pane-session-operations.runtime.ts":
       return "chat-interaction-runtime";
     case "ui/src/pages/chat/components/chat-context-breakdown.tsx":
-    case "ui/src/pages/chat/components/chat-context-breakdown-model.ts":
+    case "src/shared/context-budget-categories.ts":
     case "ui/src/pages/chat/components/chat-context-report.tsx":
     case "ui/src/pages/chat/components/chat-details-environment-body.tsx":
     case "ui/src/lib/session-context-report.ts":
@@ -340,12 +341,14 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/nodes/device-signing.noble.ts":
     case "ui/src/lib/nodes/device-signing.runtime.ts":
       return "device-signing-runtime";
+    case "src/shared/assistant-display-content.ts":
     case "ui/src/pages/chat/chat-live-events.runtime.ts":
     case "ui/src/pages/chat/chat-gateway.ts":
     case "ui/src/pages/chat/tool-stream.ts":
     case "ui/src/pages/chat/tool-stream-status.ts":
     case "ui/src/pages/chat/tool-stream-preamble.ts":
-      return "chat-live-events-runtime";
+      // Chat loads events and media together; keep both out of the route entry.
+      return "chat-transcript-runtime";
     case "ui/src/pages/chat/chat-mobile-host.runtime.tsx":
     case "ui/src/pages/chat/chat-mobile-scroll-fades.runtime.ts":
     case "ui/src/pages/chat/components/chat-mobile-people-grid.tsx":
@@ -412,9 +415,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
       return "command-discovery-english";
     case "ui/src/i18n/locales/en-model-accounts.ts":
       return "model-account-settings-english";
-    case "ui/src/i18n/locales/en-session-organization-shared.ts":
-      // Settings, New Session, and Chat share this English copy.
-      return "chat-english";
     case "ui/src/i18n/locales/en-session-organization.ts":
       // Slash commands use shared labels; management copy loads with its own consumers.
       return "session-management-english";
@@ -519,7 +519,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown-live.ts":
     case "ui/src/components/markdown-streaming.ts":
     case "ui/src/components/markdown-tokens.ts":
-      return "markdown-streaming-runtime";
+      // Only live Chat uses these; static Markdown still loads its own parser.
+      return "chat-transcript-runtime";
     case "ui/src/styles/session-panel-rail.css":
       // Inline consumers keep their text; the raw sheet shares the cross-route style group.
       return /[?&]inline(?:[=&]|$)/u.test(id) ? "session-panel-rail-inline" : undefined;
@@ -558,7 +559,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     return "markdown-highlight-runtime";
   }
   if (moduleIdIncludesPackage(id, "remend")) {
-    return "markdown-streaming-runtime";
+    return "chat-transcript-runtime";
   }
   if (
     moduleIdIncludesPackage(id, "dompurify") ||
@@ -650,6 +651,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // Cross-route labels must not pull the New Session or Chat renderers.
                 modules.add("ui/src/i18n/locales/en-chat-welcome.ts");
                 modules.add("ui/src/i18n/locales/en-session-people.ts");
+                modules.add("ui/src/i18n/locales/en-session-organization-shared.ts");
                 // Placement and delivery share retries without importing either route's bundle.
                 modules.add("ui/src/pages/chat/chat-outbox-retry.ts");
                 // Chat sends and New Session creation quote selections identically.

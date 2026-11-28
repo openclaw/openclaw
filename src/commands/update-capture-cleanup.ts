@@ -3,6 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { readRootStructuredFileSync } from "@openclaw/fs-safe/json";
 import { collectStandaloneDoctorCaptures } from "../infra/doctor-capture-retention.js";
+import { hasErrnoCode, isMissingPathError } from "../infra/errno.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migration-manifest.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "../infra/update-capture-privacy-marker.js";
@@ -62,7 +64,7 @@ export function readCompletedUpdateHistory(env: NodeJS.ProcessEnv) {
   }
 }
 
-function logicalBytes(directory: string): number {
+export function logicalBytes(directory: string): number {
   let bytes = 0;
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const entryPath = path.join(directory, entry.name);
@@ -171,7 +173,25 @@ function collectCaptureRootInventory(params: {
   const root = resolveUpdateCaptureRoot(params.stateDir);
   const artifacts: RecoveryCleanupArtifact[] = [];
   const identities = new Map<string, CaptureIdentity>();
-  const rootStat = fs.lstatSync(root, { throwIfNoEntry: false });
+  let rootStat: fs.Stats | undefined;
+  try {
+    rootStat = fs.lstatSync(root, { throwIfNoEntry: false });
+  } catch (error) {
+    // An ancestor denying search permission fails this lstat before the
+    // readdir guard below can run; the root stays unreadable, not absent.
+    if (hasErrnoCode(error, "EACCES") || hasErrnoCode(error, "EPERM")) {
+      artifacts.push({
+        kind: "update-capture",
+        path: root,
+        runs: [],
+        bytes: 0,
+        outcome: "protected",
+        reason: "unreadable-capture-root",
+      });
+      return { artifacts, identities };
+    }
+    throw error;
+  }
   if (!rootStat) {
     return { artifacts, identities };
   }
@@ -188,9 +208,27 @@ function collectCaptureRootInventory(params: {
   }
   const history = params.readHistory === false ? undefined : readCompletedUpdateHistory(params.env);
   // Standalone retention reads every manifest; status first qualifies their total metadata cost.
-  const rootEntries = params.scan
-    ? [...params.scan.directory(root)]
-    : fs.readdirSync(root, { withFileTypes: true });
+  let rootEntries: readonly fs.Dirent[];
+  try {
+    rootEntries = params.scan
+      ? [...params.scan.directory(root)]
+      : fs.readdirSync(root, { withFileTypes: true });
+  } catch (error) {
+    // A capture root this process may not read is not the absent root that
+    // release-by-absence would infer, so every capture inside it stays retained.
+    if (hasErrnoCode(error, "EACCES") || hasErrnoCode(error, "EPERM")) {
+      artifacts.push({
+        kind: "update-capture",
+        path: root,
+        runs: [],
+        bytes: 0,
+        outcome: "protected",
+        reason: "unreadable-capture-root",
+      });
+      return { artifacts, identities };
+    }
+    throw error;
+  }
   const doctorMetadataComplete =
     !params.scan ||
     rootEntries
@@ -218,7 +256,17 @@ function collectCaptureRootInventory(params: {
     };
     artifacts.push(item);
     if (!entry.isDirectory()) {
-      item.bytes = entry.isFile() ? fs.lstatSync(directory).size : 0;
+      if (entry.isFile() && params.measureBytes !== false) {
+        try {
+          item.bytes = fs.lstatSync(directory).size;
+        } catch (error) {
+          // A root that lists but denies search keeps stray files unmeasured,
+          // not fatal to the whole inventory.
+          if (!hasErrnoCode(error, "EACCES") && !hasErrnoCode(error, "EPERM")) {
+            throw error;
+          }
+        }
+      }
       continue;
     }
     item.bytes =
@@ -228,12 +276,32 @@ function collectCaptureRootInventory(params: {
           ? params.scan.logicalBytes(directory)
           : logicalBytes(directory);
     // The producer names each capture by run id and marks it before staging any payload.
-    if (
-      !/^[a-zA-Z0-9_-]{1,128}$/u.test(entry.name) ||
-      !fs
-        .lstatSync(path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER), { throwIfNoEntry: false })
-        ?.isFile()
-    ) {
+    if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(entry.name)) {
+      continue;
+    }
+    let marked: boolean;
+    try {
+      marked =
+        fs
+          .lstatSync(path.join(directory, UPDATE_CAPTURE_PRIVACY_MARKER), {
+            throwIfNoEntry: false,
+          })
+          ?.isFile() === true;
+    } catch (error) {
+      if (isMissingPathError(error)) {
+        // An unmarked directory is not a capture; readable contents are not evidence of one.
+        marked = false;
+      } else if (hasErrnoCode(error, "EACCES") || hasErrnoCode(error, "EPERM")) {
+        // A capture whose marker cannot be read stays protected, and the reader
+        // reports it as unreadable beside captures it can still verify.
+        item.captureSource = entry.name.startsWith("doctor-") ? "doctor" : "update";
+        item.detail = formatErrorMessage(error);
+        continue;
+      } else {
+        throw error;
+      }
+    }
+    if (!marked) {
       continue;
     }
     item.captureSource = entry.name.startsWith("doctor-") ? "doctor" : "update";
@@ -318,11 +386,16 @@ function collectCaptureRootInventory(params: {
   return { artifacts, identities };
 }
 
-/** Caller holds the cleanup maintenance lock and passes identities from the confirmed selection. */
+/**
+ * Removes whole capture and database snapshot directories. Caller holds the cleanup
+ * maintenance lock and passes identities from the confirmed selection.
+ */
 export async function retireUpdateCaptures(params: {
   selected: RecoveryCleanupArtifact[];
   identities: ReadonlyMap<string, CaptureIdentity>;
   assertCurrent: () => void;
+  /** Releases what the directory alone records; a failure keeps the directory. */
+  beforeRemove?: (item: RecoveryCleanupArtifact) => Promise<void>;
   onProgress?: (item: RecoveryCleanupArtifact, index: number) => void;
 }): Promise<void> {
   for (const [index, item] of params.selected.entries()) {
@@ -338,8 +411,10 @@ export async function retireUpdateCaptures(params: {
         current.dev !== expected.dev ||
         current.ino !== expected.ino
       ) {
-        throw new Error("update capture changed after selection");
+        throw new Error("directory changed after selection");
       }
+      await params.beforeRemove?.(item);
+      params.assertCurrent();
       // The marker goes last: an interrupted removal stays attributed, so a rerun finishes it.
       for (const name of fs.readdirSync(item.path)) {
         if (name !== UPDATE_CAPTURE_PRIVACY_MARKER) {
@@ -351,10 +426,10 @@ export async function retireUpdateCaptures(params: {
       await fs.promises.rm(item.path, { recursive: true });
       item.outcome = "removed";
       item.removedBytes = item.bytes;
-      item.reason = "update-capture-retired";
+      item.reason = `${item.kind}-retired`;
     } catch (error) {
       item.outcome = "failed";
-      item.reason = "update-capture-retirement-failed";
+      item.reason = `${item.kind}-retirement-failed`;
       item.detail = String(error);
     }
   }

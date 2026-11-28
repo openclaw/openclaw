@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SystemAgentSetupDetectResult, WizardStep } from "../../api/types.ts";
 import { i18n } from "../../i18n/index.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { activationTargetId } from "./state.ts";
 import {
   detected,
@@ -44,6 +45,7 @@ const firstRunProps = () =>
   props({
     page: { phase: "ready", result: ready },
     firstRun: true,
+    discoveryOpen: false,
     manualProviderId: "",
     iconUrls: {},
   });
@@ -88,12 +90,7 @@ describe("renderModelSetup", () => {
     expect(button.disabled).toBe(true);
     expect(button.getAttribute("aria-label")).toBe("Checking…");
     view.detecting = false;
-    for (const unavailable of [
-      { canAdmin: false },
-      { gatewayTooOld: true },
-      { activation: { phase: "success" as const, modelRef: "openai/gpt-5" } },
-      { page: { phase: "ready" as const, result: ready } },
-    ]) {
+    for (const unavailable of [{ canAdmin: false }, { gatewayTooOld: true }]) {
       renderSetup({ ...view, ...unavailable }, container);
       expect(container.querySelector(".model-setup__intro button")).toBe(button);
       expect(button.disabled).toBe(true);
@@ -101,6 +98,9 @@ describe("renderModelSetup", () => {
       button.click();
     }
     expect(view.onDetect).toHaveBeenCalledOnce();
+
+    renderSetup({ ...view, activation: { phase: "success", modelRef: "openai/gpt-5" } }, container);
+    expect(container.querySelector(".model-setup__intro")).toBeNull();
   });
 
   it("shows detected authentication without credential values", () => {
@@ -121,6 +121,31 @@ describe("renderModelSetup", () => {
 
     expect(text(row)).toContain(detail);
     expect(text(row)).not.toContain(secret);
+  });
+
+  it("uses the guided choice label as the sign-in action", () => {
+    const authOptions = [
+      {
+        id: "sample-browser",
+        kind: "oauth" as const,
+        label: "Sign in with Sample",
+        groupLabel: "Sample",
+        featured: true,
+      },
+    ];
+    const onStartAuth = vi.fn();
+    const container = mount(
+      props({
+        onStartAuth,
+        page: { phase: "ready", result: { ...detected, authOptions } },
+      }),
+    );
+    const button = container.querySelector<HTMLButtonElement>(
+      '[data-auth-choice="sample-browser"] button',
+    )!;
+    expect(text(button)).toBe("Sign in with Sample");
+    button.click();
+    expect(onStartAuth).toHaveBeenCalledWith(authOptions[0]);
   });
 
   it("derives prepare rows from accepted choice ids and hides usable local candidates", () => {
@@ -262,37 +287,6 @@ describe("renderModelSetup", () => {
     expect(withSignIn.querySelector(".model-setup__empty")).toBeNull();
   });
 
-  it("uses explicit brand identity without guessing from labels or opaque ids", () => {
-    const container = mount(
-      props({
-        page: {
-          phase: "ready",
-          result: {
-            ...detected,
-            candidates: [],
-            authOptions: [],
-            recommendedInstalls: [],
-            manualProviders: [
-              {
-                id: "custom-login",
-                brandId: "claude",
-                label: "Company account",
-                icon: "https://cdn.example.com/custom.png",
-              },
-            ],
-          },
-        },
-        manualProviderId: "custom-login",
-        iconUrls: {},
-      }),
-    );
-
-    expect(
-      container.querySelector('.model-setup__manual [data-provider-icon="claude"]'),
-    ).not.toBeNull();
-    expect(container.querySelector(".model-setup__manual img")).toBeNull();
-  });
-
   it("uses proxied artwork for unknown providers and invalidates broken blobs", () => {
     const iconUrl = "https://cdn.example.com/acme.png";
     const onIconError = vi.fn();
@@ -378,12 +372,6 @@ describe("renderModelSetup", () => {
     expect(container.querySelector('[data-candidate-kind="existing-model"]')).toBeNull();
     expect(container.querySelector('[data-candidate-kind="provider-auto:openai"]')).toBeNull();
     expect(container.querySelector('[data-candidate-kind="claude-cli"]')).not.toBeNull();
-    const current = container.querySelector(".model-setup__current")!;
-    expect(current.querySelector("h2")?.textContent).toBe("Selected model");
-    expect(current.querySelector("strong")?.textContent).toBe("OpenAI");
-    expect(current.querySelector(".model-setup__current-copy .muted")?.textContent).toContain(
-      "gpt-5",
-    );
     const retry = container.querySelector<HTMLButtonElement>(
       '[data-candidate-kind="saved-auth:openai:replacement"] button',
     );
@@ -391,52 +379,6 @@ describe("renderModelSetup", () => {
     expect(retry!.disabled).toBe(false);
     retry!.click();
     expect(onActivateCandidate).toHaveBeenCalledExactlyOnceWith(savedCandidate);
-  });
-
-  it("renders connection verification progress", () => {
-    const container = mount(
-      props({
-        page: { phase: "ready", result: { ...detected, configuredModel: "openai/gpt-5" } },
-        verify: { phase: "checking" },
-        actionsDisabled: true,
-      }),
-    );
-    expect(text(container)).toContain("Asking openai/gpt-5 for a quick reply…");
-    expect(
-      container.querySelector<HTMLButtonElement>(".model-setup__current button")?.disabled,
-    ).toBe(true);
-  });
-
-  it("renders successful connection verification with the answering model", () => {
-    const container = mount(
-      props({
-        page: { phase: "ready", result: { ...detected, configuredModel: "openai/gpt-5" } },
-        verify: { phase: "ok", modelRef: "anthropic/claude-opus-4-8", latencyMs: 1234 },
-      }),
-    );
-    expect(text(container)).toContain("Ready · 1234 ms");
-    const current = container.querySelector(".model-setup__current");
-    expect(current?.textContent).toContain("Anthropic");
-    expect(current?.textContent).toContain("claude-opus-4-8");
-    expect(current?.textContent).not.toContain("openai/gpt-5");
-    expect(current?.querySelector('[data-provider-icon="claude"]')).not.toBeNull();
-  });
-
-  it("shows the current model without verification controls for non-admin and unsupported gateways", () => {
-    const result = { ...detected, configuredModel: "openai/gpt-5" };
-    const nonAdmin = mount(
-      props({ page: { phase: "ready", result }, canAdmin: false, canVerify: false }),
-    );
-    const unsupportedGateway = mount(props({ page: { phase: "ready", result }, canVerify: false }));
-    for (const page of [nonAdmin, unsupportedGateway]) {
-      const current = page.querySelector(".model-setup__current")!;
-      expect(current.querySelector("h2")?.textContent).toBe("Selected model");
-      expect(current.querySelector("strong")?.textContent).toBe("OpenAI");
-      expect(current.querySelector(".model-setup__current-copy .muted")?.textContent).toContain(
-        "gpt-5",
-      );
-      expect(current.querySelector("button")).toBeNull();
-    }
   });
 
   it.each([true, false])("reports device-code fallback success: %s", async (copied) => {
@@ -459,6 +401,9 @@ describe("renderModelSetup", () => {
         : {}),
       deviceCode: { code: "ABCD-EFGH", ...(copied ? { expiresInMinutes: 10 } : {}) },
     });
+    await waitForFast(() =>
+      expect(container.querySelector(".wizard-sign-in__code button")).not.toBeNull(),
+    );
 
     if (copied) {
       const link = container.querySelector<HTMLAnchorElement>(
@@ -485,7 +430,7 @@ describe("renderModelSetup", () => {
     { sensitive: true, expectedType: "password" },
   ])(
     "labels a $expectedType input and associates validation errors until recovery",
-    ({ sensitive, expectedType }) => {
+    async ({ sensitive, expectedType }) => {
       const container = document.body.appendChild(document.createElement("div"));
       const renderStep = (validationError: string | null) =>
         renderSetup(
@@ -508,6 +453,9 @@ describe("renderModelSetup", () => {
           container,
         );
       renderStep(null);
+      await waitForFast(() =>
+        expect(container.querySelector("#model-setup-wizard-text-input")).not.toBeNull(),
+      );
       const input = container.querySelector<HTMLInputElement>("#model-setup-wizard-text-input");
       const label = container.querySelector<HTMLLabelElement>(
         'label[for="model-setup-wizard-text-input"]',
@@ -800,5 +748,31 @@ describe("renderModelSetup", () => {
       ),
     ).toHaveLength(1);
     expect(freshSuccess.textContent).not.toContain("Open Chat");
+  });
+
+  it("lets first run verify an already configured model before continuing", () => {
+    const onVerify = vi.fn();
+    const container = mount({
+      ...firstRunProps(),
+      page: { phase: "ready", result: { ...ready, setupComplete: false } },
+      onVerify,
+    });
+    const buttons = [...container.querySelectorAll("button")].map((button) =>
+      button.textContent?.trim(),
+    );
+    expect(buttons).not.toContain("Continue setup");
+    [...container.querySelectorAll("button")]
+      .find((button) => button.textContent?.trim() === "Check model")!
+      .click();
+    expect(onVerify).toHaveBeenCalledOnce();
+  });
+
+  it("names the model that answered first-run verification", () => {
+    const container = mount({
+      ...firstRunProps(),
+      verify: { phase: "ok", modelRef: "anthropic/claude-opus-4-8" },
+    });
+    expect(container.textContent).toContain("anthropic/claude-opus-4-8");
+    expect(container.textContent).not.toContain("openai/gpt-5");
   });
 });

@@ -535,24 +535,24 @@ export async function prepareGatewayLifecycle(params: {
       {
         resolveGatewayContext: runtime.resolvePluginGatewayContext,
         preparePluginRegistryClose: () => pluginRuntime.prepareClose(),
-        persistRunningSessionsForRestart: async (signal) => {
+        persistRunningSessionsForRestart: async (signal, collectNotice) => {
           const cfg = runtimeState.configReloader.getCommittedRuntimeConfig?.();
           // Input admission stays closed until this instance's config owner is prepared.
           if (!cfg) {
             return;
           }
-          const { persistRunningSessionsForRestart } = await import("./session-restart-resume.js");
-          await persistRunningSessionsForRestart({
+          await shutdownRuntime.sessionRestartResume.persistRunningSessionsForRestart({
             cfg,
             signal,
+            ...(optsValue?.restartExpectedMs != null ? { collectNotice } : {}),
           });
         },
         terminateRunningSubagentsForShutdown: async () => {
           // Persistence has settled or timed out; release marker retention before run claims.
           void Promise.resolve(markClosePreludeStarted(optsValue)).catch(() => {});
-          const { terminateLiveSubagentsForShutdown } =
-            await import("../agents/subagents/registry/subagent-registry.js");
-          await terminateLiveSubagentsForShutdown(runtime.resolvePluginGatewayContext);
+          await shutdownRuntime.subagentRegistry.terminateLiveSubagentsForShutdown(
+            runtime.resolvePluginGatewayContext,
+          );
         },
         cancelReceivedWork: (reason) => {
           // Restart markers and session stop classification precede authority retirement.

@@ -61,12 +61,13 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     const tabs = owner.tabs();
     const activeTab = owner.activeTab();
     const activeTabId = activeTab?.tabId ?? props.activeTabId;
-    const activeWidgets = snapshot && activeTab ? orderedWidgets(snapshot, activeTabId) : [];
+    const layoutWidgets = owner.layoutWidgets();
+    const activeWidgets = activeTab ? orderedWidgets(layoutWidgets, activeTabId) : [];
     if (activeTab) {
       owner.visitedTabs.add(activeTabId);
     }
     // A widget moved to an unvisited tab keeps its already mounted document.
-    const widgets = (snapshot?.widgets ?? []).filter(
+    const widgets = layoutWidgets.filter(
       (widget) => owner.visitedTabs.has(widget.tabId) || entries.has(cellKey(widget.name)),
     );
     // Touch layouts reserve a chrome row. Let ordinary long auto-height HTML
@@ -74,9 +75,10 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
     // scroll handoff; fixed-height widgets still use their saved rows.
     const fitAutoContent = owner.fitAutoContent();
     const positions = new Map<string, number>();
+    const preview = state.gesture.name ? state.previewItems : state.drop?.items;
     const rects = tabs.flatMap((tab) => {
       const tabRects = layout(
-        (tab.tabId === activeTabId && state.gesture.name ? state.previewItems : null) ??
+        (tab.tabId === activeTabId ? preview : null) ??
           boardWidgetGridItems(
             widgets.filter((widget) => widget.tabId === tab.tabId),
             owner.contentHeights,
@@ -97,7 +99,7 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
         activeWidgets[0]?.pluginKind === "session:website" ||
         activeWidgets[0]?.pluginKind === "browser:dashboard");
     const loading = !snapshot || state.initialLoading;
-    const widgetsByName = new Map(widgets.map((widget) => [widget.name, widget]));
+    const widgetsByName = new Map(snapshot?.widgets.map((widget) => [widget.name, widget]));
     const focusName = activeRects.some((rect) => rect.name === state.focusName)
       ? state.focusName
       : (activeRects[0]?.name ?? "");
@@ -124,9 +126,11 @@ function BoardViewContent(props: BoardViewProps, host: BoardViewElement) {
         present: true,
         options: {
           widget: widgetsByName.get(rect.name),
+          layoutPreview: owner.commandLayout()?.get(rect.name),
           boardRevision: snapshot?.revision ?? 0,
           rect: stableRect,
-          contentHeightPx: owner.contentHeights.get(rect.name),
+          contentHeightPx:
+            state.drop?.resized === rect.name ? undefined : owner.contentHeights.get(rect.name),
           fitAutoContent,
           pageChrome: rect.name === props.pageWidgetName,
           tabs,

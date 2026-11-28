@@ -107,11 +107,15 @@ export function flattenMarkdownToPlainText(text: string): string {
     .replace(/```/g, " ");
   // Code spans become `\0<index>\0` so block and emphasis stripping cannot rewrite them; other NULs are doubled.
   // A span closes on the next backtick run of its own length, so ``a`b`` keeps its inner backtick.
-  const withoutCode = stripInlineLinks(withoutFences).replace(
-    /\0|(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g,
-    (_match, _run: string | undefined, literal: string | undefined) =>
-      literal === undefined ? "\0\0" : `\0${code.push(literal) - 1}\0`,
-  );
+  // Protect each retained part before removing links can join separate backtick runs.
+  const withoutCode = stripInlineLinks(withoutFences, {
+    transformText: (part) =>
+      part.replace(
+        /\0|(?<!`)(`+)(?!`)([\s\S]*?[^`])\1(?!`)/g,
+        (_match, _run: string | undefined, literal: string | undefined) =>
+          literal === undefined ? "\0\0" : `\0${code.push(literal) - 1}\0`,
+      ),
+  });
   // Quote markers may nest with horizontal whitespace, but must not consume another line.
   // Recognize tables before removing block markers: a following heading or list is not a row.
   let flattened = stripTables(withoutCode).replace(
@@ -270,7 +274,7 @@ function findDestinationEnd(
 /** Strips inline link destinations, retaining nested labels and optionally omitting images entirely. */
 export function stripInlineLinks(
   text: string,
-  options: { images?: "label" | "omit" } = {},
+  options: { images?: "label" | "omit"; transformText?: (text: string) => string } = {},
 ): string {
   const skips = new Map<number, number>();
   const parenClosers = matchParens(text);
@@ -310,7 +314,7 @@ export function stripInlineLinks(
     }
   }
   if (skips.size === 0) {
-    return text;
+    return options.transformText?.(text) ?? text;
   }
   let output = "";
   let cursor = 0;
@@ -318,10 +322,12 @@ export function stripInlineLinks(
   for (let index = 0; index < text.length; index += 1) {
     const end = skips.get(index);
     if (end !== undefined) {
-      output += text.slice(cursor, index);
+      const part = text.slice(cursor, index);
+      output += options.transformText?.(part) ?? part;
       cursor = end;
       index = end - 1;
     }
   }
-  return output + text.slice(cursor);
+  const tail = text.slice(cursor);
+  return output + (options.transformText?.(tail) ?? tail);
 }

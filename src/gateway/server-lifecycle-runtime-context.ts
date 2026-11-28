@@ -39,7 +39,9 @@ export function bindGatewayLifecycleRequest(
   const resolver = explicitResolver ?? scope?.resolveGatewayContext;
   const context = resolver ? resolver() : scope?.context;
   const runtime = context?.lifecycleRuntime;
-  const hosted = context?.localEmbedded !== true && Boolean(resolver || context);
+  // Local contexts carry a lifecycle runtime too, so lifecycle reads stay in-process. Tool
+  // routing (`in-process-gateway.ts`) still treats them as unhosted: it chooses a transport.
+  const hosted = Boolean(resolver || context);
   return async <T>(request: Parameters<typeof callGateway>[0]): Promise<T> => {
     const assertCurrent = () => {
       if (hosted && (!runtime || (resolver && resolver() !== context))) {

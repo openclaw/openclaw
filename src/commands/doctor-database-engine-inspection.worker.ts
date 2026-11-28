@@ -16,6 +16,7 @@ import type { DatabaseEngineSelection } from "../infra/database-engine/types.js"
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-build.js";
+import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginSourceCaptureStorage } from "../plugins/plugin-source-capture-context.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
@@ -211,22 +212,32 @@ serveWorkerTasks<DoctorDatabaseEngineInspection, DoctorDatabaseEngineInspectionI
         // Per-store inspection retains inaccessible roots and reports their contents as unknown.
         return inspect();
       }
-      return withOpenClawStateDatabaseReadSnapshot(inspect, { env });
+      return withOpenClawStateDatabaseReadSnapshot(inspect, { env, preferLiveOwner: true });
     };
-    // The caller's inspection context does not cross this worker boundary.
-    await control.runNativeSection(() =>
-      withPluginSourceCaptureStorage({ stateDir: input.stateDir, placement: "temporary" }, () =>
-        withArtifactPreservingStateReads(
-          () =>
-            withSqliteReadOnlyWorkerScope(
+    // The caller's inspection context does not cross this worker boundary. The isolate ends
+    // without exit cleanup, so the task retires the plugin contracts it loaded and their captures.
+    const pluginCache = createPluginCache();
+    await control.runNativeSection(async () => {
+      try {
+        await withPluginCache(pluginCache, () =>
+          withPluginSourceCaptureStorage({ stateDir: input.stateDir, placement: "temporary" }, () =>
+            withArtifactPreservingStateReads(
               () =>
-                selection ? withDatabaseEngineSelection(selection, inspectState) : inspectState(),
-              { signal: control.signal, deadlineOwnedByCaller: true },
+                withSqliteReadOnlyWorkerScope(
+                  () =>
+                    selection
+                      ? withDatabaseEngineSelection(selection, inspectState)
+                      : inspectState(),
+                  { signal: control.signal, deadlineOwnedByCaller: true },
+                ),
+              { agentDatabases: true },
             ),
-          { agentDatabases: true },
-        ),
-      ),
-    );
+          ),
+        );
+      } finally {
+        await retirePluginCache(pluginCache, undefined, { waitForSettlement: true });
+      }
+    });
     return result;
   },
 );
