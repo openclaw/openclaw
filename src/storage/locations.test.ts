@@ -124,7 +124,10 @@ it("rejects out-of-prefix listings before filtering invalid keys", async () => {
 
 it.each(["uninitialized", "missing"])("refuses a %s root", async (root) => {
   const parent = tempDirs.make("openclaw-storage-location-");
-  const params = filesystemParams(root === "missing" ? path.join(parent, root) : parent);
+  const params = {
+    ...filesystemParams(root === "missing" ? path.join(parent, root) : parent),
+    env: {},
+  };
   const open = root === "missing" ? initStorageLocation : openStorageLocation;
   await expect(open(params)).rejects.toMatchObject({
     ...unavailable,
@@ -136,6 +139,17 @@ it.each(["uninitialized", "missing"])("refuses a %s root", async (root) => {
   });
   await expect(probeStorageLocation(params)).resolves.toMatchObject(unavailable);
   await expect(fs.readdir(parent)).resolves.toEqual([]);
+});
+
+it("keeps the selected profile in the initialization command for a new destination", async () => {
+  const root = tempDirs.make("openclaw-storage-profile-");
+  const result = await probeStorageLocation({
+    ...filesystemParams(root),
+    env: { OPENCLAW_PROFILE: "work" },
+  });
+  expect(result.state).toBe("unavailable");
+  expect(result.message).toContain("`openclaw --profile work storage init archive`");
+  await expect(fs.readdir(root)).resolves.toEqual([]);
 });
 
 it.each([openStorageLocation, initStorageLocation])("sanitizes %s failures", async (open) => {

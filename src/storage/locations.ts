@@ -1,3 +1,4 @@
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
 import type { StorageLocationConfig } from "../config/types.storage.js";
@@ -79,10 +80,14 @@ function configuredLocation(params: StorageLocationParams): StorageLocationConfi
   return location;
 }
 
-function unavailable(name: string, displayTarget?: string): StorageLocationError {
+function unavailable(
+  { name, env }: StorageLocationParams,
+  displayTarget: string,
+): StorageLocationError {
+  const initCommand = formatCliCommand(`openclaw storage init ${name}`, env);
   return new StorageLocationError(
     "unavailable",
-    `Storage location "${name}"${displayTarget ? ` (${displayTarget})` : ""} has no initialization marker. If this is a new location, run \`openclaw storage init ${name}\`; otherwise reconnect the disk or check the bucket and prefix.`,
+    `Storage location "${name}"${displayTarget ? ` (${displayTarget})` : ""} has no initialization marker. If this is a new location, run \`${initCommand}\`; otherwise reconnect the disk or check the bucket and prefix.`,
   );
 }
 
@@ -201,7 +206,7 @@ async function makeLocation(
       throw storageLocationError(error);
     });
     if (!current) {
-      throw unavailable(params.name, backend.displayTarget);
+      throw unavailable(params, backend.displayTarget);
     }
     if (JSON.stringify(current) !== markerIdentity) {
       throw new StorageLocationError(
@@ -366,7 +371,7 @@ export async function openStorageLocation(params: StorageLocationParams): Promis
   try {
     const marker = await readStorageMarker(prepared.backend, params.signal);
     if (!marker) {
-      throw unavailable(params.name, prepared.backend.displayTarget);
+      throw unavailable(params, prepared.backend.displayTarget);
     }
     return await makeLocation(params, prepared, marker);
   } catch (error) {
