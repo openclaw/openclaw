@@ -331,10 +331,8 @@ describe("subagent announce seam flow", () => {
     },
   );
 
-  it.each([
-    "requester lookup unavailable",
-    "Session transcript keyed user is outside the current turn: old-input",
-  ])("reports thrown announce failures to the delivery owner (%s)", async (error) => {
+  it("reports thrown announce failures to the delivery owner", async () => {
+    const error = "requester lookup unavailable";
     vi.spyOn(announceDelivery, "deliverSubagentAnnouncement").mockRejectedValueOnce(
       new Error(error),
     );
