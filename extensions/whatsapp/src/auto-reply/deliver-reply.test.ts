@@ -333,13 +333,14 @@ describe("deliverWebReply", () => {
     const outboundError = vi.spyOn(whatsappOutboundLog, "error").mockImplementation(() => {});
     try {
       await deliverWebReply(params);
-      expect(outboundError).toHaveBeenCalled();
-      expect(JSON.stringify(outboundError.mock.calls)).not.toContain(errorDetail);
+      // Regression for #206555: the operator-facing logs must carry the real cause (an infra
+      // error, not message content) so a failure like a missing ffmpeg is diagnosable; only the
+      // WhatsApp-facing reply text (checked below) must stay free of internal error detail.
+      expect(outboundError).toHaveBeenCalledWith(expect.any(String), { error: errorDetail });
       expect(replyLogger.warn).toHaveBeenCalledWith(
-        { to: "+10000000000" },
+        { to: "+10000000000", error: errorDetail },
         "failed to send web media reply",
       );
-      expect(JSON.stringify(replyLogger.warn.mock.calls)).not.toContain(errorDetail);
     } finally {
       outboundError.mockRestore();
     }
