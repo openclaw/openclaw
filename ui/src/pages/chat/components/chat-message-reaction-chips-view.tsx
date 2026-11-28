@@ -38,7 +38,7 @@ function reactorNames(reaction: MessageReactionSummary, userId: string | null | 
 
 type ReactionGroup = Parameters<typeof messageReactionOptions>[0];
 
-/** One tab on the bubble's outer corner: leading emoji, a total past one, names on hover. */
+/** One tab on the bubble's outer corner: leading emoji, a people count past one, names on hover. */
 export function GroupMessageReactions(props: {
   group: ReactionGroup;
   actionDetails: { reactionMessageId?: string } | null | undefined;
@@ -54,7 +54,18 @@ export function GroupMessageReactions(props: {
   const own = () => ownReactionEmoji(reactions(), options().userId);
   // A stable sort keeps arrival order among equal counts, so the faces do not reshuffle on ties.
   const ranked = createMemo(() => (reactions() ?? []).toSorted((a, b) => b.count - a.count));
-  const total = () => ranked().reduce((sum, reaction) => sum + reaction.count, 0);
+  const peopleCount = createMemo(() => {
+    const people = new Set<string>();
+    for (const { identities } of ranked()) {
+      for (const { id } of identities) {
+        // The Gateway namespaces agent reactions separately from human profiles.
+        if (!id.startsWith("agent:")) {
+          people.add(id);
+        }
+      }
+    }
+    return people.size;
+  });
   return (
     <Show when={ranked().length}>
       <div
@@ -77,8 +88,8 @@ export function GroupMessageReactions(props: {
               <For each={ranked().slice(0, FACE_LIMIT)} keyed={(reaction) => reaction.emoji}>
                 {(reaction) => <span class="chat-reaction-tab__emoji">{reaction().emoji}</span>}
               </For>
-              <Show when={total() > 1}>
-                <span class="chat-reaction-tab__count">{compactCount.format(total())}</span>
+              <Show when={peopleCount() > 1}>
+                <span class="chat-reaction-tab__count">{compactCount.format(peopleCount())}</span>
               </Show>
             </>
           }

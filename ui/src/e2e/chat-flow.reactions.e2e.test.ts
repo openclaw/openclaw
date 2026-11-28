@@ -223,7 +223,7 @@ suite.define(() => {
       await tabPicker.getByRole("searchbox", { name: "Search emoji…", exact: true }).fill("🦞");
       await expectSet(1, { emoji: "🦞" });
       await expect.poll(summary).toBe("🎉 You; 🦞 You");
-      expect(await tab.textContent()).toBe("🎉🦞2");
+      expect(await tab.textContent()).toBe("🎉🦞");
       // The opened tab lists the existing reactions; pressing one's own removes it.
       await expect
         .poll(() => tabPicker.locator(".chat-reaction-picker").getAttribute("data-phase"))
@@ -245,18 +245,27 @@ suite.define(() => {
         action: "added",
         actor: { type: "human", id: "profile-riley", label: "Riley" },
         reactions: [
-          { emoji: "👍", count: 1, identities: [{ id: "profile-sam", label: "Sam" }] },
+          { emoji: "👍", count: 1, identities: [{ id: "agent:main", label: "Assistant" }] },
           { emoji: "🎉", count: 1, identities: [{ id: "profile-avery", label: "Avery" }] },
-          { emoji: "👀", count: 1, identities: [{ id: "profile-riley", label: "Riley" }] },
+          {
+            emoji: "👀",
+            count: 2,
+            identities: [
+              { id: "profile-avery", label: "Avery" },
+              { id: "profile-riley", label: "Riley" },
+            ],
+          },
         ],
       });
-      await expect.poll(summary).toBe("👍 Sam; 🎉 You; 👀 Riley");
+      await expect.poll(summary).toBe("👀 You, Riley; 👍 Assistant; 🎉 You");
+      // Avery counts once across both emoji, and the assistant doesn't count as a person.
+      expect(await tab.textContent()).toBe("👀👍🎉2");
       // Hovering the tab names who reacted.
       const who = reactions.locator(".chat-reaction-who");
       expect(await who.isVisible()).toBe(false);
       await tab.hover();
       await expect.poll(() => who.isVisible()).toBe(true);
-      expect(await who.textContent()).toBe("👍Sam🎉You👀Riley");
+      expect(await who.textContent()).toBe("👀You, Riley👍Assistant🎉You");
       expect(await gateway.getRequests("session.reactions.list")).toHaveLength(listRequests);
 
       await page.getByRole("textbox", { name: "Chat composer" }).focus();
