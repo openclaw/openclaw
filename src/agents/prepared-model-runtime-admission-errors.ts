@@ -28,6 +28,9 @@ export class PreparedModelRuntimePublicationSupersededError extends PreparedMode
 
 export class PreparedModelRuntimePluginGenerationRetiredError extends Error {}
 
+/** Gateway shutdown sealed refresh admission; the retired refresh did not fail. */
+export class PreparedModelRuntimeRefreshCancelledError extends Error {}
+
 export function isPreparedModelRuntimePluginLifecycleFailure(error: unknown): boolean {
   return (
     error instanceof PluginInstanceUnavailableError ||
