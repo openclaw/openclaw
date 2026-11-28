@@ -655,6 +655,18 @@ it("a default search with no all-word match retries any-word; explicit all stays
   expect((await f.agent.grep({ query: "orchid water" }, f.owner)).queryMode).toBeUndefined();
 });
 
+it("a default keyword search cannot match on English stopwords alone", async () => {
+  const f = await fixture();
+  await f.put("dispatch_log", "Dispatch log", "Tamarind Finch deployed the orchid crate.");
+  await f.put("garden_ledger", "Garden ledger", "The tulips need gravel.");
+  expect(await f.total({ query: "where is THE zephyrium" })).toBe(0);
+  expect(await f.total({ query: "the" })).toBe(0);
+  expect(ids(await f.service.grep({ query: "where is the orchid" }, f.owner))).toEqual([
+    "dispatch_log",
+  ]);
+  expect(await f.total({ query: "the", mode: "any" })).toBe(2);
+});
+
 it("English inflections match, and a store indexed with the old tokenizer rebuilds", async () => {
   const f = await fixture();
   await f.put(

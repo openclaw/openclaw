@@ -19,7 +19,7 @@ ranked search never proves that an inventory is complete.
 
 | Operation or input            | Meaning                                                                              |
 | ----------------------------- | ------------------------------------------------------------------------------------ |
-| `knowledge_grep({query})`     | FTS5/BM25 over title, aliases, and body; every word token must match, else any word  |
+| `knowledge_grep({query})`     | FTS5/BM25 over title, aliases, and body; all words first, then any non-stopword      |
 | `mode: "all"`                 | Every word token must match; never falls back                                        |
 | `mode: "any"`                 | Any word token may match                                                             |
 | `mode: "phrase"`              | Word tokens in order and adjacent within one field                                   |
@@ -30,8 +30,10 @@ ranked search never proves that an inventory is complete.
 | `timeField`, `since`, `until` | Date filters applied before ranking; see [Dates and Chronicle](#dates-and-chronicle) |
 
 A search without `mode` that no record matches on every word retries once with
-any word. Its response reports `queryMode: "any"`; agent results include
-`queryMode: "any"` whenever any-word matching ran. A replacement found through
+any word other than common English stopwords such as `where`, `is`, and `the`.
+A default query made up entirely of stopwords returns no hits; explicit modes
+remain literal. The fallback reports `queryMode: "any"` in both Gateway and agent
+results. A replacement found through
 [superseded wording](#superseded-wording) counts as a match, so it prevents the
 retry. With Knowledge selected, agents search with `knowledge_grep`. The shared
 Gateway API, `memory.search`, has no `mode` parameter and uses the same fallback.

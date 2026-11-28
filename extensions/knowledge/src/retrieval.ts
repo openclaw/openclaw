@@ -15,6 +15,7 @@ import { effectiveRecord, mergeRedirects, referenceIds } from "./merge.js";
 import type { LoadedRecord } from "./model.js";
 import { expandTypes } from "./ontology.js";
 import { queryFreshness } from "./query-freshness.js";
+import { KEYWORD_STOPWORDS } from "./recall-keyword.js";
 import {
   SearchInput,
   LookupInput,
@@ -238,18 +239,23 @@ export function exactLookup(
 }
 
 /** Deliberately literal modes, never raw FTS syntax/SQL/regex. Punctuation is token separation. */
-export function keywordExpression(input: SearchInput): string {
+export function keywordExpression(input: SearchInput, mode = input.mode): string {
   if (!Check(SearchInput, input)) {
     throw new Error("Invalid keyword search input.");
   }
-  const tokens = input.query.match(/[\p{L}\p{N}\p{M}]+/gu) ?? [];
+  let tokens: string[] = input.query.match(/[\p{L}\p{N}\p{M}]+/gu) ?? [];
   if (!tokens.length || tokens.length > 64) {
     throw new Error("Keyword search requires 1–64 word tokens. Use exact lookup for a name or ID.");
   }
-  const build = (words: readonly string[]) =>
-    input.mode === "phrase"
-      ? `"${words.join(" ")}"`
-      : words.map((t) => `"${t}"`).join(input.mode === "any" ? " OR " : " AND ");
+  if (input.mode === undefined) {
+    const content = tokens.filter((word) => !KEYWORD_STOPWORDS.has(word.toLowerCase()));
+    if (!content.length) {
+      return '""'; // An empty FTS5 phrase matches no records.
+    }
+    if (mode === "any") {
+      tokens = content;
+    }
+  }
   // FTS5's unicode61 tokenizer does no canonical normalization, so composed (NFC)
   // and decomposed (NFD) spellings of a word index as distinct terms. The index and
   // snippet offsets keep stored text verbatim, so in all/any modes each word matches
@@ -263,11 +269,11 @@ export function keywordExpression(input: SearchInput): string {
   // need the cross product of per-word spellings; a uniformly spelled phrase query
   // can miss a record that mixes NFC and NFD across its words — a rare accepted gap.
   const spellingsOf = (t: string) => [...new Set([t, t.normalize("NFC"), t.normalize("NFD")])];
-  if (input.mode === "phrase") {
+  if (mode === "phrase") {
     const alternatives = [
       ...new Set(
         [tokens, tokens.map((t) => t.normalize("NFC")), tokens.map((t) => t.normalize("NFD"))].map(
-          build,
+          (words) => `"${words.join(" ")}"`,
         ),
       ),
     ];
@@ -278,7 +284,7 @@ export function keywordExpression(input: SearchInput): string {
       const forms = spellingsOf(t);
       return forms.length === 1 ? `"${forms[0]!}"` : `(${forms.map((f) => `"${f}"`).join(" OR ")})`;
     })
-    .join(input.mode === "any" ? " OR " : " AND ");
+    .join(mode === "any" ? " OR " : " AND ");
 }
 
 // Porter folds English inflections (deployed, deploying, deploys -> deploy) on both
@@ -491,7 +497,7 @@ function temporaryCorpus(db: DatabaseSync, name: string, records: LoadedRecord[]
 
 /** Called only inside the storage authority/identity fence, using the latest validated snapshot.
  * A search without an explicit mode that no record matches on every word retries once
- * with any word and reports `queryMode: "any"`; explicit `mode: "all"` stays strict. */
+ * with any non-stopword and reports `queryMode: "any"`; explicit `mode: "all"` stays strict. */
 export function keywordSearch(
   db: DatabaseSync,
   data: Snapshot,
@@ -554,10 +560,10 @@ export function keywordSearch(
             [r.title, r.body, ...(r.metadata.aliases ?? [])].some((v) => v.includes(marker)),
           )
         );
-        const fieldExpression = keywordExpression({
-          ...input,
-          mode: input.mode === "phrase" ? "phrase" : "any",
-        });
+        const fieldExpression = keywordExpression(
+          input,
+          input.mode === "phrase" ? "phrase" : "any",
+        );
         const count = db.prepare(`SELECT count(*) AS n FROM ${corpus} WHERE ${corpus} MATCH ?`);
         let expression = strictExpression;
         let total = Number(count.get(expression)!.n);

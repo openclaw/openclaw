@@ -13,7 +13,7 @@ export type KeywordExcerptPolicy = {
 /** One page the keyword shortlist may offer: its gate entry plus the text it is matched on. */
 export type KeywordPage = { entry: GateEntry; body: string };
 
-const STOP = new Set(
+export const KEYWORD_STOPWORDS: ReadonlySet<string> = new Set(
   "a an and are as at be been can did do does for from had has have how i in is it me my of on or our should that the their them there these they this to us was we were what when where which who why with would you your please tell about now".split(
     " ",
   ),
@@ -25,7 +25,7 @@ const TITLE_BOOST = 4;
 /** Normalized word token with light stemming, or undefined for stopwords and one-letter words. */
 function keywordToken(word: string): string | undefined {
   const token = word.normalize("NFKC").toLowerCase();
-  if (/^.?$/su.test(token) || STOP.has(token)) {
+  if (/^.?$/su.test(token) || KEYWORD_STOPWORDS.has(token)) {
     return undefined;
   }
   return stem(token);
