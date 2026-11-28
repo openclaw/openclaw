@@ -5,11 +5,16 @@ import { afterEach, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
 import { bindModelLlmRuntime } from "./model-runtime-binding.js";
 import { withModelTransportContext } from "./model-transport-context.js";
 import { admitProviderRateLimitStream } from "./provider-rate-limit-stream.js";
-import { withProviderRateLimitRetryDeadline } from "./provider-rate-limit.js";
+import {
+  getProviderRateLimitState,
+  withProviderRateLimitRetryDeadline,
+} from "./provider-rate-limit.js";
 import { complete, completeSimple, streamSimple } from "./stream.js";
 import { createAssistantMessageEventStream } from "./utils/event-stream.js";
 
@@ -358,6 +363,38 @@ it("returns excessive shared floors to failover, including a floor extended whil
   await expect(uncapped).resolves.toEqual(message);
   expect(providerStream).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(60_000);
+});
+
+it("sends the next request when a provider takes over an existing rate-limit window", async () => {
+  vi.useFakeTimers();
+  const { model, message, providerStream, run } = createCompletionRuntime();
+  const options = { apiKey: "synthetic-availability-key" };
+  providerStream.mockImplementationOnce(() =>
+    responseStream({
+      ...message,
+      stopReason: "error",
+      errorMessage: "429 Too Many Requests",
+      errorBody: JSON.stringify({ headers: { "retry-after": "3120" } }),
+    }),
+  );
+  await expect(run(options)).resolves.toMatchObject({ stopReason: "error" });
+  await expect(run(options)).rejects.toMatchObject({ reason: "rate_limit", status: 429 });
+  expect(providerStream).toHaveBeenCalledOnce();
+  expect(getProviderRateLimitState(model, options)?.retryAt).toBe(Date.now() + 3_120_000);
+
+  const managed = createPluginMetadataSnapshotFixture({
+    plugins: [{ id: "gateway", providers: [model.provider], managesOwnAvailability: true }],
+  });
+  await withPluginMetadataSnapshotScope(
+    managed,
+    async () => {
+      await expect(run(options)).resolves.toEqual(message);
+      expect(providerStream).toHaveBeenCalledTimes(2);
+      expect(getProviderRateLimitState(model, options)).toBeUndefined();
+    },
+    { trustConfigIdentity: true },
+  );
+  await vi.advanceTimersByTimeAsync(3_180_000);
 });
 
 it("bounds retry admission while shared floors extend and interactive peers remain queued", async () => {

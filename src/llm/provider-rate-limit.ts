@@ -6,6 +6,7 @@ import {
   hasOrganizationTpmRateLimitEvidence,
   resolveRetryAfterMs,
 } from "../agents/failover/retry-evidence.js";
+import { resolveProviderManagesOwnAvailability } from "../plugins/provider-availability-policy.js";
 import { AsyncContext } from "../shared/async-context.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -216,13 +217,19 @@ function requestIdentity(
   return { scope, key };
 }
 
+function getApplicableGate(provider: string, key: string): Gate | undefined {
+  const gate = gates.get(key);
+  // A plugin can take over availability while a previously observed window is still active.
+  return gate && resolveProviderManagesOwnAvailability(provider) ? undefined : gate;
+}
+
 /** Known rate limits remain saturated through the gate's recovery window. */
 export function getProviderRateLimitState(
   model: Pick<Model, "id" | "provider" | "baseUrl" | "headers">,
   options?: Pick<SimpleStreamOptions, "apiKey" | "headers">,
 ): { retryAt: number; expiresAt: number } | undefined {
   const { key } = requestIdentity(model, options);
-  const gate = key ? gates.get(key) : undefined;
+  const gate = key ? getApplicableGate(model.provider, key) : undefined;
   if (!gate) {
     return undefined;
   }
@@ -256,7 +263,7 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
       priority: "interactive" | "background" = "background",
     ): Promise<void> {
       signal?.throwIfAborted();
-      const gate = key && !inherited ? gates.get(key) : undefined;
+      const gate = key && !inherited ? getApplicableGate(model.provider, key) : undefined;
       if (!gate) {
         if (retryDeadline && !inherited) {
           retryDeadline.pendingUntil = undefined;
