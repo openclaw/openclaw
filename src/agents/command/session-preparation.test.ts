@@ -181,6 +181,43 @@ it.each([
 );
 
 it.each([
+  { opts: { verboseOnce: "off" }, verboseOverride: undefined, saved: "full" },
+  { opts: {}, verboseOverride: "off" as const, saved: "off" },
+])("runs at verbose off and saves $saved for $opts", async ({ opts, verboseOverride, saved }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const sessionKey = "agent:main:shared-voice";
+    const scope = {
+      agentId: "main",
+      sessionKey,
+      storePath: path.join(state.sessionsDir(), "sessions.json"),
+    };
+    const initial = (await replaceSessionEntry(scope, {
+      sessionId: "shared-session",
+      updatedAt: 1,
+      verboseLevel: "full",
+    }))!;
+
+    const prepared = await prepare({
+      opts: { message: "hello", ...opts },
+      sessionEntry: initial,
+      sessionStore: { [sessionKey]: initial },
+      sessionKey,
+      sessionId: initial.sessionId,
+      storePath: scope.storePath,
+      executionWorkspaceDir: state.workspaceDir,
+      suppressVisibleSessionEffects: false,
+      sessionStateActor: { actorType: "human" },
+      verboseOverride,
+      persistedVerbose: "full",
+    });
+
+    expect(prepared.resolvedVerboseLevel).toBe("off");
+    expect(getAgentRunContext(preparedRunId)?.verboseLevel).toBe("off");
+    expect(loadSessionEntry({ ...scope, readConsistency: "latest" })?.verboseLevel).toBe(saved);
+  });
+});
+
+it.each([
   { internal: false, intake: "public" },
   { internal: true, intake: "public" },
   { internal: false, intake: "coordination" },

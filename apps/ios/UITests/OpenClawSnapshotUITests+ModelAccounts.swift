@@ -2,6 +2,102 @@ import XCTest
 
 /// Provider accounts in the model sheet, against the app's local sign-in fixture (no real provider).
 extension OpenClawSnapshotUITests {
+    func testProviderDetailShowsAccessStatusModelsAndSupportedActions() throws {
+        for appearance in ["light", "dark"] {
+            launchApp(for: Self.chatScreenshotTarget, appearance: appearance, additionalArguments: [
+                "--openclaw-model-sign-in-fixture", "provider-detail",
+            ])
+            let app = try XCTUnwrap(self.app)
+            let chip = inlineModelChip(in: app)
+            XCTAssertTrue(chip.waitForExistence(timeout: 8))
+            chip.tap()
+            expandModelPickerSheet(in: app)
+            pickerSignInRow(in: app).tap()
+            for (id, title) in [("clawrouter", "ClawRouter"), ("claude-cli", "Claude Code"), ("anthropic", "Claude")] {
+                let provider = app.buttons["model-auth-provider-\(id)"]
+                XCTAssertTrue(provider.waitForExistence(timeout: 5))
+                provider.tap()
+                XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 5))
+                XCTAssertTrue(app.staticTexts["Status"].exists || app.staticTexts.matching(
+                    NSPredicate(format: "label CONTAINS %@", "Status")).firstMatch.exists, app.debugDescription)
+                XCTAssertTrue(app.staticTexts["Models for this chat"].exists, app.debugDescription)
+                let listedModel = app.staticTexts["Claude Sonnet 4"].firstMatch
+                XCTAssertTrue(listedModel.exists, app.debugDescription)
+                XCTAssertFalse(app.buttons["Claude Sonnet 4"].exists)
+                attachScreenshot(named: "provider-\(id)-\(appearance)")
+                if id == "clawrouter", appearance == "light" {
+                    app.buttons["provider-check-connection"].tap()
+                    XCTAssertTrue(app.staticTexts["Provider responded."].waitForExistence(timeout: 5))
+                    app.buttons["provider-set-key"].tap()
+                    let field = app.secureTextFields["provider-new-key"]
+                    XCTAssertTrue(field.waitForExistence(timeout: 5))
+                    field.tap()
+                    field.typeText("fixture-key")
+                    app.buttons["Save API key"].tap()
+                    XCTAssertTrue(app.staticTexts["API key saved."].waitForExistence(timeout: 5))
+                } else if id == "claude-cli" {
+                    XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Max")).firstMatch
+                        .exists)
+                    XCTAssertFalse(app.buttons["provider-set-key"].exists)
+                } else if id == "anthropic" {
+                    let remove = app.buttons["model-auth-remove-anthropic:default"]
+                    XCTAssertEqual(remove.label, "Remove access token")
+                    XCTAssertGreaterThan(remove.frame.minY, listedModel.frame.maxY)
+                }
+                app.buttons["BackButton"].tap()
+            }
+        }
+    }
+
+    func testProviderDetailKeepsOtherSignInsWhenRemovingOne() throws {
+        launchApp(for: Self.chatScreenshotTarget, additionalArguments: [
+            "--openclaw-model-sign-in-fixture", "provider-detail-actions", "--openclaw-model-sign-in-wait", "0",
+        ])
+        let app = try XCTUnwrap(self.app)
+        let chip = inlineModelChip(in: app)
+        XCTAssertTrue(chip.waitForExistence(timeout: 8))
+        chip.tap()
+        expandModelPickerSheet(in: app)
+        pickerSignInRow(in: app).tap()
+        app.buttons["model-auth-provider-anthropic"].tap()
+        let remove = app.buttons["model-auth-remove-anthropic:default"]
+        if !remove.isHittable { app.swipeUp() }
+        XCTAssertTrue(remove.waitForExistence(timeout: 5))
+        remove.tap()
+        let confirm = app.buttons["model-auth-confirm-removal"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        let cancel = app.buttons["Cancel"].firstMatch
+        if cancel.exists, cancel.isHittable {
+            cancel.tap()
+        } else {
+            // The adaptive confirmation may present as a popover with an outside-tap dismissal.
+            let backdrop = app.descendants(matching: .any)["PopoverDismissRegion"].firstMatch
+            XCTAssertTrue(backdrop.waitForExistence(timeout: 5))
+            backdrop.coordinate(withNormalizedOffset: CGVector(dx: 0.05, dy: 0.85)).tap()
+        }
+        XCTAssertTrue(confirm.waitForNonExistence(timeout: 5))
+        XCTAssertTrue(remove.exists)
+        let option = app.buttons["model-auth-option-anthropic-oauth"]
+        if !option.isHittable { app.swipeDown() }
+        option.tap()
+        let proceed = app.buttons["model-auth-continue"]
+        XCTAssertTrue(proceed.waitForExistence(timeout: 5))
+        if !proceed.isHittable {
+            app.swipeUp()
+        }
+        proceed.tap()
+        let second = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Work account"))
+            .firstMatch
+        XCTAssertTrue(second.waitForExistence(timeout: 10), app.debugDescription)
+        if !remove.isHittable { app.swipeUp() }
+        remove.tap()
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5))
+        confirm.tap()
+        XCTAssertTrue(remove.waitForNonExistence(timeout: 5), app.debugDescription)
+        if !second.isHittable { app.swipeDown() }
+        XCTAssertTrue(second.exists, "Removing the token must leave the other account in place")
+    }
+
     func testProviderAccountsOpenFromModelSheetRoot() throws {
         let app = try self.openProviderAccounts()
         XCTAssertTrue(app.buttons["model-auth-provider-openai"].exists)
@@ -13,7 +109,7 @@ extension OpenClawSnapshotUITests {
             app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "Sign-in expires"))
                 .firstMatch.waitForExistence(timeout: 5),
             app.debugDescription)
-        // Sign out is hidden until Victor decides to offer it (ChatModelAccountsPolicy.offersSignOut).
+        // There is no provider-wide sign-out button.
         XCTAssertFalse(app.buttons["model-auth-sign-out"].exists)
         self.attachScreenshot(named: "provider-account-expiring")
         // The system back button returns to the accounts page, then to the models.

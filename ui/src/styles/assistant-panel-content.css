@@ -45,6 +45,10 @@ openclaw-home-session > openclaw-chat-pane {
   flex: 1;
 }
 
+openclaw-assistant-panel-content[destination="home"] .chat-context-attachment {
+  display: none;
+}
+
 .assistant-panel-context {
   display: flex;
   align-items: flex-start;

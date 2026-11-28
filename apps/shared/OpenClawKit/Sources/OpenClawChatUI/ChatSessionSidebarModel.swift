@@ -104,9 +104,13 @@ public enum ChatSessionSidebarModel {
             activity: preferred)
     }
 
+    /// Mirrors `src/shared/session-activity-timestamp.ts`: metadata is only a legacy fallback.
     static func activityTimestamp(for session: OpenClawChatSessionEntry) -> Double? {
-        let timestamp = session.lastActivityAt ?? session.lastInteractionAt ?? session.updatedAt
-        return timestamp.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+        func positive(_ value: Double?) -> Double? {
+            value.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+        }
+        let conversation = max(positive(session.lastActivityAt) ?? 0, positive(session.lastInteractionAt) ?? 0)
+        return conversation > 0 ? conversation : positive(session.updatedAt) ?? positive(session.createdAt)
     }
 
     static func messagePreview(from messages: [OpenClawChatMessage]) -> String? {
@@ -157,10 +161,21 @@ public enum ChatSessionSidebarModel {
     }
 
     /// Rows with a parent's sub-sessions left out unless `showsChildren` says they are open.
-    public static func rows(_ nodes: [Node], depth: Int = 0, showsChildren: (Node) -> Bool) -> [Row] {
-        nodes.flatMap { node in
+    public static func rows(
+        _ nodes: [Node], depth: Int = 0, byConversationActivity: Bool = false, showsChildren: (Node) -> Bool) -> [Row]
+    {
+        let siblings = byConversationActivity ? nodes.sorted { lhs, rhs in
+            let left = self.activityTimestamp(for: lhs.session) ?? 0
+            let right = self.activityTimestamp(for: rhs.session) ?? 0
+            return left == right ? lhs.id.utf16.lexicographicallyPrecedes(rhs.id.utf16) : left > right
+        } : nodes
+        return siblings.flatMap { node in
             [Row(node: node, depth: depth)] + (showsChildren(node)
-                ? self.rows(node.children, depth: depth + 1, showsChildren: showsChildren)
+                ? self.rows(
+                    node.children,
+                    depth: depth + 1,
+                    byConversationActivity: byConversationActivity,
+                    showsChildren: showsChildren)
                 : [])
         }
     }

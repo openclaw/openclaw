@@ -2,16 +2,23 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { expectDefined } from "@openclaw/normalization-core";
 import * as processIdentity from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { installPrivateUpdateHandoffWorker } from "../../../test/helpers/private-update-handoff-store.js";
 import * as serviceMembership from "../../daemon/service-process-membership.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import * as ancestry from "../../infra/restart-stale-pids.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-support.js";
+import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
+import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { UpdatePreMutationError } from "./shared.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import {
   formatUpdateAncestryBlockMessage,
@@ -19,6 +26,8 @@ import {
   handoffUpdateFromGateway,
 } from "./update-command-handoff.js";
 import { createHandoffLifetimePreload } from "./update-command-handoff.test-support.js";
+import { createUpdateCommandFailureResult } from "./update-command-result.js";
+import { completeUpdateCommandRun } from "./update-command-run.js";
 
 const UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE = 75;
 
@@ -281,3 +290,138 @@ it("adds the chat handoff advice only to ancestry blocks", () => {
     "service inspection unavailable",
   );
 });
+
+it.runIf(process.platform === "darwin").each([
+  [
+    "engine incompatibility",
+    "Node 24.21.0 is unsupported; OpenClaw requires >=24.22.1 <25 || >=26.12.1.\nnpm can finish installing without its preinstall check.\nRe-run the installer.\nOn Windows, use the PowerShell installer.\nOr with nvm: nvm install 26 && nvm use 26.\nThen retry openclaw update.",
+    "Node 24.21.0 is unsupported",
+  ],
+  [
+    "oversized crash output",
+    `${"discarded startup noise".repeat(500)}\nError: helper startup failed: EACCES token=fixture-private-token\nRetry after correcting file permissions.`,
+    "helper startup failed: EACCES",
+  ],
+  ["missing installed recovery runtime", null, "installed runtime is unavailable"],
+] as const)(
+  "retains bounded startup diagnostics from the live CLI handoff: %s",
+  async (kind, output, expected) => {
+    const root = await fs.realpath(await tempDirs.make("openclaw-cli-handoff-diagnostics-"));
+    const control = await fs.realpath(await tempDirs.make("openclaw-cli-handoff-control-"));
+    const entrypoint = path.join(root, "dist", "index.mjs");
+    const managerLog = path.join(control, "manager.log");
+    const node = resolveTestNodeExecPath();
+    await fs.mkdir(path.dirname(entrypoint));
+    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
+    await fs.writeFile(entrypoint, "throw new Error('unexpected updater');");
+    await fs.writeFile(
+      path.join(root, "launchctl"),
+      `#!${node}\nimport fs from "node:fs";\nfs.appendFileSync(${JSON.stringify(managerLog)}, "called\\n");\nprocess.exit(61);\n`,
+      { mode: 0o755 },
+    );
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(control);
+    vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+      pids: new Set([process.pid, process.ppid]),
+      complete: true,
+    });
+    const worker = installPrivateUpdateHandoffWorker(control);
+    if (output !== null) {
+      const prepare = expectDefined(worker.getMockImplementation(), "private lease worker");
+      worker.mockImplementation(async (options) => {
+        const store = await prepare(options);
+        const stage = store.stageRuntime.bind(store);
+        store.stageRuntime = async (directory) => {
+          const files = await stage(directory);
+          await fs.writeFile(
+            expectDefined(files[0], "staged handoff runtime"),
+            `process.stderr.write(${JSON.stringify(output)}); process.exit(1);`,
+          );
+          return files;
+        };
+        return store;
+      });
+    }
+    await withEnvAsync(
+      {
+        HOME: root,
+        OPENCLAW_HOME: root,
+        OPENCLAW_STATE_DIR: root,
+        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.fixture",
+        OPENCLAW_UPDATE_RUN_HANDOFF: undefined,
+        OPENCLAW_SERVICE_SUPERVISOR: undefined,
+        TMPDIR: control,
+        TMP: control,
+        TEMP: control,
+        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+      async () => {
+        const env = { ...process.env };
+        try {
+          const { runId } = createUpdateRun({ trigger: "cli" }, { env });
+          const run = { runId, env };
+          const stopProgress = vi.fn();
+          let failure: unknown;
+          try {
+            await handoffUpdateFromGateway({
+              state: {
+                ...callerService,
+                env,
+                runtime: { status: "running", pid: process.ppid },
+              },
+              root,
+              mode: "npm",
+              opts: { json: true, run },
+              timeoutMs: 10_000,
+              nodeRunner: node,
+              stopProgress,
+            });
+          } catch (error) {
+            failure = error;
+          }
+          expect(failure).toBeInstanceOf(UpdatePreMutationError);
+          expect(failure).toMatchObject({ reason: "managed-service-handoff-failed" });
+          expect(stopProgress).toHaveBeenCalledOnce();
+          completeUpdateCommandRun(
+            createUpdateCommandFailureResult({
+              mode: "npm",
+              root,
+              durationMs: 0,
+              failure: { cause: failure },
+            }),
+            run,
+          );
+          const recorded = expectDefined(getUpdateRun(runId, { env }), "recorded CLI failure");
+          expect(recorded).toMatchObject({
+            status: "failed",
+            reason: "managed-service-handoff-failed",
+          });
+          const facts = recorded.steps.flatMap((step) => step.failureFacts ?? []);
+          expect(facts.length).toBeGreaterThan(0);
+          const diagnostics = JSON.stringify(facts);
+          expect(diagnostics).toContain(expected);
+          expect(diagnostics).not.toContain("fixture-private-token");
+          expect(diagnostics).not.toContain("discarded startup noise");
+          expect(facts.every((fact) => (fact.message?.length ?? 0) <= 200)).toBe(true);
+          const report = await prepareUpdateFailureReport(recorded, { env });
+          expect(report.body).toContain("Reason code: managed-service-handoff-failed");
+          expect(report.body).toMatch(
+            /managed update handoff (?:exited before signaling readiness|control input closed)/,
+          );
+          if (kind === "oversized crash output") {
+            expect(report.body).toContain("EACCES");
+          }
+          expect(report.body).not.toContain("fixture-private-token");
+          expect(report.body).not.toContain("discarded startup noise");
+          expect(report.body).not.toContain(root);
+          expect(await fs.readFile(managerLog, "utf8").catch(() => "")).toBe("");
+          expect(await fs.readFile(entrypoint, "utf8")).toBe(
+            "throw new Error('unexpected updater');",
+          );
+        } finally {
+          await closeStateDatabaseForTest();
+        }
+      },
+    );
+  },
+);

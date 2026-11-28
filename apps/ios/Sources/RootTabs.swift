@@ -266,9 +266,7 @@ struct RootTabs: View {
                 .task(id: self.sidebarRefreshID) {
                     guard self.scenePhase == .active else { return }
                     repeat {
-                        async let pins: Void = self.appModel.refreshPersonalSidebarPins()
                         await self.sidebarModel.refresh(appModel: self.appModel)
-                        await pins
                         await self.appModel.refreshPendingApprovalInbox()
                         guard !Task.isCancelled else { return }
                         try? await Task.sleep(for: .seconds(600))

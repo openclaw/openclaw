@@ -228,11 +228,7 @@ function WebPushSection(props: {
   actions: NotificationsSectionProps;
 }) {
   const read = createMemo(() => props.push.read);
-  const authoritativePreferences = createMemo(() => {
-    read();
-    return props.push.preferences;
-  });
-  const [preferences, setPreferences] = createOptimistic(() => authoritativePreferences());
+  const [preferences, setPreferences] = createOptimistic(() => props.push.preferences);
   const [saving, setSaving] = createOptimistic(false, { equals: false });
   const commandOutcome = createMemo(() => props.push.command);
   const present = action(function* (
@@ -248,7 +244,7 @@ function WebPushSection(props: {
       );
     }
     yield completion;
-    void refresh(authoritativePreferences);
+    void refresh(preferences);
   });
   const submit = (
     completion: Promise<void> | undefined,
@@ -393,13 +389,14 @@ function WebPushSection(props: {
       </NotificationSection>
       <Errored fallback={renderWebPushError}>
         <Loading on={props.push.read} fallback={null}>
-          <Show when={props.push.canReadPreferences ? latest(preferences) : (read(), undefined)}>
+          {(latest(read), null)}
+          <Show when={props.push.canReadPreferences && latest(preferences)}>
             {(current) => (
               <div class="settings-stack">
                 <Show when={current().durableIdentity}>
                   <UserNotificationPreferences
                     submission={props.push.agentSelections?.user}
-                    writePending={busy() || isPending(authoritativePreferences)}
+                    writePending={busy() || isPending(read)}
                     presentationScope={props.actions.presentationRetired()}
                     agentCatalog={props.actions.notificationAgents}
                     onLoadAgents={props.actions.onNotificationAgentsLoad}
@@ -421,7 +418,7 @@ function WebPushSection(props: {
                 </Show>
                 <DeviceNotificationPreferences
                   submission={props.push.agentSelections?.device}
-                  writePending={busy() || isPending(authoritativePreferences)}
+                  writePending={busy() || isPending(read)}
                   presentationScope={props.actions.presentationRetired()}
                   agentCatalog={props.actions.notificationAgents}
                   onLoadAgents={props.actions.onNotificationAgentsLoad}

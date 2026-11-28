@@ -206,6 +206,7 @@ async function settleRunFromTrial(trial: Trial | null, prefix = resolvePrefix())
             reason: `${outcome.reason ?? "The new version did not start"}; v${VERSION} is still running`,
           },
     );
+    wakeUpdateRunWatcher(trial.runId);
     if (finished.steps.some((step) => step.step === "notice:ack" && step.status === "completed")) {
       const { createUpdateRunNotifier } = await import("../gateway/update-run-notice.runtime.js");
       await (

@@ -354,6 +354,7 @@ export function useMenuMachine(
         onPointerDown: (event: PointerEvent) => {
           if (
             disabled ||
+            event.pointerType === "touch" ||
             event.button === 2 ||
             (event.button === 0 && event.ctrlKey && /^Mac/i.test(navigator.platform))
           ) {

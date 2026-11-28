@@ -17,7 +17,6 @@ const sessionKey = "agent:research:dashboard:12345678-90ab-cdef-1234-567890abcde
 const historyText = "Authoritative selected conversation.";
 const bulkMethods = ["sessions.list", "sessions.catalog.list"];
 const secondaryMethods = [
-  "taskSuggestions.list",
   "progressCard.get",
   "sessions.groups.list",
   "sessions.groups.defaults",
@@ -30,17 +29,6 @@ const ownedSession = (key: string, label: string, updatedAt = 1) => ({
   kind: "direct",
   owner: { actor: { type: "human", id: "reader" } },
 });
-const task = (id: string, title: string, createdAt = Date.now()) => ({
-  id,
-  title,
-  createdAt,
-  sessionKey,
-  agentId: "research",
-  cwd: "/workspace/client",
-  prompt: "Review the current rollout.",
-  tldr: "A synthetic suggestion.",
-});
-
 async function installStartupGateway(page: Page) {
   const config = { tools: { swarm: { enabled: true } } };
   return installMockGateway(page, {
@@ -53,7 +41,6 @@ async function installStartupGateway(page: Page) {
     featureMethods: [
       ...defaultControlUiFeatureMethods,
       "sessions.catalog.list",
-      "taskSuggestions.dismiss",
       ...secondaryMethods,
     ],
     gatewayBootId: "startup-proof-boot",
@@ -63,8 +50,6 @@ async function installStartupGateway(page: Page) {
     methodResponses: {
       "agents.list": makeBootRoster({ agents: [{ id: "main" }, { id: "research" }] }),
       "sessions.catalog.list": { catalogs: [] },
-      "taskSuggestions.list": { suggestions: [] },
-      "taskSuggestions.dismiss": { taskId: "explicit-suggestion", dismissed: true },
       "progressCard.get": { card: null },
       "mentions.list": { gatewayInstanceId: "startup-proof-boot", revision: 1, items: [] },
       "config.get": {
@@ -199,41 +184,6 @@ suite.define(() => {
         await expectProgress(page, "Resumed progress");
         // One coalesced follow-up reconciles events received during the pending snapshot.
         expect(await gateway.getRequests("progressCard.get")).toHaveLength(2);
-      });
-    },
-  );
-
-  it.each([false, true])(
-    "reconciles an explicit suggestion refresh after an event while chat remains held (hidden: %s)",
-    async (hidden) => {
-      await withPendingChat(async (page, gateway) => {
-        const suggestion = task("explicit-suggestion", "Dismiss this suggestion");
-        await gateway.emitGatewayEvent("task.suggestion", { action: "created", suggestion });
-        await gateway.deferNext("taskSuggestions.list");
-        await page.locator(".task-suggestion__dismiss").click();
-        await gateway.waitForRequest("taskSuggestions.list");
-        if (hidden) {
-          await setVisibility(page, "hidden");
-        }
-        const latest = {
-          ...suggestion,
-          id: "latest-suggestion",
-          title: "Latest suggestion remains",
-        };
-        await gateway.setMethodResponse("taskSuggestions.list", { suggestions: [latest] });
-        await gateway.emitGatewayEvent("task.suggestion", {
-          action: "created",
-          suggestion: latest,
-        });
-        if (hidden) {
-          expect(await gateway.getRequests("taskSuggestions.list")).toHaveLength(1);
-          await setVisibility(page, "visible");
-        }
-        await gateway.waitForRequest("taskSuggestions.list", { after: 1 });
-        await gateway.resolveDeferred("taskSuggestions.list", { suggestions: [] });
-        await page.getByText(latest.title, { exact: true }).waitFor();
-        expect(await page.getByText(historyText, { exact: true }).count()).toBe(0);
-        await settleStartup(page, gateway);
       });
     },
   );

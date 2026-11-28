@@ -50,6 +50,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { parseClawRouterPool, type ClawRouterPoolResult } from "./pool.js";
 import {
   buildClawRouterProviderConfig,
+  CLAWROUTER_MODEL_NOT_OFFERED_CODE,
   decisionCapabilities,
   CLAWROUTER_REASONING_EFFORT_LEVELS,
   normalizeClawRouterReasoningEfforts,
@@ -567,13 +568,18 @@ export default defineSingleProviderPluginEntry({
     return {
       label: "ClawRouter",
       docsPath: "/providers/clawrouter",
-      // The session's empty upstream grant cannot recover by retrying the shared router key.
-      classifyFailoverReason: ({ provider, status, errorMessage }) =>
-        provider?.trim().toLowerCase() === PROVIDER_ID &&
-        status === 400 &&
-        /\bcredit balance is too low\b/i.test(errorMessage)
+      classifyFailoverReason: ({ provider, status, code, errorMessage }) => {
+        // The key's catalog can't serve this model; other models and fallbacks still can.
+        if (code === CLAWROUTER_MODEL_NOT_OFFERED_CODE) {
+          return "model_not_found";
+        }
+        // The session's empty upstream grant cannot recover by retrying the shared router key.
+        return provider?.trim().toLowerCase() === PROVIDER_ID &&
+          status === 400 &&
+          /\bcredit balance is too low\b/i.test(errorMessage)
           ? "route_unavailable"
-          : undefined,
+          : undefined;
+      },
       manifestAuth: {
         hint: "Credential-scoped access to approved models and budgets",
         noteTitle: "ClawRouter",
@@ -700,10 +706,9 @@ export default defineSingleProviderPluginEntry({
         ctx.modelApi === "google-generative-ai"
           ? googleReplay.sanitizeReplayHistoryAsync?.(ctx)
           : undefined,
-      resolveReasoningOutputMode: (ctx) =>
-        ctx.modelApi === "google-generative-ai"
-          ? googleReplay.resolveReasoningOutputMode?.(ctx)
-          : undefined,
+      // GenerateContent already separates native thought Parts from answer text.
+      resolveReasoningOutputMode: ({ modelApi }) =>
+        modelApi === "google-generative-ai" ? "native" : undefined,
       resolveThinkingProfile: resolveClawRouterThinkingProfile,
       normalizeToolSchemas: (ctx) => resolveToolFamily(ctx.modelId ?? "").normalizeToolSchemas(ctx),
       inspectToolSchemas: (ctx) => resolveToolFamily(ctx.modelId ?? "").inspectToolSchemas(ctx),

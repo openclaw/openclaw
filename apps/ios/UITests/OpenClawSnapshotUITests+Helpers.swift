@@ -79,6 +79,7 @@ extension OpenClawSnapshotUITests {
         for target: ScreenshotTarget,
         appearance: String? = "dark",
         screenshotMode: Bool = true,
+        initialSidebarVisible: Bool = false,
         additionalArguments: [String] = [])
     {
         self.terminateCurrentApp()
@@ -87,6 +88,7 @@ extension OpenClawSnapshotUITests {
             for: target,
             appearance: appearance,
             screenshotMode: screenshotMode,
+            initialSidebarVisible: initialSidebarVisible,
             additionalArguments: additionalArguments)
         app.launch()
         self.app = app
@@ -107,6 +109,7 @@ extension OpenClawSnapshotUITests {
         for target: ScreenshotTarget,
         appearance: String?,
         screenshotMode: Bool,
+        initialSidebarVisible: Bool = false,
         additionalArguments: [String]) -> XCUIApplication
     {
         let app = XCUIApplication()
@@ -117,7 +120,7 @@ extension OpenClawSnapshotUITests {
             "--openclaw-initial-destination",
             target.initialDestination,
             "--openclaw-sidebar-visibility",
-            "hidden",
+            initialSidebarVisible ? "visible" : "hidden",
             "--openclaw-ui-test-readiness",
         ]
         if screenshotMode {
@@ -369,7 +372,8 @@ extension OpenClawSnapshotUITests {
 
     func startPairedLiveGatewayApp(
         initialTab: String,
-        initialDestination: String) throws -> XCUIApplication
+        initialDestination: String,
+        appearance: String? = nil) throws -> XCUIApplication
     {
         try XCTSkipUnless(
             ProcessInfo.processInfo.environment["OPENCLAW_IOS_LIVE_GATEWAY"] == "1",
@@ -389,6 +393,7 @@ extension OpenClawSnapshotUITests {
             "-AppleLanguages", "(en)",
             "-AppleLocale", "en_US",
         ]
+        if let appearance { app.launchArguments += ["--openclaw-appearance", appearance] }
         app.launch()
         self.app = app
 

@@ -6,6 +6,7 @@ import {
   validateCronStatusParams,
   validateCronUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { captureCronStreamSandboxTarget } from "../../agents/sandbox/stream-context.js";
 import { bindCronSelfRemovalCommitGuard } from "../../cron/active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../cron/agent-id.js";
@@ -55,10 +56,10 @@ import {
   canHumanManageCronJob,
   prepareCronOwnerChange,
 } from "./cron-human-owner.js";
+import { captureCronUpdatedInferenceBinding } from "./cron-inference-account.js";
 import {
   assertValidCronUpdatePatch,
   captureCronCreatorSession,
-  captureCronUpdatedInferenceBinding,
   normalizeCronUpdateRequest,
 } from "./cron-input-validation.js";
 import {
@@ -163,6 +164,19 @@ export const cronHandlers: GatewayRequestHandlers = {
       respondCronJobNotFound(respond, jobId);
       return;
     }
+    // Released clients encode account selection and key recovery as model-only agentTurn patches.
+    // Authorize the original request, but persist only the binding for a system event.
+    const accountOnly =
+      currentJob.payload.kind === "systemEvent" &&
+      patch.payload?.kind === "agentTurn" &&
+      typeof patch.payload.model === "string" &&
+      Object.keys(patch).length === 1 &&
+      Object.keys(patch.payload).length === 2 &&
+      Boolean(currentJob.inferenceBinding || splitTrailingAuthProfile(patch.payload.model).profile);
+    const definitionPatch = accountOnly ? {} : patch;
+    const expectedRevision =
+      p.expectedConfigRevision ??
+      (accountOnly ? resolveCronJobConfigRevision(currentJob) : undefined);
     let assertOwnerSelectionCurrent: (() => void) | undefined;
     try {
       assertOwnerSelectionCurrent = await prepareCronOwnerChange(client, currentJob, patch);
@@ -234,7 +248,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         cfg,
         defaultAgentId: context.cron.getDefaultAgentId(),
         currentJob: jobToUpdate,
-        patch,
+        patch: definitionPatch,
       });
       targetAccess?.release();
       targetAccess = undefined;
@@ -300,7 +314,8 @@ export const cronHandlers: GatewayRequestHandlers = {
         (sourceBound &&
           (requiresStreamExec ||
             patch.enabled === true ||
-            sealed?.executionRevision !== nextSourceRevision))
+            sealed?.executionRevision !== nextSourceRevision ||
+            accountOnly))
       ) {
         operatorSourceExecutionRevision = nextSourceRevision;
         operatorCapture = await captureCronCreatorSession(
@@ -317,6 +332,14 @@ export const cronHandlers: GatewayRequestHandlers = {
           capture: operatorCapture,
           context,
         });
+      }
+      if (
+        accountOnly &&
+        (runtimeAuthority || nextJob.runtimeAuthority || nextJob.runtimeAuthorityRecoveryRequired)
+      ) {
+        throw new TypeError(
+          "This automation’s runtime owns its account; a host account cannot replace it.",
+        );
       }
       inference = runtimeAuthority
         ? undefined
@@ -352,7 +375,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       ...(operatorCapture?.operatorSource
         ? { operatorSource: operatorCapture.operatorSource, operatorSourceExecutionRevision }
         : {}),
-      ...(touchesToolRuntime || narrowsTrustedJob
+      ...((touchesToolRuntime && !accountOnly) || narrowsTrustedJob
         ? {
             scheduledToolPolicy:
               callerScope?.manageAll && !capture
@@ -436,7 +459,7 @@ export const cronHandlers: GatewayRequestHandlers = {
           }
           return context.cron.updateWithPrecondition(
             jobId,
-            patch,
+            definitionPatch,
             async (lockedJob) => {
               if (
                 !cronJobMatchesCallerScope({
@@ -447,11 +470,11 @@ export const cronHandlers: GatewayRequestHandlers = {
               ) {
                 throw new Error(`unknown cron job id: ${jobId}`);
               }
-              if (p.expectedConfigRevision !== undefined) {
+              if (expectedRevision !== undefined) {
                 const actualConfigRevision = resolveCronJobConfigRevision(lockedJob);
-                if (actualConfigRevision !== p.expectedConfigRevision) {
+                if (actualConfigRevision !== expectedRevision) {
                   throw new CronJobConfigRevisionConflictError(
-                    p.expectedConfigRevision,
+                    expectedRevision,
                     actualConfigRevision,
                   );
                 }

@@ -26,6 +26,7 @@ import { assertParticipationRuntime } from "../../agents/participation-ceiling.j
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { followsSessionInferenceAccount } from "../../cron/inference-binding.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -296,8 +297,13 @@ export async function runCliFallbackCandidate(
                   : undefined,
             )
           : await resolveLiveProfile();
-        if (turn.followupRun.run.scheduledAutomation && !scheduledInference && authProfileId) {
+        const needsRecordedAccount =
+          turn.followupRun.run.scheduledAutomation &&
+          !scheduledInference &&
+          !followsSessionInferenceAccount(turn.followupRun.run.scheduledAutomation.job);
+        if (needsRecordedAccount && authProfileId) {
           throw createUnrecordedScheduledAccountRefusal({
+            jobId: turn.followupRun.run.scheduledAutomation?.job.id,
             runtime: params.cliExecutionProvider,
             modelRef: `${params.provider}/${params.model}`,
             profileId: authProfileId,
@@ -536,10 +542,7 @@ export async function runCliFallbackCandidate(
                   scheduledInference.assertCurrent(params.provider);
                 }
               : undefined,
-            nativeAuthOnly:
-              turn.followupRun.run.scheduledAutomation && !params.scheduledInference
-                ? true
-                : undefined,
+            nativeAuthOnly: needsRecordedAccount ? true : undefined,
             mediaImageLayout: params.currentTurnImages.mediaImageLayout,
             messageChannel: turn.followupRun.originatingChannel,
             messageProvider: hookMessageProvider,

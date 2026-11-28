@@ -23,7 +23,6 @@ function installControlUiPaneRuntimeTestAdapter() {
       "state",
       "chatState",
       "context",
-      "taskSuggestions",
       "catalogMessages",
       "loadingOlder",
       "historyIntentTimer",

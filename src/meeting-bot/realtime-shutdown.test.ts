@@ -1,6 +1,5 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import type {
@@ -21,6 +20,8 @@ import * as audioFormat from "./realtime-audio-format.js";
 import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.js";
 import { startMeetingRealtimeEngine } from "./realtime-engine.js";
 
+type AgentTurnParams = Parameters<PluginRuntime["agent"]["runCommandFromIngress"]>[0];
+
 let state: OpenClawTestState;
 const spokenResult = {
   success: true,
@@ -35,7 +36,8 @@ async function createFixture(
 ) {
   const sessionKey = "agent:main:subagent:test-meeting:meeting-1";
   let entry: SessionEntry = { sessionId: "synthetic-consult", updatedAt: 1 };
-  const runEmbeddedAgent = vi.fn(async (_params: RunEmbeddedAgentParams) => ({
+  // Meeting consults run as agent turns of the consult session.
+  const runAgentTurn = vi.fn(async (_params: AgentTurnParams) => ({
     payloads: [{ text: "The synthetic answer." }],
     meta: {},
   }));
@@ -64,7 +66,7 @@ async function createFixture(
           return entry;
         },
       },
-      runEmbeddedAgent,
+      runCommandFromIngress: runAgentTurn,
     },
     tts: { textToSpeechTelephony },
   } as unknown as PluginRuntime;
@@ -151,7 +153,7 @@ async function createFixture(
   }
   return {
     handle,
-    runEmbeddedAgent,
+    runAgentTurn,
     textToSpeechTelephony,
     writeOutput: transport.writeOutput,
     sendUserMessage,
@@ -233,7 +235,7 @@ describe("meeting shutdown", () => {
       const playbackStarted = createDeferredCore();
       const secondRunStarted = createDeferredCore();
       const answer = "The synthetic project is ready.";
-      fixture.runEmbeddedAgent
+      fixture.runAgentTurn
         .mockResolvedValueOnce({ payloads: [{ text: answer }], meta: {} })
         .mockImplementationOnce(async () => {
           secondRunStarted.resolve();
@@ -247,7 +249,7 @@ describe("meeting shutdown", () => {
         fixture.transcript("Please give me a project status update.");
         await vi.advanceTimersByTimeAsync(900);
         await playbackStarted.promise;
-        expect(fixture.runEmbeddedAgent).toHaveBeenCalledOnce();
+        expect(fixture.runAgentTurn).toHaveBeenCalledOnce();
         expect(fixture.writeOutput).toHaveBeenCalledOnce();
         fixture.inputAudio(Buffer.alloc(960, 1));
         fixture.transcript(answer);
@@ -256,7 +258,7 @@ describe("meeting shutdown", () => {
         if (isolated) {
           await secondRunStarted.promise;
         }
-        expect(fixture.runEmbeddedAgent).toHaveBeenCalledTimes(isolated ? 2 : 1);
+        expect(fixture.runAgentTurn).toHaveBeenCalledTimes(isolated ? 2 : 1);
         expect(fixture.handle.getHealth().suppressedInputBytes).toBe(isolated ? 0 : 960);
       } finally {
         playback.resolve();
@@ -282,8 +284,8 @@ describe("meeting shutdown", () => {
         await vi.advanceTimersByTimeAsync(900);
         await delivered.promise;
         await setImmediate();
-        expect(fixture.runEmbeddedAgent).toHaveBeenCalledOnce();
-        const run = fixture.runEmbeddedAgent.mock.calls[0]?.[0];
+        expect(fixture.runAgentTurn).toHaveBeenCalledOnce();
+        const run = fixture.runAgentTurn.mock.calls[0]?.[0];
         expect(run?.abortSignal?.aborted).toBe(false);
         expect(
           engine === "transcription" ? fixture.textToSpeechTelephony : fixture.sendUserMessage,
@@ -301,10 +303,10 @@ describe("meeting shutdown", () => {
     ["voice", "fatal"],
   ] as const)("cancels the generic agent run from %s %s", async (engine, shutdown) => {
     const fixture = await createFixture(engine);
-    const started = createDeferredCore<RunEmbeddedAgentParams>();
+    const started = createDeferredCore<AgentTurnParams>();
     const settled = createDeferredCore();
-    const result = createDeferredCore<Awaited<ReturnType<typeof fixture.runEmbeddedAgent>>>();
-    fixture.runEmbeddedAgent.mockImplementationOnce((params) => {
+    const result = createDeferredCore<Awaited<ReturnType<typeof fixture.runAgentTurn>>>();
+    fixture.runAgentTurn.mockImplementationOnce((params) => {
       const abort = () => {
         result.reject(params.abortSignal?.reason);
       };

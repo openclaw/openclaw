@@ -27,27 +27,21 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-it("retains post-activation advice from a closed tick scope without reopening the update", async () => {
+it("retains post-completion advice from a closed tick scope without reopening the update", async () => {
   const stateDir = tempDirs.make("openclaw-update-advice-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
   const run = createUpdateRun({ trigger: "control-ui" }, options);
   const finished = finishUpdateRun(run.runId, { status: "succeeded" }, options);
-  const step = "post-activation doctor inspections";
+  const step = "recovery-artifact-cleanup";
   recordUpdateRunStep(run.runId, { step, status: "in_progress" }, options);
   expect(getUpdateRun(run.runId, options)?.steps).not.toContainEqual(
     expect.objectContaining({ step }),
   );
-  for (const name of [
-    step,
-    `warning:${step}`,
-    `warning:${step}:2`,
-    `diagnostic:${step}:2`,
-    `finalize:doctor-lint:${step}`,
-  ]) {
+  for (const name of [step, `warning:${step}`, `warning:${step}:2`, `diagnostic:${step}:2`]) {
     recordUpdateRunStep(
       run.runId,
-      { step: name, status: "completed", detail: "Inspection receipt." },
+      { step: name, status: "completed", detail: "Cleanup receipt." },
       options,
     );
   }
@@ -69,9 +63,9 @@ it("retains post-activation advice from a closed tick scope without reopening th
         await recordUpdateRunStepAsync(
           run.runId,
           {
-            step: `diagnostic:${step}:closed-tick`,
+            step: "plugins",
             status: "completed",
-            detail: "Closed tick inspection receipt.",
+            detail: "Closed tick plugin receipt.",
           },
           options,
         );
@@ -84,7 +78,7 @@ it("retains post-activation advice from a closed tick scope without reopening th
     // The watcher owns the advisory job; stopping it joins that work.
     await watcher.stop();
     expect(getUpdateRun(run.runId, options)?.steps).toContainEqual(
-      expect.objectContaining({ detail: "Closed tick inspection receipt." }),
+      expect.objectContaining({ step: "plugins", detail: "Closed tick plugin receipt." }),
     );
   } finally {
     closed.resolve();
@@ -100,7 +94,7 @@ it("retains post-activation advice from a closed tick scope without reopening th
     finishedAtMs: finished.finishedAtMs,
   });
   expect(retained.steps).not.toContainEqual(expect.objectContaining({ step: "late-non-advisory" }));
-  expect(retained.steps.filter(({ detail }) => detail === "Inspection receipt.")).toHaveLength(5);
+  expect(retained.steps.filter(({ detail }) => detail === "Cleanup receipt.")).toHaveLength(4);
 });
 
 it.each(["completed", "failed"] as const)(

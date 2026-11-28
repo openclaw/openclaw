@@ -562,6 +562,18 @@ describe("openclaw path CLI", () => {
         },
       },
       {
+        label: "an existing quoted Markdown frontmatter key",
+        file: "note.md",
+        before: '---\r\n"title": original\r\n---\r\nBody\r\n',
+        path: "oc://note.md/[frontmatter]/+title",
+        value: "new",
+        expected: {
+          ok: false,
+          reason: "type-mismatch",
+          detail: "frontmatter key 'title' already exists; use set, not insert",
+        },
+      },
+      {
         label: "non-keyed Markdown item with human output",
         file: "AGENTS.md",
         before: "## Tools\n- plain bullet\n",

@@ -47,6 +47,7 @@ export function resolveModelProviderCapabilities(params: {
     const quickApiKeySetup = apiKeySupported && supportsSetupManualSecret(choice);
     const quickApiKeyGroupLabel =
       current?.quickApiKeyGroupLabel ?? (quickApiKeySetup ? choice.groupLabel : undefined);
+    const groupId = current?.groupId ?? choice.groupId?.trim();
     const providerLoginOptions = loginOptions.filter(
       (option) => resolveProvider(option.brandId) === provider,
     );
@@ -55,6 +56,7 @@ export function resolveModelProviderCapabilities(params: {
       apiKeySupported: current?.apiKeySupported === true || apiKeySupported,
       quickApiKeySetup: current?.quickApiKeySetup === true || quickApiKeySetup,
       ...(quickApiKeyGroupLabel ? { quickApiKeyGroupLabel } : {}),
+      ...(groupId ? { groupId } : {}),
       ...(current?.featured || choice.onboardingFeatured === true ? { featured: true } : {}),
       ...(providerLoginOptions.length > 0 ? { loginOptions: providerLoginOptions } : {}),
     });
