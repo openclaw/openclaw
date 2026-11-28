@@ -66,9 +66,7 @@ describe("native session binding generation authority", () => {
   const retain = (assertCurrent?: () => void) =>
     retainNativeSessionGenerationAuthority({ ...params(), assertCurrent });
   const resolve = (
-    overrides: Partial<
-      Parameters<typeof resolvePreparedNativeSessionBinding<typeof binding>>[0]
-    > = {},
+    overrides: Partial<Parameters<typeof resolvePreparedNativeSessionBinding<typeof binding>>[0]>,
   ) =>
     resolvePreparedNativeSessionBinding({
       ...params(),
