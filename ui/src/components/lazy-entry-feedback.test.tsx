@@ -16,7 +16,7 @@ import {
   handleMarkdownTableInteraction,
   releaseMarkdownTables,
 } from "./markdown-tables.ts";
-import { moveSessionFromMenu } from "./session-placement-action.ts";
+import { moveSessionFromMenu } from "./session-menu-placement.ts";
 import { SidebarMenusRenderer } from "./sidebar-menus-render.tsx";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import { createSidebarMenus } from "./sidebar-menus.tsx";

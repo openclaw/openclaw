@@ -11,6 +11,7 @@ import { reserveExternalWindowForDeferredNavigation } from "../open-external-url
 import { readSessionMethodAccess } from "../session-method-access.ts";
 import { showToast } from "../toast.ts";
 import { resolveSessionPreferredFaceForKey, sessionNavigationTarget } from "./route-navigation.ts";
+import { canSplitSessionView } from "./session-split-host.ts";
 
 registerSessionOrganizationSharedEnglish();
 
@@ -21,20 +22,6 @@ export type SessionNavigationTarget<TRouteId extends string> = {
   sourceSessionKey?: string;
   isCurrent: () => boolean;
 };
-
-const sessionSplitHosts = new Map<HTMLElement, () => boolean>();
-
-/** Chat publishes its mounted capability without exposing its DOM to menu callers. */
-export function registerSessionSplitHost(host: HTMLElement, available: () => boolean) {
-  sessionSplitHosts.set(host, available);
-  return () => {
-    sessionSplitHosts.delete(host);
-  };
-}
-
-export function canSplitSessionView(): boolean {
-  return [...sessionSplitHosts].some(([host, available]) => host.isConnected && available());
-}
 
 export function canCopySessionMarkdown(snapshot: ApplicationGatewaySnapshot | undefined): boolean {
   return readSessionMethodAccess(snapshot, {

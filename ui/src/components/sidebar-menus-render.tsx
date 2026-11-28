@@ -28,9 +28,9 @@ import {
 } from "../lib/sessions/session-key.ts";
 import {
   canCopySessionMarkdown,
-  canSplitSessionView,
   runSessionNavigationAction,
 } from "../lib/sessions/session-menu-navigation.ts";
+import { canSplitSessionView } from "../lib/sessions/session-split-host.ts";
 import { showToast } from "../lib/toast.ts";
 import { shareAgentAsTemplate } from "../pages/templates/creator-owner.ts";
 import { canCreateTemplateDraft } from "../pages/templates/draft-navigation.ts";
@@ -53,6 +53,7 @@ import {
 import { canRetryGatewayStatus } from "./gateway-status.ts";
 import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
+import { moveSessionFromMenu } from "./session-menu-placement.ts";
 import { SessionMenu, type SessionMenuAction } from "./session-menu-solid.tsx";
 import {
   createNestedSession,
@@ -60,7 +61,7 @@ import {
   runSessionAction,
   runBatchSessionAction,
 } from "./session-organizer-menu.runtime.ts";
-import { moveSessionFromMenu, sessionMenuPlacementAction } from "./session-placement-action.ts";
+import { sessionMenuPlacementAction } from "./session-placement-action.ts";
 import { resolveAgentMenuSessionKey } from "./sidebar-agent-menu-session-key.ts";
 import { isUpdateAttentionForced } from "./sidebar-attention-dismissals.ts";
 import { isReleaseUpdateAvailable } from "./sidebar-attention-update.ts";

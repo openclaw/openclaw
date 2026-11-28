@@ -332,11 +332,9 @@ describe("personal navigation rail", () => {
   it("supports native page drop, direct pin reordering, and context-menu unpin with unloaded refs retained", async () => {
     const retained = ["person:offline", "session-rail:agent:other:unloaded"];
     const { sidebar, dom } = await fixture({ sidebarEntries: retained });
+    expect(dom.query(".sidebar-pages-menu")).toBeNull();
     await click(sidebar, "[data-rail-more]");
-    await vi.dynamicImportSettled();
-    await waitForSolid(() =>
-      expect(dom.query('.sidebar-pages-menu [data-sidebar-entry="route:usage"]')).not.toBeNull(),
-    );
+    expect(dom.query('.sidebar-pages-menu [data-sidebar-entry="route:usage"] a')).not.toBeNull();
     const transfer = createDataTransferStub();
     drag(
       dom.query('.sidebar-pages-menu [data-sidebar-entry="route:usage"]')!,

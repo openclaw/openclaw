@@ -7,11 +7,10 @@ import type { ChatHistoryResult } from "../../pages/chat/chat-history-snapshot.t
 import { copyToClipboard } from "../clipboard.ts";
 import { showToast } from "../toast.ts";
 import {
-  canSplitSessionView,
-  registerSessionSplitHost,
   runSessionNavigationAction,
   type SessionNavigationTarget,
 } from "./session-menu-navigation.ts";
+import { canSplitSessionView, registerSessionSplitHost } from "./session-split-host.ts";
 
 vi.mock("../clipboard.ts", () => ({ copyToClipboard: vi.fn(async () => true) }));
 vi.mock("../toast.ts", () => ({ showToast: vi.fn() }));

@@ -1,6 +1,6 @@
 import { onSettled } from "solid-js";
 import { useApplication } from "../../lib/reactive/context.ts";
-import { registerSessionSplitHost } from "../../lib/sessions/session-menu-navigation.ts";
+import { registerSessionSplitHost } from "../../lib/sessions/session-split-host.ts";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { ChatPageBody } from "./chat-page-pane-render.tsx";
 import { createChatPageState } from "./chat-page-state.ts";

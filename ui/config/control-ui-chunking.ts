@@ -162,6 +162,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/i18n/locales/en-agents-home.ts":
       // Draft navigation belongs to the optional template flow.
       return "template-draft-runtime";
+    case "ui/src/lib/sessions/session-menu-navigation.ts":
+    case "ui/src/components/session-menu-placement.ts":
+    case "ui/src/lib/editor-links.ts":
+    case "ui/src/app/native-editor-locality.runtime.ts":
+      // Menus and opened file views own these session actions, not Chat boot.
+      return "session-interaction-runtime";
     case "src/shared/dedupe-by-key.ts":
       // Config search shares this helper without loading optional session UI.
       return "control-ui-boot-shared";
@@ -196,10 +202,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/menu-surface.ts":
     case "ui/src/components/session-menu-data.ts":
     case "ui/src/components/session-placement-action.ts":
-    case "ui/src/lib/editor-links.ts":
-    case "ui/src/lib/sessions/session-menu-navigation.ts":
     case "src/config/required-worker-profile.ts":
-    case "ui/src/app/native-editor-locality.runtime.ts":
     case "ui/src/app/native-gateways.runtime.ts":
     case "ui/src/pages/plugins/icon-loader.ts":
     case "ui/src/pages/plugins/plugin-icon-owner.ts":

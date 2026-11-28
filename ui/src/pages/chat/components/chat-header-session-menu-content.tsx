@@ -32,10 +32,8 @@ import {
   resolveUiConfiguredMainKey,
   resolveUiConversationIdentity,
 } from "../../../lib/sessions/session-key.ts";
-import {
-  canCopySessionMarkdown,
-  canSplitSessionView,
-} from "../../../lib/sessions/session-menu-navigation.ts";
+import { canCopySessionMarkdown } from "../../../lib/sessions/session-menu-navigation.ts";
+import { canSplitSessionView } from "../../../lib/sessions/session-split-host.ts";
 import { isChatBubbleMode, setChatBubbleMode } from "../chat-bubble-mode.ts";
 import { ChatPaneHeaderMemo } from "../chat-pane-header-memo.ts";
 import { ChatPaneNativeSessionActions } from "../chat-pane-native-session-actions.ts";
