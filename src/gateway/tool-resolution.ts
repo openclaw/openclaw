@@ -9,7 +9,6 @@ import { createOpenClawCodingToolsInternalAsync } from "../agents/agent-tools.as
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
 import { projectAgentToolsExecPolicy } from "../agents/agent-tools.execution-policy.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
-import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { isHostSystemTurn, resolveTurnToolSurface } from "../agents/agent-tools.turn-authority.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
@@ -38,10 +37,8 @@ import {
   collectExplicitAllowlist,
   collectExplicitDenylist,
   hasRestrictiveAllowPolicy,
-  mergeAlsoAllowPolicy,
   normalizeToolPolicyName,
   replaceWithEffectiveToolAllowlist,
-  resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import {
@@ -62,6 +59,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import { resolveExactExecModeFromPolicy } from "../infra/exec-approvals.js";
+import { inferChatTypeFromTarget } from "../infra/outbound/targets.js";
 import { logWarn } from "../logger.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -73,6 +71,7 @@ import {
   resolveGatewayRequesterToolPolicies,
   resolveGatewaySenderAuthority,
 } from "./tool-resolution-authority.js";
+import { resolveGatewayConfiguredToolPolicies } from "./tool-resolution-policy.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
@@ -171,32 +170,15 @@ export async function resolveGatewayScopedTools(
       ? "message_tool_only"
       : undefined);
   const runtimeAlsoAllow = sourceReplyDeliveryMode === "message_tool_only" ? ["message"] : [];
-  function resolveConfiguredToolPolicies(config: OpenClawConfig) {
-    const effective = resolveEffectiveToolPolicy({
+  const resolveConfiguredToolPolicies = (config: OpenClawConfig) =>
+    resolveGatewayConfiguredToolPolicies({
       config,
       sessionKey: runtimePolicySessionKey,
       agentId: runtimePolicyAgentId,
       modelProvider: params.modelProvider,
       modelId: params.modelId,
+      alsoAllow: [...gatewayRequestedTools, ...runtimeAlsoAllow],
     });
-    const profilePolicy = resolveToolProfilePolicy(effective.profile);
-    const providerProfilePolicy = resolveToolProfilePolicy(effective.providerProfile);
-    return {
-      ...effective,
-      profilePolicy,
-      providerProfilePolicy,
-      profilePolicyWithAlsoAllow: mergeAlsoAllowPolicy(profilePolicy, [
-        ...(effective.profileAlsoAllow ?? []),
-        ...gatewayRequestedTools,
-        ...runtimeAlsoAllow,
-      ]),
-      providerProfilePolicyWithAlsoAllow: mergeAlsoAllowPolicy(providerProfilePolicy, [
-        ...(effective.providerProfileAlsoAllow ?? []),
-        ...gatewayRequestedTools,
-        ...runtimeAlsoAllow,
-      ]),
-    };
-  }
   const configuredToolPolicies = resolveConfiguredToolPolicies(params.cfg);
   const {
     agentId: resolvedPolicyAgentId,
@@ -374,6 +356,14 @@ export async function resolveGatewayScopedTools(
     wrapBeforeToolCallHook: false,
     agentAccountId: params.accountId,
   });
+  const boundChannelId = params.currentChannelId ?? params.agentTo;
+  // A direct invocation is bound to a conversation only by its hints. Report that
+  // conversation's kind as outbound targets infer it, so chat-type confinement
+  // applies as it does to a turn from there.
+  const directInvocationChatType =
+    surface === "http" && messageProvider && boundChannelId
+      ? inferChatTypeFromTarget({ channel: messageProvider, to: boundChannelId })
+      : undefined;
   const delegatedExecPolicy = projectAgentToolsExecPolicy({
     options: { config: params.cfg, exec: params.execOverrides, sessionPermissionPolicy },
     execConfig: resolveExecToolConfig({ cfg: params.cfg, agentId: policyAgentId }),
@@ -439,7 +429,8 @@ export async function resolveGatewayScopedTools(
     sourceReplyOnly: params.sourceReplyOnly,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
-    currentChannelId: params.currentChannelId ?? params.agentTo,
+    currentChannelId: boundChannelId,
+    currentChatType: directInvocationChatType,
     currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
     replyToMode: params.replyToMode,
     onYield: params.onYield,

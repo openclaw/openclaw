@@ -523,7 +523,8 @@ async function resolveDeliveryTargetWithPolicyAndSessionRoute(
   return refinedDelivery;
 }
 
-function inferChatTypeFromTarget(params: {
+/** Infers a target's conversation kind from its prefix or its channel plugin's grammar. */
+export function inferChatTypeFromTarget(params: {
   channel: string;
   to: string;
   plugin?: ChannelPlugin;

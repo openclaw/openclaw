@@ -71,9 +71,9 @@ import {
 } from "./send.js";
 import { TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST } from "./status-reaction-variants.js";
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
-import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
+import { normalizeTelegramOutboundTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
-import { buildTelegramConversationId, resolveTelegramTargetThread } from "./topic-conversation.js";
+import { formatTelegramDeliveryTarget } from "./topic-conversation.js";
 import { resolveTelegramTopicNameCacheScope, updateTopicName } from "./topic-name-cache.js";
 
 const TELEGRAM_EMOJI_LIST_LIMIT = 100;
@@ -104,17 +104,6 @@ function normalizeTelegramActionName(action: string): TelegramActionName {
     throw new Error(`Unsupported Telegram action: ${action}`);
   }
   return normalized;
-}
-
-function formatTelegramDeliveryTarget(to: string, messageThreadId?: number | null): string {
-  const parsed = parseTelegramTarget(to);
-  const thread = resolveTelegramTargetThread({
-    ...parsed,
-    messageThreadId: messageThreadId ?? parsed.messageThreadId,
-  });
-  return thread.scope === "none"
-    ? to
-    : buildTelegramConversationId({ chatId: parsed.chatId, thread });
 }
 
 export async function handleTelegramAction(
