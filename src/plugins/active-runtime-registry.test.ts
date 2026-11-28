@@ -90,6 +90,8 @@ it.each(["diagnostics", "channelSetups"] as const)(
     }
     activate(registry);
     expect(lookup(["unloaded"])).toBeUndefined();
+    activate({ ...registry, plugins: [] });
+    expect(lookup(["unloaded"])).toBeUndefined();
   },
 );
 
@@ -116,22 +118,34 @@ it.each([
   );
 });
 
-it("rejects a request registry when a workspace selects another physical owner", () => {
-  const registry = createRegistryWithPlugin("demo", {
-    origin: "bundled",
-    rootDir: "/plugins/demo",
-    source: "/plugins/demo/index.js",
+it("matches only the loaded executable owner by origin and path", () => {
+  const runtime = writePlugin({
+    id: "owner-fixture",
+    filename: "index.cjs",
+    body: 'module.exports = { id: "owner-fixture", register() {} };',
   });
-
+  const options = createLoadOptions({
+    id: runtime.id,
+    origin: "global",
+    rootDir: runtime.dir,
+    source: runtime.file,
+  });
+  const registry = loadOpenClawPlugins(options);
+  const record = registry.plugins[0]!;
+  const manifest = options.manifestRegistry!.plugins[0]!;
+  expect(record.status).toBe("loaded");
+  expect(createRuntimePluginManifestLookup(registry, [manifest])(runtime.id)).toBe(record);
   expect(
     createRuntimePluginManifestLookup(registry, [
       {
-        id: "demo",
-        origin: "workspace",
-        rootDir: "/tmp/session-workspace/.openclaw/extensions/demo",
-        source: "/tmp/session-workspace/.openclaw/extensions/demo/index.js",
-      } as never,
-    ])("demo"),
+        ...manifest,
+        rootDir: path.join(runtime.dir, "other"),
+        source: path.join(runtime.dir, "other", "index.cjs"),
+      },
+    ])(runtime.id),
+  ).toBeUndefined();
+  expect(
+    createRuntimePluginManifestLookup(registry, [{ ...manifest, origin: "workspace" }])(runtime.id),
   ).toBeUndefined();
 });
 

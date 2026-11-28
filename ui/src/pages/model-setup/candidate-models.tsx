@@ -1,6 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
-import { SettingsSectionHeader } from "../../components/solid/settings-ui.tsx";
+import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -48,67 +48,66 @@ export function CandidateRows(
   });
   return (
     <Show when={candidates().length > 0}>
-      <section class="settings-section">
-        <SettingsSectionHeader title={t("modelSetup.candidates.title")} />
-        <div class="model-setup__rows">
-          <For
-            each={candidates()}
-            keyed={(candidate) =>
-              JSON.stringify([candidate.kind, candidate.modelRef, candidate.modelTarget])
-            }
-          >
-            {(candidate) => {
-              const active = () =>
-                (props.activation.phase === "testing" || props.activation.phase === "failure") &&
-                props.activation.targetId ===
-                  activationTargetId(candidate().kind, candidate().modelRef);
-              const testing = () => active() && props.activation.phase === "testing";
-              const failure = () => active() && props.activation.phase === "failure";
-              return (
-                <div class="model-setup__row" data-candidate-kind={candidate().kind}>
-                  <div class="model-setup__row-main">
-                    <div class="model-setup__row-title">
-                      {renderProviderIcon(props, candidate())}
-                      <strong>{candidate().label}</strong>
-                      <span class="model-setup__chip">{candidateStatus(candidate())}</span>
-                    </div>
-                    <div class="muted">
-                      {candidate().modelRef} · {formatUiExternalText(candidate().detail)}
-                    </div>
-                    {candidate().modelTarget === "utility" ? (
-                      <div class="muted">{t("modelSetup.utility.hint")}</div>
-                    ) : undefined}
-                  </div>
-                  <div class="model-setup__row-actions">
-                    <button
-                      type="button"
-                      class={["btn", { primary: !failure() }]}
-                      disabled={props.actionsDisabled || props.detecting}
-                      onClick={() => props.onActivateCandidate(candidate())}
-                    >
-                      <span>
-                        {t(
-                          testing()
-                            ? "modelSetup.candidates.testingButton"
-                            : failure()
-                              ? "modelSetup.candidates.retry"
-                              : candidate().modelTarget === "utility"
-                                ? props.result.configuredModel
-                                  ? "modelSetup.utility.useUtility"
-                                  : "modelSetup.utility.useSetup"
-                                : props.embedded
-                                  ? "modelSetup.discovery.useForAgent"
-                                  : "modelSetup.candidates.testAndUse",
-                        )}
-                      </span>
-                    </button>
-                  </div>
+      <SettingsSection title={t("modelSetup.candidates.title")}>
+        <For
+          each={candidates()}
+          keyed={(candidate) =>
+            JSON.stringify([candidate.kind, candidate.modelRef, candidate.modelTarget])
+          }
+        >
+          {(candidate) => {
+            const active = () =>
+              (props.activation.phase === "testing" || props.activation.phase === "failure") &&
+              props.activation.targetId ===
+                activationTargetId(candidate().kind, candidate().modelRef);
+            const testing = () => active() && props.activation.phase === "testing";
+            const failure = () => active() && props.activation.phase === "failure";
+            return (
+              <div
+                class="settings-row model-setup__candidate"
+                data-candidate-kind={candidate().kind}
+              >
+                {renderProviderIcon(props, candidate())}
+                <div class="settings-row__text">
+                  <span class="settings-row__title">
+                    {candidate().label}{" "}
+                    <span class="model-setup__chip">{candidateStatus(candidate())}</span>
+                  </span>
+                  <span class="settings-row__desc">
+                    {candidate().modelRef} · {formatUiExternalText(candidate().detail)}
+                  </span>
+                  <Show when={candidate().modelTarget === "utility"}>
+                    <span class="settings-row__desc">{t("modelSetup.utility.hint")}</span>
+                  </Show>
                 </div>
-              );
-            }}
-          </For>
-        </div>
-      </section>
+                <div class="settings-row__control">
+                  {/* Detection is never consent: each model activates only from this click. */}
+                  <button
+                    type="button"
+                    class={["btn btn--sm", { primary: !failure() }]}
+                    disabled={props.actionsDisabled || props.detecting}
+                    onClick={() => props.onActivateCandidate(candidate())}
+                  >
+                    {t(
+                      testing()
+                        ? "modelSetup.candidates.testingButton"
+                        : failure()
+                          ? "modelSetup.candidates.retry"
+                          : candidate().modelTarget === "utility"
+                            ? props.result.configuredModel
+                              ? "modelSetup.utility.useUtility"
+                              : "modelSetup.utility.useSetup"
+                            : props.embedded
+                              ? "modelSetup.discovery.useForAgent"
+                              : "modelSetup.candidates.testAndUse",
+                    )}
+                  </button>
+                </div>
+              </div>
+            );
+          }}
+        </For>
+      </SettingsSection>
     </Show>
   );
 }

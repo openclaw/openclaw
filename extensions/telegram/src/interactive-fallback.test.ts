@@ -3,6 +3,24 @@ import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.
 import { parseTelegramQuestionCallbackData } from "./question-callback-data.js";
 
 describe("canonicalizeTelegramPresentationPayload", () => {
+  it("keeps agent ownership for sends queued by v2026.11.5", () => {
+    const result = canonicalizeTelegramPresentationPayload({
+      text: "Pick one",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "A", action: { type: "callback", value: "pick:a" } }],
+          },
+        ],
+      },
+      channelData: { telegram: { typedCallbackOwner: "agent" } },
+    });
+
+    const telegram = result.channelData?.telegram as { buttons?: unknown } | undefined;
+    expect(telegram?.buttons).toEqual([[{ text: "A", callback_data: "::pick:a" }]]);
+  });
+
   it("preserves mixed presentation order while moving controls to Telegram buttons", () => {
     const result = canonicalizeTelegramPresentationPayload({
       text: "Top-level summary",

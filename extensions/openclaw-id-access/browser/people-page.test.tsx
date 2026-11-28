@@ -1,14 +1,20 @@
 /* @vitest-environment jsdom */
 
 import { render } from "@solidjs/web";
-import type * as UI from "openclaw/plugin-sdk/control-ui";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { InviteForm } from "./invite-form.js";
 import { createPeopleMotion } from "./people-motion.js";
-import { PeoplePage } from "./people-page.js";
-import { button, hostFor, linked, pendingInvite, rolePicker } from "./people-page.test-support.js";
-import type { StatusResult } from "./types.js";
+import {
+  button,
+  disposers,
+  hostFor,
+  linked,
+  mountPage,
+  pendingInvite,
+  plugin,
+  rolePicker,
+} from "./people-page.test-support.js";
 
 // Signing needs this browser's owner key from IndexedDB; the tests stand in for it.
 // mock-isolation: the owner device key lives in IndexedDB, which these page tests replace with a fixed signer.
@@ -19,32 +25,6 @@ vi.mock("./owner-signing.js", () => ({
   signMembershipChange: vi.fn(async (_link: unknown, target: unknown) => ({ signed: target })),
   signAsOwner: vi.fn(async () => ({ signed: "cap" })),
 }));
-
-const { default: plugin } = await import("./index.js");
-const disposers: Array<() => void> = [];
-
-async function mountPage(statuses: StatusResult[], submitResult?: unknown) {
-  const harness = hostFor([statuses[0]!, ...statuses], submitResult);
-  const { host, request, registerPage, controller } = harness;
-  const stop = await plugin.activate(host);
-  if (typeof stop === "function") {
-    disposers.push(stop);
-  }
-  await vi.waitFor(() => expect(registerPage).toHaveBeenCalled());
-  const [page] = registerPage.mock.calls[0]!;
-  expect(page).toMatchObject({ id: "access", label: "Remote access" });
-  const container = document.createElement("div");
-  document.body.append(container);
-  const view = page.mount(container, {
-    host,
-    props: {},
-    signal: controller.signal,
-    presented: true,
-  } as UI.ControlUiViewContext);
-  const dispose = () => view?.dispose?.();
-  disposers.push(dispose);
-  return { ...harness, request, container, dispose };
-}
 
 describe("Access page", () => {
   afterEach(() => {
@@ -287,51 +267,8 @@ describe("Access page", () => {
     },
   );
 
-  it("repairs a blocked member with a signed role change at the fresh seq", async () => {
-    const member = {
-      accountId: "blocked",
-      displayName: "Bo",
-      role: "deleted",
-      roleDefined: false,
-      peerKeys: [],
-    };
-    const { container, request } = await mountPage([linked({ members: [member] })]);
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain("The role deleted is not defined on this claw"),
-    );
-    button(container, "Change role")!.click();
-    flush();
-    const picker = container.querySelector(
-      ".ocid-access__row--member select",
-    )! as HTMLSelectElement;
-    picker.value = "viewer";
-    picker.dispatchEvent(new Event("change"));
-    flush();
-    request.mockImplementation(async (method: string) =>
-      method === "openclawId.people"
-        ? { link: linked({ members: [member], seq: 6 }).link }
-        : method === "openclawId.status"
-          ? linked()
-          : {},
-    );
-    button(container, "Save role")!.click();
-    const { signMembershipChange } = await import("./owner-signing.js");
-    await vi.waitFor(() =>
-      expect(signMembershipChange).toHaveBeenLastCalledWith(expect.objectContaining({ seq: 6 }), {
-        op: "set_role",
-        account_id: "blocked",
-        role: "viewer",
-      }),
-    );
-    expect(request).toHaveBeenCalledWith("openclawId.authority", {
-      action: "submit",
-      statement: { signed: { op: "set_role", account_id: "blocked", role: "viewer" } },
-    });
-  });
-
-  it.each(["invite", "change"] as const)(
-    "reconfirms a freshly administrative role before signing %s",
-    async (action) => {
+  it("reconfirms a freshly administrative role before signing an invite", async () => {
+    {
       const member = { accountId: "blocked", role: "deleted", roleDefined: false, peerKeys: [] };
       const initial = linked({ rootPub: pendingInvite.pending!.devicePub, members: [member] });
       const { container, request } = await mountPage([initial]);
@@ -349,20 +286,15 @@ describe("Access page", () => {
             ? fresh
             : {},
       );
-      if (action === "invite") {
-        const input = container.querySelector("input")!;
-        input.value = "friend@example.test";
-        input.dispatchEvent(new Event("input", { bubbles: true }));
-      } else {
-        button(container, "Change role")!.click();
-      }
+      const input = container.querySelector("input")!;
+      input.value = "friend@example.test";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
       flush();
       const { signAsOwner, signMembershipChange } = await import("./owner-signing.js");
       vi.mocked(signAsOwner).mockClear();
       vi.mocked(signMembershipChange).mockClear();
-      button(container, action === "invite" ? "Create invite link" : "Save role")!.click();
-      const confirmLabel =
-        action === "invite" ? "Confirm administrator invite" : "Confirm administrator role";
+      button(container, "Create invite link")!.click();
+      const confirmLabel = "Confirm administrator invite";
       await vi.waitFor(() => expect(button(container, confirmLabel)).toBeDefined());
       expect(container.textContent).toContain("change Gateway settings");
       expect(request).not.toHaveBeenCalledWith("openclawId.authority", expect.anything());
@@ -372,11 +304,11 @@ describe("Access page", () => {
       await vi.waitFor(() =>
         expect(request).toHaveBeenCalledWith(
           "openclawId.authority",
-          expect.objectContaining({ action: action === "invite" ? "register_invite" : "submit" }),
+          expect.objectContaining({ action: "register_invite" }),
         ),
       );
-    },
-  );
+    }
+  });
 
   it("shows a member their own role without requesting people or exposing controls", async () => {
     const { container, request } = await mountPage([
@@ -734,21 +666,6 @@ describe("Access page", () => {
     );
   });
 
-  it("shows no people to a client that is not an owner, and never asks for them", async () => {
-    const { host, request } = hostFor([{ ...linked(), owner: false }]);
-    const container = document.createElement("div");
-    document.body.append(container);
-    disposers.push(render(() => <PeoplePage host={host} />, container));
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain(
-        "Only the owner can see who has access. Open this page from an approved owner browser.",
-      ),
-    );
-    expect(request).not.toHaveBeenCalledWith("openclawId.people", {});
-    expect(container.textContent).not.toContain("member@example.test");
-    expect(button(container, "Add node")).toBeUndefined();
-  });
-
   it("is read-only in a browser that is not an owner device", async () => {
     const status = linked({
       ownerDevices: [{ devicePub: "ed25519:other", label: "Other", peerKeys: [], cert: {} }],
@@ -770,9 +687,9 @@ describe("Access page", () => {
     const harness = await mountPage([linked()]);
     expect(harness.registerNavigation).toHaveBeenCalledWith({
       id: "access",
-      label: "Access",
+      label: "Remote access",
       page: { id: "access" },
-      icon: "users",
+      icon: "access",
       defaultVisible: false,
     });
     harness.connect(false);

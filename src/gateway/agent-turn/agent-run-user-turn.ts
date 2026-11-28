@@ -14,13 +14,9 @@ import type { ExecElevatedDefaults } from "../../agents/bash-tools.exec-types.js
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
 import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import type { ReplyExpectation } from "../../agents/reply-completion.js";
-import {
-  captureRequesterOrigin,
-  resolveRequesterPrincipalKey,
-  type RequesterOrigin,
-} from "../../agents/requester-origin.js";
+import { captureRequesterOrigin, type RequesterOrigin } from "../../agents/requester-origin.js";
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
-import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import { prepareCommandOwnerAuthority } from "../../auto-reply/command-owner-facts.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.pending-inputs.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -33,15 +29,19 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
+import type { UserTurnInput } from "../../sessions/user-turn-input.types.js";
 import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
 import { retainsUserTurnTranscriptMedia } from "../../sessions/user-turn-transcript-media.js";
-import { completeUserTurnProcessing } from "../../sessions/user-turn-transcript-processing.js";
+import {
+  completeUserTurnProcessing,
+  settleUserTurnPendingInput,
+} from "../../sessions/user-turn-transcript-processing.js";
 import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
-  type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import type { SubagentCompletion } from "../../shared/subagent-completion.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import {
   INLINE_IMAGE_DURABLE_OMISSION_MARKER,
@@ -49,7 +49,6 @@ import {
   type ChatImageContent,
   type OffloadedRef,
 } from "../chat-attachments.js";
-import { hasGatewayAdminScope } from "../operator-scopes.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
@@ -73,7 +72,6 @@ export type PreparedAgentRunUserTurn = {
   inputProvenance?: InputProvenance;
   recorder?: UserTurnTranscriptRecorder;
   requesterOrigin?: RequesterOrigin;
-  assertRequesterCurrent?: () => void;
   senderIsOwner: boolean;
   suppressPromptPersistence: boolean;
   releaseProcessingAbortObserver?: () => void;
@@ -153,6 +151,7 @@ export async function prepareAgentRunUserTurn(params: {
   privateCompletion?: true;
   replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
+  subagentCompletions?: readonly SubagentCompletion[];
   abortSignal?: AbortSignal;
   getAbortStopReason?: () => string;
   request: AgentRunRequest;
@@ -177,11 +176,12 @@ export async function prepareAgentRunUserTurn(params: {
   inputProvenance?: InputProvenance;
   runId: string;
   client: AgentTurnPrincipal | null;
+  /** The admitted turn grant's owner bit; admission runs before input is recorded. */
+  senderIsOwner: boolean;
   context: AgentTurnContext;
 }): Promise<PreparedAgentRunUserTurn> {
   const caller = params.client?.internal?.agentToolCaller;
   const operatorAuthority = params.client?.internal?.operatorRunAuthority;
-  operatorAuthority?.assertCurrent();
   let requesterOrigin = caller
     ? captureRequesterOrigin(caller)
     : operatorAuthority ||
@@ -192,14 +192,6 @@ export async function prepareAgentRunUserTurn(params: {
             operatorAuthority?.profileId ?? params.client?.authenticatedUserProfile?.profileId,
         })
       : undefined;
-  const resolveRuntimeSenderIsOwner = () =>
-    hasGatewayAdminScope(params.client) &&
-    (!requesterOrigin ||
-      Boolean(requesterOrigin.operatorProfileId) ||
-      ((!requesterOrigin.messageProvider ||
-        requesterOrigin.messageProvider === INTERNAL_MESSAGE_CHANNEL) &&
-        !resolveRequesterPrincipalKey({ requesterOrigin }) &&
-        params.client?.internal?.operatorRoleActor?.kind === "system"));
   const execApprovalFollowupHandoffClaimId = randomUUID();
   let claimedExecApprovalFollowupHandoffId: string | undefined;
   let createdMediaIds: string[] = [];
@@ -243,7 +235,6 @@ export async function prepareAgentRunUserTurn(params: {
       throw new Error("exec approval followup runtime handoff is unavailable");
     }
 
-    let senderIsOwner = resolveRuntimeSenderIsOwner();
     const settleWakeReplay = params.settleWakeReplay;
     if (
       settleWakeReplay &&
@@ -268,7 +259,10 @@ export async function prepareAgentRunUserTurn(params: {
         "Private completion requires an exact internal requester turn with delivery disabled",
       );
     }
-    const trackRequesterCompletion = params.privateCompletion || settleWakeReplay !== undefined;
+    const trackRequesterCompletion =
+      params.privateCompletion ||
+      settleWakeReplay !== undefined ||
+      Boolean(params.subagentCompletions?.length);
     const suppressPromptPersistence =
       !params.privateCompletion && params.requestedPromptPersistenceSuppression;
     if (
@@ -332,11 +326,11 @@ export async function prepareAgentRunUserTurn(params: {
           config: params.cfgForAgent ?? params.cfg,
         };
       };
-      const privateTarget = params.privateCompletion ? await resolveTarget() : undefined;
+      const completionTarget = trackRequesterCompletion ? await resolveTarget() : undefined;
       const senderFields = gatewayClientSenderFields(params.client);
-      if (privateTarget) {
+      if (completionTarget) {
         const submitted = await readSessionSubmittedInput(
-          privateTarget,
+          completionTarget,
           buildRunUserTurnIdempotencyKey(params.runId),
         );
         params.assertCurrent();
@@ -353,8 +347,16 @@ export async function prepareAgentRunUserTurn(params: {
           };
         }
       }
+      const peerDelivery = readSessionSendDeliveryAdmission({
+        runId: params.runId,
+        sessionKey: params.resolvedSessionKey,
+        sessionId: params.admittedSessionId,
+        agentId: params.activeSessionAgentId,
+      });
       const input: UserTurnInput = {
+        subagentCompletions: params.subagentCompletions,
         ...(params.privateCompletion ||
+        peerDelivery?.delivery.returnedResult?.hideInput === true ||
         isCompletionReportInputProvenance(params.inputProvenance) ||
         isSubagentCoordinationInputProvenance(params.inputProvenance)
           ? { display: false as const }
@@ -368,26 +370,20 @@ export async function prepareAgentRunUserTurn(params: {
         timestamp: Date.now(),
         idempotencyKey: buildRunUserTurnIdempotencyKey(params.runId),
         ...senderFields,
-        senderIsOwner,
+        senderIsOwner: params.senderIsOwner,
         requesterOrigin,
         ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
         ...(media.length > 0 ? { media } : {}),
         ...(slots.length > 0 ? { mediaImageLayout: { slots } } : {}),
       };
-      const peerDelivery = readSessionSendDeliveryAdmission({
-        runId: params.runId,
-        sessionKey: params.resolvedSessionKey,
-        sessionId: params.admittedSessionId,
-        agentId: params.activeSessionAgentId,
-      });
       recorder = createUserTurnTranscriptRecorder({
         trackInputCompletion: trackRequesterCompletion || peerDelivery !== undefined,
         pendingInputReplaySourceSessionKeys: settleWakeReplay?.sourceSessionKeys,
         input,
-        target: params.privateCompletion
+        target: trackRequesterCompletion
           ? () => {
               params.assertCurrent();
-              return privateTarget;
+              return completionTarget;
             }
           : resolveTarget,
         errorContext: "gateway agent user turn transcript",
@@ -440,6 +436,7 @@ export async function prepareAgentRunUserTurn(params: {
       requesterOrigin = readUserTurnRequesterOrigin(recorder) ?? requesterOrigin;
     }
 
+    // An asserted channel owner has no grant; its child turns keep the `ownerAllowFrom` match.
     const requesterOwner =
       requesterOrigin?.messageProvider &&
       requesterOrigin.messageProvider !== INTERNAL_MESSAGE_CHANNEL &&
@@ -452,19 +449,7 @@ export async function prepareAgentRunUserTurn(params: {
           })
         : undefined;
     params.assertCurrent();
-    if (requesterOrigin && !requesterOrigin.operatorProfileId) {
-      senderIsOwner =
-        requesterOwner?.isCurrent(params.cfg) === true || resolveRuntimeSenderIsOwner();
-    }
-    const assertRequesterCurrent =
-      requesterOwner && senderIsOwner
-        ? () => {
-            if (!requesterOwner.isCurrent(params.context.getRuntimeConfig())) {
-              throw new Error("Requester owner authority changed; send a new request.");
-            }
-          }
-        : undefined;
-    assertRequesterCurrent?.();
+    const senderIsOwner = params.senderIsOwner || requesterOwner?.isCurrent(params.cfg) === true;
 
     let releaseProcessingAbortObserver: (() => void) | undefined;
     if (trackRequesterCompletion && recorder && !recorder.getProcessingCompletion?.()) {
@@ -511,7 +496,6 @@ export async function prepareAgentRunUserTurn(params: {
       ...(recorder ? { recorder } : {}),
       senderIsOwner,
       requesterOrigin,
-      assertRequesterCurrent,
       suppressPromptPersistence,
     };
   } catch (error) {
@@ -526,6 +510,7 @@ export async function prepareAgentRunUserTurn(params: {
     const failure = await releasePreparedAgentRunUserTurnAfterFailure(
       { recorder, claimedExecApprovalFollowupHandoffId, execApprovalFollowupHandoffClaimId },
       error,
+      params.abortSignal,
     );
     if (!mediaRetained) {
       await Promise.allSettled(createdMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
@@ -578,14 +563,22 @@ export async function releasePreparedAgentRunUserTurn(
     | "execApprovalFollowupHandoffClaimId"
   >,
   disposition: "cancelled" | "interrupted" = "cancelled",
-  userInitiated?: true,
+  signal?: AbortSignal,
+  failure?: unknown,
+  accepted = true,
 ): Promise<void> {
   try {
     prepared.releaseProcessingAbortObserver?.();
-    prepared.recorder?.finishPendingInput?.(disposition, userInitiated);
   } finally {
     try {
-      await prepared.recorder?.waitForPendingInputSettlement?.();
+      await settleUserTurnPendingInput(
+        prepared.recorder,
+        signal,
+        failure,
+        false,
+        disposition,
+        accepted,
+      );
     } finally {
       releaseExecApprovalFollowupRuntimeHandoff({
         handoffId: prepared.claimedExecApprovalFollowupHandoffId,
@@ -609,10 +602,11 @@ export class AgentRunUserTurnCleanupError extends AggregateError {
 export async function releasePreparedAgentRunUserTurnAfterFailure(
   prepared: Parameters<typeof releasePreparedAgentRunUserTurn>[0],
   error: unknown,
-  disposition: "cancelled" | "interrupted" = "cancelled",
+  signal: AbortSignal | undefined,
+  accepted = false,
 ): Promise<unknown> {
   try {
-    await releasePreparedAgentRunUserTurn(prepared, disposition);
+    await releasePreparedAgentRunUserTurn(prepared, "cancelled", signal, error, accepted);
     return error;
   } catch (cleanupError) {
     return new AgentRunUserTurnCleanupError(error, cleanupError);

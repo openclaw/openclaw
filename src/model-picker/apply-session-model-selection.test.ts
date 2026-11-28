@@ -268,12 +268,10 @@ it.each([undefined, "openclaw", "claude-cli"])(
       model: "gpt-4o",
       agentRuntime: "openclaw",
     });
-    const compatible = agentRuntimeOverride === "openclaw";
     const stored = loadSessionEntryReadOnly(target);
     expect(stored).toMatchObject({ providerOverride: "openai", modelOverride: "gpt-4o" });
-    expect([stored?.agentRuntimeOverride, stored?.nativeRuntimeConsent]).toEqual(
-      compatible ? ["openclaw", "openclaw"] : [undefined, undefined],
-    );
+    expect(stored).not.toHaveProperty("agentRuntimeOverride");
+    expect(stored).not.toHaveProperty("nativeRuntimeConsent");
     expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
   },
 );

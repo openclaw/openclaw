@@ -54,7 +54,7 @@ import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts"
 const defaultPool = process.platform === "win32" ? "forks" : "threads";
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
 const scopedGatewayMethodsIsolatedTestFiles = `chat-metadata-runtime.cache agent
-  agent.followup-owner agent.visitor-access board.runtime-boundaries chat.reset-visible-yield
+  agent.visitor-access board.runtime-boundaries chat.reset-visible-yield
   environments.pairing-snapshot health.owner-routing sessions.send-yield-resume
   system-agent-nested-inference.integration system-agent-setup-control-ui transcripts
   users-preferences users-role.worker usage usage.sessions-usage`
@@ -514,20 +514,6 @@ describe("projects vitest config", () => {
       expect(testConfig.isolate).toBe(true);
       expect(testConfig.include).toContain(`${pluginId}/**/*.test.ts`);
       expect(configFor(createExtensionsVitestConfig).exclude).toContain(`${pluginId}/**`);
-    },
-  );
-
-  it.each(["extensions/google/research-gateway.test.ts"])(
-    "routes %s through the host database owner exactly once",
-    (file) => {
-      const project = "test/vitest/vitest.extension-database-workers.config.ts";
-      expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
-      expect(requireTestConfig(createExtensionDatabaseWorkersVitestConfig({})).pool).toBe(
-        diagnosticForksPool,
-      );
-      expect(requireTestConfig(createExtensionsVitestConfig({})).exclude).toContain(
-        file.slice("extensions/".length),
-      );
     },
   );
 

@@ -38,7 +38,7 @@ describe("btw inline message", () => {
           const lines = message.render(140);
           const raw = lines.join("\n");
           const normalized = normalizeTestText(raw);
-          expectText(normalized, [...visible, "Press Enter or Esc to dismiss"], absent);
+          expectText(normalized, [...visible, "Press Esc in the editor to dismiss"], absent);
           expectText(raw, [], ["\x1b[3J", "\x1b]52;", "\u009b3J", "\u009d0;"]);
           expect(lines[1]).not.toMatch(/[\r\n\t]/u);
           for (const line of lines.filter((entry) => /[\u0590-\u08ff]/u.test(entry))) {

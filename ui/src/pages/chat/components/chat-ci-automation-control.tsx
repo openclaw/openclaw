@@ -120,7 +120,7 @@ function createCiAutomation(props: Props, host: SolidBridgeElement<Props>) {
         })
       : undefined;
     stopEvents = source?.subscribeEvents((event) => {
-      if (isCronInventoryInvalidation(event, source.snapshot)) {
+      if (isCronInventoryInvalidation(event)) {
         invalidate();
       }
     });

@@ -106,6 +106,9 @@ export function loadCronRuntimeAuthorities(params: {
   storeKey: string;
   jobs: CronStoredJob[];
 }): CronRuntimeAuthorityLoadResult {
+  if (params.jobs.length === 0) {
+    return { repairJobIds: [] };
+  }
   const jobsById = new Map(params.jobs.map((job) => [job.id, job] as const));
   const repairJobIds: string[] = [];
   for (const row of loadCronRuntimeAuthorityRows(params.db, params.storeKey, jobsById.keys())) {

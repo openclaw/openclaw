@@ -87,7 +87,11 @@ function ToastCard(props: { entry: ToastEntry; open: boolean; owner: ToastContro
       active={props.entry.active}
       depth={props.entry.depth}
       open={props.open}
-      onDismiss={(reason) => props.owner.dismiss(props.entry.id, reason)}
+      onDismiss={
+        props.entry.options.dismissible === false
+          ? undefined
+          : (reason) => props.owner.dismiss(props.entry.id, reason)
+      }
       onHover={(hovered) => props.owner.hover("anchored", hovered)}
       onFocus={(focused) => props.owner.focus("anchored", focused)}
       onExit={() => props.owner.transitionEnd(props.entry.id)}

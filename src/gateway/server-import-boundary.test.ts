@@ -14,10 +14,16 @@ const completionSelectionEntries = [
   "src/system-agent/setup-inference-detect.ts",
   "src/agents/simple-completion-selection.ts",
 ];
+const passivePathEntries = [
+  "src/infra/path-existence.ts",
+  "src/agents/auth-profiles/shared-main-dir.ts",
+  "src/state/openclaw-state-db.paths.ts",
+];
 const graph = createRuntimeImportGraph(
   repoRoot,
   [
     ...completionSelectionEntries,
+    ...passivePathEntries,
     "src/agents/auth-profiles/path-resolve.ts",
     "src/gateway/call.ts",
     "src/gateway/config-get-response.ts",
@@ -40,6 +46,10 @@ const graph = createRuntimeImportGraph(
     "src/gateway/agent-turn/agent-turn-service.ts",
     "src/daemon/service-command.ts",
     "src/config/legacy-workboard-database.ts",
+    "src/infra/sqlite-readonly-worker-context.ts",
+    "src/infra/update-doctor-migration-context.ts",
+    "src/infra/client-credential-store.ts",
+    "src/infra/client-credential.worker.ts",
   ],
   { sourceImports: true },
 );
@@ -61,6 +71,23 @@ function collectStaticValueImports(entryRelativePath: string): string[] {
 }
 
 describe("gateway startup import boundaries", () => {
+  it.each(passivePathEntries)(
+    "resolves paths in %s without loading broader filesystem operations",
+    (entry) => {
+      const modules = collectStaticValueImports(entry);
+      for (const deferred of [
+        "src/infra/boundary-path.ts",
+        "src/config/paths.ts",
+        "src/utils.ts",
+      ]) {
+        expect(modules).not.toContain(path.normalize(deferred));
+      }
+      expect(
+        modules.flatMap((file) => graph.dependencies(file).map(({ specifier }) => specifier)),
+      ).not.toContain("@openclaw/fs-safe/advanced");
+    },
+  );
+
   it("reads published auth ownership without loading database preparation", () => {
     const modules = collectStaticValueImports("src/agents/auth-profiles/path-resolve.ts");
     for (const owner of [
@@ -172,14 +199,15 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   }
   return resolved;
 }});
-const { listManualSetupInferenceOptions } = await import(${JSON.stringify(entry)});
-const result = await listManualSetupInferenceOptions("main");
+const { listManualSetupInferenceDetection } = await import(${JSON.stringify(entry)});
+const result = await listManualSetupInferenceDetection("main");
 console.log(JSON.stringify({ utilityModel: result.utilityModel, setupComplete: result.setupComplete }));
 `,
           ],
           { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...state.envVars },
           30_000,
         );
+        expect(result.error).toBeUndefined();
         expect(result.status, result.stderr).toBe(0);
         expect(JSON.parse(result.stdout)).toEqual({
           utilityModel: "fixture/utility",
@@ -221,6 +249,7 @@ console.log("prewarm-cold-selection-ok");`,
           { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, ...state.envVars },
           30_000,
         );
+        expect(result.error).toBeUndefined();
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toContain("prewarm-cold-selection-ok");
       },
@@ -231,12 +260,25 @@ console.log("prewarm-cold-selection-ok");`,
     ["src/gateway/call.ts", "src/gateway/method-scopes.ts"],
     ["src/gateway/call.ts", "src/infra/worker-task-pool.ts"],
     ["src/gateway/call.ts", "src/infra/client-credential-store.ts"],
+    ["src/infra/client-credential.worker.ts", "src/infra/exec-approvals-config.ts"],
+    ["src/infra/client-credential-native-bootstrap.ts", "src/infra/exec-approvals-config.ts"],
     ["src/gateway/config-get-response.ts", "src/config/runtime-schema.ts"],
     ["src/daemon/service-command.ts", "src/daemon/launchd-runtime.ts"],
     ["src/daemon/service-command.ts", "src/daemon/schtasks-layout.ts"],
     ["src/config/legacy-workboard-database.ts", "src/infra/database-engine/open.ts"],
   ])("loads %s without the demand-only %s", (entry, deferred) => {
     expect(collectStaticValueImports(entry)).not.toContain(path.normalize(deferred));
+  });
+
+  it.each([
+    "src/infra/sqlite-readonly-worker-context.ts",
+    "src/infra/update-doctor-migration-context.ts",
+    "src/infra/client-credential-store.ts",
+    "src/infra/client-credential.worker.ts",
+  ])("reads cancellation in %s without loading SQLite workers", (entry) => {
+    const modules = collectStaticValueImports(entry);
+    expect(modules).not.toContain(path.normalize("src/infra/sqlite-readonly-worker.ts"));
+    expect(modules).not.toContain(path.normalize("src/infra/sqlite-readonly-worker-pool.ts"));
   });
 
   it("prepares worker exec approvals without loading model completion", () => {
@@ -270,10 +312,10 @@ console.log("prewarm-cold-selection-ok");`,
     );
   });
 
-  it("starts the command broker without loading the execa runtime", () => {
-    expect(collectStaticValueImports("src/process/spawn-broker/worker.ts")).not.toContain(
-      path.normalize("src/process/spawn-broker/execa-worker.ts"),
-    );
+  it("waits for the broker bootstrap before loading command handlers", () => {
+    const modules = collectStaticValueImports("src/process/spawn-broker/worker.ts");
+    expect(modules).not.toContain(path.normalize("src/process/spawn-broker/execa-worker.ts"));
+    expect(modules).not.toContain(path.normalize("src/agents/sessions/tools/read-file-page.ts"));
   });
 
   it.each([
@@ -301,10 +343,14 @@ console.log("prewarm-cold-selection-ok");`,
     }
   });
 
-  it("prepares chat.send without loading the media execution runtime", () => {
-    expect(
-      collectStaticValueImports("src/gateway/server-methods/chat-send-external-entry.ts"),
-    ).not.toContain("src/media-understanding/runtime.ts");
+  it("prepares chat.send without loading media execution or session cancellation", () => {
+    const modules = collectStaticValueImports(
+      "src/gateway/server-methods/chat-send-external-entry.ts",
+    );
+    expect(modules).not.toContain(path.normalize("src/media-understanding/runtime.ts"));
+    expect(modules).not.toContain(
+      path.normalize("src/gateway/server-methods/chat-abort-runtime.ts"),
+    );
   });
 
   it("keeps static method policy independent of session storage", () => {

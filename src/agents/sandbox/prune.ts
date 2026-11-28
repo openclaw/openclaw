@@ -8,13 +8,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
-import { listExecSessionsForCancellation } from "../bash-process-registry.js";
 import type { WorkspaceStateGuard } from "../workspace-state-store.worker-contract.js";
 import { getSandboxBackendManager, usesSandboxRuntimeReservations } from "./backend.js";
 import { stopCachedBrowserBridgesForContainer } from "./browser-bridges.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { withSandboxContainerLifecycle } from "./container-lifecycle.js";
-import { isSandboxContainerInUse } from "./container-usage.js";
+import { hasActiveContainerUsage } from "./container-usage.js";
 import { dockerSandboxBackendManager, podmanSandboxBackendManager } from "./docker-backend.js";
 import {
   maybeRunSandboxRegistryHousekeeping,
@@ -48,20 +47,6 @@ function shouldStopIdleContainer(entry: SandboxRegistryEntry, now: number): bool
     (entry.runtimeState === undefined || entry.runtimeState === "ready") &&
     entry.idleStoppedAtLastUsedMs !== entry.lastUsedAtMs &&
     now - entry.lastUsedAtMs > IDLE_STOP_MS
-  );
-}
-
-function hasActiveContainerUsage(entry: SandboxRegistryEntry): boolean {
-  return (
-    isSandboxContainerInUse(entry.sessionKey) ||
-    listExecSessionsForCancellation().some(
-      (process) =>
-        process.sandboxContainerName === entry.containerName &&
-        (!process.exited ||
-          process.finalizing ||
-          process.cleanupUncertain ||
-          process.finalizationFailed),
-    )
   );
 }
 

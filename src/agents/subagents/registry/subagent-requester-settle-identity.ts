@@ -1,7 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
+import { subagentCompletionForOutcome } from "../../../shared/subagent-completion.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
+import { isSubagentCompletionCancelled } from "./subagent-control-kill-intent.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import type { RequesterSettleWakeState, SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   compareSubagentRunGeneration,
   isSameSubagentRun,
@@ -59,7 +62,7 @@ export function isRequesterSettleWakeForRun(params: {
   if (!wake) {
     return false;
   }
-  const pauseNotice = entry.pauseReason === "sessions_yield" && wake.pauseNotice;
+  const pauseNotice = isSubagentPausedByYield(entry) && wake.pauseNotice;
   // Dispatch selects the surviving members of its frozen generation. Retired
   // rows no longer contribute to the admitted wake's identity.
   const batchRunIds = pauseNotice
@@ -99,12 +102,7 @@ export function isRequesterSettleWakeForRun(params: {
 
 /** Kill, suppression, and session retirement each end a row's completion obligation. */
 export function isSubagentObligationRetired(entry: SubagentRunRecord): boolean {
-  return (
-    entry.killIntent !== undefined ||
-    entry.killReconciliation !== undefined ||
-    entry.suppressCompletionDelivery === true ||
-    entry.endedReason === SUBAGENT_ENDED_REASON_KILLED
-  );
+  return isSubagentCompletionCancelled(entry) || entry.endedReason === SUBAGENT_ENDED_REASON_KILLED;
 }
 
 /** A requester cohort counts only members that still owe their completion. */
@@ -187,7 +185,7 @@ export function isRequesterCompletionCohortCurrent(
   ) => SubagentRunRecord | null,
 ): boolean {
   const taskRunId = entry.taskRunId ?? entry.runId;
-  const paused = entry.pauseReason === "sessions_yield";
+  const paused = isSubagentPausedByYield(entry);
   const owner = latestForSession(
     entry.childSessionKey,
     (candidate) =>
@@ -205,7 +203,7 @@ const requesterRetirementCustody = (current: SubagentRunRecord) => ({
   requester: captureRequesterSettleRunIdentity(current),
   expectsCompletionMessage: current.expectsCompletionMessage === true,
   suppressCompletionDelivery: current.suppressCompletionDelivery === true,
-  retireAfterRequesterTurn: current.retireAfterRequesterTurn === true,
+  retireAfterSettle: current.retireAfterSettle === true,
   hasRequesterSettleWake: current.requesterSettleWake !== undefined,
   killIntent: current.killIntent && {
     requestedAt: current.killIntent.requestedAt,
@@ -288,8 +286,8 @@ export function resolveCurrentRequesterSettleWakeBatch(params: {
       !wake ||
       wake.rearmGeneration !== params.rearmGeneration ||
       (params.pause
-        ? entry.pauseReason !== "sessions_yield" || !wake.pauseNotice
-        : entry.pauseReason === "sessions_yield")
+        ? !isSubagentPausedByYield(entry) || !wake.pauseNotice
+        : isSubagentPausedByYield(entry))
     ) {
       return undefined;
     }
@@ -311,4 +309,16 @@ export function isRequesterYieldCohortMember(
     wake.batchRunIds?.length === batchRunIds.length &&
     wake.batchRunIds.every((runId, index) => runId === batchRunIds[index])
   );
+}
+
+/** Completion rows for a settled batch: one finished, failed, timed-out or stopped row per child. */
+export function settledCompletions(rows: readonly SubagentRunRecord[]) {
+  return rows.flatMap((entry) => {
+    const completion = subagentCompletionForOutcome(
+      { runId: entry.runId, sessionKey: entry.childSessionKey, label: entry.label },
+      entry.execution.outcome?.status,
+      entry.endedReason === SUBAGENT_ENDED_REASON_KILLED,
+    );
+    return completion ? [completion] : [];
+  });
 }

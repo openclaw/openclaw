@@ -119,19 +119,26 @@ describe("POSIX process tree metrics", () => {
 
   it("parses macOS ps RSS KiB values as bytes", () => {
     usePsOutput("100 0 1024\n101 0 1.5", "darwin");
-    expect([100, 101].map(readProcessTreeRssBytes)).toEqual([1_048_576, 1_536]);
+    expect([100, 101].map((pid) => readProcessTreeRssBytes(pid))).toEqual([1_048_576, 1_536]);
     expectPsCommand("rss");
   });
 
   it("rejects malformed macOS ps RSS values", () => {
     usePsOutput("101 0 nope\n102 0 -1\n103 0 0x10", "darwin");
-    expect([100, 101, 102, 103].map(readProcessTreeRssBytes)).toEqual([null, null, null, null]);
+    expect([100, 101, 102, 103].map((pid) => readProcessTreeRssBytes(pid))).toEqual([
+      null,
+      null,
+      null,
+      null,
+    ]);
   });
   it("reports unavailable RSS when a zombie leader still has live threads", () => {
     usePsOutput("100 0 0");
     readFileSyncMock.mockReturnValue("State:\tZ (zombie)\nThreads:\t2\n");
 
-    expect(readProcessTreeRssBytes(100)).toBeNull();
+    const unavailable = vi.fn();
+    expect(readProcessTreeRssBytes(100, unavailable)).toBeNull();
+    expect(unavailable).toHaveBeenCalledExactlyOnceWith("vmrss-unavailable pid=100");
   });
 
   it("keeps unavailable child memory in the tree", () => {
@@ -140,7 +147,9 @@ describe("POSIX process tree metrics", () => {
       path === "/proc/100/status" ? "VmRSS:\t1024 kB\n" : "Threads:\t2\n",
     );
 
-    expect(readProcessTreeRssBytes(100)).toBeNull();
+    const unavailable = vi.fn();
+    expect(readProcessTreeRssBytes(100, unavailable)).toBeNull();
+    expect(unavailable).toHaveBeenCalledExactlyOnceWith("vmrss-unavailable pid=101");
     expect(readFileSyncMock).toHaveBeenCalledWith("/proc/101/status", "utf8");
   });
 
@@ -150,6 +159,19 @@ describe("POSIX process tree metrics", () => {
       throw Object.assign(new Error("status unavailable"), { code: "ENOENT" });
     });
 
-    expect(readProcessTreeRssBytes(100)).toBeNull();
+    const unavailable = vi.fn();
+    expect(readProcessTreeRssBytes(100, unavailable)).toBeNull();
+    expect(unavailable).toHaveBeenCalledExactlyOnceWith("proc-status-unreadable pid=100");
+  });
+
+  it("distinguishes snapshot failure from a missing root without retrying", () => {
+    usePsOutput("101 0 0");
+    const unavailable = vi.fn();
+    expect(readProcessTreeRssBytes(100, unavailable)).toBeNull();
+    expect(unavailable).toHaveBeenLastCalledWith("root-missing pid=100");
+    spawnSyncMock.mockReturnValue({ status: null, stdout: "", signal: "SIGKILL" });
+    expect(readProcessTreeRssBytes(100, unavailable)).toBeNull();
+    expect(unavailable).toHaveBeenLastCalledWith("ps-failed status=null");
+    expect(spawnSyncMock).toHaveBeenCalledTimes(2);
   });
 });

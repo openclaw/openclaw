@@ -12,6 +12,7 @@ import {
   installQueueTestPlugin,
   useOutboundRuntime,
 } from "../../infra/outbound/deliver.custody.test-support.js";
+import { chatRef } from "../../sessions/chat-ref.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sendCronAnnouncePayloadStrict } from "../delivery.js";
@@ -161,13 +162,7 @@ it.each(["original", "reset"])(
       const sessionKey = "agent:main:structured-report";
       const entry = { sessionId: "structured-report", lifecycleRevision: "original", updatedAt: 1 };
       writeSessionEntry(database, sessionKey, entry);
-      const sessionGeneration = {
-        agentId: "main",
-        storePath: database.path,
-        sessionKey,
-        sessionId: entry.sessionId,
-        lifecycleRevision: entry.lifecycleRevision,
-      };
+      const sessionGeneration = chatRef({ agentId: "main", storePath: database.path, sessionKey });
       replaceSessionEntrySync(
         { agentId: "main", storePath: database.path, sessionKey },
         { ...entry, lifecycleRevision: revision, updatedAt: 2 },

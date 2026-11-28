@@ -68,10 +68,10 @@ describe("chat account selection", () => {
             modelAuthStatusResult,
             owner: state,
             client: state.client,
+            ownsScope: () => current,
             selection: state.chatAccountSelection,
             model: "openai/gpt-5.5",
             disabled: false,
-            ownsSelection: () => current,
             onSelect,
             onManage,
           }),
@@ -105,24 +105,6 @@ describe("chat account selection", () => {
       },
     };
   }
-
-  it("labels automatic selection concisely without changing its account choices", async () => {
-    const request = vi.fn().mockResolvedValue({ profileId: "owner", links: [], accounts: [] });
-    const view = mountAccountControl(request, {
-      kind: "automatic",
-      label: "Automatic account selection",
-    });
-    expect(
-      view.container.querySelector(".chat-controls__account-trigger")?.textContent?.trim(),
-    ).toBe("Account: Auto");
-    view.open();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith("users.listModelAccounts", {}));
-    expect(
-      view.container.querySelector('[data-chat-account-option="current"]')?.textContent?.trim(),
-    ).toBe("Automatic");
-    view.select("manage");
-    expect(view.onManage).toHaveBeenCalledOnce();
-  });
 
   it("keeps the current chat choice separate from a saved default for new chats", async () => {
     const request = vi.fn().mockResolvedValue({
@@ -193,7 +175,7 @@ describe("chat account selection", () => {
     expect(view.onManage).toHaveBeenCalledOnce();
   });
 
-  it("retries a failed inventory when the section is reopened", async () => {
+  it("retries a failed inventory explicitly after reopening the section", async () => {
     const request = vi
       .fn()
       .mockRejectedValueOnce(new Error("inventory offline"))
@@ -224,6 +206,12 @@ describe("chat account selection", () => {
     );
     view.open();
     view.open();
+    expect(request).toHaveBeenCalledOnce();
+    const retry = Array.from(view.container.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Retry",
+    );
+    expect(retry).toBeDefined();
+    retry!.click();
     await vi.waitFor(() => expect(view.container.textContent).toContain("Work workspace"));
     expect(view.container.querySelector('[role="alert"]')).toBeNull();
     expect(request).toHaveBeenCalledTimes(2);
@@ -336,6 +324,7 @@ describe("chat account selection", () => {
 
 describe("chat pane composer controls", () => {
   it("renders the selected Gateway model while keeping its model picker locked", async () => {
+    await import("./components/chat-model-picker-panel.tsx");
     const selectedSession: GatewaySessionRow = {
       key: "main",
       kind: "direct",
@@ -377,7 +366,7 @@ describe("chat pane composer controls", () => {
   });
 
   it.each([
-    { label: "empty", cached: false, connected: true, error: null, message: "No models available" },
+    { label: "empty", cached: false, connected: true, error: null, message: "Set up a model" },
     {
       label: "offline",
       cached: true,
@@ -431,21 +420,27 @@ describe("chat pane composer controls", () => {
       mountSolid(() => createComponent(ChatPaneModelControl, controls.composerControls), {
         container,
       });
-      await waitForSolid(() =>
-        expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
-      );
+      if (error) {
+        await waitForSolid(() =>
+          expect(
+            container.querySelector(".chat-controls__model-catalog-state")?.textContent,
+          ).toContain(message),
+        );
+        expect(
+          container.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled"),
+        ).toBe(String(!connected));
+      } else {
+        await waitForSolid(() =>
+          expect(container.querySelector("button[data-chat-model-setup]")?.textContent).toBe(
+            message,
+          ),
+        );
+        expect(container.querySelector(".chat-controls__model-picker")).toBeNull();
+      }
 
       expect(container.querySelectorAll(".chat-composer-model-control")).toHaveLength(1);
       expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
       expect(container.querySelector('[data-chat-permission-select="true"]')).toBeNull();
-      await waitForSolid(() =>
-        expect(
-          container.querySelector(".chat-controls__model-catalog-state")?.textContent,
-        ).toContain(message),
-      );
-      expect(
-        container.querySelector('[data-chat-model-select="true"]')?.getAttribute("aria-disabled"),
-      ).toBe(String(!connected));
       expect(container.querySelectorAll("[data-chat-model-option]")).toHaveLength(cached ? 1 : 0);
       const permissionContainer = document.createElement("div");
       mountSolid(() => createComponent(ChatPermissionPicker, controls.permissionPicker), {
@@ -515,8 +510,12 @@ describe("chat pane composer controls", () => {
     const heading = menu.querySelector<HTMLElement>(".oc-menu-heading__label");
     expect(heading?.textContent?.trim()).toBe("Permissions");
     expect(heading?.closest('[role="menuitem"]')).toBeNull();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector("a.chat-controls__permission-learn-more")?.textContent?.trim(),
+      ).toBe("Learn more"),
+    );
     const docsLink = container.querySelector<HTMLElement>("a.chat-controls__permission-learn-more");
-    expect(docsLink?.textContent?.trim()).toBe("Learn more");
     expect(docsLink?.getAttribute("href")).toBe(
       "https://docs.openclaw.ai/gateway/permission-modes",
     );
@@ -882,3 +881,35 @@ describe("chat pane model controls", () => {
     expect(state.chatRunId).toBeNull();
   });
 });
+
+it.each(["read-only", "guarded", "workspace", "full"] as const)(
+  "shows the admitted participant permission %s instead of the owner's mode",
+  (invitedPermission) => {
+    const key = "agent:main:participant-permission";
+    const selectedSession: GatewaySessionRow = {
+      key,
+      kind: "direct" as const,
+      permissionMode: "full" as const,
+      invitedAccess: "send" as const,
+      invitedPermission,
+      sharingRole: "member" as const,
+    };
+    const state = makeChatHost({
+      sessionKey: key,
+      chatModelSwitchPromises: {},
+      sessionsResult: {
+        ...createSessionsListResult({ defaultsModel: null, defaultsProvider: null }),
+        sessions: [selectedSession],
+      },
+    }) as unknown as ChatPageHost;
+    expect(renderControls(state).permissionPicker).toMatchObject({
+      mode: invitedPermission,
+      participant: true,
+    });
+    selectedSession.sharingRole = "owner";
+    expect(renderControls(state).permissionPicker).toMatchObject({
+      mode: "full",
+      participant: false,
+    });
+  },
+);

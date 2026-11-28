@@ -7,6 +7,8 @@ const runtime = registerNewSessionRuntimeEnglish.catalog.newSession;
 // Session setup messages load with their consumers instead of every UI startup.
 const enNewSessionSetup = {
   newSession: {
+    incognitoPermissionDenied: "You don’t have permission to start an Incognito session.",
+    fullAccessPermissionDenied: "You don’t have permission to turn on Full access.",
     openClawWorker: "Cloud device",
     deviceFolder: "Existing folder",
     deviceFolderOn: "Existing folder on {device}",
@@ -28,7 +30,6 @@ const enNewSessionSetup = {
     requiredWorkerUnavailable: runtime.requiredWorkerUnavailable,
     requiredWorkerChanged: runtime.requiredWorkerChanged,
     title: en.newSession.title,
-    hint: en.newSession.hint,
     environments: "Devices",
     gateway: "This computer",
     cloudWorkerMachine: "{profile} · {machine}",
@@ -188,12 +189,17 @@ const enNewSessionSetup = {
     checkoutRepositoryFrom: "Remote checkout from {branch}",
     checkoutRequiresWorktree: "Use an isolated worktree for this project and agent",
     checkoutCheckUnavailable: "Couldn’t check the checkout. Select the project again to retry.",
+    checkoutProjectUnavailable: "This session can’t use this project.",
+    checkoutProjectUnavailableAction:
+      "This session can’t use this project. Choose another project or workspace.",
     checkoutRemoteLocked: "Paired and cloud devices use a worktree",
     local: "This computer",
     folderPlaceholder: "Agent workspace",
     localProjects: "Local projects",
     noLocalProjects: "No local projects registered",
     noLocalProjectMatches: "No local projects match",
+    noSharedProjects: "No projects are shared with your role. Ask an admin to share one.",
+    manageProjects: "Manage projects",
     noAdditionalGithubProjects: "No additional GitHub repositories",
     projectsAdminHint: "Admins can register projects from Browse folders",
     projectSearchPlaceholder: "Search projects or paste a Git URL",
@@ -227,6 +233,7 @@ const enNewSessionSetup = {
     autoDeviceInfo: "About automatic device selection",
     autoDeviceScope: "Connected devices only",
     restoringPreferences: "Restoring your last session setup…",
+    savedProjectLookupFailed: "Your saved project didn’t load. Choose a workspace.",
     checkingPlace: "Checking the selected device…",
     agentsUnavailable:
       "No agents are available on this Gateway. Ask an admin to add one before starting a session.",

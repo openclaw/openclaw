@@ -13,9 +13,15 @@ import {
 } from "./official-external-plugin-catalog.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
-import { isProviderAuthChoicePlatformSupported } from "./provider-auth-choice-platform.js";
 import { parseProviderPluginMethodChoice } from "./provider-plugin-choice.js";
 import { groupPluginRecords, PLUGIN_ORIGIN_PRIORITIES } from "./record-groups.js";
+
+/** Keep setup and cold-install choices on the platforms their provider supports. */
+export function isProviderAuthChoicePlatformSupported(platforms: unknown): boolean {
+  return (
+    platforms === undefined || (Array.isArray(platforms) && platforms.includes(process.platform))
+  );
+}
 
 export type ProviderAuthChoiceMetadata = Omit<
   PluginManifestProviderAuthChoice,

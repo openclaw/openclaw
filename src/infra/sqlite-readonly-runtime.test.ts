@@ -47,7 +47,7 @@ const session = () =>
     argv: [],
     retainLifetime: false,
     requestArgs: () => [],
-    readBudget: () => ({ timeoutMs: 5_000, size: "fixture" }),
+    readBudget: async () => ({ timeoutMs: 5_000, size: "fixture" }),
     deadlineOwnedByCaller: () => true,
     timeoutError: () => new Error("unexpected timeout"),
     closeTimeoutMs: 5_000,
@@ -103,7 +103,7 @@ it
   },
 );
 
-it("publishes a removed runtime observed by readiness before another worker spawn", async () => {
+it("publishes a removed runtime from explicit preparation before another worker spawn", async () => {
   const { registerChildRuntimeRecovery } = await import("./child-runtime-viability.js");
   const executable = await runtime("echo v26.12.0");
   const recover = vi.fn(async () => ({ status: "report-only" as const, reason: "test service" }));
@@ -112,6 +112,9 @@ it("publishes a removed runtime observed by readiness before another worker spaw
   const readiness = readinessChecker();
   expect(readiness().ready).toBe(true);
   await fs.unlink(executable);
+  expect(readiness().ready).toBe(true);
+  const prepared = await readiness.prepare();
+  expect(prepared.publish()).toMatchObject({ ready: false, failing: ["child-runtime"] });
   expect(readiness()).toMatchObject({ ready: false, failing: ["child-runtime"] });
   await Promise.resolve();
   expect(recover).toHaveBeenCalledTimes(1);

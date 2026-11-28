@@ -85,6 +85,8 @@ it(
             row.state = "interrupted";
           }
           row.consumed_event_id = null;
+          row.end_cause = null;
+          row.origin_source_json = null;
         }
       }
       const runtime = createBuiltRuntime(state.root);

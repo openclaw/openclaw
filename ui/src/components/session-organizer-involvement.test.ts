@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expect, it, vi } from "vitest";
+import { setSessionInvolvement as writeSessionInvolvement } from "../lib/sessions/session-involvement-write.runtime.ts";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import { createHarness, sessionRow } from "./session-organizer-batch-mutations.test-support.ts";
 import { setSessionInvolvement } from "./session-organizer-batch-mutations.ts";
@@ -10,8 +11,8 @@ it.each(["operator.sessions.read", "operator.read"])(
   async (scope) => {
     const h = createHarness({ methods: ["sessions.setInvolvement"], scopes: [scope] });
     const row = sessionRow(1, { sharingRole: "viewer" });
-    h.request.mockResolvedValue({ ok: true });
-    h.scope.sessions.patchRowLocal = vi.fn();
+    const mutate = vi.fn(async () => true);
+    h.scope.sessions.setInvolvement = mutate;
 
     expect(
       sessionMenuReasons({ snapshot: h.scope.gateway.snapshot, session: row })[
@@ -20,19 +21,12 @@ it.each(["operator.sessions.read", "operator.read"])(
     ).toBeUndefined();
     for (const hidden of [true, false]) {
       await setSessionInvolvement(h.host, row, hidden, h.scope);
-      expect(h.request).toHaveBeenLastCalledWith("sessions.setInvolvement", {
-        key: row.key,
-        agentId: "main",
-        expectedSessionId: row.sessionId,
-        hidden,
-      });
-      expect(h.scope.sessions.patchRowLocal).toHaveBeenLastCalledWith(
-        row.key,
-        { hiddenFromInvolvingMe: hidden },
-        { agentId: "main", sessionId: row.sessionId },
+      expect(mutate).toHaveBeenLastCalledWith(
+        { key: row.key, agentId: "main", expectedSessionId: row.sessionId, hidden },
+        writeSessionInvolvement,
       );
     }
-    expect(h.request).toHaveBeenCalledTimes(2);
+    expect(mutate).toHaveBeenCalledTimes(2);
     expect(h.host.sessionData.refreshSidebarSessions).toHaveBeenCalledTimes(2);
     expect(h.publishSessionMutationError).not.toHaveBeenCalled();
     expect(h.patch).not.toHaveBeenCalled();

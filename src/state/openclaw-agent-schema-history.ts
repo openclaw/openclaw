@@ -24,7 +24,15 @@ import {
   SESSION_PARTICIPANTS_TABLE,
 } from "./openclaw-agent-db-contract.js";
 import { withLegacyAgentIndexes } from "./openclaw-agent-index-retirement-migration.js";
+import {
+  AGENT_MEMBER_ACCESS_SCHEMA_VERSION,
+  withoutAgentMemberAccess,
+} from "./openclaw-agent-member-access-schema.js";
 import { withLegacyAgentMemoryRevisionTriggers } from "./openclaw-agent-memory-revision-migration.js";
+import {
+  AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION,
+  withoutAgentPendingInputEndings,
+} from "./openclaw-agent-pending-input-endings-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION,
@@ -36,6 +44,7 @@ import {
   withoutAgentToolUsage,
 } from "./openclaw-agent-tool-usage-schema.js";
 import { withoutTrajectoryPayloadColumns } from "./openclaw-agent-trajectory-storage-migration.js";
+import { AGENT_ARCHIVE_UNDO_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 
 // Schema 21–24 kept every raw writer observable through this required trigger group.
 export const LEGACY_ENTRY_VALIDITY_TRIGGERS_SQL = `
@@ -319,7 +328,19 @@ function withLegacyAgentWriteLayout(schema: string): string {
     );
 }
 
-const AGENT_SCHEMA_BEFORE_TOOL_USAGE = withoutAgentToolUsage(OPENCLAW_AGENT_SCHEMA_SQL);
+const AGENT_SCHEMA_BEFORE_ARCHIVE_UNDO = OPENCLAW_AGENT_SCHEMA_SQL.replace(
+  ",\n  archive_undo_marker TEXT\n",
+  "\n",
+);
+const AGENT_SCHEMA_BEFORE_MEMBER_ACCESS = withoutAgentMemberAccess(
+  AGENT_SCHEMA_BEFORE_ARCHIVE_UNDO,
+);
+const AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS = withoutAgentPendingInputEndings(
+  AGENT_SCHEMA_BEFORE_MEMBER_ACCESS,
+);
+const AGENT_SCHEMA_BEFORE_TOOL_USAGE = withoutAgentToolUsage(
+  AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS,
+);
 const AGENT_SCHEMA_BEFORE_ACTIVE_EVENT_FACTS = withoutAgentActiveEventFacts(
   AGENT_SCHEMA_BEFORE_TOOL_USAGE,
 );
@@ -345,7 +366,13 @@ export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
           ? AGENT_SCHEMA_BEFORE_ACTIVE_EVENT_FACTS
           : targetVersion < AGENT_TOOL_USAGE_SCHEMA_VERSION
             ? AGENT_SCHEMA_BEFORE_TOOL_USAGE
-            : OPENCLAW_AGENT_SCHEMA_SQL;
+            : targetVersion < AGENT_PENDING_INPUT_ENDINGS_SCHEMA_VERSION
+              ? AGENT_SCHEMA_BEFORE_PENDING_INPUT_ENDINGS
+              : targetVersion < AGENT_MEMBER_ACCESS_SCHEMA_VERSION
+                ? AGENT_SCHEMA_BEFORE_MEMBER_ACCESS
+                : targetVersion < AGENT_ARCHIVE_UNDO_SCHEMA_VERSION
+                  ? AGENT_SCHEMA_BEFORE_ARCHIVE_UNDO
+                  : OPENCLAW_AGENT_SCHEMA_SQL;
   const navigationSchemaSql =
     targetVersion < AGENT_COLD_NAVIGATION_SCHEMA_VERSION
       ? withoutAgentColdNavigation(schemaSql)

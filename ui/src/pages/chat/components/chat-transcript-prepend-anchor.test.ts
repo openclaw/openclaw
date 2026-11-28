@@ -28,6 +28,7 @@ function fixture(scrollHeight = 1600) {
   bubble.getBoundingClientRect = () => rect(90, 180);
   const virtualizer = {
     scrollElement: scroller,
+    cancelScroll: vi.fn(),
     scrollToOffset: vi.fn((offset: number) => {
       scroller.scrollTop = Math.max(0, Math.min(offset, scrollHeight - scroller.clientHeight));
     }),
@@ -47,6 +48,90 @@ function fixture(scrollHeight = 1600) {
 
 const messages = (...ids: string[]) => new Set(ids);
 afterEach(() => document.body.replaceChildren());
+
+it("retains the reader without admitting a pending history prepend", () => {
+  const { scroller, bubble, instance, anchor } = fixture();
+  scroller.scrollTop = 200;
+  let contentTop = 290;
+  bubble.getBoundingClientRect = () => rect(contentTop - scroller.scrollTop, 180);
+  anchor.messageKeys = messages("visible");
+  anchor.capture(scroller, false);
+  anchor.messageKeys = messages("older", "visible");
+
+  anchor.retainReader(scroller);
+  expect(anchor.hasPrepend).toBe(true);
+  expect(scroller.scrollTop).toBe(200);
+
+  // Only the admitted projection retires the prepend; its new flow keeps the saved reader.
+  anchor.capture(scroller, false);
+  expect(anchor.hasPrepend).toBe(false);
+  contentTop += 40;
+  anchor.update(instance, unmeasuredRows);
+  expect(scroller.scrollTop).toBe(240);
+  expect(bubble.getBoundingClientRect().top).toBe(90);
+});
+
+it("keeps a newer scroll when a fractional prepend correction has already landed", async () => {
+  const { scroller, bubble, anchor } = fixture();
+  const instance = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 1,
+    estimateSize: () => scroller.scrollHeight,
+    getScrollElement: () => scroller,
+    observeElementRect: vi.fn(),
+    observeElementOffset: vi.fn(),
+    scrollToFn: (offset) => {
+      scroller.scrollTop = Math.round(offset);
+    },
+  });
+  instance.scrollElement = scroller;
+  instance.targetWindow = window;
+  scroller.scrollTop = 200;
+  anchor.messageKeys = messages("visible");
+  anchor.capture(scroller, false);
+  anchor.messageKeys = messages("older", "visible");
+  anchor.capture(scroller, false);
+  bubble.getBoundingClientRect = () => rect(130.375, 180);
+  anchor.update(instance, measuredRows);
+  expect(scroller.scrollTop).toBe(240);
+
+  // The virtualizer has observed the rounded position, but not the reader's next scroll event.
+  instance.scrollOffset = scroller.scrollTop;
+  scroller.scrollTop -= 24;
+  await new Promise(requestAnimationFrame);
+  expect(scroller.scrollTop).toBe(216);
+});
+
+it("restores a committed reader while measurements settle without requesting idle commits", () => {
+  const { scroller, bubble, instance, anchor } = fixture();
+  scroller.scrollTop = 200;
+  let contentTop = 290;
+  bubble.getBoundingClientRect = () => rect(contentTop - scroller.scrollTop, 180);
+  anchor.messageKeys = messages("visible");
+  anchor.capture(scroller, false);
+  anchor.retainReader(scroller);
+
+  contentTop += 40;
+  expect(anchor.update(instance, unmeasuredRows)).toBe(false);
+  expect(scroller.scrollTop).toBe(200);
+  expect(anchor.update(instance, unmeasuredRows, true)).toBe(true);
+  expect(scroller.scrollTop).toBe(240);
+  expect(bubble.getBoundingClientRect().top).toBe(90);
+  const idleCommits = Array.from({ length: 2 }, () =>
+    anchor.update(instance, unmeasuredRows, true),
+  );
+  expect(idleCommits).toEqual([false, false]);
+  expect(anchor.messageKey).toBe("visible");
+
+  contentTop += 10;
+  expect(anchor.update(instance, unmeasuredRows, true)).toBe(true);
+  expect(scroller.scrollTop).toBe(250);
+  expect(bubble.getBoundingClientRect().top).toBe(90);
+  const settledCommits = Array.from({ length: 3 }, () =>
+    anchor.update(instance, measuredRows, true),
+  );
+  expect(settledCommits).toEqual([true, true, false]);
+  expect(anchor.messageKey).toBeNull();
+});
 
 it("stops requesting commits when a reachable scroll correction makes no progress", () => {
   const { scroller, bubble, virtualizer, instance, anchor } = fixture();
@@ -240,7 +325,12 @@ it("keeps the original reader target when another projection commits before rest
   expect(measureRows).toHaveBeenCalledTimes(2);
 });
 
-it("preserves native wheel movement after a projection captures the reader", () => {
+const wheelOrderings = ["event-first", "capture-first", "move-first", "idle-first"] as const;
+it.each(wheelOrderings)("keeps wheel movement (%s)", (order) => {
+  const syncFirst = order !== "event-first";
+  if (syncFirst) {
+    vi.useFakeTimers();
+  }
   const { scroller, bubble, anchor } = fixture(2000);
   let headerGrowth = 0;
   bubble.getBoundingClientRect = () => rect(290 + headerGrowth - scroller.scrollTop, 180);
@@ -277,17 +367,39 @@ it("preserves native wheel movement after a projection captures the reader", () 
   updateVirtualizer();
   scroller.dispatchEvent(new Event("scroll"));
   try {
-    scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+    if (syncFirst && order !== "idle-first") {
+      vi.advanceTimersByTime(1_000);
+      expect(instance.isScrolling).toBe(false);
+    }
+    scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: syncFirst ? -24 : -40 }));
+    if (order === "move-first") {
+      scroller.scrollTop = 176;
+    }
     anchor.messageKeys = messages("visible");
     anchor.capture(scroller, false, true);
     anchor.update(instance, measuredRows);
-    headerGrowth = 30;
-    scroller.scrollTop = 160;
-    scroller.dispatchEvent(new Event("scroll"));
+    if (syncFirst) {
+      // Committed position reconciliation can read the viewport before its scroll event.
+      scroller.scrollTop = 176;
+      if (order === "idle-first") {
+        expect(instance.isScrolling).toBe(true);
+        vi.advanceTimersByTime(1_000);
+        expect(instance.isScrolling).toBe(false);
+      } else {
+        owner.state.syncNativeOffset?.();
+      }
+    } else {
+      headerGrowth = 30;
+      scroller.scrollTop = 160;
+      scroller.dispatchEvent(new Event("scroll"));
+    }
     anchor.update(instance, measuredRows);
-    expect(scroller.scrollTop).toBe(190);
-    expect(bubble.getBoundingClientRect().top).toBe(130);
+    expect(scroller.scrollTop).toBe(syncFirst ? 176 : 190);
+    expect(bubble.getBoundingClientRect().top).toBe(syncFirst ? 114 : 130);
   } finally {
     dispose();
+    if (syncFirst) {
+      vi.useRealTimers();
+    }
   }
 });

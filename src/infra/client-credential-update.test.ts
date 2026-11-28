@@ -330,7 +330,12 @@ async function capture(f: Fixture, fresh = false, reservePlugins = false) {
   return { run, backup: result.backup! };
 }
 
-async function migrate(f: Fixture, captured?: Awaited<ReturnType<typeof capture>>, fresh = false) {
+async function migrate(
+  f: Fixture,
+  captured?: Awaited<ReturnType<typeof capture>>,
+  fresh = false,
+  expected: { token?: string; rollback?: boolean } = {},
+) {
   const maintenance = await beginDoctorMaintenance({
     root: null,
     options: { repair: true, nonInteractive: true },
@@ -367,7 +372,7 @@ async function migrate(f: Fixture, captured?: Awaited<ReturnType<typeof capture>
           source: captured.backup.sourceGenerations,
           writes,
         }),
-      ).toBe(true);
+      ).toBe(expected.rollback ?? true);
       expect(Object.keys(writes!.generations).toSorted()).toEqual(
         Object.keys(captured.backup.sourceGenerations).toSorted(),
       );
@@ -376,7 +381,11 @@ async function migrate(f: Fixture, captured?: Awaited<ReturnType<typeof capture>
           name: "candidate Doctor",
         }),
       ).toBeDefined();
-      expect(captured.backup.restoreRefusal).toBeUndefined();
+      if (expected.rollback === false) {
+        expect(captured.backup.restoreRefusal).toBeDefined();
+      } else {
+        expect(captured.backup.restoreRefusal).toBeUndefined();
+      }
     }
   } finally {
     await maintenance!.release();
@@ -386,7 +395,7 @@ async function migrate(f: Fixture, captured?: Awaited<ReturnType<typeof capture>
     using local = openClientCredentialCustody(f.env, { migration: true })!;
     expect(readClientCredentialReceipt(local.database)?.phase).toBe("complete");
   } else {
-    assertMigratedCredentials(f);
+    assertMigratedCredentials(f, expected.token);
   }
 }
 
@@ -433,10 +442,9 @@ describe("client credential public update custody", () => {
       "pending",
     );
     expect(
-      readMatchingUpdateDatabaseGeneration(
-        f.pathname,
+      readMatchingUpdateDatabaseGeneration(f.pathname, [
         captured.backup.sourceGenerations[f.pathname]!,
-      ),
+      ]),
     ).toEqual(expect.any(String));
     expect(await f.readShared()).toEqual(before);
     expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
@@ -868,18 +876,34 @@ describe("client credential public update custody", () => {
     ]);
   });
 
-  it("refuses a foreign shared write after capture without retiring credentials", async () => {
+  it("migrates newer credentials after capture without allowing stale rollback", async () => {
     const f = await fixture("sqlite");
     const captured = await capture(f);
     {
       using shared = openNodeSqliteDatabase(f.pathname);
       shared.prepare("UPDATE device_auth_tokens SET token=?").run("synthetic-foreign-token");
     }
-    await expect(migrate(f, captured)).rejects.toThrow(/changed|capture|generation|custody/i);
-    expect(await f.readShared()).toEqual({ version: 25, token: "synthetic-foreign-token", policy });
-    expect(() =>
-      runClientCredentialOperation(f.env, { kind: "identity.read", identity_key: "primary" }),
-    ).toThrow();
+    await migrate(f, captured, false, { token: "synthetic-foreign-token", rollback: false });
+    const result: UpdateRunResult = { status: "error", mode: "npm", steps: [], durationMs: 0 };
+    expect(
+      await restoreFailedUpdateDatabases({
+        backup: captured.backup,
+        runId: captured.run.runId,
+        env: f.env,
+        assertCurrent() {},
+        result,
+      }),
+    ).toBe(false);
+    expect(result.rollbackOutcome?.status).toBe("not-attempted");
+    using local = openClientCredentialCustody(f.env, { migration: true })!;
+    expect(readClientCredentialReceipt(local.database)?.phase).toBe("complete");
+    expect(local.database.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
+      token: "synthetic-foreign-token",
+    });
+    using shared = openNodeSqliteDatabase(f.pathname, { readOnly: true });
+    expect(
+      shared.prepare("SELECT name FROM sqlite_schema WHERE name='device_auth_tokens'").get(),
+    ).toBeUndefined();
   });
 });
 

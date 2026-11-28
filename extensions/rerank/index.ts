@@ -1,7 +1,7 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
-import { RERANK_DECISION_CAPABILITIES } from "./decision-codec.js";
-import { buildRerankDecisionProvider, RERANK_PROVIDER_ID } from "./decision-provider.js";
+import { RERANK_DECISION_CAPABILITIES, RERANK_PROVIDER_ID } from "./decision-metadata.js";
+import { buildRerankDecisionProvider } from "./decision-provider.js";
 
 export default definePluginEntry({
   id: "rerank",

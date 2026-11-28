@@ -46,7 +46,7 @@ suite.define(() => {
               thinkingLevels,
               thinkingDefault: "medium",
               cyberAccessProgramDefault: "standard",
-              availableAccessPrograms: { cyber: ["standard", "daybreak_blue", "daybreak_red"] },
+              availableAccessPrograms: { cyber: ["standard", "daybreak_blue"] },
             },
           ],
           ...(source === "identity"
@@ -82,6 +82,9 @@ suite.define(() => {
         await page.locator('[data-chat-speed-option="on"]').waitFor({ state: "visible" });
         return effort;
       };
+      const daybreak = () => page.getByRole("switch", { name: "Daybreak", exact: true });
+      const expectDaybreak = () =>
+        expect.poll(() => daybreak().isChecked()).toBe(expectedAccess === "daybreak_blue");
       const speed = (value: "on" | "off") => page.locator(`[data-chat-speed-option="${value}"]`);
       const expectSpeed = (value: "on" | "off", checked = "true") =>
         pollAttribute(speed(value), "aria-checked").toBe(checked);
@@ -95,10 +98,7 @@ suite.define(() => {
         await pollAttribute(await openEffort(), "data-chat-thinking-value").toBe("high");
         await expectSpeed("on", String(enabled));
         if (source === "identity") {
-          await pollAttribute(
-            page.locator(`[data-chat-access-option="${expectedAccess}"]`),
-            "aria-pressed",
-          ).toBe("true");
+          await expectDaybreak();
         }
       };
       const submit = async (message: string, fastMode: boolean) => {
@@ -141,14 +141,10 @@ suite.define(() => {
         await speed("on").click();
         await expectSpeed("on");
         await confirmPreferenceWrite({ fastMode: true });
-        const access = page.locator('[data-chat-access-option="daybreak_blue"]');
         if (source === "identity") {
-          await page.getByRole("switch", { name: "Daybreak", exact: true }).check();
-          await pollAttribute(access, "aria-pressed").toBe("true");
-          await confirmPreferenceWrite({
-            cyberAccessProgram: "daybreak_blue",
-            daybreakAccessProgram: "daybreak_blue",
-          });
+          await daybreak().check();
+          await expectDaybreak();
+          await confirmPreferenceWrite({ cyberAccessProgram: "daybreak_blue" });
         }
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         await captureUiProof(suite, page, `access-${source}-new.png`);
@@ -156,29 +152,23 @@ suite.define(() => {
         await waitForCommittedChatRoute(page);
         await openEffort();
         if (source === "identity") {
-          await pollAttribute(access, "aria-pressed").toBe("true");
+          await expectDaybreak();
         }
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         await captureUiProof(suite, page, `access-${source}-chat.png`);
         if (source === "identity") {
-          await page.locator('[data-chat-access-option="daybreak_red"]').click();
+          await daybreak().uncheck();
           await gateway.waitForRequest("sessions.patch", {
-            match: { cyberAccessProgram: "daybreak_red" },
+            match: { cyberAccessProgram: "standard" },
           });
-          await confirmPreferenceWrite({
-            cyberAccessProgram: "daybreak_red",
-            daybreakAccessProgram: "daybreak_red",
-          });
-          expectedAccess = "daybreak_red";
+          await confirmPreferenceWrite({ cyberAccessProgram: "standard" });
+          expectedAccess = "standard";
           const savedSession = await gateway.getSessionRow("agent:main:fast-mode-proof");
-          expect(savedSession.cyberAccessProgram).toBe("daybreak_red");
+          expect(savedSession.cyberAccessProgram).toBe("standard");
           await gateway.setSessionsListResponse({ sessions: [savedSession] });
           await page.reload();
           await openEffort();
-          await pollAttribute(
-            page.locator('[data-chat-access-option="daybreak_red"]'),
-            "aria-pressed",
-          ).toBe("true");
+          await expectDaybreak();
         }
 
         await reopen(true);

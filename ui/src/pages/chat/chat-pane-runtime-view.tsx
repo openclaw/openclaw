@@ -343,7 +343,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       const cacheProgress = () => {
         const { target, store, options } = runtime.readProgressCardScope();
         if (target && options.admitAutomaticRead()) {
-          runtime.cacheProgressCard(target, store.get(target));
+          runtime.cacheProgressCard(target, store.get(target, "saved"));
         }
       };
       onSettled(() => {
@@ -378,6 +378,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       // Relative labels tick only while this retained pane is presented.
       const [relativeTime, setRelativeTime] = createSignal(Date.now());
       const minutePoll = useVisiblePoll(60_000, () => setRelativeTime(Date.now()));
+      const catalogPoll = useVisiblePoll(5_000, () => void runtime.pollCatalogSession());
       const [providerReview, setProviderReview] = createSignal<ChatProviderReviewOwner>();
       const frame = createParkedProjection(
         () => {
@@ -445,8 +446,10 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
             }
             if (next.presented) {
               minutePoll.start();
+              catalogPoll.start();
             } else {
               minutePoll.stop();
+              catalogPoll.stop();
             }
           },
         );

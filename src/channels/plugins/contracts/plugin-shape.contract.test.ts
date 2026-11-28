@@ -1,4 +1,3 @@
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { beforeAll, describe, expect, it } from "vitest";
 import { listChannelCatalogEntries } from "../../../plugins/channel-catalog-registry.js";
 import {
@@ -46,10 +45,8 @@ describe("bundled channel plugin shape coherence", () => {
         "<think>secret</think>",
         visible,
       ].join("\n");
-      const expected = sanitizeAssistantVisibleText(text);
 
-      expect(expected).toBe(visible);
-      expect(sanitizeText({ text, payload: { text } })).toBe(expected);
+      expect(sanitizeText({ text, payload: { text } })).toBe(visible);
     },
   );
 

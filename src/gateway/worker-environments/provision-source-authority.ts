@@ -1,4 +1,4 @@
-import { GatewayOperatorRecoveryAuthorizationError } from "../../infra/restart-recovery-errors.js";
+import { OperatorRefusalError } from "../operator-refusal.js";
 import { restoreGatewayQueuedOperatorRecovery } from "../operator-run-recovery.js";
 import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
@@ -6,7 +6,7 @@ import type { WorkerEnvironmentRecord } from "./store.js";
 /** Distinguishes a refused original source from a later retry caller's refusal. */
 export class WorkerProvisionSourceChangedError extends Error {
   constructor(cause: unknown) {
-    super("Worker creation authority changed; submit a new request.", { cause });
+    super("Worker creation was refused; submit a new request.", { cause });
   }
 }
 
@@ -67,11 +67,11 @@ export async function restoreWorkerProvisionSource(
     });
   } catch (error) {
     signal.throwIfAborted();
-    if (error instanceof GatewayOperatorRecoveryAuthorizationError) {
+    if (error instanceof OperatorRefusalError) {
       throw new WorkerProvisionSourceChangedError(error);
     }
     // A failed identity read or an unavailable runtime context does not prove revocation.
     throw new WorkerProvisionSourceRecoveryPendingError(error);
   }
-  return { assertCurrent: wrap(restored.authority.assertCurrent), release: restored.release };
+  return { assertCurrent: assertOwner, release: restored.release };
 }

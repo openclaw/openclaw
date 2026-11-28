@@ -268,6 +268,7 @@ export type RelayAgentRun = {
 
 export type RelayAgentRunRegistration = {
   run: RelayAgentRun;
+  onSessionIdChanged?: (sessionId: string) => void;
   isCurrent: (phase?: "active" | "completion") => boolean;
   release: () => void;
   abortIfCurrent: () => void;
@@ -278,7 +279,9 @@ export type RelaySession = {
   getToolAuthorityOverlay?: (
     authority?: TalkAgentConsultAuthority,
     source?: "reply" | "attempt",
-  ) => import("../../../sessions/session-controller.contracts.js").ReplyToolAuthorityOverlay;
+  ) => Promise<
+    import("../../../sessions/session-controller.contracts.js").ReplyToolAuthorityOverlay
+  >;
   id: string;
   connId: string;
   context: GatewayRequestContext;

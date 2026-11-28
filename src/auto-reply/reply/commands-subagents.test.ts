@@ -11,7 +11,6 @@ import {
 import * as controlScope from "../../agents/subagents/registry/subagent-control-scope.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../../agents/subagents/registry/subagent-lifecycle-events.js";
 import { captureSubagentListReadContext } from "../../agents/subagents/registry/subagent-list.js";
-import { SubagentLifecycleController } from "../../agents/subagents/registry/subagent-registry-lifecycle.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../../agents/subagents/registry/subagent-registry-persistence.js";
 import { buildSubagentRunReadIndexFromRuns } from "../../agents/subagents/registry/subagent-registry-queries.js";
@@ -315,6 +314,9 @@ describe("subagents global-session inspection", () => {
       const text = await replyText(handleSubagentsCommand(params, true));
 
       expectText(text, ["research worker"], ["ops worker"]);
+      if (command === "/subagents info 1") {
+        expectText(text, ["Recorded status: running", "Activity: current activity unavailable"]);
+      }
       if (command === "/subagents log 1 5") {
         expectText(
           text,
@@ -430,38 +432,23 @@ describe("subagents info", () => {
     }
   });
 
+  it("distinguishes a pending approval from the recorded running status", async () => {
+    const run = timedRun("awaiting-approval", "Inspect a waiting worker", Date.now());
+    seedSubagentRunForReadTest(run);
+    const context = buildInfoContext([run], [run.runId]);
+    context.readContext.list.execution = new Map([
+      [run.runId, { state: "waiting", wait: { kind: "approval" } }],
+    ]);
+    expectText(await replyText(handleSubagentsInfoAction(context)), [
+      "Recorded status: running",
+      "Activity: waiting for approval",
+    ]);
+  });
+
   it("returns usage for missing targets", async () => {
     const result = await handleSubagentsInfoAction(buildInfoContext([], []));
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("/subagents info <id|#>");
-  });
-
-  it("returns info for a subagent with discard reason=expired", async () => {
-    const now = Date.now();
-    const runId = "info-discard";
-    const run = timedRun(runId, "do thing", now - 20_000, {
-      endedAt: now - 8 * 24 * 60 * 60_000,
-      outcome: { status: "ok" },
-      completion: { required: true, resultText: "Completed the requested task" },
-    });
-    run.delivery = {
-      status: "suspended",
-      suspendedAt: now - 7 * 24 * 60 * 60_000,
-      suspendedReason: "permanent_failure",
-      lastError: "requester unavailable\ntry retained result",
-    };
-    SubagentLifecycleController.discardTerminalDelivery(run, now);
-    expect(run.delivery.lastError).toBeUndefined();
-    const text = await inspectRun(run, undefined, run.runId);
-    expectText(text, [
-      "Status: done",
-      "Outcome: ok",
-      "Progress: Completed the requested task",
-      "Delivery: discarded",
-      "Delivery disposition: expired",
-      `Delivery retired: ${new Date(now).toISOString()}`,
-      "Task summary: requester unavailable try retained result",
-    ]);
   });
 
   it("uses displayed indices and killed status for info and log beside stale unended runs", async () => {
@@ -480,10 +467,15 @@ describe("subagents info", () => {
     const context = buildInfoContext(runs);
     const listing = await replyText(handleSubagentsListAction(context));
     expectText(listing, ["1. recent worker", " killed"], ["stale worker"]);
-    expectText(await replyText(handleSubagentsInfoAction(context)), [
-      "Run: numbering-recent",
-      "Status: killed",
-    ]);
+    expectText(
+      await replyText(handleSubagentsInfoAction(context)),
+      ["Run: numbering-recent", "Status: killed"],
+      ["Activity:"],
+    );
+    expectText(
+      await replyText(handleSubagentsInfoAction({ ...context, restTokens: ["numbering-stale"] })),
+      ["Run: numbering-stale", "Activity: current activity unavailable"],
+    );
     callGatewayMock.mockResolvedValue({ messages: [] });
     await handleSubagentsLogAction(context);
     expect(callGatewayMock).toHaveBeenLastCalledWith({

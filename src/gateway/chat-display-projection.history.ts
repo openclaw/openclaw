@@ -16,6 +16,7 @@ import {
   stripInterSessionPromptPrefixForDisplay,
 } from "../sessions/input-provenance.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { isLegacySessionStateNoticeText } from "../sessions/session-state-notice-text.js";
 import { readSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
@@ -24,11 +25,14 @@ import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-o
 import { extractChatHistoryBlockText } from "./chat-display-projection.canvas.js";
 import {
   asRoleContentMessage,
+  attachProjectedTurnBoundary,
+  projectCompletionReportInput,
   extractProjectedText,
   hasAssistantNonTextContent,
   hasAssistantDisplayableNonTextContent,
   hasTranscriptMediaFacts,
   isEmptyTextOnlyContent,
+  isLegacySessionsSendFailureNoticeMessage,
   isProjectedForwardedMessage,
   isForwardedUserMessage,
   isCronRunMessage,
@@ -99,7 +103,7 @@ export function createSubagentCoordinationHistoryProjection(
         if (typeof steerTargetRunId === "string") {
           visibleSteerRunIds.add(steerTargetRunId);
         }
-        return message;
+        return projectCompletionReportInput(record, projectedHistoryTurnBoundary(record));
       }
       // A delivery mirror records a reply the run sent to the human, such as a
       // message(action=send) from a private coordination turn; it is the outcome.
@@ -397,7 +401,10 @@ function shouldHideProjectedHistoryMessage(
   roleContent: RoleContentMessage | null,
   heartbeatUser: boolean,
 ): boolean {
-  if (isDisplayHiddenProjectedMessage(message)) {
+  if (
+    isDisplayHiddenProjectedMessage(message) ||
+    isLegacySessionsSendFailureNoticeMessage(message)
+  ) {
     return true;
   }
   if (isProjectedForwardedMessage(message)) {
@@ -407,6 +414,14 @@ function shouldHideProjectedHistoryMessage(
     return false;
   }
   const provenance = normalizeInputProvenance(message.provenance);
+  if (
+    roleContent.role === "user" &&
+    provenance?.kind === "internal_system" &&
+    provenance.sourceTool === "session" &&
+    isLegacySessionStateNoticeText(extractProjectedText(message.content ?? message.text))
+  ) {
+    return true;
+  }
   if (
     roleContent.role === "user" &&
     provenance?.kind === "internal_system" &&
@@ -465,23 +480,6 @@ export function projectedHistoryTurnBoundary(message: unknown): PendingTurnBound
     return sourceTool;
   }
   return kind === "inter_session" && sourceTool === "subagent_settle" ? "subagent" : false;
-}
-
-function attachProjectedTurnBoundary(
-  message: Record<string, unknown>,
-  boundary: Exclude<PendingTurnBoundary, false>,
-): Record<string, unknown> {
-  const metadata = readRecord(message["__openclaw"]);
-  return {
-    ...message,
-    __openclaw: {
-      ...metadata,
-      // Exec and restart rows kept `turnBoundary` for clients that read only it;
-      // the continuation fact tells the Control UI the turn goes on.
-      ...(boundary === "subagent" ? {} : { turnBoundary: true }),
-      ...(boundary === true ? {} : { continuation: { source: boundary } }),
-    },
-  };
 }
 
 function canCarryProjectedTurnBoundary(message: RoleContentMessage | null): boolean {

@@ -57,6 +57,30 @@ export function resolveRootOptionRole(
     : "root";
 }
 
+export async function isOfflineSetupExplanation({
+  primary,
+  argv,
+}: {
+  primary: string | null;
+  argv: string[];
+}): Promise<boolean> {
+  if (primary !== "setup") {
+    return false;
+  }
+  const args = argv.slice(2);
+  const positions = args.flatMap((arg, i) =>
+    arg === "--explain-error" || arg.startsWith("--explain-error=") ? [i] : [],
+  );
+  if (positions.length === 0) {
+    return false;
+  }
+  const { Command } = await import("commander");
+  const { registerSetupCommand } = await import("./program/register.setup.js");
+  const program = new Command();
+  registerSetupCommand(program);
+  return positions.some((i) => resolveRootOptionRole(program, args, i) === "command");
+}
+
 export function normalizeRootNoColorArgvForProgram(
   argv: string[],
   program: CommanderCommand,

@@ -7,6 +7,7 @@ import { hasCodexAppServerSiblingThreadWork } from "./client-runtime.js";
 import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
 import { neutralizeCodexExplicitMentionSigils } from "./context-engine-projection.js";
 import { isCodexInferenceTransportFailure } from "./inference-transport.js";
+import { CODEX_INFERENCE_REQUEST_TOO_LARGE } from "./inference-upload.js";
 import { isJsonObject } from "./protocol.js";
 import {
   assertCodexBindingMayBeReplaced,
@@ -92,17 +93,22 @@ export async function clearCodexBindingAfterInvalidImagePayload(
   });
 }
 
-export function shouldUseFreshCodexThreadAfterContextEngineOverflow(params: {
+export function shouldUseFreshCodexThreadAfterContextOverflow(params: {
   error: unknown;
   contextEngineActive: boolean;
   thread: CodexAppServerThreadLifecycleBinding;
 }): boolean {
+  const message = formatErrorMessage(params.error);
+  // A byte-limit rejection does not fill Codex's token window, so native auto-
+  // compaction never runs. The next turn must use the host's bounded history seed.
+  // Keep this exact to the local relay; unrelated upstream errors retain their thread.
+  if (message.includes(CODEX_INFERENCE_REQUEST_TOO_LARGE)) {
+    return true;
+  }
   if (!params.contextEngineActive || params.thread.lifecycle.action !== "resumed") {
     return false;
   }
-  return /context (?:window|length)|maximum context|too many tokens/iu.test(
-    formatErrorMessage(params.error),
-  );
+  return /context (?:window|length)|maximum context|too many tokens/iu.test(message);
 }
 
 export function isCodexActiveCompactTurnError(error: unknown): boolean {

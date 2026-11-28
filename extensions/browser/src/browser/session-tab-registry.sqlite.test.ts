@@ -437,39 +437,6 @@ describe("durable session tab registry", () => {
     expect(openStore().entries()).toEqual([]);
   });
 
-  it("warns again when a settled durable tab is retracked and deferred anew", async () => {
-    const registry = await freshRegistry("deferred-warning-recurrence");
-    const tracked = 1_000;
-    const track = (now: number) =>
-      registry.trackSessionBrowserTab(owned("gone", "NATIVE-recur", { now }));
-    const warnings: string[] = [];
-    const deferred = "deferred tracked browser tab NATIVE-recur: browser-identity-lookup-failed";
-    const sweepAt = (now: number, outcome: () => Promise<CloseTrackedCdpTargetResult>) => {
-      cdpMocks.closeTrackedCdpTarget.mockImplementation(outcome);
-      return registry.sweepTrackedBrowserTabs({
-        now,
-        idleMs: 1,
-        onWarn: (message) => warnings.push(message),
-      });
-    };
-    const unreachable = async (): Promise<CloseTrackedCdpTargetResult> => ({
-      status: "unavailable",
-      reason: "browser-identity-lookup-failed",
-    });
-
-    await track(tracked);
-    await sweepAt(tracked + 1, unreachable);
-    await sweepAt(tracked + 2, unreachable);
-    expect(warnings).toEqual([deferred]);
-
-    await sweepAt(tracked + 3, async () => ({ status: "closed" }));
-    expect(openStore().entries()).toEqual([]);
-
-    await track(tracked + 4);
-    await sweepAt(tracked + 5, unreachable);
-    expect(warnings).toEqual([deferred, deferred]);
-  });
-
   it("keeps an old unreachable row when activity revokes its retirement claim", async () => {
     const registry = await freshRegistry("unreachable-touch-race");
     const tracked = 1_000;

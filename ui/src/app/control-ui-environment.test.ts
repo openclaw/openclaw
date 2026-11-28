@@ -79,11 +79,7 @@ it("renders and clears environment presentation, including the sidebar badge and
   };
   const sidebarProps = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
   sidebarProps.sidebarAgentsMode = "chip";
-  const host = new AppSidebarOwner(
-    { dashboards: null, loadMoreDashboards() {} },
-    context,
-    sidebarProps,
-  );
+  const host = new AppSidebarOwner(context, sidebarProps);
   const { container: sidebar } = mountSolid(() => renderSidebarAgentCard(host));
   expect(document.querySelector(".control-ui-environment-stripe")).toBeNull();
   expect(document.querySelector(".control-ui-environment-pill")).toBeNull();

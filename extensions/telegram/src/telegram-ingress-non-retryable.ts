@@ -31,9 +31,6 @@ export function resolveTelegramIngressNonRetryableFailure(err: unknown) {
   for (const candidate of candidates) {
     const message = formatErrorMessage(candidate);
     if (callbackFailure && candidate instanceof Error) {
-      if (candidate.message === "Gateway requester authority changed") {
-        return { reason: "callback-authority-changed" as const, message };
-      }
       if (
         isRecord(candidate) &&
         candidate.error_code === 400 &&

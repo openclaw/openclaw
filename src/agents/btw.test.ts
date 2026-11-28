@@ -10,7 +10,7 @@ import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
-import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import {
   looksLikeSecretSentinel,
   mintSecretSentinel,
@@ -808,16 +808,13 @@ describe("runBtwSideQuestion", () => {
     expect(btw.registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
 
-  it("rejects CLI session forks before backend preparation or provider I/O", async () => {
+  it("hands CLI session forks to the fork owner instead of the CLI side question", async () => {
     btw.mockCliOutput({ text: "CLI side answer." });
-    const params = {
-      cfg: btw.createCliRuntimeConfig(),
-      model: "claude-opus-4-7",
-    };
-
-    await expect(btw.runSideQuestion({ ...params, toolCalls: "deny" })).rejects.toThrow(
-      "Session forks are not supported for CLI runtime claude-cli",
-    );
+    const params = { cfg: btw.createCliRuntimeConfig(), model: "claude-opus-4-7" };
+    const sessionFork = async () => ({ text: "fork owner answer" });
+    await expect(btw.runSideQuestion({ ...params, sessionFork })).resolves.toEqual({
+      text: "fork owner answer",
+    });
     expect(btw.prepareCliRunContextMock).not.toHaveBeenCalled();
     expect(executePreparedCliRunMock).not.toHaveBeenCalled();
     expect(btw.streamSimpleMock).not.toHaveBeenCalled();

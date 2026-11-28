@@ -1,7 +1,7 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { WebSocket } from "ws";
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
@@ -237,7 +237,6 @@ it.each(process.platform === "win32" ? [true] : [true, false])(
             ...withRuntimePreload({}, preloadPath),
             OPENCLAW_ENTRY_PID_LOG: pidLogPath,
             OPENCLAW_NODE_EXTRA_CA_CERTS_READY: "1",
-            OPENCLAW_NODE_OPTIONS_READY: undefined,
             OPENCLAW_NO_RESPAWN: undefined,
           },
     });
@@ -296,28 +295,16 @@ it("rejects invalid remote config before a node pairing mutation without opening
 
 it("exits promptly after cron list emits complete output", async () => {
   const root = tempDirs.make("openclaw-gateway-cli-exit-");
-  const caTriggerPath = path.join(root, "load-default-ca.mjs");
   const gateway = await startCliReadGateway(TEST_TOKEN);
   const { stateDir, configPath } = await remoteFixture(root, {
     url: gateway.url,
     token: TEST_TOKEN,
   });
-  await fs.writeFile(
-    caTriggerPath,
-    `if (process.env.OPENCLAW_NODE_OPTIONS_READY === "1") {
-  const { getCACertificates } = await import("node:tls");
-  getCACertificates("default");
-}
-`,
-  );
-
   // A parseable JSON buffer starts the socket-release budget.
   let completeOutputAt: number | undefined;
   const result = await runCliProcessChild({
     nodeArgs: [
       ...resolveRuntimeWorkerArgv(cliEntrypoint).slice(0, -1),
-      "--import",
-      pathToFileURL(caTriggerPath).href,
       fileURLToPath(cliEntrypoint),
       "cron",
       "list",
@@ -326,15 +313,13 @@ it("exits promptly after cron list emits complete output", async () => {
     env: {
       ...process.env,
       HOME: root,
-      // Exercise NODE_OPTIONS respawn without stacking the compile-cache respawn;
-      // entry.compile-cache owns the latter contract.
+      // entry.compile-cache owns the compile-cache respawn contract.
       NODE_DISABLE_COMPILE_CACHE: "1",
       NODE_ENV: undefined,
       NODE_OPTIONS: undefined,
       NODE_USE_SYSTEM_CA: "1",
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_NODE_OPTIONS_READY: undefined,
       OPENCLAW_STATE_DIR: stateDir,
       VITEST: undefined,
     },
@@ -397,6 +382,9 @@ it("renders a machine-mode cron lookup miss as expected guidance, not a crash", 
     ok: false,
     error: { type: "cli_error", message },
   });
-  expectGuidance(result.stderr, message);
+  expectGuidance(
+    result.stderr,
+    "OpenClaw couldn’t find the automation “missing-job”. Run `openclaw cron list --all` to see IDs for enabled and disabled automations.",
+  );
   expect(gateway.calls).toEqual(["cron.get", "cron.list"]);
 });

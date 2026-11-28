@@ -5,7 +5,6 @@ import { loggingState } from "../logging/state.js";
 let routed: boolean | undefined;
 const registerPluginCliCommandsFromValidatedConfig = vi.fn(async () => {
   routed = loggingState.forceConsoleToStderr;
-  return {};
 });
 
 vi.mock("../plugins/cli.js", () => ({

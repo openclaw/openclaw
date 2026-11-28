@@ -2,6 +2,9 @@ import { afterEach, expect, it, vi } from "vitest";
 const mocks = {
   check: vi.fn(),
   run: vi.fn(),
+  list: vi.fn(async () => []),
+  migrations: vi.fn(async () => []),
+  sessionWarnings: vi.fn(() => [] as string[]),
   writeJson: vi.fn(),
   log: vi.fn(),
 };
@@ -24,14 +27,22 @@ const overrides = {
     checkUpdateStatus: mocks.check,
     formatGitInstallLabel: () => undefined,
   },
-  "../../infra/update-run-status.js": { readUpdateRunStatus: mocks.run },
+  "../../infra/update-run-status.js": {
+    // History settles first; owed-step enrichment may outlive it.
+    readUpdateRunStatusWithOwedSteps: async (onStatus: (status: unknown) => void) => {
+      const status = await mocks.run();
+      onStatus(status);
+      await mocks.list();
+      return status;
+    },
+  },
   "../../infra/update-recovery-backup-status.js": { inspectUpdateRecoveryBackups: async () => [] },
   "../../infra/deferred-plugin-migrations.js": {
-    readDeferredPluginMigrationsAsync: async () => [],
+    readDeferredPluginMigrationsAsync: mocks.migrations,
     formatDeferredPluginMigration: () => "",
   },
   "../../commands/doctor-session-sqlite-warnings.js": {
-    readSessionSqliteMigrationWarnings: () => [],
+    readSessionSqliteMigrationWarnings: mocks.sessionWarnings,
   },
   "../../gateway/call.js": { callGateway: async () => ({}) },
   "../../infra/device-identity-async.js": { loadDeviceIdentityIfPresentAsync: async () => null },
@@ -49,6 +60,9 @@ const { updateStatusCommand } = await import("./status.js");
 afterEach(() => {
   vi.useRealTimers();
   vi.clearAllMocks();
+  mocks.list.mockResolvedValue([]);
+  mocks.migrations.mockResolvedValue([]);
+  mocks.sessionWarnings.mockReturnValue([]);
 });
 const lastRun = { runId: "completed-run", status: "succeeded" };
 const delayed = <T>(value: T, ms: number) =>
@@ -88,6 +102,53 @@ it.each(["2147483", "2147484", "9007199254740"])(
     expect(mocks.writeJson.mock.lastCall?.[0]).not.toHaveProperty("inspectionErrors");
   },
 );
+
+it("retains completed history when owed-step enrichment exceeds the overall deadline", async () => {
+  const started = Promise.withResolvers<void>();
+  mocks.check.mockResolvedValue({ installKind: "unknown" });
+  mocks.run.mockResolvedValue({ lastRun });
+  mocks.list.mockImplementation(() => {
+    started.resolve();
+    return new Promise(() => {});
+  });
+  mocks.sessionWarnings.mockReturnValue(["Retained migration needs repair."]);
+  vi.useFakeTimers();
+  const pending = updateStatusCommand({ json: true });
+  await started.promise;
+  await vi.advanceTimersByTimeAsync(30_001);
+  await pending;
+  expect(mocks.writeJson).toHaveBeenCalledOnce();
+  expect(mocks.writeJson.mock.lastCall?.[0]).toMatchObject({
+    lastRun,
+    migrationWarnings: ["Retained migration needs repair."],
+  });
+  expect(mocks.writeJson.mock.lastCall?.[0]).not.toHaveProperty("runStatusError");
+  expect(mocks.writeJson.mock.lastCall?.[0].inspectionErrors).toContainEqual({
+    section: "update history",
+    message: expect.stringMatching(/timed out.*30.*second/i),
+  });
+});
+
+it("retains history and settled warnings when another migration reader exceeds the deadline", async () => {
+  const started = Promise.withResolvers<void>();
+  mocks.check.mockResolvedValue({ installKind: "unknown" });
+  mocks.run.mockResolvedValue({ lastRun });
+  mocks.migrations.mockImplementation(() => {
+    started.resolve();
+    return new Promise(() => {});
+  });
+  mocks.sessionWarnings.mockReturnValue(["Retained migration needs repair."]);
+  vi.useFakeTimers();
+  const pending = updateStatusCommand({ json: true });
+  await started.promise;
+  await vi.advanceTimersByTimeAsync(30_001);
+  await pending;
+  expect(mocks.writeJson.mock.lastCall?.[0]).toMatchObject({
+    lastRun,
+    migrationWarnings: ["Retained migration needs repair."],
+    migrationWarningsError: expect.stringMatching(/timed out.*30.*second/i),
+  });
+});
 
 it.each(["installation", "update history"])(
   "returns partial JSON at the overall deadline when %s never settles",

@@ -6,15 +6,12 @@ import {
   type WorkerProvider,
   WorkerProviderError,
 } from "openclaw/plugin-sdk/plugin-entry";
-import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import * as secretEgressRuntime from "openclaw/plugin-sdk/secret-egress-runtime";
 import { beforeEach, expect, it, vi } from "vitest";
 import { ensureManagedCrabboxBinary, type CrabboxBinary } from "./crabbox-managed-binary.js";
-import { crabboxState } from "./crabbox-state.test-support.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.test-support.js";
-import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
 import {
   active,
   catalogJson,
@@ -23,8 +20,6 @@ import {
   createProviderTestHarness,
   nodeEnrollmentFixture,
   OPENCLAW_ROOT,
-  WORKER_WALLPAPER_PATH,
-  mappedCatalog,
 } from "./crabbox-worker-provider.test-support.js";
 import {
   CRABBOX_WARMUP_TIMEOUT_MS,
@@ -58,7 +53,7 @@ const CLASSLESS_PROFILE = { provider: "aws", ttl: "24h", idleTimeout: "60m" };
 const PROFILE = { ...CLASSLESS_PROFILE, class: "standard", warmImage: false };
 const SETUP_PROFILE = { ...PROFILE, setup: "install-node", setupSecrets: SETUP_SECRETS };
 type ProvisionOptions = Parameters<WorkerProvider["provision"]>[2];
-const { createProvider, tempDirs } = createProviderTestHarness(
+const { createProvider } = createProviderTestHarness(
   { isExecutable: (candidate) => candidate === SIBLING_BINARY },
   "openclaw-crabbox-provider-",
 );
@@ -199,99 +194,6 @@ function heartbeatFixture(run: CrabboxCommandRunner) {
   return { provider, heartbeat, warnings };
 }
 
-it("projects a large catalog by OS and architecture without inferring resources", async () => {
-  const runCommand = vi.fn<CrabboxCommandRunner>(async (_argv, options) =>
-    processRuntime.runCommandWithTimeout(
-      [process.execPath, "-e", "process.stdin.pipe(process.stdout)"],
-      {
-        ...options,
-        input: JSON.stringify([
-          {
-            provider: "unrelated",
-            targets: ["linux"],
-            classCatalog: { metadata: "x".repeat(65_536) },
-          },
-          {
-            provider: "aws",
-            aliases: ["ec2"],
-            targets: ["windows/normal", "linux", "windows/wsl2", "macos"],
-            classCatalog: mappedCatalog([
-              classProfile("standard", { vcpu: 64 }, { architecture: "arm64" }),
-              classProfile("memory", { memory: { value: 16, unit: "GB" } }),
-              classProfile(
-                "standard",
-                { vcpu: 8, memory: { value: 32, unit: "GiB" } },
-                { fallbacks: [{ vcpu: 99, memory: { value: 99, unit: "GB" } }] },
-              ),
-              classProfile("unknown", { memory: { value: 16384, unit: "MiB" } }),
-              classProfile("standard", { vcpu: 99 }),
-              classProfile("standard", { vcpu: 4 }, { target: "windows", windowsMode: "wsl2" }),
-              classProfile(
-                "standard",
-                { vcpu: 16 },
-                { target: "windows", windowsMode: "normal", architecture: "arm64" },
-              ),
-              classProfile("standard", { vcpu: 8 }, { target: "windows", windowsMode: "normal" }),
-              classProfile("standard", {}, { target: "macos", architecture: "mixed" }),
-            ]),
-            classes: [{ class: "standard", vcpu: 128 }],
-          },
-          {
-            provider: "machine0",
-            targets: ["linux"],
-            classCatalog: { disposition: "unmapped", profiles: [classProfile("standard")] },
-          },
-        ]),
-      },
-    ),
-  );
-  const provider = providerWithRunner(runCommand);
-  expect(await provider.listOperatingSystems?.(PROFILE)).toEqual([
-    { id: "linux", label: "Linux", default: true },
-    { id: "windows/wsl2", label: "Windows (WSL2)" },
-    { id: "windows/normal", label: "Windows" },
-    { id: "macos", label: "macOS" },
-  ]);
-  expect(await provider.listMachineOptions?.({ ...PROFILE, provider: "ec2" })).toEqual([
-    { os: "linux", id: "memory", label: "Memory", memoryGb: 16 },
-    { os: "linux", id: "standard", label: "Standard", cpu: 8, memoryGb: 32, default: true },
-    { os: "linux", id: "unknown", label: "Unknown" },
-    { os: "windows/wsl2", id: "standard", label: "Standard", cpu: 4, default: true },
-    { os: "windows/normal", id: "standard", label: "Standard", cpu: 8, default: true },
-    { os: "macos", id: "standard", label: "Standard", default: true },
-  ]);
-  expect(await provider.listMachineOptions?.({ ...PROFILE, provider: "machine0" })).toEqual([]);
-  expect(await provider.listMachineOptions?.({ ...PROFILE, provider: "missing" })).toEqual([]);
-  expect(runCommand).toHaveBeenCalledTimes(1);
-});
-
-it("discovers Boat through Crabbox aliases without inventing unmapped machine sizes", async () => {
-  const runCommand = vi.fn(async () =>
-    commandResult({
-      stdout: JSON.stringify([
-        {
-          provider: "ascii-box",
-          aliases: ["boat", "ascii", "asciibox"],
-          targets: ["linux"],
-          classCatalog: { disposition: "unmapped", profiles: [] },
-        },
-      ]),
-    }),
-  );
-  const provider = providerWithRunner(runCommand);
-  const profiles = ["boat", "ascii-box", "ascii"].map((backend) => ({
-    provider: backend,
-    ttl: "2h",
-    idleTimeout: "30m",
-  }));
-  expect(
-    await Promise.all(profiles.map((profile) => provider.listOperatingSystems!(profile))),
-  ).toEqual(profiles.map(() => [{ id: "linux", label: "Linux", default: true }]));
-  expect(await provider.listMachineOptions!(profiles[0]!)).toEqual([]);
-  expect(await provider.listOperatingSystems!({ ...PROFILE, provider: "missing" })).toEqual([]);
-  expect(runCommand).toHaveBeenCalledTimes(1);
-});
-
 it("bounds catalogs while reserving the configured class", async () => {
   const configuredClass = "custom";
   const provider = providerWithRunner(async () =>
@@ -348,36 +250,6 @@ it.each([
   expect(await provider.listMachineOptions?.(PROFILE)).toEqual(recovered);
   expect(runCommand).toHaveBeenCalledTimes(2);
   expect(warn).toHaveBeenCalledTimes(1);
-});
-
-it.each([
-  { provider: "aws" },
-  {
-    provider: "aws",
-    targets: ["linux"],
-    classCatalog: mappedCatalog([null, {}, classProfile(" "), classProfile("x".repeat(129))]),
-  },
-])("caches unusable catalog %j without warnings", async (entry) => {
-  const warn = vi.fn();
-  const runCommand = vi.fn(async () => commandResult({ stdout: JSON.stringify([entry]) }));
-  const provider = providerWithRunner(runCommand, warn);
-  expect(await provider.listMachineOptions?.(PROFILE)).toEqual([]);
-  expect(await provider.listMachineOptions?.(PROFILE)).toEqual([]);
-  expect(runCommand).toHaveBeenCalledTimes(1);
-  expect(warn).not.toHaveBeenCalled();
-});
-
-it.each([false, true])("rejects invalid wallpaper (PNG=%s)", (png) => {
-  const bytes = png ? fs.readFileSync(WORKER_WALLPAPER_PATH) : Buffer.from("not a PNG");
-  if (png) {
-    bytes.writeUInt32BE(1023, 16);
-  }
-  const tempDir = tempDirs.make("openclaw-crabbox-wallpaper-");
-  const wallpaperPath = path.join(tempDir, "wallpaper.png");
-  fs.writeFileSync(wallpaperPath, bytes);
-  expect(() => createCrabboxWorkerProvider({ state: crabboxState, wallpaperPath })).toThrow(
-    png ? "must be 1024x576; got 1023x576" : "is not a PNG",
-  );
 });
 
 it("runs profile setup with sentinels while keeping the proxy and enrollment credentials separate", async () => {

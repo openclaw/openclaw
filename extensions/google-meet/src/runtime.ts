@@ -98,10 +98,6 @@ function isBrowserTransport(transport: GoogleMeetTransport): boolean {
   return transport === "chrome" || transport === "chrome-node";
 }
 
-function noteSession(session: GoogleMeetSession, note: string): void {
-  session.notes = [...session.notes.filter((item) => item !== note), note];
-}
-
 function withSessionAgentConfig(config: GoogleMeetConfig, agentId: string): GoogleMeetConfig {
   return config.realtime.agentId === agentId
     ? config
@@ -195,6 +191,7 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
         mode: request.mode === "realtime" ? "agent" : (request.mode ?? params.config.defaultMode),
         agentId: this.#resolveAgentId(request.agentId),
       }),
+      getRequesterSessionKey: (request) => request.requesterSessionKey,
       createSession: ({ resolved, createdAt }): GoogleMeetSession =>
         createMeetingSession({ platform: adapter, config: params.config, resolved, createdAt }),
       resolveSpeechInstructions: (request) =>
@@ -226,7 +223,26 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
       },
       joinTransport: async ({ request, session, context }) =>
         await this.#joinTransport(request, session, context),
-      releaseBrowserTab: async (session) => await this.#releaseBrowserTab(session),
+      releaseBrowserTab: (session) =>
+        this.releaseTrackedBrowserTab(session, {
+          messages: {
+            noTrackedTab:
+              "No tracked Meet browser tab for this session; close the Meet tab manually if it is still in the call.",
+            sharedTab: "Kept the shared Meet tab open because another active session uses it.",
+            leaveFailed: (error) => `Browser control could not leave the Meet tab: ${error}`,
+          },
+          leave: (tab) =>
+            leaveChromeMeet({
+              runtime: params.runtime,
+              ...(session.transport === "chrome-node"
+                ? { transport: "chrome-node", nodeId: session.chrome?.nodeId }
+                : {}),
+              config: params.config,
+              meetingSessionId: session.id,
+              meetingUrl: session.url,
+              tab,
+            }),
+        }),
       refreshBrowserHealth: async (session, options) =>
         await this.#refreshBrowserHealth(session, options),
       refreshStatus: async (session) => await this.#refreshStatus(session),
@@ -235,7 +251,8 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
           await this.#refreshTwilioVoiceCallStatus(session);
         }
       },
-      ensureRealtimeBridge: async (session) => await this.#ensureChromeRealtimeBridge(session),
+      ensureRealtimeBridge: (session, requesterSessionKey) =>
+        this.#ensureChromeRealtimeBridge(session, requesterSessionKey),
       captureTranscript: async (session, options) =>
         await this.#captureTranscript(session, options),
       speakViaTransport: async (session, instructions) =>
@@ -476,6 +493,7 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
 
   async #ensureChromeRealtimeBridge(
     session: GoogleMeetSession,
+    requesterSessionKey?: string,
   ): Promise<MeetingSessionRuntimeHandles<GoogleMeetChromeHealth> | undefined> {
     if (
       !MeetingPlatformAdapter.isTalkBackMode(session.mode) ||
@@ -503,6 +521,7 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
       config: recoveryConfig,
       fullConfig: this.params.fullConfig,
       meetingSessionId: session.id,
+      requesterSessionKey,
       mode: session.mode,
       url: session.url,
       logger: this.params.logger,
@@ -527,7 +546,7 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
         trackedTargetId: session.chrome?.browserTab?.targetId,
         url: session.url,
       });
-      if (result.found && session.chrome) {
+      if (result.found && session.chrome && this.canObserveBrowser(session)) {
         if (result.targetId) {
           const currentTab = session.chrome.browserTab;
           session.chrome.browserTab = {
@@ -624,70 +643,5 @@ export class GoogleMeetRuntime extends MeetingSessionRuntime<
       meetingSessionId: session.id,
       tab,
     });
-  }
-
-  async #releaseBrowserTab(session: GoogleMeetSession): Promise<boolean | undefined> {
-    if (!isBrowserTransport(session.transport)) {
-      return undefined;
-    }
-    const tab = session.chrome?.browserTab;
-    if (!tab) {
-      noteSession(
-        session,
-        "No tracked Meet browser tab for this session; close the Meet tab manually if it is still in the call.",
-      );
-      session.browserLeft = false;
-      return false;
-    }
-    const shared = this.list().some(
-      (other) =>
-        other.id !== session.id &&
-        other.state === "active" &&
-        isBrowserTransport(other.transport) &&
-        other.chrome?.browserTab?.targetId === tab.targetId &&
-        other.chrome?.nodeId === session.chrome?.nodeId,
-    );
-    if (shared) {
-      noteSession(session, "Kept the shared Meet tab open because another active session uses it.");
-      session.browserLeft = undefined;
-      return undefined;
-    }
-    let left: boolean;
-    try {
-      const result = await leaveChromeMeet({
-        runtime: this.params.runtime,
-        ...(session.transport === "chrome-node"
-          ? { transport: "chrome-node", nodeId: session.chrome?.nodeId }
-          : {}),
-        config: this.params.config,
-        meetingSessionId: session.id,
-        meetingUrl: session.url,
-        tab,
-      });
-      noteSession(session, result.note);
-      left = result.left;
-    } catch (error) {
-      noteSession(
-        session,
-        `Browser control could not leave the Meet tab: ${formatErrorMessage(error)}`,
-      );
-      left = false;
-    }
-    if (session.chrome && left) {
-      session.chrome.browserTab = undefined;
-      if (session.chrome.health) {
-        session.chrome.health = {
-          ...session.chrome.health,
-          captioning: false,
-          audioOutputRouted: false,
-          providerConnected: false,
-          realtimeReady: false,
-          audioInputActive: false,
-          audioOutputActive: false,
-        };
-      }
-    }
-    session.browserLeft = left;
-    return left;
   }
 }

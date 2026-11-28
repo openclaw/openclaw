@@ -101,8 +101,8 @@ it("does not invoke a withdrawn model build after its display worker read", asyn
   const original = sqliteRead.prepareAgentAuthProfileRowsRead;
   using _ = vi
     .spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead")
-    .mockImplementation((options) => {
-      const reader = original(options);
+    .mockImplementation(async (options) => {
+      const reader = await original(options);
       return {
         ...reader,
         async read() {

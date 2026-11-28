@@ -165,6 +165,8 @@ export function createPluginGenerationFileCapture({
   receipt,
   retained,
   sourceFacts,
+  executionAliases,
+  executionSources,
   onPackageMetadata,
 }: {
   boundary: string;
@@ -186,6 +188,8 @@ export function createPluginGenerationFileCapture({
   receipt: ReturnType<typeof createPluginGenerationReceipt>;
   retained?: { source: PluginRecoverySource; files: ReadonlyMap<string, PluginCapturedSourceFact> };
   sourceFacts?: Map<string, PluginCapturedSourceFact>;
+  executionAliases: Map<string, string>;
+  executionSources: Map<string, string>;
   onPackageMetadata: (source: string, target: string) => void;
 }) {
   const { additions } = sourceCapture;
@@ -318,12 +322,19 @@ export function createPluginGenerationFileCapture({
           },
         );
       }
+      const relative = path.relative(directory, target);
+      const compiledSource =
+        !sourceOnly && /\.(?:[cm]?tsx?|jsx)$/u.test(target) && !/\.d\.[cm]?ts$/u.test(target);
       receipt.file(
         {
           target: native?.path ?? target,
           boundary: native?.boundary ?? directory,
           sizeBytes: Number(stat.size),
           native: native !== undefined,
+          onSource:
+            compiledSource && !executionSources.has(relative)
+              ? (sourceText) => executionSources.set(relative, sourceText)
+              : undefined,
           prepared: native?.content ?? copiedContent,
           onContent: (content) => {
             native?.record(content);
@@ -335,6 +346,17 @@ export function createPluginGenerationFileCapture({
         },
         openFile,
       );
+      if (compiledSource) {
+        if (!executionAliases.has(relative)) {
+          // Node's ESM-to-CJS bridge requires an existing .js execution path.
+          // Publish it with admitted bytes; load hooks own the compiled contents.
+          const alias = path.join(".compiled", `${relative}.js`);
+          const output = path.join(directory, alias);
+          fs.mkdirSync(path.dirname(output), { recursive: true, mode: 0o700 });
+          fs.writeFileSync(output, "", { flag: "wx", mode: 0o600 });
+          executionAliases.set(relative, alias);
+        }
+      }
       if (path.basename(target) === "package.json") {
         onPackageMetadata(source, target);
       }

@@ -301,7 +301,10 @@ describe("Solid native modal policy", () => {
     document.body.append(trigger);
     trigger.focus();
     const changes = vi.fn();
-    const unsubscribe = subscribeNativeOverlayOcclusion(changes, () => null);
+    const unsubscribe = subscribeNativeOverlayOcclusion(
+      (value) => changes(value !== "live"),
+      () => null,
+    );
     try {
       const outer = mount();
       outer.view.getByRole("textbox").focus();

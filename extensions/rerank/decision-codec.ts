@@ -1,24 +1,4 @@
-import type {
-  DecisionAnswerV2,
-  DecisionBatchV2,
-  DecisionProviderContextV2,
-} from "openclaw/plugin-sdk/decisions";
-
-type DecisionCapabilities = NonNullable<
-  NonNullable<DecisionProviderContextV2["model"]["inference"]>["decision"]
->;
-
-/** Declared for configured rerank rows that do not author their own Decision facts. */
-export const RERANK_DECISION_CAPABILITIES = {
-  protocol: "rerank",
-  input: ["text"],
-  questions: {
-    boolean: { probabilities: "boolean", abstention: false },
-    choice: { probabilities: "independent", abstention: false, minOptions: 2 },
-    sort: { probabilities: "none", abstention: false, minOptions: 1 },
-  },
-  confidence: "none",
-} satisfies DecisionCapabilities;
+import type { DecisionAnswerV2, DecisionBatchV2 } from "openclaw/plugin-sdk/decisions";
 
 /** One `/rerank` call: a query scored against documents. */
 type RerankRequest = { readonly query: string; readonly documents: readonly string[] };

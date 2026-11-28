@@ -9,7 +9,10 @@ import { resolveGatewayPort } from "../../config/paths.js";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { compareSemverStrings } from "../../infra/npm-registry-spec.js";
 import { readPackageVersion } from "../../infra/package-json.js";
-import { settlePendingPackageActivation } from "../../infra/package-update-activation.js";
+import {
+  readPackageActivationRepairLease,
+  settlePendingPackageActivation,
+} from "../../infra/package-update-activation.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   normalizeUpdateChannel,
@@ -22,16 +25,15 @@ import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { prepareManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { resolveLegacyGatewayManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-legacy-store.js";
 import { ManagedHandoffCustodyRetainedError } from "../../infra/update-managed-service-handoff-reclamation.js";
-import type { PluginCohortRecoveryPair } from "../../infra/update-plugin-cohort-schema.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
+import { inspectUpdateRepairDriverAdmission } from "../../infra/update-repair-driver-admission.js";
 import {
-  inspectUpdateRepairDriverAdmission,
   inspectNewerRecoveryHistory,
   needsPostCoreRepair,
   isFreshUnacknowledgedAbandonedUpdateRun,
   recordedUpdateRunDrivers,
-  inspectUpdateRunAbandonment,
 } from "../../infra/update-run-activity.js";
+import { listUnverifiedDataAtRisk } from "../../infra/update-run-data-at-risk.js";
 import { inspectUpdateRunDriver } from "../../infra/update-run-driver.js";
 import { findUpdateGatewayStop } from "../../infra/update-run-gateway-stop.js";
 import {
@@ -47,12 +49,8 @@ import {
   isAcknowledgedAbandonedUpdateRun,
   isUnacknowledgedPackageOwnerRefusal,
 } from "../../infra/update-run-record.js";
-import {
-  assertUpdateRecoveryAdmission,
-  inspectPluginCohortRecoveryAdmission,
-} from "../../infra/update-run-recovery-admission.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery-types.js";
-import { pluginCohortRecoveryMatchesSource } from "../../infra/update-run-recovery.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -75,15 +73,11 @@ import {
   type UpdateFinalizeOptions,
 } from "./shared.js";
 import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
-import {
-  captureUpdateCommandExecutorAuthority,
-  withUpdateCommandExecutor,
-} from "./update-command-executor.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { updateFinalizeCommand, type UpdateCoreCompletion } from "./update-command-finalize.js";
 import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import { updateMaintenanceError } from "./update-maintenance-error.js";
-import { settleInterruptedUpdatePluginCohort } from "./update-plugin-cohort-settlement.js";
 import {
   reportRetainedUpdateCustody,
   type RetainedUpdateCustodyReport,
@@ -97,29 +91,13 @@ export function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> 
 }
 
 async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
-  // Recovery refusal precedes discovery; later mutation checks still revalidate.
-  let pluginCohort: PluginCohortRecoveryPair | undefined;
-  try {
-    await assertUpdateRecoveryAdmission({ env: process.env });
-  } catch (error) {
-    pluginCohort = await inspectPluginCohortRecoveryAdmission({ env: process.env });
-    if (!pluginCohort) {
-      throw error;
-    }
-  }
+  await assertUpdateRecoveryAdmission({ env: process.env });
   const discoveredRoot = await resolveUpdateRoot();
-  const installKey = resolveUpdateInstallRoot(discoveredRoot);
-  if (pluginCohort && resolveUpdateInstallRoot(pluginCohort.cohort.installKey) !== installKey) {
-    throw new Error("Plugin cohort recovery belongs to a different installation.");
-  }
   await refuseHostOwnedUpdate(discoveredRoot, opts);
   await refuseImmutableUpdateActivation(discoveredRoot, opts);
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
   const env = resolveServiceRefreshEnv(process.env, tryProcessCwd());
   const options = { env, busyTimeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS };
-  if (pluginCohort && !pluginCohortRecoveryMatchesSource(pluginCohort, options)) {
-    throw new Error("Plugin cohort recovery selected a different state or configuration path.");
-  }
   assertConfigWriteAllowedInCurrentMode({ env });
   await assertOpenClawStateWriteAllowedAtPath({
     databasePath: resolveOpenClawStateSqlitePath(env),
@@ -150,7 +128,6 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
   };
   if (
-    !pluginCohort &&
     admission.kind === "conflict" &&
     !inheritedRunId &&
     activeRuns.some((run) =>
@@ -169,16 +146,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
       await reconcileUnderRepairOwnership(repairOwnership);
     });
   }
-  // This predicts only whether native custody could reconcile ambiguous history;
-  // it grants no effects and never defers a proven live driver.
-  const deferCohortDriverAdmission =
-    pluginCohort &&
-    !inheritedRunId &&
-    activeRuns.every(
-      (run) =>
-        inspectUpdateRunAbandonment(run, { explicit: true, exclusiveRepair: true }) !== undefined,
-    );
-  if (admission.kind === "conflict" && !deferCohortDriverAdmission) {
+  if (admission.kind === "conflict") {
     throw new Error(admission.message);
   }
   const validChannel = opts.channel === undefined || normalizeUpdateChannel(opts.channel) !== null;
@@ -186,15 +154,21 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   const prepareHandoffRepair = async () => {
     // Admission keys custody by the canonical installation, not a lexical slot.
     const root = resolveUpdateInstallRoot(await resolveUpdateRoot());
-    if (pluginCohort && root !== installKey) {
-      throw new Error("Plugin cohort repair selected a different installation before custody.");
-    }
     try {
+      const packageLease = await readPackageActivationRepairLease(root);
       const repair = await (
-        await prepareManagedHandoffLeaseStore()
+        await prepareManagedHandoffLeaseStore(
+          packageLease
+            ? {
+                databasePath: packageLease.databasePath,
+                existingIdentity: packageLease,
+                serviceManagerEnv: resolveServiceManagerEnv(),
+              }
+            : undefined,
+        )
       ).prepareRepair(root, env, timeoutMs);
       const legacy = resolveLegacyGatewayManagedUpdateLeaseDatabasePath();
-      if (repair || !legacy || !fs.existsSync(legacy)) {
+      if (packageLease || repair || !legacy || !fs.existsSync(legacy)) {
         return repair;
       }
       // An earlier macOS Gateway's handoff stays in its own store until repaired.
@@ -215,9 +189,6 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
   };
   using handoff =
     hasCliProcessScope() &&
-    // A package-to-source link needs the executor's claim on both the saved
-    // package slot and its destination; a canonical-only handoff cannot grant it.
-    (!pluginCohort || pluginCohort.cohort.installKey === installKey) &&
     !inheritedRunId &&
     !env.OPENCLAW_UPDATE_RUN_HANDOFF &&
     !env[POST_CORE_UPDATE_ENV] &&
@@ -228,55 +199,6 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     defaultRuntime.error(
       "Warning: Reclaiming a dead managed handoff lease under exclusive repair ownership.",
     );
-  }
-  if (pluginCohort) {
-    if (
-      !validChannel ||
-      inheritedRunId ||
-      env.OPENCLAW_UPDATE_RUN_HANDOFF ||
-      env[POST_CORE_UPDATE_ENV]
-    ) {
-      throw new Error("Plugin cohort recovery requires a fresh update repair invocation.");
-    }
-    const originalPair = pluginCohort;
-    const settleCohort = async (ownership: UpdateRecoveryFence) => {
-      const assertCurrent = () => {
-        ownership.assertCurrent();
-        if (
-          resolveUpdateInstallRoot(discoveredRoot) !== installKey ||
-          resolveUpdateInstallRoot(originalPair.cohort.installKey) !== installKey
-        ) {
-          throw new Error("Plugin cohort recovery installation changed during repair.");
-        }
-      };
-      await settleInterruptedUpdatePluginCohort({
-        expected: originalPair,
-        root: discoveredRoot,
-        options,
-        assertCurrent,
-      });
-      if (admission.kind === "conflict") {
-        await reconcileUnderRepairOwnership({ assertCurrent });
-      } else {
-        activeRuns = listUpdateRuns({ active: true, limit: 100 }, options);
-        admission = inspectUpdateRepairDriverAdmission(activeRuns, inheritedRunId);
-      }
-      if (admission.kind === "conflict") {
-        throw new Error(admission.message);
-      }
-    };
-    if (handoff) {
-      await settleCohort(handoff);
-    } else {
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const ownership = await executor.enter(originalPair.cohort.installKey);
-        if (captureUpdateCommandExecutorAuthority(ownership).installKey !== installKey) {
-          throw new Error("Plugin cohort recovery lost its installation executor.");
-        }
-        await settleCohort(ownership);
-      });
-    }
-    pluginCohort = undefined;
   }
   if (validChannel) {
     // Repair's claim now owns the installation; fresh admission would be refused.
@@ -299,7 +221,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
               trigger: "cli",
               settlement: {
                 reason: settled.reason,
-                detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+                detail: `${settled.detail} Operation ${settled.operationId}${settled.retained ? `; evidence retained at ${settled.retained}` : ""}.`,
               },
             },
             options,
@@ -311,6 +233,14 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     );
     if (settlement?.warning) {
       defaultRuntime.error(`Warning: ${settlement.warning}`);
+    }
+    // Includes the healthy-history shortcut below; diagnostics never enter this repair path.
+    const { repairLegacyGitReleaseLauncher } = await import("../../update/repair-launcher.js");
+    const launcher = await repairLegacyGitReleaseLauncher({ root: discoveredRoot, env });
+    if (launcher) {
+      defaultRuntime.error(
+        `Repaired the legacy release launcher ${launcher}: status checks no longer count as Gateway starts.`,
+      );
     }
   }
   // Capture Doctor-visible history before finalization admits its own newer run.
@@ -415,7 +345,9 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     recoveryRunIds.length !== recoveryRuns.length ||
     recoveryRuns.some(needsPostCoreRepair) ||
     history.postCoreRuns.length > 0 ||
-    history.incomplete
+    history.incomplete ||
+    // Finalization verifies a recorded data-at-risk mark before acknowledging it.
+    listUnverifiedDataAtRisk(recentRuns).length > 0
   ) {
     return await finalizeRepair();
   }
@@ -472,7 +404,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     currentHistory.incomplete
   ) {
     throw new Error(
-      `Update history changed during inspection and now needs post-core maintenance. Retry ${formatCliCommand("openclaw update repair", env)}; if the managed Gateway cannot stop, run ${formatCliCommand("openclaw gateway stop", env)} first.`,
+      `Update history changed during inspection and now needs post-core maintenance. Retry ${formatCliCommand("openclaw update repair", env)}; if the managed Gateway cannot stop, run ${formatCliCommand("openclaw gateway stop --force", env)} first.`,
     );
   }
   const reconciled = activeRuns.length

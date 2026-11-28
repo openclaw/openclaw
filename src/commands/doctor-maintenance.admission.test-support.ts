@@ -9,6 +9,7 @@ import {
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveClientCredentialStorePath } from "../infra/client-credential-paths.js";
+import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
 import { isSqliteSnapshotStagingMode } from "../infra/sqlite-readonly-worker-protocol.js";
 import * as tempRoot from "../infra/tmp-openclaw-dir.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
@@ -106,12 +107,14 @@ export function setupDoctorAdmissionFixture() {
       native.close();
       fs.writeFileSync(path.join(root, 'sqlite-open-guard-' + process.pid + '.json'),
         JSON.stringify({ pid: process.pid, entry: process.argv[1], databasePath: expected }));
-      process.on('message', (message) => {
-        if (message && typeof message === 'object' && Array.isArray(message.args)) {
-          fs.appendFileSync(path.join(root, 'sqlite-readonly-requests-' + process.pid + '.jsonl'),
-            JSON.stringify(message.args) + '\\n');
-        }
-      });
+      if (process.argv[2] === ${JSON.stringify(SQLITE_READONLY_CHILD_ARG)}) {
+        process.on('message', (message) => {
+          if (message && typeof message === 'object' && Array.isArray(message.args)) {
+            fs.appendFileSync(path.join(root, 'sqlite-readonly-requests-' + process.pid + '.jsonl'),
+              JSON.stringify(message.args) + '\\n');
+          }
+        });
+      }
     `,
     );
     const childEnv = withRuntimePreload(
@@ -168,7 +171,7 @@ export function setupDoctorAdmissionFixture() {
           if (call[0] !== process.execPath || !Array.isArray(args)) {
             continue;
           }
-          const marker = args.indexOf("--openclaw-sqlite-readonly-child");
+          const marker = args.indexOf(SQLITE_READONLY_CHILD_ARG);
           if (marker < 1) {
             continue;
           }

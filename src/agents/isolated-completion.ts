@@ -463,6 +463,7 @@ async function runIsolatedCompletionOwned(
             preparedModelRuntime: lease.snapshot,
             signal: request.abortSignal,
             modelResolver: resolveAuthorizedModel,
+            selectedModelStores: true,
           },
           assertCurrent,
         );
@@ -490,7 +491,7 @@ async function runIsolatedCompletionOwned(
             {
               abortSignal: request.abortSignal,
               assertCurrent,
-              ...lease.snapshot.createStores(),
+              selectedModelStores: true,
               preparedModelRuntime: lease.snapshot,
               workspaceDir,
               authProfileId: request.authProfileId,
@@ -598,6 +599,7 @@ async function runIsolatedCompletionOwned(
                       abortSignal: request.abortSignal,
                       assertCurrent,
                       modelIdSource: "selected",
+                      selectedModelStores: true,
                       preparedModelRuntime: lease.snapshot,
                       workspaceDir,
                       authProfileId,

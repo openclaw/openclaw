@@ -97,6 +97,7 @@ describe("confirmed session navigation", () => {
         agentId: "main",
       });
       await vi.mocked(context.navigateAndWait).mock.results[0]?.value;
+      expect(context.chatSubmissions.readAcceptedCreate()?.displayName).toBeUndefined();
       if (retire === "stop") {
         lifecycle.abort();
       } else {
@@ -115,7 +116,9 @@ describe("confirmed session navigation", () => {
     vi.mocked(context.preload).mockReturnValue(preload.promise);
     vi.mocked(context.navigateAndWait).mockImplementation(async (_routeId, options) => {
       expect(options?.pathname).toBe(pathname);
-      expect(consumeSessionNavigationHandoff(context.gateway, pathname)).toBe(sessionKey);
+      expect(consumeSessionNavigationHandoff(context.gateway, pathname)?.sessionKey).toBe(
+        sessionKey,
+      );
       return readyChat();
     });
     flow.setMessage("start this task");

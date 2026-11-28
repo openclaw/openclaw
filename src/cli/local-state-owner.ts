@@ -10,22 +10,28 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { GatewayRequestFunction } from "../gateway/call.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
-import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import type { DatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { DatabasePortRecoveryIntent } from "../infra/database-port-recovery.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
+import { resolveIdentityPathViaExistingAncestorSync } from "../infra/path-existence.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { waitForGatewayRootWorkIdle } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerSignalExitGate } from "./signal-exit-barrier.js";
 
-const localOwnerAssertion = new AsyncLocalStorage<() => void>();
+const localOwnerScope = new AsyncLocalStorage<{
+  assertCurrent: () => void;
+  holdsOfflineTarget?: (databasePath: string, configPath: string) => boolean;
+}>();
 
 type LocalMutationScope = {
   env: NodeJS.ProcessEnv;
   config: OpenClawConfig;
   signal: AbortSignal;
   assertCurrent: () => void;
+  /** This invocation or its enclosing command still holds offline custody for this target. */
+  localGatewayAbsent?: true;
 };
 
 /**
@@ -36,7 +42,7 @@ type LocalMutationScope = {
 export type OwnerRequest = <R>(
   method: string,
   params: Record<string, unknown>,
-  options?: { expectFinal?: boolean },
+  options?: { expectFinal?: boolean; signal?: AbortSignal },
 ) => Promise<R>;
 
 class LocalStateOwnerError extends Error {
@@ -48,6 +54,21 @@ class LocalStateOwnerError extends Error {
     super(message, { cause });
     this.name = "LocalStateOwnerError";
   }
+}
+
+/**
+ * Detached work a one-shot command admitted (subagent completion, announcements) writes through
+ * the command's databases; every owner that closes them lets that work finish unless the user
+ * interrupts.
+ */
+export async function waitForLocalBackgroundWork(signal: AbortSignal | undefined): Promise<void> {
+  await waitForGatewayRootWorkIdle({
+    signal,
+    onWaiting: (count) =>
+      process.stderr.write(
+        `Waiting for ${count} background ${count === 1 ? "task" : "tasks"} to finish. Press Ctrl-C to stop.\n`,
+      ),
+  });
 }
 
 /** Select one owner before domain admission and retain offline custody through resource settlement. */
@@ -80,8 +101,11 @@ export async function runWithLocalStateOwner<T>(params: {
     | ((scope: Omit<LocalMutationScope, "config"> & { requestOwner: OwnerRequest }) => Promise<T>);
   assertTargetCurrent?: () => void;
   runLocal: (scope: LocalMutationScope) => Promise<T>;
+  /** Interrupts the wait for detached work before databases close (Ctrl-C). */
+  signal?: AbortSignal;
 }): Promise<T> {
-  localOwnerAssertion.getStore()?.();
+  const parent = localOwnerScope.getStore();
+  parent?.assertCurrent();
   const databasePortRecovery = params.databasePortRecovery
     ? { ...params.databasePortRecovery }
     : undefined;
@@ -151,7 +175,7 @@ export async function runWithLocalStateOwner<T>(params: {
       return refuse(error);
     }
   };
-  const runLocal = async (assertOwnerCurrent: () => void): Promise<T> => {
+  const runLocal = async (assertOwnerCurrent: () => void, acquiredOffline?: true): Promise<T> => {
     const assertCurrent = () => {
       assertTargetCurrent();
       assertOwnerCurrent();
@@ -160,20 +184,43 @@ export async function runWithLocalStateOwner<T>(params: {
     const { loadConfig } = await import("../config/config.js");
     assertCurrent();
     let config: OpenClawConfig | undefined;
-    return await localOwnerAssertion.run(assertCurrent, () =>
-      params.runLocal({
-        env,
-        // Loading config can write state. Config-free owners must reach their own admission first.
-        get config() {
+    // A process may host other owners. Only the command holding this lock can vouch for
+    // its implicit Gateway target, and detached work must lose that proof when it returns.
+    let active = true;
+    const holdsOfflineTarget = acquiredOffline
+      ? (selectedDatabasePath: string, selectedConfigPath: string) => {
+          if (
+            !active ||
+            selectedDatabasePath !== databasePath ||
+            selectedConfigPath !== paths.configPath
+          ) {
+            return false;
+          }
           assertCurrent();
-          config ??= loadConfig();
-          assertCurrent();
-          return config;
-        },
-        signal: controller.signal,
-        assertCurrent,
-      }),
-    );
+          return true;
+        }
+      : parent?.holdsOfflineTarget?.(databasePath, paths.configPath)
+        ? parent.holdsOfflineTarget
+        : undefined;
+    try {
+      return await localOwnerScope.run({ assertCurrent, holdsOfflineTarget }, () =>
+        params.runLocal({
+          env,
+          // Loading config can write state. Config-free owners must reach their own admission first.
+          get config() {
+            assertCurrent();
+            config ??= loadConfig();
+            assertCurrent();
+            return config;
+          },
+          signal: controller.signal,
+          assertCurrent,
+          ...(holdsOfflineTarget ? { localGatewayAbsent: true } : {}),
+        }),
+      );
+    } finally {
+      active = false;
+    }
   };
   const route = async (
     owner: Omit<GatewayLockIdentity, "port"> & { port?: number },
@@ -191,7 +238,7 @@ export async function runWithLocalStateOwner<T>(params: {
       gatewayMethod: string,
       gatewayInput: Record<string, unknown>,
       primary: boolean,
-      expectFinal = primary ? params.expectFinal : undefined,
+      requestOptions?: Parameters<OwnerRequest>[2],
     ): Promise<R> => {
       const port = listenerPort();
       const { callGateway, isGatewayClientRequestError } = await import("../gateway/call.js");
@@ -213,8 +260,10 @@ export async function runWithLocalStateOwner<T>(params: {
             ...(params.requiredCapabilities ?? []),
           ],
           timeoutMs: params.timeoutMs ?? 600_000,
-          expectFinal,
-          signal: controller.signal,
+          expectFinal: requestOptions?.expectFinal ?? (primary ? params.expectFinal : undefined),
+          signal: requestOptions?.signal
+            ? AbortSignal.any([controller.signal, requestOptions.signal])
+            : controller.signal,
           scopes,
           onSignalAbort: primary ? params.onGatewaySignalAbort : undefined,
           onResponse:
@@ -278,7 +327,7 @@ export async function runWithLocalStateOwner<T>(params: {
         signal: controller.signal,
         assertCurrent: assertTargetCurrent,
         requestOwner: (ownerMethod, ownerInput, options) =>
-          requestGateway(ownerMethod, ownerInput, false, options?.expectFinal),
+          requestGateway(ownerMethod, ownerInput, false, options),
       });
       assertTargetCurrent();
       return result;
@@ -397,12 +446,20 @@ export async function runWithLocalStateOwner<T>(params: {
       const cleanup = createAgentCleanupScope();
       let uncertainCleanup = false;
       try {
-        return await (resources ?? lock).run(() => cleanup.run(() => runLocal(lock.assertCurrent)));
+        return await (resources ?? lock).run(() =>
+          cleanup.run(() => runLocal(lock.assertCurrent, true)),
+        );
       } catch (error) {
         uncertainCleanup = hasCommandProcessCleanupError(error);
         throw error;
       } finally {
         uncertainCleanup ||= cleanup.outcome === "uncertain";
+        if (resources) {
+          // The CLI signal gate aborts `controller`; `agent --local` owns SIGINT through its bridge.
+          await waitForLocalBackgroundWork(
+            params.signal ? AbortSignal.any([controller.signal, params.signal]) : controller.signal,
+          );
+        }
         // Failed cleanup keeps physical custody; release cannot race accepted worker/native work.
         await resources?.close();
         // Stop lending this owner, but keep physical custody until uncertain children exit.

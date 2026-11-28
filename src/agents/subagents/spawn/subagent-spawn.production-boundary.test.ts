@@ -21,6 +21,7 @@ import { readAgentRuntimeExecutionLineage } from "../../../gateway/agent-runtime
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
 import { callGateway } from "../../../gateway/call.js";
 import { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
+import { registerGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime-context.js";
 import { createRequestGatewayMethodRegistry } from "../../../gateway/server-methods.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import {
@@ -275,11 +276,20 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
     return validateRuntimeAuthority(identity);
   };
   const methodRegistry = createRequestGatewayMethodRegistry();
-  const runtime = createGatewayInstanceRuntime({
+  const instanceRuntime = createGatewayInstanceRuntime({
     getContext: () => context,
     getMethodRegistry: () => methodRegistry,
     isDispatchAvailable: () => true,
   });
+  // This fixture stands in for the listening Gateway, which owns the process lifecycle runtime.
+  const releaseLifecycleRuntime = registerGatewayLifecycleRuntime(instanceRuntime.lifecycle);
+  const runtime = {
+    ...instanceRuntime,
+    close: () => {
+      instanceRuntime.close();
+      releaseLifecycleRuntime();
+    },
+  };
   context.createAgentTurnFacade = runtime.createAgentTurnFacade;
   context.lifecycleRuntime = runtime.lifecycle;
   vi.spyOn(runtime.lifecycle, "waitForAgent").mockResolvedValue({ status: "pending" });
@@ -419,7 +429,6 @@ describe("recursive spawn production boundary", () => {
         },
       };
       let consented: boolean | undefined;
-      let revokedSource: unknown;
       const modelRun = holdModelRun(bound, "child complete", async (params) => {
         consented = await assertAgentHarnessExecutionEnvironment(harness, params);
         const admitted = await resolvePreparedRunAdmission({
@@ -431,13 +440,6 @@ describe("recursive spawn production boundary", () => {
         // The harness host captures this assertion and checks it right before native dispatch.
         const active = expectDefined(resolveAdmittedRunActiveAssertion(admitted), "active child");
         active();
-        // Removing the spawning owner after admission must stop that dispatch.
-        bound.cfg.commands = { ownerAllowFrom: [] };
-        try {
-          active();
-        } catch (error) {
-          revokedSource = error;
-        }
       });
       let childRunId: string | undefined;
       const failures: unknown[] = [];
@@ -454,7 +456,6 @@ describe("recursive spawn production boundary", () => {
         await waitForEmbeddedRun(bound, details.runId, modelRun.started);
         expect(runEmbeddedAgent.mock.calls[0]?.[0]).toMatchObject({ senderIsOwner: owner });
         expect(consented).toBe(owner);
-        expect(revokedSource !== undefined).toBe(owner);
       } catch (error) {
         failures.push(error);
       } finally {

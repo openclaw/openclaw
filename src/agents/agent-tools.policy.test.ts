@@ -167,6 +167,30 @@ describe("resolveGroupToolPolicy group context validation", () => {
     },
   );
 
+  it("names the missing creator channel when a DM-key scheduled account cannot resolve a channel", () => {
+    const params = {
+      config,
+      sessionKey: "agent:ailybot:telegram:direct:alex",
+      accountId: "ailybot",
+      requireConfiguredAccount: true,
+    };
+    expect(() => resolveGroupToolPolicy(params)).toThrow(
+      'Scheduled account "ailybot" is unavailable: the job has no recorded creator channel',
+    );
+  });
+
+  it("identifies an unlisted account without implying there is a scoped registry", () => {
+    const params = {
+      config,
+      sessionKey: "agent:main:whatsapp:group:safe-room",
+      accountId: "removed",
+      requireConfiguredAccount: true,
+    };
+    expect(() => resolveGroupToolPolicy(params)).toThrow(
+      'Scheduled account "removed" is unavailable on channel "whatsapp". Process registry: account not listed; scoped registry: no scope.',
+    );
+  });
+
   it("preserves scheduled deny-all", () => {
     expect(
       resolveGroupToolPolicy({

@@ -7,7 +7,7 @@ import type { AuthProfileCredential, AuthProfileSecretsStore } from "./types.js"
 export type AuthProfileAuthorizationLifetimes = Record<string, string>;
 type AuthorizationWriteIntent =
   | { kind: "replace" }
-  | { kind: "refresh"; previous: AuthProfileCredential };
+  | { kind: "refresh" | "display-name"; previous: AuthProfileCredential };
 type WriteIntent = AuthorizationWriteIntent & { used: boolean };
 export type AuthProfileAuthorizationWriteIntents = Array<{
   profileId: string;
@@ -45,6 +45,20 @@ export function continueAuthProfileAuthorization<T extends AuthProfileCredential
 ): T {
   intents.set(next, { kind: "refresh", previous: structuredClone(previous), used: false });
   return next;
+}
+
+/** Carry the same grant through a write that changes only its display name. */
+export function continueAuthProfileAuthorizationForDisplayName<T extends AuthProfileCredential>(
+  previous: AuthProfileCredential,
+  next: T,
+): T {
+  intents.set(next, { kind: "display-name", previous: structuredClone(previous), used: false });
+  return next;
+}
+
+function withoutDisplayName(credential: Record<string, unknown>): Record<string, unknown> {
+  const { displayName: _displayName, ...grant } = credential;
+  return grant;
 }
 
 /** Explicit login/upsert is replacement even when the operator supplies identical bytes. */
@@ -164,8 +178,12 @@ export function prepareAuthProfileAuthorizationWrite(
     const continuing =
       intent &&
       !intent.used &&
-      intent.kind === "refresh" &&
-      isDeepStrictEqual(intent.previous, previous);
+      intent.kind !== "replace" &&
+      isDeepStrictEqual(intent.previous, previous) &&
+      (intent.kind === "refresh" ||
+        (isRecord(previous) &&
+          isRecord(next) &&
+          isDeepStrictEqual(withoutDisplayName(previous), withoutDisplayName(next))));
     if (
       (intent && !intent.used && intent.kind === "replace") ||
       (!isDeepStrictEqual(previous, next) && !continuing)

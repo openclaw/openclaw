@@ -13,7 +13,7 @@ vi.mock("./src/database-store.js", () => ({
 const respond = vi.fn();
 const method = "geolocation.lookup";
 
-function lookup(params: Record<string, unknown>, hasCurrentClientAuthority = () => true) {
+function lookup(params: Record<string, unknown>) {
   const registerGatewayMethod = vi.fn<OpenClawPluginApi["registerGatewayMethod"]>();
   plugin.register(createTestPluginApi({ registerGatewayMethod }));
   return registerGatewayMethod.mock.calls.find(([name]) => name === method)![1]({
@@ -23,7 +23,6 @@ function lookup(params: Record<string, unknown>, hasCurrentClientAuthority = () 
     client: null,
     context: {} as GatewayRequestHandlerOptions["context"],
     isWebchatConnect: () => false,
-    hasCurrentClientAuthority,
   });
 }
 
@@ -70,16 +69,4 @@ it.each([
   const error = expect.objectContaining({ code: "INVALID_REQUEST" });
   expect(respond.mock.calls).toEqual([[false, undefined, error]]);
   expect(loadDatabase).not.toHaveBeenCalled();
-});
-
-it("withholds a pending result after the caller loses its authority", async () => {
-  let current = true;
-  loadDatabase.mockImplementation(async () => {
-    current = false;
-    return { lookup: () => null };
-  });
-  await expect(lookup({ ips: ["8.8.8.8"] }, () => current)).rejects.toThrow(
-    "Gateway requester authority changed",
-  );
-  expect(respond).not.toHaveBeenCalled();
 });

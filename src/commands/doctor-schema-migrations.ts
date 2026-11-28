@@ -2,7 +2,7 @@ import { withEngineStoreAdmission } from "../infra/database-engine/admission-sco
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runSqliteIntegrityOperationSync } from "../infra/sqlite-integrity.js";
-import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker-context.js";
 import {
   hasUpdateDoctorMigrationCapture,
   runUpdateSqliteMigrationAsync,
@@ -14,8 +14,8 @@ import {
   ensureOpenClawAgentDatabaseSchemaSteps,
   ensureOpenClawAgentSchema,
 } from "../state/openclaw-agent-db-schema.js";
+import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-doctor-repair.js";
 import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
-import { repairDoctorStateSchemaAsync } from "../state/openclaw-state-db-repair.js";
 import {
   openOpenClawStateDatabaseForDoctor,
   prepareOpenClawStateDatabaseSchema,

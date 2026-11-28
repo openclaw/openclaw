@@ -187,6 +187,26 @@ it.each([false, true])(
   },
 );
 
+it("reports an unmeasured direct Node exception under bun-all without rerouting it", async () => {
+  const target = "src/process/spawn-utils.test.ts";
+  const plans = resolveShardPlans({ OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify([target]) });
+  const output: string[] = [];
+  vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+    output.push(String(chunk));
+    return true;
+  });
+  const result = await recordPlans(plans, { env: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-all" } });
+  expect(result.code).toBe(0);
+  expect(result.calls).toHaveLength(1);
+  expect(result.calls[0]![0]).toEqual([target]);
+  expect(result.calls[0]![1].OPENCLAW_VITEST_RUNTIME).toBe("node");
+  expect(
+    output
+      .filter((line) => line.startsWith("[shard:volume] "))
+      .map((line) => JSON.parse(line.slice("[shard:volume] ".length))),
+  ).toEqual([expect.objectContaining({ target, runtime: "node", full: null, selected: null })]);
+});
+
 function machine(cpus: number, gib: number) {
   vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
   vi.spyOn(os, "availableParallelism").mockReturnValue(cpus);

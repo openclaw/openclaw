@@ -44,7 +44,7 @@ export function registerCodexNativeSubagentReceiptAlias<Parent extends ReceiptPa
   return known.deliveryReceipts.addAlias(childThreadId, agentPath);
 }
 
-type Receipt = { agentPath: string; result?: string };
+type Receipt = { agentPath: string; result?: string; contextual: boolean };
 type Outcome = {
   paths: Set<string>;
   result?: string;
@@ -58,13 +58,13 @@ export class CodexNativeSubagentDeliveryReceipts {
   private readonly pending: Receipt[] = [];
   private readonly outcomes = new Map<string, Outcome>();
 
-  observe(receipts: CodexNativeSubagentNotification["receipts"]): string[] {
+  observe(receipts: CodexNativeSubagentNotification["receipts"], contextual = false): string[] {
     for (const { id, agentPath, result } of receipts) {
       if (this.seen.has(id)) {
         continue;
       }
       this.seen.add(id);
-      this.pending.push({ agentPath, result: receiptResultKey(result) });
+      this.pending.push({ agentPath, contextual, result: receiptResultKey(result) });
     }
     return this.match();
   }
@@ -135,7 +135,8 @@ export class CodexNativeSubagentDeliveryReceipts {
         match &&
         match[1].result === undefined &&
         !match[1].receiptResults.has(receipt.result) &&
-        matches.length > 1;
+        // A later parent can receive a contextual notice for an already retired predecessor.
+        (receipt.contextual || matches.length > 1);
       if (!match || ambiguous) {
         index += 1;
         continue;
@@ -155,11 +156,11 @@ export class CodexNativeSubagentDeliveryReceipts {
 
 export function observeCodexNativeSubagentDeliveryReceipts<Parent extends ReceiptParent>(params: {
   state: Parent;
-  receipts: CodexNativeSubagentNotification["receipts"];
+  notification: CodexNativeSubagentNotification;
   knownChildren: Iterable<KnownReceiptChild<Parent>>;
   applyReceipts: (runIds: readonly string[]) => void;
 }): void {
-  const { state, receipts, knownChildren, applyReceipts } = params;
+  const { state, notification, knownChildren, applyReceipts } = params;
   const trackers = new Set([state.deliveryReceipts]);
   // A fresh parent can consume a receipt before history reveals its alias.
   // Observe that current receipt in retained assignment owners too; never copy
@@ -170,7 +171,7 @@ export function observeCodexNativeSubagentDeliveryReceipts<Parent extends Receip
     }
   }
   for (const tracker of trackers) {
-    applyReceipts(tracker.observe(receipts));
+    applyReceipts(tracker.observe(notification.receipts, notification.completions.length > 0));
   }
 }
 

@@ -15,7 +15,7 @@ import {
 } from "../../agents/auth-profiles/store.js";
 import { normalizeMessagesForLlmBoundary } from "../../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
 import { submitEmbeddedAttemptPrompt } from "../../agents/embedded-agent-runner/run/attempt-prompt-submit.js";
-import { createChatGPTV2CompactionBoundary } from "../../agents/embedded-agent-runner/run/chatgpt-v2-compaction.js";
+import { createRequestBoundaryCompaction } from "../../agents/embedded-agent-runner/run/request-boundary-compaction.js";
 import { createToolResultPromptProjectionState } from "../../agents/embedded-agent-runner/session-prompt-state.js";
 import { prepareAgentRuntimeAuth } from "../../agents/runtime-plan/prepare-auth.js";
 import {
@@ -231,14 +231,15 @@ export function registerReplyCompactionCases({
               attempt: { sessionId: session.sessionId },
               activeSession: session,
               contextTokenBudget: 200_000,
-              compactBeforeRequest: createChatGPTV2CompactionBoundary({
+              compactBeforeRequest: createRequestBoundaryCompaction({
+                variant: "native-checkpoint",
                 session,
                 contextTokenBudget: 200_000,
                 reserveTokens: 20_000,
                 timeoutMs: 30_000,
                 assertActive: () => {},
                 withTranscriptWrite,
-                onFallback: () => order.push("native-fallback"),
+                onPrecheck: () => order.push("native-fallback"),
               }),
               images: [],
               modelPrompt: "Current request.",
@@ -329,7 +330,8 @@ export function registerReplyCompactionCases({
             });
           }
           const result = await run();
-          expect(order).toEqual(native ? ["attempt"] : ["client-compaction", "attempt"]);
+          // Every route compacts at the attempt's request boundary.
+          expect(order).toEqual(["attempt"]);
           // Surface the embedded attempt's own failure before asserting its output.
           expect(attemptError).toBeUndefined();
           expect(result).toMatchObject({ text: "done" });
@@ -340,7 +342,7 @@ export function registerReplyCompactionCases({
               "compaction",
             ]);
           } else {
-            expect(state.compactEmbeddedAgentSessionMock).toHaveBeenCalledOnce();
+            expect(state.compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
             expect(requests).toHaveLength(0);
           }
         } finally {

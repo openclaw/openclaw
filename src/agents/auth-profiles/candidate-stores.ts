@@ -4,18 +4,18 @@ import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import { isErrno } from "../../infra/errno.js";
 import {
   assertDatabasePathIdentity,
-  readDatabasePathIdentitySync,
+  readDatabasePathIdentity,
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { listOpenClawRegisteredAgentDatabasesAsync } from "../../state/openclaw-agent-db-registry-listing.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
-import { listAgentEntries, resolveAgentDir } from "../agent-scope.js";
+import { resolveEffectiveAgentDir } from "../agent-scope-config.js";
+import { listAgentEntries } from "../agent-scope.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
 import { mergePersistedAuthProfileState } from "./persisted.js";
@@ -57,10 +57,6 @@ type CandidateSource = {
   databasePath: string;
   configured: boolean;
 };
-
-function canonicalizeDatabasePath(databasePath: string): string {
-  return resolvePathViaExistingAncestorSync(path.resolve(databasePath));
-}
 
 async function collectStateRootCandidates(env: NodeJS.ProcessEnv): Promise<CandidateSource[]> {
   const agentsRoot = path.join(resolveStateDir(env), "agents");
@@ -104,7 +100,7 @@ export async function listCandidateAuthProfileStores(params: {
       continue;
     }
     const agentId = normalizeAgentId(id);
-    const agentDir = path.resolve(resolveAgentDir(params.cfg, agentId, env));
+    const agentDir = path.resolve(resolveEffectiveAgentDir(params.cfg, agentId, { env }));
     sources.push({
       agentId,
       agentDir,
@@ -124,7 +120,8 @@ export async function listCandidateAuthProfileStores(params: {
 
   const candidates = new Map<string, CandidateAuthProfileStore>();
   for (const source of sources) {
-    const databasePath = canonicalizeDatabasePath(source.databasePath);
+    const databaseIdentity = await readDatabasePathIdentity(source.databasePath);
+    const databasePath = databaseIdentity.canonicalPath;
     const agentDir = source.agentDir ?? path.dirname(databasePath);
     const existing = candidates.get(databasePath);
     if (!existing) {
@@ -132,7 +129,7 @@ export async function listCandidateAuthProfileStores(params: {
         agentId: source.agentId,
         agentDir,
         databasePath,
-        databaseIdentity: readDatabasePathIdentitySync(databasePath),
+        databaseIdentity,
         configured: source.configured,
         env,
       });
@@ -145,12 +142,10 @@ export async function listCandidateAuthProfileStores(params: {
   );
 }
 
-function assertCandidateDatabaseIdentity(candidate: CandidateAuthProfileStore): void {
+async function adoptCandidateDatabaseIdentity(candidate: CandidateAuthProfileStore): Promise<void> {
   if (candidate.databaseIdentity.key.startsWith("path:")) {
     // Discovery captured no file; startup or another operation may create it before first use.
-    candidate.databaseIdentity = readDatabasePathIdentitySync(candidate.databasePath);
-  } else {
-    assertDatabasePathIdentity(candidate.databasePath, candidate.databaseIdentity);
+    candidate.databaseIdentity = await readDatabasePathIdentity(candidate.databasePath);
   }
 }
 
@@ -158,12 +153,11 @@ function assertCandidateDatabaseIdentity(candidate: CandidateAuthProfileStore): 
 export async function loadCandidateAuthProfileStoreAsync(
   candidate: CandidateAuthProfileStore,
 ): Promise<AuthProfileStore | null> {
-  assertCandidateDatabaseIdentity(candidate);
-  const reader = prepareAgentAuthProfileRowsRead(candidate);
+  await adoptCandidateDatabaseIdentity(candidate);
+  const reader = await prepareAgentAuthProfileRowsRead(candidate);
   try {
     const rows = await reader.read();
     reader.assertCurrent();
-    assertCandidateDatabaseIdentity(candidate);
     return loadPersistedAuthProfileStoreFromRows(rows, candidate.databasePath);
   } finally {
     await reader.dispose();
@@ -181,7 +175,7 @@ export async function prepareCandidateAuthProfileCredentialRead(
   >
 > {
   // Key the authority by the adopted file identity that later writes publish under.
-  assertCandidateDatabaseIdentity(candidate);
+  await adoptCandidateDatabaseIdentity(candidate);
   const authority = captureAuthProfileCredentialAuthority(
     captureOpenClawStateWorkerContext({ env: candidate.env }),
     {
@@ -242,6 +236,7 @@ async function runCandidateAuthProfileUpdate(
   peerGeneration?: AuthStoreUpdateInput["peerGeneration"],
 ): Promise<{ changed: boolean; store: AuthProfileStore } | undefined> {
   const { candidate } = params;
+  await adoptCandidateDatabaseIdentity(candidate);
   const saveOptions = {
     filterExternalAuthProfiles: false,
     syncExternalCli: false,
@@ -256,7 +251,7 @@ async function runCandidateAuthProfileUpdate(
   if (workerWrites) {
     const assertCurrent = () => {
       workerWrites.assertOwner(candidate.env);
-      assertCandidateDatabaseIdentity(candidate);
+      assertDatabasePathIdentity(candidate.databasePath, candidate.databaseIdentity);
       params.assertCurrent?.();
     };
     return runAuthProfileUsage(() =>
@@ -336,10 +331,7 @@ async function runCandidateAuthProfileUpdate(
     envOnly: false,
     peerGeneration,
     options: { env: candidate.env },
-    assertCurrent: () => {
-      assertCandidateDatabaseIdentity(candidate);
-      params.assertCurrent?.();
-    },
+    assertCurrent: params.assertCurrent,
     update(prepared) {
       const store = prepared.store;
       const changed = params.updater(store);

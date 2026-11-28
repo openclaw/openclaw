@@ -170,6 +170,29 @@ describe("OpenClawStdioClientTransport", () => {
     expect(closed).toHaveBeenCalledOnce();
   });
 
+  it("gracefully closes an admitted startup without aborting its cleanup owner", async () => {
+    const fixture = createFixture();
+    const admitted = createDeferred<AbortSignal>();
+    const starting = createDeferred<OwnedStdioProcess>();
+    spawnMock.mockImplementationOnce(({ abortSignal }: { abortSignal: AbortSignal }) => {
+      admitted.resolve(abortSignal);
+      return starting.promise;
+    });
+    const started = fixture.transport.start();
+    const signal = await admitted.promise;
+    const closing = fixture.transport.close();
+    try {
+      expect(signal.aborted).toBe(false);
+      expect(closeMock).not.toHaveBeenCalled();
+    } finally {
+      starting.resolve(fixture.child);
+      await started;
+      fixture.cleanup();
+      await closing;
+    }
+    expect(closeMock).toHaveBeenCalledExactlyOnceWith(fixture.child, { force: false });
+  });
+
   it("forceClose retires startup while its owned data directory is being prepared", async () => {
     const preparation = createDeferred<undefined>();
     vi.spyOn(fs, "mkdir").mockReturnValue(preparation.promise);

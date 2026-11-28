@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -56,7 +55,6 @@ import {
   applyMessageCrossContextMarker,
   executeGatewayAction,
 } from "./message-action-execution.js";
-import { recordGatewayActionSend } from "./message-action-gateway-transcript.js";
 import { collectAttachmentSources, normalizeSandboxMediaSource } from "./message-action-params.js";
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import {
@@ -608,29 +606,8 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
         }),
       });
   if (gatewayPluginAction) {
-    const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
-    if (!deliveryFact || deliveryFact.status === "settled") {
-      await commitOutboundSessionRoute();
-      // The Gateway owns source-reply history; other conversations get the
-      // confirmed send through the destination history owner.
-      if (!dryRun && outboundRoute && !deliveryFact?.partialDelivery) {
-        await recordGatewayActionSend({
-          cfg,
-          channel,
-          to,
-          accountId: ctx.accountId ?? undefined,
-          route: outboundRoute,
-          producerSessionKey: input.sourceReplySessionKey ?? input.sessionKey,
-          agentId,
-          payload: sendPayload.payload,
-          deliveryId:
-            normalizeOptionalString(params.idempotencyKey) ??
-            input.deliveryIntentId ??
-            randomUUID(),
-          signal: ctx.abortSignal,
-        });
-      }
-    }
+    // The Gateway commits the route and transcript together. Repeating the route
+    // write here opens a second process-local owner behind its resident session.
     return await annotateSourceDelivery(
       withSendNormalization(gatewayPluginAction, sendPayload.normalization),
       ctx,

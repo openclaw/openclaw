@@ -76,12 +76,27 @@ rewrite stored/model text, change routing or authorization, or create mention
 notifications. Missing source scope stays unchanged; an unlinked or invisible
 profile uses only the source fallback, or keeps the raw ID if none is available.
 
+## Renewing queued ingress access
+
+Use `childSessionPublication: { assertCurrent, prepare }` to renew source
+authorization once when an ingress turn starts, including queued user requests
+and room events.
+Despite the field's name, omitting `audience` permits ordinary run admission
+without granting public child sessions. `prepare` reacquires current channel
+policy and returns `null` when access was removed. The host records the refusal
+for the session owner and drops the request without a model call or a channel
+reply; operational failures instead produce a retryable access-verification
+error. A started ordinary turn may finish after access changes. Its returned
+assertion should retain cancellation, not recheck channel access throughout
+the run.
+
 ## Opted-in public child sessions
 
-The ingress resolver accepts an optional host-invocation intent,
-`childSessionPublication: { audience: "public", assertCurrent }`. Supply it only
+The same ingress intent additionally grants child publication for a
+`user_request` when it supplies `audience: "public"`. Supply that audience only
 after explicit operator opt-in and provider-native proof that the entire
-supplied context is public. Unknown audience metadata must deny publication.
+supplied context is public. Missing or unknown audience metadata never grants
+publication. For public publication,
 `assertCurrent` synchronously rechecks account policy and the live ingress
 owner; never derive this field from message text, stored permalinks, or model
 arguments. The ordinary decision-only resolver does not grant authority.
@@ -94,7 +109,8 @@ must reacquire current authorization and routing with bounded retries and return
 longer valid. This drops the turn without trying another model or publishing a
 generic model-failure reply. Throw operational failures instead; these stop model
 fallback but produce a retryable access-verification error. Preparation cannot
-renew an already admitted run; use-time checks and revocation remain mandatory.
+renew an already admitted run; public child publication retains its existing
+use-time checks.
 
 An exact host resolver-to-context handoff binds the intent to one admitted
 run. Only its fresh immediate isolated visible children can receive public

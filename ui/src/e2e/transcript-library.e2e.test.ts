@@ -103,8 +103,9 @@ suite.define(() => {
         );
       }
       await page.setViewportSize({ width: 1400, height: 1000 });
-      await library.locator("summary").click();
-      await control(library, "searchbox", "Provider").waitFor();
+      await click(library, "Filters");
+      await control(page, "searchbox", "Provider").waitFor();
+      await page.keyboard.press("Escape");
       await expectColumns();
       await library.getByRole("link", { name: /Design review/ }).click();
       const reader = control(page, "article", "Transcript reader");
@@ -114,10 +115,11 @@ suite.define(() => {
       await control(reader, "link", "Back to library").click();
       await gateway.setMethodResponse("transcripts.list", { sessions: [], nextCursor: null });
       await control(library, "searchbox", "Search meetings").fill("no-match");
-      await click(library, "Filter");
+      await control(library, "searchbox", "Search meetings").press("Enter");
       await expectParams(gateway, "transcripts.list", { query: "no-match" });
       await library.getByRole("heading", { name: "No meetings match your search." }).waitFor();
-      await click(library, "Clear filters");
+      await click(library, "Filters");
+      await click(page, "Clear filters");
       await library.getByRole("heading", { name: "No meetings yet." }).waitFor();
     });
   });
@@ -197,7 +199,7 @@ suite.define(() => {
       await library.getByRole("link", { name: /Design review/ }).waitFor();
       expect(await library.getAttribute("aria-busy")).toBe("false");
       await control(library, "searchbox", "Search meetings").fill("design");
-      await click(library, "Filter");
+      await control(library, "searchbox", "Search meetings").press("Enter");
       await expectParams(gateway, "transcripts.list", { query: "design", limit: 50 });
       await click(library, "Next page");
       await expectParams(gateway, "transcripts.list", { cursor: "list-next", query: "design" });

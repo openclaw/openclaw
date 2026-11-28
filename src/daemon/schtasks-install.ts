@@ -320,6 +320,7 @@ export async function installScheduledTask(
         activationAttempted = true;
         const passwordTaskActivation = await runScheduledTaskOrThrow({
           taskName,
+          beforeMutation: args.beforeMutation,
           env: activationEnv,
           scriptPath,
           allowFallback: false,
@@ -443,6 +444,7 @@ export async function installScheduledTask(
       activationAttempted = true;
       const taskActivation = await runScheduledTaskOrThrow({
         taskName,
+        beforeMutation: args.beforeMutation,
         env: activationEnv,
         scriptPath,
         assertCurrent: definitionTransaction?.assertCurrent,
@@ -486,6 +488,7 @@ export async function installScheduledTask(
         // Re-reading ownership now would inspect the replacement command, not the captured fallback.
         await restartRegisteredScheduledTask({
           env: activationEnv,
+          beforeMutation: args.beforeMutation,
           stdout: args.stdout,
           mode: { kind: "fallback-takeover" },
           onRunMutation: () => {

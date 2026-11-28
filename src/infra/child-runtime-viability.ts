@@ -4,6 +4,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getSpawnBroker } from "../process/spawn-broker/context-state.js";
+import { restoreExecaResult } from "../process/spawn-broker/execa-protocol.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasErrnoCode } from "./errno.js";
@@ -56,6 +58,11 @@ function publishRuntimeViability(execPath: string, error?: unknown): ChildRuntim
   return { execPath, available: !(runtime.execPath === execPath && runtime.failure) };
 }
 
+/** Read the launch/diagnostic owner's verdict without starting filesystem or child work. */
+export function getRecordedChildRuntimeViability(): ChildRuntimeViability {
+  return publishRuntimeViability(process.execPath);
+}
+
 /** Retained for the public synchronous readiness, OOM and SQLite contracts. */
 export function readChildRuntimeViability(params?: { execPath?: string }): ChildRuntimeViability {
   const execPath = params?.execPath ?? process.execPath;
@@ -82,7 +89,12 @@ export async function prepareChildRuntimeViability(params?: {
       const identity = await fs.stat(execPath).then(formatExecutableIdentity, () => undefined);
       available = !classifyRuntimeProbe(execPath, probe, identity, probe.error);
     } catch (error) {
-      available = publishRuntimeViability(execPath, error).available;
+      // A failed broker transport must not hide a runtime removed during restart.
+      const cause = await fs.stat(execPath).then(
+        () => error,
+        (statError: unknown) => statError,
+      );
+      available = publishRuntimeViability(execPath, cause).available;
     }
   }
   return {
@@ -142,11 +154,33 @@ function runtimeProbeOptions(options: { env?: NodeJS.ProcessEnv; cwd?: string } 
   };
 }
 
-/** Native launch avoids recursing into the command owner's runtime diagnosis. */
-export function probeChildRuntimeExecutable(
+/** Direct transport launch avoids recursing into the command owner's runtime diagnosis. */
+export async function probeChildRuntimeExecutable(
   execPath: string,
   options: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
 ): Promise<RuntimeProbe> {
+  const broker = getSpawnBroker();
+  if (broker) {
+    const remote = broker.spawnExeca([execPath, "--version"], {
+      ...runtimeProbeOptions(options),
+      extendEnv: false,
+      stripFinalNewline: false,
+      stdin: "ignore",
+    });
+    remote.child.once("spawn", () => {
+      remote.child.stdout?.resume();
+      remote.child.stderr?.resume();
+    });
+    const result = restoreExecaResult(await remote.result);
+    await remote.child.waitForClose();
+    return {
+      stdout: typeof result.stdout === "string" ? result.stdout : "",
+      stderr: typeof result.stderr === "string" ? result.stderr : "",
+      error: result instanceof Error ? result : undefined,
+      status: result.exitCode ?? null,
+      signal: result.signal ?? null,
+    };
+  }
   return new Promise((resolve) => {
     execFile(execPath, ["--version"], runtimeProbeOptions(options), (error, stdout, stderr) =>
       resolve({

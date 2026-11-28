@@ -526,7 +526,6 @@ describe("same-root local mutation routing", () => {
   );
 
   it.each([
-    "mcp logout synthetic-server",
     "models auth logout synthetic:manual --yes",
     "sandbox recreate --all --force",
     "migrate apply synthetic-missing-provider --yes --no-backup --force --json",

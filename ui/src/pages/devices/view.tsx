@@ -154,6 +154,8 @@ function resolveBindingsState(input: DevicesProps) {
 /** Bindings autosave like the rest of config; the settings save indicator reports them. */
 function Bindings(props: BindingState) {
   const supportsBinding = () => props.nodes.length > 0;
+  // Until the first node inventory lands, "no devices" is unknown rather than true.
+  const nodesPending = () => props.loading && props.inventory.length === 0;
   const hasBinding = () =>
     props.defaultBinding !== null || props.agents.some((agent) => agent.binding !== null);
   return (
@@ -166,7 +168,7 @@ function Bindings(props: BindingState) {
       ) : undefined}
       {!props.ready ? (
         props.configLoading ? (
-          <PolicyActionRow description={t("common.loading")} />
+          <SettingsLoadingSkeleton rows={1} />
         ) : (
           <PolicyActionRow description={t("devices.binding.loadConfigHint")}>
             <button class="btn" disabled={!props.connected} onClick={() => props.onLoadConfig()}>
@@ -175,13 +177,17 @@ function Bindings(props: BindingState) {
           </PolicyActionRow>
         )
       ) : !supportsBinding() && !hasBinding() ? (
-        <SettingsEmpty message={t("devices.binding.noNodes")} />
+        nodesPending() ? (
+          <SettingsLoadingSkeleton rows={1} />
+        ) : (
+          <SettingsEmpty message={t("devices.binding.noNodes")} />
+        )
       ) : (
         <>
           <SettingsRow
             title={t("devices.binding.defaultBinding")}
             description={
-              supportsBinding() ? (
+              supportsBinding() || nodesPending() ? (
                 t("devices.binding.defaultBindingHint")
               ) : (
                 <>

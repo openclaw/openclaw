@@ -230,6 +230,25 @@ it("declares setup auto-enable reasons for browser config surfaces", () => {
   const probe = registerAutoEnableProbe.mock.calls[0]?.[0];
   assert(probe, "expected browser auto-enable probe");
   const result = (config: OpenClawPluginApi["config"]) => probe({ config, env: {} });
+  const hardeningOnly = { extensionRelay: { allowLegacyAuth: false } };
+  expect(result({ browser: hardeningOnly })).toBeNull();
+  expect(result({ browser: { ...hardeningOnly, enabled: true } })).toBe("browser configured");
+  expect(result({ browser: { ...hardeningOnly, defaultProfile: "openclaw" } })).toBe(
+    "browser configured",
+  );
+  expect(result({ browser: hardeningOnly, plugins: { entries: { browser: {} } } })).toBe(
+    "browser plugin configured",
+  );
+  expect(result({ browser: hardeningOnly, tools: { alsoAllow: ["browser"] } })).toBe(
+    "browser tool referenced",
+  );
+  expect(
+    result({ browser: hardeningOnly, plugins: { entries: { browser: { enabled: false } } } }),
+  ).toBeNull();
+  expect(result({ browser: {} })).toBe("browser configured");
+  expect(result({ browser: { extensionRelay: { allowLegacyAuth: true } } })).toBe(
+    "browser configured",
+  );
   expect(result({ browser: { defaultProfile: "openclaw" } })).toBe("browser configured");
   expect(result({ tools: { alsoAllow: ["browser"] } })).toBe("browser tool referenced");
   expect(result({ agents: { entries: { reviewer: { tools: { allow: ["browser"] } } } } })).toBe(

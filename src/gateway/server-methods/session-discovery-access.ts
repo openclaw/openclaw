@@ -14,10 +14,11 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Keep discovery bound to current sharing facts while consuming selected display metadata. */
 export async function withSessionDiscoveryAccess(
-  params: Pick<
-    GatewayRequestHandlerOptions,
-    "client" | "context" | "respond" | "signal" | "hasCurrentClientAuthority"
-  > & { sessionKey?: string; agentId: string; changedError: ErrorShape },
+  params: Pick<GatewayRequestHandlerOptions, "client" | "context" | "respond" | "signal"> & {
+    sessionKey?: string;
+    agentId: string;
+    changedError: ErrorShape;
+  },
   discover: (entry?: SessionEntry) => Promise<unknown>,
 ): Promise<void> {
   if (!params.sessionKey) {
@@ -29,7 +30,7 @@ export async function withSessionDiscoveryAccess(
     using access = await prepareSessionSharingAccess(
       { ...params, sessionKey: params.sessionKey },
       () => {
-        throw new Error("Session discovery authority changed.");
+        throw new Error("Session discovery ended. Start a new request to retry.");
       },
     );
     if (!access) {

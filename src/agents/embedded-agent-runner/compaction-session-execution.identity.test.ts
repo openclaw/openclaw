@@ -30,6 +30,8 @@ it("persists recovery compaction under the identity its progress announced", asy
     sessionId: prepared.sessionId,
     sessionKey,
     sessionFile: sessionKey,
+    provider: "openai", // direct compaction callers pass the session model
+    model: "gpt-6-astra",
     sessionTarget: { agentId: "main", sessionId: prepared.sessionId, sessionKey, storePath },
     workspaceDir: prepared.workspaceDir,
     trigger: "overflow",

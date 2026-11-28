@@ -8,6 +8,7 @@ import {
   prepareAgentDeleteDatabases,
   prepareJournaledAgentDirOwnership,
   readAgentDeleteDatabaseRegistry,
+  readRegisteredAgentDatabasePaths,
   resolveSurvivingDatabaseFilePaths,
   retireAgentDeleteRuntime,
 } from "../../agents/agent-delete-databases.js";
@@ -51,6 +52,7 @@ import {
   withConfigMutationExclusive,
 } from "../../config/config.js";
 import type { ConfigWriteOptions } from "../../config/io.js";
+import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import { purgeAgentSessionStoreEntries } from "../../config/sessions.js";
 import { resolveSessionTranscriptsDirForAgent } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -175,10 +177,12 @@ async function deleteGatewayAgentAttempt(
           throw new Error(`Agent ${agentId} deletion recovery no longer owns its journal.`);
         }
         const configured = isConfiguredAgent(lockedConfig, agentId);
+        // A retired agent (removed from config, still registered) is deleted like a configured one.
+        const retired = !configured && (await readRegisteredAgentDatabasePaths(agentId)).length > 0;
         if (await agentOwnsSharedAuthStore(lockedConfig, agentId)) {
           throw new AgentSharedAuthStoreOwnerError(formatSharedAuthStoreOwnerDeleteError(agentId));
         }
-        if (!configured && (!lockedJournal || lockedJournal.cleanupCompleted)) {
+        if (!configured && !retired && (!lockedJournal || lockedJournal.cleanupCompleted)) {
           throw new AgentConfigPreconditionError(`agent "${agentId}" not found`);
         }
         if (agentId === tryResolveSoleAgentId(lockedConfig)) {
@@ -191,7 +195,13 @@ async function deleteGatewayAgentAttempt(
             `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
           );
         }
-        if (configured && lockedJournal?.cleanupCompleted) {
+        // A retired agent is no longer in config; only its completed deletion records its paths.
+        const recorded = retired && lockedJournal?.cleanupCompleted ? lockedJournal : undefined;
+        if (recorded && !requestedDeleteFiles) {
+          // The completed deletion kept the registration; a repeat without files changes nothing.
+          return undefined;
+        }
+        if ((configured || retired) && lockedJournal?.cleanupCompleted) {
           const claimed = await claimCompletedAgentDeletion(agentId, lockedJournal.operationId);
           const remainingJournal = await readAgentDeletionJournalAsync(agentId);
           if (!claimed && remainingJournal) {
@@ -209,9 +219,9 @@ async function deleteGatewayAgentAttempt(
         const deletion = await begin(
           lockedJournal ?? {
             agentId,
-            agentDir: resolveAgentDir(lockedConfig, agentId),
-            workspaceDir: resolveAgentWorkspaceDir(lockedConfig, agentId),
-            sessionsDir: resolveSessionTranscriptsDirForAgent(agentId),
+            agentDir: recorded?.agentDir ?? resolveAgentDir(lockedConfig, agentId),
+            workspaceDir: recorded?.workspaceDir ?? resolveAgentWorkspaceDir(lockedConfig, agentId),
+            sessionsDir: recorded?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId),
             deleteFiles,
             phase: "draining",
           },
@@ -220,6 +230,13 @@ async function deleteGatewayAgentAttempt(
         options.recoveryOperationId = deletion.entry.operationId;
         return { deletion, lockedJournal, config: lockedConfig };
       });
+      if (!prepared) {
+        // Nothing was written, so the caller's config-application receipt has nothing to apply.
+        if (writeOptions) {
+          getRuntimeConfigWriteApplication(writeOptions)?.claim()?.settle("applied");
+        }
+        return { ok: true, agentId, removedBindings: 0, removed: [], failed: [] };
+      }
       const { deletion, lockedJournal } = prepared;
       const journal = deletion.entry;
       if (journal.phase === "draining") {

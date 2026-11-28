@@ -18,21 +18,46 @@ export type ModelProvidersRouteData = {
   selectionIntentRevision: number;
   /** An explicit connection entry from a saved setup link. */
   connect?: boolean;
+  /** First-run setup scopes credentials to the application's agent, not Settings'. */
+  firstRun?: boolean;
   provider?: string;
+  pluginId?: string;
 };
 
+export function modelProvidersFirstRun(search: string): boolean {
+  return ["1", "explicit"].includes(new URLSearchParams(search).get("firstRun") ?? "");
+}
+
 async function loadModelProvidersRouteData(
-  context: Pick<ApplicationContext, "gateway" | "agents" | "settingsAgentSelection">,
+  context: Pick<
+    ApplicationContext,
+    "gateway" | "agents" | "agentSelection" | "settingsAgentSelection"
+  >,
   options: RouteLoaderOptions,
 ): Promise<ModelProvidersRouteData> {
   const search = new URLSearchParams(options.location.search);
   const connect = search.get("connect") === "1";
   const provider = search.get("provider")?.trim() ?? "";
+  const pluginId = connect ? search.get("plugin")?.trim() || undefined : undefined;
+  const firstRun = modelProvidersFirstRun(options.location.search);
+  if (firstRun) {
+    // First-run setup shows detected models beside the catalog; fetch its module with the data.
+    // The page's lazy import owns load failures.
+    void import("../model-setup/model-setup-page.tsx").catch(() => undefined);
+  }
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
-  const selection = context.settingsAgentSelection;
+  const selection = firstRun ? context.agentSelection : context.settingsAgentSelection;
   const selectionIntentRevision = selection.intentRevision;
-  const owner = { gateway, gatewaySnapshot, selectionIntentRevision, connect, provider };
+  const owner = {
+    gateway,
+    gatewaySnapshot,
+    selectionIntentRevision,
+    connect,
+    firstRun,
+    provider,
+    ...(pluginId ? { pluginId } : {}),
+  };
   let agentId = selection.state.selectedId;
   const { EMPTY_MODEL_PROVIDERS_DATA, startModelProvidersData } = await import("./load.ts");
   const client = gatewaySnapshot.phase === "connected" ? gatewaySnapshot.client : null;

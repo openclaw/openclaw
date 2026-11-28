@@ -2,12 +2,16 @@
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
-import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
+import {
+  resolveControlUiAutomationRunUrl,
+  resolveControlUiSessionUrl,
+} from "../../config/control-ui-link-base.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
+import { createCronExecutionId } from "../run-id.js";
 import { normalizeCronRunErrorText } from "../service/execution-errors.js";
 import type { CronResolvedDeliveryState } from "../types.js";
 import {
@@ -110,6 +114,7 @@ export async function dispatchCronDelivery(
     };
   };
   // Commits the settled result into a persistent execution conversation; returns an error.
+  // The execution's own reply already holds the result in that conversation's model context.
   const commitExecutionResult = async (
     payloads: ReplyPayload[],
     sessionKey = params.agentSessionKey,
@@ -122,6 +127,7 @@ export async function dispatchCronDelivery(
       jobId: params.job.id,
       runStartedAt: params.runStartedAt,
       conversation: { sessionKey },
+      displayOnly: true,
       payloads,
       signal: params.abortSignal,
       deliveryAttemptFence: params.deliveryAttemptFence,
@@ -175,10 +181,11 @@ export async function dispatchCronDelivery(
         adoptChild(child.reply);
       }
     }
-    // Persistent executions keep their raw transcript audit-only. A disabled
-    // notification does not discard the settled reply in that same conversation.
+    // Scheduled execution output may be audit-only. A visible hook reply needs
+    // no mirror, but the result of a child handoff is a separate reply.
     if (
       params.job.sessionTarget.startsWith("session:") &&
+      (!params.executionReplyAlreadyVisible || params.spawnOnlyHandoff) &&
       params.undeliveredRunStatus === "ok" &&
       !params.skipDelivery &&
       !sentByTool &&
@@ -353,11 +360,19 @@ export async function dispatchCronDelivery(
           );
         },
         tts: { auto: params.ttsAuto },
-        inspectionUrl: resolveControlUiSessionUrl(params.cfgWithAgentDefaults, {
-          sessionKey: params.runSessionKey,
-          fallbackAgentId: params.agentId,
-          exactKey: true,
-        }),
+        // Run history outlives the run's session alias, so a scheduler-claimed run links to its
+        // recorded run; unclaimed synthetic jobs (hooks, plugin triggers) keep the session link.
+        inspectionUrl:
+          params.job.state?.runningAtMs === undefined
+            ? resolveControlUiSessionUrl(params.cfgWithAgentDefaults, {
+                sessionKey: params.runSessionKey,
+                fallbackAgentId: params.agentId,
+                exactKey: true,
+              })
+            : resolveControlUiAutomationRunUrl(params.cfgWithAgentDefaults, {
+                jobId: params.job.id,
+                runId: createCronExecutionId(params.job.id, params.job.state.runningAtMs),
+              }),
         abortSignal: params.abortSignal ?? new AbortController().signal,
         bestEffort: params.deliveryBestEffort,
         completion: {
@@ -465,6 +480,11 @@ export async function dispatchCronDelivery(
         conversationError = committed.reason;
       } else {
         diagnostics = mergeCronRunDiagnostics(diagnostics, committed.diagnostics);
+        if (committed.skipped) {
+          // With no external route, only a visible conversation commit proves delivery.
+          conversationError =
+            "cron delivery payload has no visible conversation content; include text or configure an external delivery target";
+        }
       }
     } catch (error) {
       conversationError = formatErrorMessage(error);

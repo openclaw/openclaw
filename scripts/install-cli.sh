@@ -144,6 +144,7 @@ INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
 GIT_DIR="${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}"
 GIT_UPDATE="${OPENCLAW_GIT_UPDATE:-1}"
 JSON=0
+JSON_EVENT_FD=1
 RUN_ONBOARD=0
 NODE_ONLY=0
 RUNTIME_ONLY=0
@@ -262,12 +263,36 @@ emit_json() {
     quote_json_string "$value"
     output+="$JSON_STRING"
   done
-  printf '%s}\n' "$output"
+  printf '%s}\n' "$output" >&"$JSON_EVENT_FD"
 }
 
 fail() {
   installer_error "$@"
   exit 1
+}
+
+# Returns true when a controlling terminal device can be opened.
+has_controlling_tty() {
+  if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
+    return 1
+  fi
+  if ! { : </dev/tty; } 2>/dev/null; then
+    return 1
+  fi
+  return 0
+}
+
+# Prints the controlling terminal's own device, such as /dev/ttys003, for OpenClaw stdin.
+# macOS resolves /dev/tty against the caller's session on every use, so a detached
+# Node grandchild that inherits it aborts at startup (#200244). The device keeps working.
+controlling_tty_path() {
+  local name=""
+  name="$(ps -o tty= -p $$ 2>/dev/null | tr -d '[:space:]')" || true
+  if [[ -n "$name" && -c "/dev/$name" && -r "/dev/$name" && -w "/dev/$name" ]]; then
+    echo "/dev/$name"
+  else
+    echo "/dev/tty"
+  fi
 }
 
 fail_freebsd_source_install() {
@@ -1303,6 +1328,11 @@ refresh_gateway_service_if_loaded() {
 
 main() {
   parse_args "$@"
+  if [[ "$JSON" -eq 1 ]]; then
+    # --json promises NDJSON-only stdout: keep it for events and send child-process output to stderr.
+    exec 3>&1 1>&2
+    JSON_EVENT_FD=3
+  fi
   # Node-only recovery ignores the method; normal installs validate before any writes.
   if [[ "$NODE_ONLY" -eq 0 && "$INSTALL_METHOD" != "npm" && "$INSTALL_METHOD" != "git" ]]; then
     fail "Unknown install method: ${INSTALL_METHOD} (use npm or git)"
@@ -1334,6 +1364,7 @@ main() {
   fi
 
   select_node_version_for_platform "$(os_detect)" "$(arch_detect)"
+  local original_path="${PATH-}"
   PATH="$(node_dir)/bin:${PREFIX}/bin:${PATH}"
   export PATH
 
@@ -1368,12 +1399,67 @@ main() {
   else
     refresh_gateway_service_if_loaded
   fi
+  local onboard_tty="" onboard_with_stdio=0
+  if [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
+    if [[ -t 0 && -t 1 ]]; then
+      onboard_with_stdio=1
+    elif has_controlling_tty; then
+      onboard_tty="$(controlling_tty_path)"
+    else
+      # The install already succeeded; onboarding cannot run without a terminal, so
+      # defer it with a hint instead of failing the installer.
+      emit_json step name onboarding status skip reason no-terminal
+    fi
+  fi
   emit_json "done" version "$installed_version"
   log "OpenClaw installed (${installed_version})."
+  local bin_dir="${PREFIX%/}/bin"
+  if [[ "$JSON" -eq 0 && ":${original_path}:" != *":${bin_dir}:"* ]]; then
+    local shell_name="${SHELL:-}" quoted_dir="$bin_dir" fish_dir="$bin_dir" quote_escape="'\\''"
+    shell_name="${shell_name##*/}"
+    quoted_dir="${quoted_dir//\'/$quote_escape}"
+    quoted_dir="'$quoted_dir'"
+    fish_dir="${fish_dir//\\/\\\\}"
+    fish_dir="${fish_dir//\"/\\\"}"
+    fish_dir="${fish_dir//\$/\\\$}"
+
+    echo ""
+    echo "Warning: PATH missing prefix bin dir: ${bin_dir}"
+    echo "  This directory was not on PATH when the installer started."
+    case "$shell_name" in
+      bash|zsh)
+        echo "  For this shell, run:"
+        printf "    export PATH=%s:\"\$PATH\"; hash -r\n" "$quoted_dir"
+        ;;
+      fish)
+        echo "  For this shell, run:"
+        printf "    set -gx PATH \"%s\" \$PATH\n" "$fish_dir"
+        ;;
+      *)
+        echo "  Add this directory to PATH using your shell's syntax. Examples:"
+        printf "    Bash/zsh: export PATH=%s:\"\$PATH\"; hash -r\n" "$quoted_dir"
+        printf "    Fish: set -gx PATH \"%s\" \$PATH\n" "$fish_dir"
+        ;;
+    esac
+    echo "  For future shells, check your shell startup file."
+
+    if [[ "$RUN_ONBOARD" -eq 0 || "$RUNTIME_ONLY" -eq 1 ]]; then
+      local quoted_claw=""
+      printf -v quoted_claw '%q' "${bin_dir}/openclaw"
+      echo "Run ${quoted_claw} onboard to finish setup."
+    fi
+  fi
   log "Support: https://community.openclaw.ai/"
 
-  if [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
+  if [[ "$onboard_with_stdio" -eq 1 ]]; then
     "${PREFIX}/bin/openclaw" onboard
+  elif [[ -n "$onboard_tty" ]]; then
+    # The wizard requires both descriptors to be terminals, even when install output is redirected.
+    "${PREFIX}/bin/openclaw" onboard <>"$onboard_tty" >&0
+  elif [[ "$RUN_ONBOARD" -eq 1 && "$RUNTIME_ONLY" -eq 0 ]]; then
+    local quoted_claw=""
+    printf -v quoted_claw '%q' "${bin_dir}/openclaw"
+    printf '%s\n' "No terminal available; run ${quoted_claw} onboard to finish setup." >&2
   fi
 }
 

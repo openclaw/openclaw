@@ -56,7 +56,6 @@ beforeAll(() => {
     "scripts/lib/canonical-json.mjs",
     "scripts/lib/docker-e2e-plan.mts",
     "scripts/lib/docker-e2e-scenarios.mts",
-    "scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs",
     "scripts/lib/official-external-channel-catalog.json",
     "scripts/lib/official-external-provider-catalog.json",
     "scripts/lib/record-shared.mjs",
@@ -570,58 +569,6 @@ describe("release validation no-push transport", () => {
   );
 
   it.each([
-    ["openclaw/openclaw", "hybrid", false],
-    ["openclaw/openclaw", "github", false],
-    ["openclaw/openclaw", "boat", false],
-    ["openclaw/openclaw", "", false],
-    ["fork/openclaw", "hybrid", false],
-    ["openclaw/openclaw", "hybrid", true],
-  ])(
-    "routes short release controls and reusable candidate jobs for %s/%s (hosted=%s)",
-    (repository, backend, hosted) => {
-      const targets = [
-        [FULL_RELEASE, "resolve_target"],
-        [FULL_RELEASE, "plugin_compatibility_readiness"],
-        [FULL_RELEASE, "evidence_reuse"],
-        [FULL_RELEASE, "release_checks_independent"],
-        [FULL_RELEASE, "release_checks_candidate"],
-        [FULL_RELEASE, "performance"],
-        [FULL_RELEASE, "release_execution_plan"],
-        [".github/workflows/full-release-candidate.yml", "discover"],
-        [".github/workflows/full-release-candidate.yml", "resolve_candidate"],
-        [LIVE_E2E, "validate_selected_ref"],
-        [LIVE_E2E, "bind_full_release_candidate_evidence"],
-      ];
-      for (const [workflowPath, name] of targets) {
-        // Only the reusable harness exposes an explicit hosted-runner override.
-        if (hosted && workflowPath !== LIVE_E2E) {
-          continue;
-        }
-        const expression = job(readWorkflow(workflowPath!), name!)["runs-on"]!;
-        const label = "ubuntu-24.04";
-        for (const runnerGroup of ["", "release"]) {
-          const actual = expression.startsWith("${{")
-            ? runInNewContext(
-                expression.slice(3, -2),
-                runnerSandbox({
-                  github: { repository },
-                  inputs: { use_github_hosted_runners: hosted, runner_group: runnerGroup },
-                  vars: {
-                    OPENCLAW_CI_RUNNER_BACKEND: backend,
-                    OPENCLAW_RELEASE_RUNNER_GROUP: runnerGroup,
-                  },
-                }),
-              )
-            : expression;
-          expect(actual, `${workflowPath}:${name}:${runnerGroup}`).toEqual(
-            runnerGroup ? { group: runnerGroup, labels: label } : label,
-          );
-        }
-      }
-    },
-  );
-
-  it.each([
     { name: "local validated package", imported: false, status: 0, calls: 0 },
     { name: "imported package", imported: true, status: 0, calls: 1 },
     { name: "imported validator failure", imported: true, checkExit: 7, status: 7, calls: 1 },
@@ -781,6 +728,7 @@ describe("release validation no-push transport", () => {
 
     expect(umbrellaGroups).toEqual([
       "all",
+      "build-only",
       "ci",
       "plugin-prerelease",
       "install-smoke",
@@ -1984,11 +1932,7 @@ describe("release validation no-push transport", () => {
     const fullText = readFileSync(FULL_RELEASE, "utf8");
     const performance = readWorkflow(PERFORMANCE);
     const publisher = job(performance, "publish");
-    const dangerousSteps = [
-      "Prepare clawgrit report commit",
-      "Create clawgrit reports app token",
-      "Publish to clawgrit reports",
-    ];
+    const dangerousSteps = ["Prepare clawgrit report commit", "Publish to clawgrit reports"];
 
     expect(performance.on?.workflow_dispatch?.inputs?.publish_reports).toMatchObject({
       default: true,
@@ -2090,6 +2034,9 @@ describe("release validation no-push transport", () => {
     expect(dockerCall.if).toContain("needs.verify_core_npm_registry.result == 'success'");
     expect(dockerCall.with).toEqual({
       runner_group: "${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP }}",
+      release_publish_run_id: "${{ github.run_id }}",
+      release_publish_run_attempt: "${{ needs.publish.outputs.publication_attempt }}",
+      fast_track_request: "${{ inputs.fast_track_request }}",
       full_release_validation_run_id: "${{ inputs.full_release_validation_run_id }}",
       full_release_validation_run_attempt:
         "${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}",
@@ -2225,7 +2172,8 @@ describe("release validation no-push transport", () => {
   it("keeps approval-only intent on the original publication route within the input budget", () => {
     const workflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
     expect(Object.keys(workflow.on?.workflow_dispatch?.inputs ?? {})).toHaveLength(25);
-    expect(workflow.on?.workflow_dispatch?.inputs?.wait_for_clawhub).toBeDefined();
+    expect(workflow.on?.workflow_dispatch?.inputs?.fast_track_request).toBeDefined();
+    expect(workflow.on?.workflow_dispatch?.inputs?.wait_for_clawhub).toBeUndefined();
     const validate = step(job(workflow, "resolve_release_target"), "Validate inputs");
     const projection = validate.run?.split('RELEASE_EVIDENCE_MODE="')[0];
     if (!projection) {

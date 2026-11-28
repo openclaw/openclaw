@@ -222,6 +222,18 @@ export function assertDatabasePathIdentity(
   }
 }
 
+/** Async admission preserves the same existing-file and observed-absence checks. */
+export async function assertDatabasePathIdentityAsync(
+  databasePath: string,
+  expected: DatabasePathIdentity,
+): Promise<void> {
+  if (expected.key.startsWith("file:")) {
+    assertDatabaseFileIdentity(await stat(databasePath, { bigint: true }), expected);
+  } else if ((await readDatabasePathIdentity(databasePath)).key !== expected.key) {
+    throw new Error(`SQLite database path identity changed: ${databasePath}`);
+  }
+}
+
 export function assertExistingDatabaseIdentity(
   databasePath: string,
   expected: string,

@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { decodeMemoryEmbedding } from "../../packages/memory-host-sdk/src/host/embedding-vector.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
@@ -10,14 +10,31 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { AGENT_DATABASE_MAINTENANCE_LEASE } from "./openclaw-agent-db-lease.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
-import { ensureOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import {
+  assertCanonicalAgentPersistenceVersion,
+  readExistingAgentSchemaMeta,
+} from "./openclaw-agent-db-schema-read.js";
+import {
+  ensureOpenClawAgentDatabaseSchema,
+  ensureOpenClawAgentSchema,
+} from "./openclaw-agent-db-schema.js";
+import { withoutAgentMemberAccess } from "./openclaw-agent-member-access-schema.js";
+import { getOpenClawAgentMigrationSchema } from "./openclaw-agent-schema-history.js";
 import {
   seedOpenClawAgentSchemaV22,
   OPENCLAW_AGENT_SCHEMA_V22_SQL,
 } from "./openclaw-agent-schema-v22.test-support.js";
+import { assertOpenClawMigrationWitnessPreserved } from "./openclaw-migration-witness.js";
 import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
+import {
+  agentWitness,
+  expectVersion,
+  migrationFixture,
+  row as readRow,
+  seedVersion,
+} from "./schema-migration.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -283,7 +300,7 @@ it.each(["UTF-8", "UTF-16le"] as const)(
         session_nodes: select(
           db,
           "session_nodes",
-          "*, 0 AS snapshot_revision, NULL AS session_started_at, 0 AS has_optional_references",
+          "*, 0 AS snapshot_revision, NULL AS session_started_at, 0 AS has_optional_references, NULL AS archive_undo_marker",
         ),
       };
       using reader = new DatabaseSync(pathname, { readOnly: true });
@@ -423,5 +440,135 @@ it("rolls every conversion back when maintenance authority is lost", async () =>
       user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+  });
+});
+
+const insertNodes = `INSERT INTO session_nodes (session_key, current_session_id, updated_at, entry_json, archived_at)
+  VALUES ('active', 'one', 1, '{ "sessionId": "one" }', NULL),
+         ('archived', 'two', 2, '{ "sessionId": "two", "archivedAt": 2 }', 2)`;
+const markerColumn = (db: DatabaseSync) =>
+  readRow(
+    db,
+    "SELECT type, [notnull], dflt_value FROM pragma_table_info('session_nodes') WHERE name='archive_undo_marker'",
+  );
+const nodes = (db: DatabaseSync) => select(db, "session_nodes", "*", "session_key");
+const archiveUndoFixture = migrationFixture({
+  predecessor: 44,
+  target: 45,
+  scope: ["schema_meta", "session_nodes"],
+  seed(db) {
+    const predecessor = getOpenClawAgentMigrationSchema(44);
+    // The exact v44 DDL from upstream main eee7a1bd, independent of the candidate's v45 definition.
+    expect(sha256Hex(predecessor)).toBe(
+      "8b4399730f3a96d1450de6aa72b44698a4acef4d9a04d1199556ffec719e3007",
+    );
+    db.exec(predecessor);
+    seedVersion(db, 44);
+    db.exec(
+      `${insertNodes}; INSERT INTO session_members(session_key,identity_id,added_by,added_at,access) VALUES ('archived','reader','owner',1,'suggest'); INSERT INTO cache_entries (scope,key,blob,updated_at) VALUES ('unrelated','bytes',X'00FF',1); ANALYZE;`,
+    );
+  },
+});
+
+it("upgrades v44 under maintenance custody without issuing or rewriting existing rows", async () => {
+  await archiveUndoFixture("archive-undo.sqlite", async ({ database: db, migrate }) => {
+    const before = nodes(db);
+    const witness = agentWitness(db);
+    expect(markerColumn(db)).toBeUndefined();
+    expect(() => assertCanonicalAgentPersistenceVersion(db, "archive-undo.sqlite")).toThrow(
+      /schema version 44.*upgrade it to schema version 45/u,
+    );
+    expect(() => ensureOpenClawAgentSchema(db, "main", "archive-undo.sqlite", 45)).toThrow(
+      /stopped-writer maintenance/u,
+    );
+    await migrate("rollback");
+    expectVersion(db, 44);
+    expect(markerColumn(db)).toBeUndefined();
+    expect(nodes(db)).toEqual(before);
+    // An equal-value UPDATE would also preserve the snapshot; reject any node DML.
+    db.setAuthorizer((action, table) =>
+      table === "session_nodes" &&
+      (action === constants.SQLITE_UPDATE ||
+        action === constants.SQLITE_INSERT ||
+        action === constants.SQLITE_DELETE)
+        ? constants.SQLITE_DENY
+        : constants.SQLITE_OK,
+    );
+    await migrate();
+    expectVersion(db, 45);
+    // The nullable marker keeps the v44 reader floor, matching the update preflight.
+    expect(readExistingAgentSchemaMeta(db)?.minReader).toBe(44);
+    expect(readRow(db, "SELECT access FROM session_members WHERE identity_id='reader'")).toEqual({
+      access: "suggest",
+    });
+    expect(() => assertCanonicalAgentPersistenceVersion(db, "archive-undo.sqlite")).not.toThrow();
+    expect(nodes(db)).toEqual(
+      before.map((node) => Object.assign(node, { archive_undo_marker: null })),
+    );
+    expect(() => assertOpenClawMigrationWitnessPreserved(witness, agentWitness(db))).not.toThrow();
+    db.exec("UPDATE session_members SET access='send' WHERE identity_id='reader'");
+    expect(() => assertOpenClawMigrationWitnessPreserved(witness, agentWitness(db))).toThrow(
+      /changed or lost retained database content: session_members/u,
+    );
+    db.exec("UPDATE session_members SET access='suggest' WHERE identity_id='reader'");
+    db.exec(
+      "UPDATE session_nodes SET archive_undo_marker = 'synthetic' WHERE session_key = 'archived'",
+    );
+    expect(() => assertOpenClawMigrationWitnessPreserved(witness, agentWitness(db))).toThrow(
+      /changed or lost retained database content: session_nodes/u,
+    );
+  });
+});
+
+it("restores the pre-upgrade session rows and v44 shape without reverting unrelated writes", async () => {
+  await archiveUndoFixture(
+    "archive-undo-restore.sqlite",
+    async ({ database: db, restore }) => {
+      await restore(() => ({
+        nodes: nodes(db),
+        schema: readRow(db, "SELECT sql FROM sqlite_schema WHERE name='session_nodes'"),
+        version: readRow(db, "PRAGMA user_version"),
+        metadata: readRow(db, "SELECT * FROM schema_meta"),
+      }));
+    },
+    "state",
+  );
+});
+
+it("refuses the exact divergent preview v44 without changing its marker or payload", async () => {
+  const preview = migrationFixture({
+    predecessor: 44,
+    target: 45,
+    scope: ["schema_meta", "session_nodes"],
+    seed(db) {
+      const ddl = withoutAgentMemberAccess(getOpenClawAgentMigrationSchema(45));
+      expect(sha256Hex(ddl)).toBe(
+        "2a1ba60f141406d06be88e3ff45961501bade65c05b943d803c3eb935fe3e6e5",
+      );
+      db.exec(ddl);
+      seedVersion(db, 44);
+      db.exec(insertNodes);
+      db.exec(
+        "UPDATE session_nodes SET archive_undo_marker='preview' WHERE session_key='archived'",
+      );
+    },
+  });
+  await preview("archive-undo-preview.sqlite", async ({ database: db, migrate }) => {
+    const before = nodes(db);
+    await expect(migrate()).rejects.toThrow(/preview archive-marker schema 44 is unsupported/u);
+    expectVersion(db, 44);
+    expect(nodes(db)).toEqual(before);
+  });
+});
+
+it("refuses a preexisting non-null archive verifier rather than adopting it on upgrade", async () => {
+  await archiveUndoFixture("archive-undo-collision.sqlite", async ({ database: db, migrate }) => {
+    db.exec(
+      "ALTER TABLE session_nodes ADD COLUMN archive_undo_marker TEXT; UPDATE session_nodes SET archive_undo_marker='unissued' WHERE session_key='archived'",
+    );
+    const before = nodes(db);
+    await expect(migrate()).rejects.toThrow(/archive undo marker predating schema 45/u);
+    expectVersion(db, 44);
+    expect(nodes(db)).toEqual(before);
   });
 });

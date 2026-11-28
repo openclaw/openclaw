@@ -1,4 +1,5 @@
 export const FLAG_TERMINATOR: "--";
+export const ROOT_VALUE_FLAGS: ReadonlySet<string>;
 
 export function isValueToken(arg: string | undefined): boolean;
 export function consumeRootOptionToken(args: ReadonlyArray<string>, index: number): number;
@@ -30,7 +31,3 @@ export function getCommandArgsWithRootOptions(
   argv: readonly string[],
   options: Omit<CommandPositionalsParseOptions, "maxPositionals">,
 ): string[] | null;
-export function getCommandOptionsWithRootOptions(
-  argv: readonly string[],
-  options: Omit<CommandPositionalsParseOptions, "maxPositionals">,
-): { rootOptions: string[]; commandOptions: string[] } | null;

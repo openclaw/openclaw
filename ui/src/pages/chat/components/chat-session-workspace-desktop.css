@@ -203,14 +203,17 @@
   min-width: 0;
 }
 
-.workspace-desktop__name-line,
-.workspace-desktop__filename {
+.workspace-desktop__name-line {
   display: flex;
   align-items: center;
   min-width: 0;
 }
 
 .workspace-desktop__filename {
+  display: grid;
+  grid-template-columns: minmax(0, max-content) minmax(0, max-content);
+  align-items: baseline;
+  min-width: 0;
   width: fit-content;
   max-width: 100%;
   white-space: nowrap;
@@ -226,7 +229,11 @@
   mask-image: linear-gradient(to right, black calc(100% - 10px), transparent);
 }
 
-.workspace-desktop__filename > :last-child,
+.workspace-desktop__filename > :last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .workspace-breadcrumb__overflow {
   flex: none;
 }

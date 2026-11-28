@@ -39,6 +39,85 @@ async function captureProviderProof(fileName: string, content: Locator): Promise
 }
 
 suite.define(() => {
+  it("describes first-run sign-in without requiring an API key", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "light", reducedMotion: "reduce" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "models.authLogin",
+            "wizard.next",
+            "openclaw.setup.detect",
+          ],
+          methodResponses: {
+            "models.list": { models: [] },
+            "openclaw.setup.detect": {
+              candidates: [],
+              manualProviders: [],
+              setupComplete: false,
+              workspace: "/workspace",
+            },
+            "models.authStatus": {
+              ts: 1,
+              providers: [],
+              providerCapabilities: [
+                {
+                  provider: "example",
+                  apiKeySupported: false,
+                  quickApiKeySetup: false,
+                  loginOptions: [
+                    {
+                      id: "example-browser",
+                      brandId: "example",
+                      groupLabel: "Example Cloud",
+                      label: "Sign in with browser",
+                      kind: "oauth",
+                      featured: true,
+                    },
+                    {
+                      id: "example-device",
+                      brandId: "example",
+                      groupLabel: "Example Cloud",
+                      label: "Sign in with a device code",
+                      kind: "device-code",
+                      featured: false,
+                    },
+                  ],
+                },
+              ],
+            },
+            "models.authLogin": { sessionId: "example-sign-in", done: false, status: "running" },
+            "wizard.next": {
+              done: false,
+              status: "running",
+              step: {
+                id: "continue",
+                type: "text",
+                executor: "client",
+                message: "Enter the verification code.",
+              },
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "settings/model-providers");
+        await page.locator('[data-models-catalog-provider="example"] button').click();
+        const dialog = page.locator(".model-provider-login");
+        await dialog.getByRole("heading", { name: "Example Cloud" }).waitFor();
+        await captureProviderProof("sign-in-only-setup.png", dialog);
+        expect(await dialog.locator(".oc-dialog__description").textContent()).not.toContain(
+          "API key",
+        );
+        expect(await dialog.locator("[data-models-login-api-key]").count()).toBe(0);
+        await dialog.getByRole("button", { name: "Sign in with browser", exact: true }).click();
+        expect((await gateway.waitForRequest("models.authLogin")).params).toMatchObject({
+          authChoice: "example-browser",
+          selectModel: true,
+        });
+      },
+    );
+  });
+
   it("anchors text sign-in actions while retaining the stable dialog height", async () => {
     await suite.withPage(
       { viewport: { width: 1400, height: 900 }, reducedMotion: "reduce" },
@@ -89,8 +168,7 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "settings/model-providers?connect=1");
-        await page.locator('[data-models-login-provider="example"]').click();
-        await page.getByRole("button", { name: "Example code sign-in", exact: true }).click();
+        await page.locator('[data-models-catalog-provider="example"] button').click();
         const wizard = page.locator(".model-setup-wizard");
         const input = wizard.getByPlaceholder("Verification code");
         const submit = wizard.getByRole("button", { name: "Submit", exact: true });
@@ -158,161 +236,6 @@ suite.define(() => {
     );
   });
 
-  it("loads provider styles and hands first-run API keys to the selected setup method", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "light",
-        locale: "en-US",
-        reducedMotion: "reduce",
-        serviceWorkers: "block",
-        viewport: { width: 1280, height: 900 },
-      },
-      async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          featureMethods: [
-            ...defaultControlUiFeatureMethods,
-            "openclaw.setup.detect",
-            "openclaw.setup.activate.start",
-            "wizard.next",
-          ],
-          methodResponses: {
-            "openclaw.setup.detect": {
-              candidates: [],
-              manualProviders: [
-                {
-                  id: "setup-token",
-                  brandId: "anthropic",
-                  groupLabel: "Anthropic",
-                  label: "Anthropic setup-token",
-                },
-                {
-                  id: "apiKey",
-                  brandId: "anthropic",
-                  groupLabel: "Anthropic",
-                  label: "Anthropic API key",
-                },
-                {
-                  id: "github-copilot",
-                  brandId: "github-copilot",
-                  groupLabel: "Copilot",
-                  label: "GitHub Copilot",
-                  hint: "Device login with your GitHub account",
-                },
-              ],
-              workspace: "/tmp/openclaw-e2e",
-              setupComplete: false,
-            },
-            "models.authStatus": {
-              ts: 1,
-              providers: [],
-              providerCapabilities: [
-                { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
-                {
-                  provider: "openai",
-                  apiKeySupported: true,
-                  quickApiKeySetup: true,
-                  loginOptions: [
-                    {
-                      id: "openai-login",
-                      brandId: "openai",
-                      label: "Sign in with ChatGPT",
-                      kind: "oauth",
-                      featured: true,
-                    },
-                  ],
-                },
-                {
-                  provider: "github-copilot",
-                  apiKeySupported: false,
-                  quickApiKeySetup: false,
-                  loginOptions: [
-                    {
-                      id: "github-copilot/github-copilot",
-                      brandId: "github-copilot",
-                      groupLabel: "Copilot",
-                      label: "GitHub Copilot",
-                      hint: "Device login with your GitHub account",
-                      kind: "device-code",
-                      featured: false,
-                    },
-                  ],
-                },
-              ],
-            },
-            "openclaw.setup.activate.start": { done: false, status: "running" },
-            "wizard.next": { done: true, status: "cancelled" },
-          },
-        });
-        await page.goto(`${suite.server.baseUrl}settings/model-setup?firstRun=1`);
-        await page.locator(".model-setup__manual").waitFor();
-        await page.locator("[data-models-connect]").click();
-        const dialog = page.locator(".model-provider-login");
-        await dialog.locator('[data-models-login-provider="openai"]').waitFor();
-        expect(
-          (await dialog.locator(".oc-dialog__description p").first().textContent())?.trim(),
-        ).toBe(
-          "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
-        );
-        if (recordVisuals) {
-          await writeFile(
-            path.join(suite.artifactDir, "first-run-provider-picker.png"),
-            await takeControlUiViewportScreenshot(
-              page,
-              page.locator("openclaw-modal-dialog dialog"),
-              [dialog],
-            ),
-          );
-        }
-        expect(
-          await dialog.locator("ul").evaluate((element) => getComputedStyle(element).listStyleType),
-        ).toBe("none");
-        expect(await dialog.locator('[data-models-login-provider="anthropic"]').isVisible()).toBe(
-          true,
-        );
-        expect(
-          await dialog
-            .locator('[data-models-login-provider="anthropic"] .provider-brand-icon')
-            .evaluate((element) => element.getBoundingClientRect().width),
-        ).toBeGreaterThan(0);
-        await dialog.locator('[data-models-login-provider="github-copilot"]').click();
-        const copilotMethods = dialog.locator("[data-models-login-choice] button");
-        expect(await copilotMethods.locator("strong").allTextContents()).toEqual([
-          "GitHub Copilot",
-          "GitHub Copilot API key or token",
-        ]);
-        expect(await copilotMethods.nth(1).textContent()).toContain("Paste an API key or token");
-        await dialog.locator("[data-models-login-back]").click();
-        await dialog.locator('[data-models-login-provider="anthropic"]').click();
-        expect(
-          await dialog
-            .getByRole("button", { name: "Anthropic setup-token", exact: true })
-            .isVisible(),
-        ).toBe(true);
-        await dialog.getByRole("button", { name: "Anthropic API key", exact: true }).click();
-        const keyInput = page.locator('.model-setup__manual input[type="password"]');
-        await expect
-          .poll(() => keyInput.evaluate((element) => document.activeElement === element))
-          .toBe(true);
-        expect(await page.locator(".model-setup-provider-select__trigger").textContent()).toContain(
-          "Anthropic API key",
-        );
-        expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
-        await captureProviderProof("first-run-anthropic-key-form.png", keyInput);
-        await keyInput.fill("synthetic-anthropic-api-key");
-        await page.locator(".model-setup__manual button.primary").click();
-        const activation = await gateway.waitForRequest("openclaw.setup.activate.start");
-        expect(activation.params).toEqual({
-          sessionId: expect.any(String),
-          agentId: "main",
-          kind: "api-key",
-          authChoice: "apiKey",
-          apiKey: "synthetic-anthropic-api-key",
-        });
-        expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
-        expect(await gateway.getRequests("models.authSetApiKey")).toHaveLength(0);
-      },
-    );
-  });
   it.each(["chat", "new"])(
     "opens existing provider settings from %s without starting a connection",
     async (origin) => {
@@ -377,10 +300,9 @@ suite.define(() => {
           expect(await page.locator('[data-provider-id="anthropic"]').count()).toBe(0);
           expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
           await captureProviderProof(`provider-settings-${origin}.png`, card);
-          await page.locator("[data-models-connect]").click();
+          await page.locator('[data-models-catalog-provider="openai"] button').click();
           const dialog = page.locator("openclaw-modal-dialog");
           await dialog.getByRole("heading", { name: "Add an account", exact: true }).waitFor();
-          await dialog.locator('[data-models-login-provider="openai"]').waitFor();
           expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
         },
       );
@@ -426,22 +348,21 @@ suite.define(() => {
           featureMethods: [...defaultControlUiFeatureMethods, "models.authLogin", "wizard.next"],
           heldMethods: ["wizard.next"],
           methodResponses: {
+            // An agent with a model: this sign-in only adds the account.
+            "config.get": {
+              config: { agents: { defaults: { model: "example/existing" } } },
+              sourceConfig: { agents: { defaults: { model: "example/existing" } } },
+              hash: "models-login-callback",
+              issues: [],
+              raw: JSON.stringify({ agents: { defaults: { model: "example/existing" } } }),
+              valid: true,
+            },
             "models.authStatus": { ts: 1, providers: [], providerCapabilities },
             "models.authLogin": { done: false, status: "running" },
           },
         });
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-        await page.locator("[data-models-connect]").click();
-        await page.locator('[data-models-login-provider="example"]').click();
-        expect(
-          (
-            await page
-              .locator(".model-provider-login .oc-dialog__description p")
-              .first()
-              .textContent()
-          )?.trim(),
-        ).toBe("Add an account for this agent. Choose the model separately.");
-        await page.getByRole("button", { name: "Example browser sign-in", exact: true }).click();
+        await page.locator('[data-models-catalog-provider="example"] button').click();
         const login = await gateway.waitForRequest("models.authLogin");
         const loginParams = login.params;
         assert(loginParams && typeof loginParams === "object" && "sessionId" in loginParams);
@@ -560,15 +481,7 @@ suite.define(() => {
       const primary = page.locator(".model-providers__defaults openclaw-select-picker").first();
       await expect.poll(() => modelPickerValue(primary)).toBe("example/existing");
       await captureProviderProof("login-models-before-native.png", primary);
-      // A working default hides the setup prompt; Provider access owns Connect provider.
-      await page.locator("[data-models-connect]").click();
-      expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
-      await page.locator('[data-models-login-provider="example"]').click();
-      const signIn = page.getByRole("button", { name: "Example device sign-in", exact: true });
-      await signIn.waitFor();
-      expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
-      await captureProviderProof("login-before-choice-native.png", signIn);
-      await signIn.click();
+      await page.locator('[data-models-catalog-provider="example"] button').click();
       const login = await gateway.waitForRequest("models.authLogin");
       const loginParams = login.params;
       assert(loginParams && typeof loginParams === "object" && "sessionId" in loginParams);
@@ -681,6 +594,15 @@ suite.define(() => {
             "wizard.cancel",
           ],
           methodResponses: {
+            // The agent already has a model, so adding an account only saves it.
+            "config.get": {
+              config: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+              sourceConfig: { agents: { defaults: { model: "openai/gpt-5.5" } } },
+              hash: "models-login-accounts",
+              issues: [],
+              raw: JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.5" } } }),
+              valid: true,
+            },
             "models.authStatus": {
               ts: now,
               providers: [
@@ -716,22 +638,14 @@ suite.define(() => {
                   quickApiKeySetup: true,
                   loginOptions: [
                     {
-                      id: "openai-device-code",
+                      id: "openai",
                       brandId: "openai",
                       groupLabel: "OpenAI",
-                      label: "Codex login (device code)",
-                      hint: "Use a browser code when OpenClaw runs on a remote VM",
+                      label: "Codex login",
+                      hint: "Sign in with your ChatGPT account using a one-time code",
                       kind: "device-code",
                       featured: true,
                       docsUrl: "https://docs.openclaw.ai/providers/openai/authentication",
-                    },
-                    {
-                      id: "openai",
-                      brandId: "openai",
-                      label: "Codex login (browser)",
-                      hint: "Sign in to Codex locally with your ChatGPT account",
-                      kind: "oauth",
-                      featured: false,
                     },
                     {
                       id: "openai-token-sharing",
@@ -776,8 +690,7 @@ suite.define(() => {
           },
         });
         await page.goto(suite.server.baseUrl + "settings/model-providers");
-        await page.locator("[data-models-connect]").click();
-        await page.locator('[data-models-login-provider="openai"]').click();
+        await page.locator('[data-models-catalog-provider="openai"] button').click();
         const dialog = page.locator(".model-setup-wizard");
         await dialog.getByText("Accounts available to this agent", { exact: true }).waitFor();
         const profiles = dialog.locator("[data-profile-id]");
@@ -795,7 +708,7 @@ suite.define(() => {
             has: page.locator("strong").filter({ hasText: label }),
           });
         expect(await dialog.locator("[data-models-login-choice] strong").allTextContents()).toEqual(
-          ["Codex login (device code)", "Codex login (browser)", "Sign in with ChatGPT"],
+          ["Codex login", "Sign in with ChatGPT"],
         );
         expect(await dialog.locator("[data-models-login-api-key]").isVisible()).toBe(true);
         expect(await dialog.locator("select, openclaw-select-picker").count()).toBe(0);
@@ -804,10 +717,11 @@ suite.define(() => {
           .waitFor();
         expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
         expect(await gateway.getRequests("models.authSetApiKey")).toHaveLength(0);
+        // Opened from the page's catalog, the method step has no footer; the last method stays in view.
         const footerFits = () =>
           dialog.evaluate((element) => {
-            const footer = element.querySelector(".model-setup-wizard__footer")!;
-            return footer.getBoundingClientRect().bottom <= element.getBoundingClientRect().bottom;
+            const methods = element.querySelector(".model-provider-login__methods")!;
+            return methods.getBoundingClientRect().bottom <= element.getBoundingClientRect().bottom;
           });
         expect(await footerFits()).toBe(true);
         await captureProviderProof("login-provider-accounts-and-methods.png", dialog);

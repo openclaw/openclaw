@@ -45,7 +45,6 @@ describe("isCacheTtlEligibleProvider", () => {
 
   it.each([
     ["openai", "gpt-4o", undefined, undefined],
-    ["openrouter", "openai/gpt-4o", undefined, undefined],
     ["openrouter", "model-1", "openai-responses", { supportsPromptCacheKey: true }],
     ["myproxy", "model-1", "custom-api", { supportsPromptCacheKey: true }],
   ] as const)("rejects unsupported %s/%s via %s", (provider, model, api, route) => {
@@ -103,5 +102,30 @@ describe("readLastCacheTtlTimestamp", () => {
 
   it("ignores unscoped cache-ttl entries when a context filter is requested", () => {
     expect(read(marker({ timestamp: 1_700_000_000_000 }))).toBeNull();
+  });
+
+  it("moves the transcript clock forward to a later prewarm of the same route", () => {
+    const entries = [
+      { type: "message", id: "reply-1" },
+      marker({ timestamp: 1_000, provider: "anthropic", modelId: "claude-sonnet-4-5" }),
+    ];
+    const session = { getEntries: () => entries };
+    const prewarm = {
+      anchorEntryId: "reply-1",
+      provider: "anthropic",
+      model: "claude-sonnet-4-5",
+      lastPingAt: 5_000,
+      pings: 1,
+    };
+    expect(readLastCacheTtlTimestamp(session, target, prewarm)).toBe(5_000);
+    // Another route, or a reply this transcript does not hold, did not touch this cache.
+    expect(readLastCacheTtlTimestamp(session, target, { ...prewarm, model: "other" })).toBe(1_000);
+    expect(
+      readLastCacheTtlTimestamp(session, target, { ...prewarm, anchorEntryId: "reply-0" }),
+    ).toBe(1_000);
+    // Without a transcript clock there is nothing to move.
+    expect(
+      readLastCacheTtlTimestamp({ getEntries: () => [entries[0]] }, target, prewarm),
+    ).toBeNull();
   });
 });

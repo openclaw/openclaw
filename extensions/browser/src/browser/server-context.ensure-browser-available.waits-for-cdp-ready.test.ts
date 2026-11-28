@@ -3,11 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
 import { withTimeout } from "../sdk-node-runtime.js";
 import { PROFILE_ATTACH_RETRY_TIMEOUT_MS } from "./cdp-timeouts.js";
+import * as cdp from "./cdp.helpers.js";
+import * as cdpActions from "./cdp.js";
 import type { ChromeCdpDiagnostic } from "./chrome.diagnostics.js";
 import type { RunningChrome } from "./chrome.js";
 import * as chromeModule from "./chrome.js";
 import { BROWSER_STARTUP_TIMEOUT_MS } from "./constants.js";
 import { BROWSER_ERROR_REASONS, BrowserProfileUnavailableError } from "./errors.js";
+import { createBrowserRouteDispatcher } from "./routes/dispatcher.js";
 import { createProfileAvailability } from "./server-context.availability.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { beginProfileTransition, getProfileLifecycle } from "./server-context.lifecycle.js";
@@ -31,6 +34,15 @@ function fakeRunning(pid: number): RunningChrome {
   return mockLaunchedChrome(vi.fn(), pid);
 }
 
+function blankPage(id: string) {
+  return {
+    id,
+    type: "page",
+    url: "about:blank",
+    webSocketDebuggerUrl: `ws://127.0.0.1:18800/devtools/page/${id}`,
+  };
+}
+
 function deferResult<T>(mock: { mockImplementationOnce: (fn: () => Promise<T>) => unknown }) {
   const entered = Promise.withResolvers<void>();
   const result = Promise.withResolvers<T>();
@@ -50,7 +62,7 @@ function setupEnsureBrowserAvailableHarness(params?: Parameters<typeof makeBrows
     throw new Error("expected profile runtime");
   }
   const freshProfile = () => createBrowserRouteContext({ getState: () => state }).forProfile();
-  return { profile, state, runtime, freshProfile };
+  return { ctx, profile, state, runtime, freshProfile };
 }
 
 function createAttachOnlyLoopbackProfile(cdpUrl: string) {
@@ -110,6 +122,116 @@ describe("browser server-context ensureBrowserAvailable", () => {
     chrome.reachable.mockResolvedValue(false);
     chrome.ownsCdp.mockResolvedValue(true);
     chrome.ready.mockResolvedValue(true);
+  });
+
+  it.each([false, true])(
+    "expires only an unclaimed address warmup (claimed=%s)",
+    async (claimed) => {
+      const { profile, runtime, freshProfile } = setupEnsureBrowserAvailableHarness();
+      const { entered, result } = deferResult(chrome.launch);
+      const running = fakeRunning(1203);
+      vi.spyOn(cdp, "fetchJson").mockResolvedValue([{ type: "page", url: "about:blank" }]);
+      const warm = profile.ensureBrowserAvailable({ prewarm: true });
+      await entered.promise;
+      const foreground = claimed ? freshProfile().ensureBrowserAvailable() : undefined;
+      result.resolve(running);
+      await Promise.all([warm, foreground]);
+      expect(runtime.running).toBe(running);
+      expect(chrome.launch).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(31_000);
+      expect(runtime.running).toBe(claimed ? running : null);
+      expect(chrome.stop).toHaveBeenCalledTimes(claimed ? 0 : 1);
+    },
+  );
+
+  it("retires an unused warmup even when the panel previews its blank tab", async () => {
+    const { ctx, profile, runtime } = setupEnsureBrowserAvailableHarness();
+    const { dispatch } = createBrowserRouteDispatcher(ctx);
+    const running = mockLaunchedChrome(chrome.launch, 1203);
+    chrome.reachable.mockImplementation(async () => runtime.running === running);
+    const readPages = vi.spyOn(cdp, "fetchJson").mockResolvedValue([blankPage("warmup-tab")]);
+
+    await expect(dispatch({ method: "POST", path: "/prewarm" })).resolves.toMatchObject({
+      status: 200,
+    });
+    await expect(dispatch({ method: "GET", path: "/tabs" })).resolves.toMatchObject({
+      status: 200,
+      body: { running: false, tabs: [] },
+    });
+    await expect(
+      dispatch({ method: "POST", path: "/screencast", body: { targetId: "warmup-tab" } }),
+    ).resolves.toMatchObject({ status: 200, body: { url: "about:blank" } });
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(chrome.stop).toHaveBeenCalledExactlyOnceWith(running);
+    mockLaunchedChrome(chrome.launch, 1204);
+    readPages.mockResolvedValue([blankPage("next-tab")]);
+    await expect(profile.ensureTabAvailable()).resolves.toMatchObject({ targetId: "next-tab" });
+  });
+
+  it("keeps Chrome running for an explicit screenshot of a warmup tab", async () => {
+    const { ctx, profile, runtime } = setupEnsureBrowserAvailableHarness();
+    const { dispatch } = createBrowserRouteDispatcher(ctx);
+    const running = mockLaunchedChrome(chrome.launch, 1203);
+    chrome.reachable.mockImplementation(async () => runtime.running === running);
+    vi.spyOn(cdp, "fetchJson").mockResolvedValue([blankPage("warmup-tab")]);
+    const { entered, result } = deferResult(vi.spyOn(cdpActions, "captureScreenshot"));
+    await profile.ensureBrowserAvailable({ prewarm: true });
+
+    const screenshot = dispatch({
+      method: "POST",
+      path: "/screenshot",
+      body: { targetId: "warmup-tab" },
+    });
+    await entered.promise;
+    await vi.advanceTimersByTimeAsync(30_000);
+    result.resolve(
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        "base64",
+      ),
+    );
+    await expect(screenshot).resolves.toMatchObject({ status: 200 });
+    expect(runtime.running).toBe(running);
+  });
+
+  it("honors an explicit headless start queued behind a headed warmup", async () => {
+    const { ctx, runtime } = setupEnsureBrowserAvailableHarness({
+      resolvedOverrides: { headless: false },
+    });
+    const { dispatch } = createBrowserRouteDispatcher(ctx);
+    const { entered, result } = deferResult(chrome.launch);
+    const headed = { ...fakeRunning(1203), headless: false };
+    chrome.reachable.mockImplementation(async () => Boolean(runtime.running));
+    chrome.launch.mockImplementationOnce(async (_config, _profile, options) => ({
+      ...fakeRunning(1204),
+      headless: options?.headlessOverride ?? false,
+    }));
+
+    const warm = dispatch({ method: "POST", path: "/prewarm" });
+    await entered.promise;
+    const start = dispatch({ method: "POST", path: "/start", query: { headless: "true" } });
+    const foreground = dispatch({ method: "POST", path: "/start" });
+    result.resolve(headed);
+    await expect(start).resolves.toMatchObject({ status: 200 });
+    await expect(foreground).resolves.toMatchObject({ status: 200 });
+    await warm;
+
+    expect(runtime.running?.headless).toBe(true);
+    expect(chrome.stop).toHaveBeenCalledExactlyOnceWith(headed);
+  });
+
+  it("retires an unused warmup after a transient failure reading Chrome's tabs", async () => {
+    const { profile } = setupEnsureBrowserAvailableHarness();
+    const running = mockLaunchedChrome(chrome.launch, 1203);
+    vi.spyOn(cdp, "fetchJson")
+      .mockRejectedValueOnce(new Error("CDP connection reset"))
+      .mockResolvedValue([{ type: "page", url: "about:blank" }]);
+
+    await profile.ensureBrowserAvailable({ prewarm: true });
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    expect(chrome.stop).toHaveBeenCalledExactlyOnceWith(running);
   });
 
   it("keeps a shared launch running when one caller cancels its wait", async () => {

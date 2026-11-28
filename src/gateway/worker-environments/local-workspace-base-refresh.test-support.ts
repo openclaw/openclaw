@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, vi, type Mock } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
-import { prepareLocalWorkspaceCheckout } from "./local-workspace-checkout.js";
 import { withLocalWorkspaceProjection } from "./local-workspace-projection.js";
 import * as localWorkspaceStore from "./local-workspace-store.js";
 import { readLocalWorkspaceProjection } from "./local-workspace-store.test-support.js";
@@ -57,24 +56,12 @@ export async function proveResumedBaseRefresh(params: {
   await expect(
     withLocalWorkspaceProjection(owner, async (state) => {
       const checkouts = await fs.mkdtemp(path.join(params.root, "refresh-"));
-      for (const [name, commit] of [
-        ["before", sourceHead],
-        ["after", selectedBase],
-      ] as const) {
-        await prepareLocalWorkspaceCheckout({
-          source: canonical,
-          destination: path.join(checkouts, name),
-          temporaryRoot: checkouts,
-          baseCommit: commit,
-          branch: "refresh",
-          signal: new AbortController().signal,
-          assertCurrent: () => {},
-        });
-      }
       const baseline = await state.baselineDocument();
       const refreshed = await prepareWorkspaceBaseRefresh({
-        beforeRoot: path.join(checkouts, "before"),
-        afterRoot: path.join(checkouts, "after"),
+        root: canonical,
+        beforeTree: sourceHead,
+        afterTree: selectedBase,
+        temporaryRoot: checkouts,
         baseCommit: selectedBase,
         baseRaw: baseline.rawManifest,
         baseRef: baseline.manifestRef,
