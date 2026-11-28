@@ -262,7 +262,9 @@ public enum OpenClawChatGatewayPayloadCodec {
             thinkingLevels: model.thinkinglevels.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
             thinkingDefault: model.thinkingdefault,
             input: model.input.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
-            agentRuntime: model.agentruntime.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) })
+            agentRuntime: model.agentruntime.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
+            providerName: model.providername,
+            serviceTiers: model.servicetiers)
     }
 
     public static func commandChoice(_ entry: CommandEntry) -> OpenClawChatCommandChoice {
@@ -320,8 +322,10 @@ public enum OpenClawChatGatewayPayloadCodec {
         case health
         case chat
         case sessionMessage = "session.message"
+        case sessionTool = "session.tool"
         case agent
         case progressCardChanged = "progressCard.changed"
+        case sessionPullRequestsChanged = "controlUi.sessionPullRequests.changed"
         case questionRequested = "question.requested"
         case questionResolved = "question.resolved"
     }
@@ -370,36 +374,42 @@ public enum OpenClawChatGatewayPayloadCodec {
         case .chat:
             return decode(OpenClawChatEventPayload.self).map(OpenClawChatTransportEvent.chat)
         case .sessionMessage:
-            guard let message = decode(OpenClawSessionMessageEventPayload.self)
-            else { return nil }
-            if var canonicalMessage = message.message,
-               canonicalMessage.transcriptMessageID?
-                   .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
-                   let messageID = message.messageId?.trimmingCharacters(in: .whitespacesAndNewlines),
-                   !messageID.isEmpty
-            {
-                // Live events carry durable transcript identity on their envelope.
-                // Preserve it on the row so history cannot replay the same message.
-                canonicalMessage.transcriptMessageID = messageID
-                return .sessionMessage(OpenClawSessionMessageEventPayload(
-                    sessionKey: message.sessionKey,
-                    agentId: message.agentId,
-                    message: canonicalMessage,
-                    messageId: message.messageId,
-                    messageSeq: message.messageSeq,
-                    hasActiveRun: message.hasActiveRun,
-                    activeRunIds: message.activeRunIds,
-                    activeRunIdsPresent: message.activeRunIdsPresent))
-            }
-            return .sessionMessage(message)
-        case .agent:
+            return decode(OpenClawSessionMessageEventPayload.self).map { .sessionMessage(self.canonicalized($0)) }
+        // The Gateway mirrors the same tool payload under session.tool for attached viewers.
+        case .agent, .sessionTool:
             return decode(OpenClawAgentEventPayload.self).map(OpenClawChatTransportEvent.agent)
         case .progressCardChanged:
             return decode(ProgressCardChangedEvent.self).map(OpenClawChatTransportEvent.progressCardChanged)
+        case .sessionPullRequestsChanged:
+            return decode(OpenClawSessionPullRequestsChangedEvent.self)
+                .map(OpenClawChatTransportEvent.sessionPullRequestsChanged)
         case .questionRequested:
             return decode(QuestionRecord.self).map(OpenClawChatTransportEvent.questionRequested)
         case .questionResolved:
             return decode(OpenClawQuestionResolvedEvent.self).map(OpenClawChatTransportEvent.questionResolved)
         }
+    }
+
+    /// Live events carry durable transcript identity on their envelope. Preserve it on the row so history
+    /// cannot replay the same message.
+    private static func canonicalized(
+        _ message: OpenClawSessionMessageEventPayload) -> OpenClawSessionMessageEventPayload
+    {
+        guard var canonicalMessage = message.message,
+              canonicalMessage.transcriptMessageID?
+                  .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+                  let messageID = message.messageId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !messageID.isEmpty
+        else { return message }
+        canonicalMessage.transcriptMessageID = messageID
+        return OpenClawSessionMessageEventPayload(
+            sessionKey: message.sessionKey,
+            agentId: message.agentId,
+            message: canonicalMessage,
+            messageId: message.messageId,
+            messageSeq: message.messageSeq,
+            hasActiveRun: message.hasActiveRun,
+            activeRunIds: message.activeRunIds,
+            activeRunIdsPresent: message.activeRunIdsPresent)
     }
 }

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { repairLegacySessionRunOutcomes } from "../../commands/doctor/shared/session-entry-rewrite.js";
+import { repairLegacyStartupSessionEntries } from "../../commands/doctor/shared/session-entry-rewrite.js";
 import { withEngineStoreAdmission } from "../../infra/database-engine/admission-scope.js";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { settleCurrentReadPreparations } from "../../shared/current-read-authority.js";
@@ -23,7 +23,6 @@ import { gatewayDiscoveryReadOptions } from "./combined-store-paths.js";
 import { resolveSqliteReadScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { isCanonicalSqliteSessionMainKeyCurrent } from "./session-canonical-key-read.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
-import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
 import { assertSessionStoreMigrationComplete } from "./startup-migration.js";
 import {
   isConfiguredAgentDatabaseTarget,
@@ -103,7 +102,7 @@ export async function runSessionStartupMigration(params: {
 
   const databases = new Set<string>();
   const coldCloses = new Set<string>();
-  let interruptedSessions = 0;
+  let repairedSessions = 0;
   const terminalUnmatched = new Map<string, number>();
   const registeredDatabases = new Set(
     registeredDatabaseRows.map((entry) => `${entry.agentId}\0${entry.path}`),
@@ -157,21 +156,17 @@ export async function runSessionStartupMigration(params: {
         );
       }
       let embeddedAcpSessionKey: string | undefined;
-      const repaired = await repairLegacySessionRunOutcomes(
+      const repaired = await repairLegacyStartupSessionEntries(
         { agentId: options.agentId, env, storePath: databasePath },
         () => params.assertCurrent?.(),
-        (row) => {
-          // Pre-repair rows are valid only while legacy repair never adds or removes `acp`.
-          if (
-            embeddedAcpSessionKey === undefined &&
-            parseSqliteSessionEntryRecord(row)?.acp != null
-          ) {
-            embeddedAcpSessionKey = row.session_key;
+        (entry, sessionKey) => {
+          if (embeddedAcpSessionKey === undefined && entry?.acp != null) {
+            embeddedAcpSessionKey = sessionKey;
           }
         },
         params.log.warn,
       );
-      interruptedSessions += repaired.repaired;
+      repairedSessions += repaired.repaired;
       if (repaired.terminalUnmatched > 0) {
         terminalUnmatched.set(
           options.agentId,
@@ -250,8 +245,8 @@ export async function runSessionStartupMigration(params: {
     );
   }
   throwSqliteLifecycleErrors([...errors], "Session startup migration and cleanup failed");
-  if (interruptedSessions > 0) {
-    params.log.info(`session: settled ${interruptedSessions} legacy run(s)`);
+  if (repairedSessions > 0) {
+    params.log.info(`session: repaired ${repairedSessions} legacy session(s)`);
   }
   params.assertCurrent?.();
 }

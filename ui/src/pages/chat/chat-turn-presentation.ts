@@ -146,11 +146,15 @@ function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
     return false;
   }
   const role = item.role.toLowerCase();
+  // Only text the model labels as commentary is hideable progress. Unlabeled
+  // text, such as Chat Completions text before a tool call, stays visible.
   return (
     role === "tool" ||
     (role === "assistant" &&
       !assistantGroupIsIndependentBoundary(item) &&
-      assistantMessageKind(item.messages[0]?.message, item.visibleContent) !== "final_answer")
+      assistantMessageKind(item.messages[0]?.message, item.visibleContent) !== "final_answer" &&
+      (item.visibleContent !== "text" ||
+        item.messages.every(({ message }) => resolveAssistantReplyPhase(message) === "commentary")))
   );
 }
 

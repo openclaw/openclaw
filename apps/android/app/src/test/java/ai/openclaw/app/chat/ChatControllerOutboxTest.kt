@@ -2201,7 +2201,7 @@ class ChatControllerOutboxTest {
         "chat",
         """{"sessionKey":"custom","runId":"owner-a-row","state":"delta","message":{"role":"assistant","content":[{"type":"text","text":"private A stream"}]}}""",
       )
-      assertNull(chat.streamingAssistantText.value)
+      assertNull(chat.streamingAssistant.value?.text)
 
       chat.switchSession("agent:other:main")
       defaultAgentId = "owner-a"
@@ -2707,7 +2707,7 @@ class ChatControllerOutboxTest {
           )
         }.toString(),
       )
-      assertEquals("Original run is still working.", chat.streamingAssistantText.value)
+      assertEquals("Original run is still working.", chat.streamingAssistant.value?.text)
 
       // A follow-up send must see the accepted head as live-owned: it dispatches directly,
       // without erasing the running turn or parking its durable row.
@@ -2715,7 +2715,7 @@ class ChatControllerOutboxTest {
       advanceTimeBy(10_000)
       assertTrue(followUp)
       assertEquals(listOf("slow turn", "second"), gateway.sentMessages)
-      assertEquals("Original run is still working.", chat.streamingAssistantText.value)
+      assertEquals("Original run is still working.", chat.streamingAssistant.value?.text)
       assertTrue(outbox.rows().values.none { it.status == ChatOutboxStatus.Failed })
     }
 

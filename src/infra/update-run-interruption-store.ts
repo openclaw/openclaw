@@ -142,7 +142,7 @@ export function persistInterruptedUpdateObservation(
           return { accepted: false };
         }
         if (
-          readUpdateRuns(db, { active: true, limit: 1, excludeRunId: run.runId }).length ||
+          readUpdateRuns(db, { active: true, limit: 1, excludeRunIds: [run.runId] }).length ||
           recordedUpdateRunDrivers(run).some((driver) => inspectUpdateRunDriver(driver) !== "dead")
         ) {
           return { accepted: false, retry: true };

@@ -18,6 +18,34 @@ struct ChatComposerTextViewIOSTests {
         #expect(textView.accessibilityIdentifier == "chat-message-input")
     }
 
+    @Test func `draft changes tell the keyboard and skip an unchanged draft`() {
+        let textView = ChatComposerTextViewIOSFactory.makeConfiguredTextView()
+        let keyboard = RecordingInputDelegate()
+        textView.text = "Check the ten"
+        textView.inputDelegate = keyboard
+
+        textView.applyDraftText("Check the ten")
+        #expect(keyboard.events.isEmpty)
+
+        textView.applyDraftText("")
+        #expect(textView.text.isEmpty)
+        #expect(textView.markedTextRange == nil)
+        #expect(keyboard.events == ["textWillChange", "textDidChange"])
+    }
+
+    @Test func `a draft change ends composition first`() {
+        let textView = ChatComposerTextViewIOSFactory.makeConfiguredTextView()
+        textView.text = "ol"
+        textView.selectedRange = NSRange(location: 2, length: 0)
+        textView.setMarkedText("á", selectedRange: NSRange(location: 1, length: 0))
+        #expect(textView.markedTextRange != nil)
+
+        textView.applyDraftText("")
+
+        #expect(textView.markedTextRange == nil)
+        #expect(textView.text.isEmpty)
+    }
+
     @Test func `return insertion respects caret and selection`() {
         let textView = ChatComposerTextViewIOSFactory.makeConfiguredTextView()
         textView.text = "firstsecond"
@@ -195,6 +223,22 @@ struct ChatComposerTextViewIOSTests {
         textView.onPasteImageAttachment = nil
         #expect(!textView.pasteImageAttachments(from: pasteboard))
         #expect(pasted.isEmpty)
+    }
+}
+
+@MainActor
+private final class RecordingInputDelegate: NSObject, UITextInputDelegate {
+    var events: [String] = []
+    func selectionWillChange(_: (any UITextInput)?) {}
+    func selectionDidChange(_: (any UITextInput)?) {}
+    func textWillChange(_: (any UITextInput)?) {
+        self.events.append("textWillChange")
+    }
+
+    func conversationContext(_: UIConversationContext?, didChange _: (any UITextInput)?) {}
+
+    func textDidChange(_: (any UITextInput)?) {
+        self.events.append("textDidChange")
     }
 }
 #endif

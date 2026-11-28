@@ -272,8 +272,8 @@ export async function dispatchSqliteWorkerJob(
     const request = prepareSqliteWorkerRequest(job);
     assertDispatchable();
     const selection = request.stateContext?.databaseEngineSelection;
-    if (!slot.postgresPoolSent && selection) {
-      // A carrier can be created before boot selects its database engines.
+    if (!slot.postgresPoolSent && (request.type === "open" || selection)) {
+      // An existing process pool can outlive the selection that created it.
       request.postgresPool = createPostgresPoolEndpoints(selection);
     }
     assertStateAccess?.();

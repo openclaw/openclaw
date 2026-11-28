@@ -128,6 +128,9 @@ it("backup create refuses unreadable discovery state even without workspaces", a
       `Cannot read shared state for discovery: ${state.statePath("state/openclaw.sqlite")}.`,
     );
     expect(failure.error.message).toContain("file is not a database");
+    expect(failure.error.message).not.toContain(
+      "Retry after the current state operation completes.",
+    );
     await expect(fs.stat(state.path("backup.tar.gz"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

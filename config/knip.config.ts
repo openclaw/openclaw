@@ -75,6 +75,8 @@ const repositoryScriptEntries = [
   "test/fixtures/fs-safe-drvfs-calls.mjs!",
   // Forked by update-command-doctor-child.test.ts to model the successor's state swap.
   "src/cli/update-cli/update-command-state-handoff.process.test-support.ts!",
+  // Forked by server-startup-legacy-completion.test.ts to model a schema-40 verifier.
+  "src/gateway/legacy-schema40-driver.test-support.ts!",
   // Their source headers document standalone benchmark and measurement commands.
   "scripts/bench-ci-lint-plan.mts!",
   "scripts/bench-ci-planner.mts!",
@@ -125,6 +127,8 @@ const repositoryScriptEntries = [
   // Package scripts execute these maintained generators, whose inputs are production contracts.
   "scripts/generate-runtime-script-assets.mjs!",
   "scripts/generate-static-validators.mts!",
+  // ToolOperationCatalog.swift consumes this CLI's generated wording catalog.
+  "scripts/tool-operations.ts!",
   // src/daemon/systemd-directives.ts documents this node regeneration command.
   "scripts/generate-systemd-directives.mjs!",
   // ui:validators:gen/check compile canonical payload schemas into browser runtime guards.
@@ -420,6 +424,8 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/upgrade-survivor/backup-rollback.mjs!",
   // run.sh invokes the backup schedule upgrade scenario through this CLI.
   "scripts/e2e/lib/upgrade-survivor/backup-schedule.mjs!",
+  // run.sh launches the boot-convergence fixture and probes as separate Node processes.
+  "scripts/e2e/lib/upgrade-survivor/boot-plugin-convergence.mjs!",
   "scripts/e2e/lib/upgrade-survivor/channel-owner-policy.mjs!",
   "scripts/e2e/lib/upgrade-survivor/config-parking.mjs!",
   // run.sh invokes this CLI and preloads it into updater/Doctor children.
@@ -1414,6 +1420,8 @@ const config = {
         "solid-js",
         "playwright-core",
         "partial-json",
+        // Performance measurement resolves Tokenjuice from extensions/tokenjuice/package.json.
+        "tokenjuice",
         // The bundled AI runtime loads Bun proxy support through a computed import.
         "proxy-from-env",
         // The native Canvas bundle falls back without optional Markdown support.

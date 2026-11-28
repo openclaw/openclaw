@@ -1275,28 +1275,34 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
 }
 
 @Suite(.serialized, .testWaitLimit) struct NodeAppModelInvokeTests {
-    @Test @MainActor func `first model frame already targets the last chat`() {
-        let registry = GatewaySettingsStore.loadGatewayRegistry()
+    @Test @MainActor func `cold launch opens the last agent main chat before and after offline restore`() async throws {
+        let registry = await GatewayRegistryTestIsolation()
+        defer { registry.restore() }
         let stableID = "scroll-launch-\(UUID().uuidString)"
-        let sessionKey = "agent:main:dashboard:last-used"
+        let sessionKey = "agent:research:dashboard:last-used"
         defer {
-            _ = GatewaySettingsStore.saveGatewayRegistry(registry)
             GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
             GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil)
         }
-        #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
+        try #require(GatewaySettingsStore.upsertGatewayRegistryEntry(.init(
             stableID: stableID, kind: .manual, name: "Launch test", host: "localhost", port: 443,
             useTLS: true, contextPath: nil, lastConnectedAtMs: nil), activate: true))
         GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: sessionKey)
-        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "main")
+        GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: "research")
         let model = NodeAppModel(restoringSavedGatewayRoute: true)
         defer { model.voiceWake.stop() }
-        #expect(model.chatSessionKey == sessionKey)
+        #expect(model.chatSessionKey == "agent:research:main")
+        #expect(model.newChatRequestID == 0)
         #expect(model.connectedGatewayID == stableID)
-        #expect(model.selectedAgentId == "main")
-        model.prepareForGatewayConnect(stableID: stableID)
-        #expect(model.chatSessionKey == sessionKey)
-        model.chatSessionRoutingRestoreTask?.cancel()
+        #expect(model.selectedAgentId == "research")
+        let cache = try #require(model.makeChatOfflineStore())
+        let identity = try #require(OpenClawChatSessionRoutingIdentity(
+            scope: "per-sender", mainSessionKey: "home", defaultAgentID: "main"))
+        await cache.storeSessionRoutingIdentity(identity)
+        await model.restoreChatSessionRoutingIdentityIfNeeded()
+        #expect(model.chatSessionKey == "agent:research:home")
+        #expect(!model.isOperatorGatewayConnected)
+        await model.purgeChatTranscriptCache(gatewayID: stableID)
     }
 
     @Test @MainActor func `agent switch forgets the previous agent's saved chat`() {
@@ -1613,13 +1619,21 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.chatViewModelIdentityID != selectedIdentity)
     }
 
-    @Test @MainActor func `init preserves saved talk mode preference`() {
-        withUserDefaults(["talk.enabled": true]) {
+    @Test @MainActor func `a fresh launch starts with Talk off and never starts it`() async {
+        await withUserDefaults(["talk.enabled": true]) {
+            // A previous run left Talk on. Starting is the path that asks for the microphone.
             let talkMode = TalkModeManager(allowSimulatorCapture: true)
+            var startAttempts = 0
+            talkMode._test_setStartEntryHandler { startAttempts += 1 }
+            defer { talkMode._test_setStartEntryHandler(nil) }
             let appModel = NodeAppModel(talkMode: talkMode)
+            // The connection becoming ready used to resume a restored Talk.
+            appModel.talkMode.updateGatewayConnected(true)
+            await Task.yield()
 
-            #expect(UserDefaults.standard.bool(forKey: "talk.enabled"))
-            #expect(appModel.talkMode.isEnabled)
+            #expect(!appModel.talkMode.isEnabled)
+            #expect(startAttempts == 0)
+            #expect(UserDefaults.standard.object(forKey: "talk.enabled") == nil)
         }
     }
 
@@ -1864,6 +1878,39 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON("exec-inactive"))
         await appModel.presentExecApprovalGatewayEventPrompt(approvalId: "exec-inactive")
         #expect(appModel.pendingApprovalAttentionRequests.first { $0.id == "exec-inactive" }?.createdAtMs == 51)
+    }
+
+    @Test @MainActor func `the session card resolves its own request rather than the selected inbox review`() async throws {
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
+        let (_, model) = makeWatchModel(notificationCenter: MockBootstrapNotificationCenter())
+        configureMockApprovalRoute(model)
+        try model._test_setUnifiedExecApprovalGetResponses([
+            ("request-a", makePendingExecApprovalJSON("request-a")),
+            ("request-b", makePendingApprovalJSON(
+                id: "request-b", presentation: pluginApprovalPresentation(
+                    title: "Review a request",
+                    description: "Test request."))),
+        ], listResponses: [
+            "exec.approval.list": makePendingApprovalListJSON(
+                id: "request-a", kind: .exec, sessionKey: "agent:worker:room-a"),
+            "plugin.approval.list": makePendingApprovalListJSON(
+                id: "request-b", kind: .plugin, sessionKey: "agent:worker:room-b"),
+        ])
+        await model.refreshPendingApprovalInbox()
+        let card = try #require(model.pendingApproval(forSession: "agent:worker:room-a", agentID: "worker"))
+        let other = try #require(model.pendingApproval(forSession: "agent:worker:room-b", agentID: "worker"))
+        model.presentPendingExecApprovalFromInbox(other.id)
+
+        let writes = WatchApprovalReadbackProbe()
+        model._test_setExecApprovalResolutionSuccessHandler { id, _, decision, _ in
+            await writes.record(id + ":" + decision)
+        }
+        await model.resolveSessionApproval(card, decision: .deny)
+
+        #expect(await writes.snapshot() == ["request-a:deny"])
+        #expect(model.pendingApproval(forSession: "agent:worker:room-a", agentID: "worker") == nil)
+        #expect(model.pendingApproval(forSession: "agent:worker:room-b", agentID: "worker")?.id == other.id)
     }
 
     @Test(arguments: ["terminal", "gateway", "operator"])
@@ -2536,7 +2583,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test(arguments: [true, false]) @MainActor
-    func `startup remembered chat retains delivered watch decision without an approval route`(
+    func `startup main chat retains delivered watch decision without an approval route`(
         matchingCachedPrompt: Bool) async throws
     {
         let isolation = await GatewayRegistryTestIsolation()
@@ -2599,7 +2646,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(seeded.pendingResolutions.isEmpty)
 
         // Use the real startup constructor and resolve owner, with no fetch/resolve hook.
-        // Remembered Chat must not admit a cached write or consume an uncached reply.
+        // Remembered Gateway identity must not admit a cached write or consume an uncached reply.
         let model = NodeAppModel(
             notificationCenter: MockBootstrapNotificationCenter(),
             watchMessagingService: MockWatchMessagingService(),
@@ -2610,7 +2657,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(!model.isOperatorGatewayConnected)
         #expect(await model.operatorSession.currentRoute() == nil)
         #expect(model.connectedGatewayID == stableID)
-        #expect(model.chatSessionKey == savedChat)
+        #expect(model.chatSessionKey == model.mainSessionKey)
         let delivered = WatchExecApprovalResolveEvent(
             replyId: "startup-delivered-reply", approvalId: "startup-delivered-approval",
             gatewayStableID: stableID, decision: .deny, sentAtMs: 123, transport: "transferUserInfo")
@@ -2632,7 +2679,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(!recreated.gatewayConnected)
         #expect(!recreated.isOperatorGatewayConnected)
         #expect(recreated.connectedGatewayID == stableID)
-        #expect(recreated.chatSessionKey == savedChat)
+        #expect(recreated.chatSessionKey == recreated.mainSessionKey)
         #expect(try persistedBridge().pendingResolutions == expected)
     }
 
@@ -5047,7 +5094,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `Talk toggle preserves Voice Wake preference and enabled owner state`() async {
-        let keys = [VoiceWakePreferences.enabledKey, "talk.enabled"]
+        let keys = [VoiceWakePreferences.enabledKey]
         let previousValues = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
         for key in keys {
             UserDefaults.standard.set(false, forKey: key)
@@ -5077,7 +5124,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(!appModel.talkMode.isEnabled)
         #expect(appModel.voiceWake.isEnabled)
         #expect(UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey))
-        #expect(!UserDefaults.standard.bool(forKey: "talk.enabled"))
+        // Talk's on/off belongs to the running app; nothing is stored for the next launch.
+        #expect(UserDefaults.standard.object(forKey: "talk.enabled") == nil)
     }
 
     @Test @MainActor func `voice note start cannot race an acquired PTT lease`() async {
@@ -6501,7 +6549,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             audioAdmissionInitiallyAllowed: false, restoringSavedGatewayRoute: true)
         defer { model.voiceWake.stop() }
         #expect(model.connectedGatewayID == stableID)
-        #expect(model.chatSessionKey == savedChat)
+        #expect(model.chatSessionKey == model.mainSessionKey)
         #expect(model.activeGatewayConnectConfig == nil)
         #expect(await model.operatorSession.currentRoute() == nil)
         model.setTalkEnabled(false)
@@ -6512,7 +6560,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             gateway: stableID, sentAt: 125, transport: "transferUserInfo"))
         try #require(await waitForMainActorWork { messaging.lastSentAppSnapshot != nil })
         #expect(model.openChatRequestID == opened)
-        #expect(model.chatSessionKey == savedChat)
+        #expect(model.chatSessionKey == model.mainSessionKey)
         #expect(!model.talkMode.isEnabled)
         #expect(messaging.lastSentAppSnapshot?.gatewayStableID == nil)
 
@@ -7280,7 +7328,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             #expect(terminal.runId == expectedRunID)
             let expectedTitle = switch scenario {
             case "reply": String(localized: "Reply saved")
-            case "accepted-failure": String(localized: "Gateway run failed")
+            case "accepted-failure": String(localized: "Run failed")
             default: String(localized: "Not sent")
             }
             #expect(WatchMessageJournalView.statusTitle(retained) == expectedTitle)
@@ -8772,11 +8820,10 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(response.ok == false)
         #expect(response.error?.code == .unavailable)
         #expect(response.error?.message == "node invoke cancelled")
-        #expect(appModel.cameraHUDText == nil)
-        #expect(appModel.cameraHUDKind == nil)
+        #expect(appModel.toasts.current == nil)
     }
 
-    @Test @MainActor func `older cancelled camera invoke preserves newer HUD`() async {
+    @Test @MainActor func `a cancelled camera invoke says nothing and the one that finishes says Photo taken`() async {
         let defaults = UserDefaults.standard
         let key = "camera.enabled"
         let previous = defaults.object(forKey: key)
@@ -8812,12 +8859,12 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await camera.releaseFirst()
         let firstResponse = await firstTask.value
         #expect(firstResponse.error?.message == "node invoke cancelled")
-        #expect(appModel.cameraHUDText == "Taking photo…")
+        #expect(appModel.toasts.current == nil)
 
         await camera.releaseSecond()
         let secondResponse = await secondTask.value
         #expect(secondResponse.ok)
-        #expect(appModel.cameraHUDText == "Photo captured")
+        #expect(appModel.toasts.current?.toast.text == "Photo taken")
     }
 
     @Test @MainActor func `system notify returns unavailable when notifications off`() async throws {

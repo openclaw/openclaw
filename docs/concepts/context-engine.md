@@ -507,6 +507,27 @@ That means there are two valid plugin patterns:
 
 A no-op `compact()` is unsafe for an active non-owning engine because it disables the normal `/compact` and overflow-recovery compaction path for that engine slot.
 
+### Compaction requests
+
+Each `compact()` call describes why the host is asking and how far to go:
+
+| Field               | Meaning                                                                                                                                             |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reason`            | Why the host requested compaction: `manual`, `preflight`, `overflow`, `budget`, or `timeout`. Absent when the caller does not classify the request. |
+| `force`             | Compact even when context is below the engine's normal trigger threshold.                                                                           |
+| `compactionTarget`  | `threshold` converges on the engine's compaction threshold; `budget` (default) only needs to fit the token budget.                                  |
+| `currentTokenCount` | The host's live prompt token count, when it has a fresh observation.                                                                                |
+
+`reason` values:
+
+- `manual`: an operator ran `/compact`. The host also sets `force: true` and `compactionTarget: "threshold"`.
+- `preflight`: the next prompt cannot be submitted until context shrinks.
+- `overflow`: the provider rejected a request for exceeding its context window.
+- `budget`: context crossed the host's compaction budget.
+- `timeout`: recovery after a model call timed out with large context.
+
+When a compaction does nothing, return `compacted: false` with a `reason` that says why. `/compact` shows that reason to the operator. Phrase known outcomes as `nothing to compact`, `already under target`, or `below threshold`, optionally followed by `: <details>`, so OpenClaw can classify the outcome and still show your details.
+
 ## Configuration reference
 
 ### Plugin and engine IDs

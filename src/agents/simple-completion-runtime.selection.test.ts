@@ -1,6 +1,10 @@
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import * as metadata from "../plugins/plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
+import * as agentScope from "./agent-scope.js";
+import * as preparedRuntime from "./prepared-model-runtime.js";
 import {
   acquireSimpleCompletionModelForAgent,
   resolveSimpleCompletionSelectionForAgent as resolveSelection,
@@ -34,6 +38,44 @@ function expectRoute(
     }),
   ).toMatchObject({ provider, modelId, ...(profileId ? { profileId } : {}) });
 }
+
+it("resolves the acquired directory once and honors standalone directory overrides", async () => {
+  const cfg = completionConfig(
+    "fixture",
+    { baseUrl: "http://localhost", models: [completionModelDefinition({ id: "actual" })] },
+    withAgents({ model: "fixture/actual" }, { main: {} }),
+  );
+  const params = { cfg, agentId: "main", modelRef: "fixture/actual@work" };
+  const snapshot = createPluginMetadataSnapshotFixture();
+  const stop = new Error("stop at prepared runtime acquisition");
+  using directory = vi.spyOn(agentScope, "resolveAgentDir").mockReturnValue("/fixture/agent");
+  using pluginMetadata = vi
+    .spyOn(metadata, "resolvePluginMetadataSnapshot")
+    .mockReturnValue(snapshot);
+  using lease = vi
+    .spyOn(preparedRuntime, "acquireAgentRunPreparedModelRuntime")
+    .mockRejectedValue(stop);
+
+  await expect(acquireSimpleCompletionModelForAgent(params)).rejects.toBe(stop);
+  expect(directory).toHaveBeenCalledExactlyOnceWith(cfg, "main");
+  expect(lease.mock.calls[0]?.[0].agentDir).toBe("/fixture/agent");
+  expect(pluginMetadata).toHaveBeenCalled();
+
+  expect(
+    resolveSelection({ ...params, manifestPlugins: snapshot, agentDir: "  /override  " }),
+  ).toMatchObject({
+    provider: "fixture",
+    modelId: "actual",
+    profileId: "work",
+    agentDir: "/override",
+  });
+  expect(resolveSelection({ cfg: {}, agentId: "main", manifestPlugins: snapshot })).toBeNull();
+  expect(directory).toHaveBeenCalledTimes(1);
+  expect(resolveSelection({ ...params, manifestPlugins: snapshot })?.agentDir).toBe(
+    "/fixture/agent",
+  );
+  expect(directory).toHaveBeenCalledTimes(2);
+});
 
 it("reads configured aliases only when the selected model can use them", () => {
   const readAlias = vi.fn(() => "quick");

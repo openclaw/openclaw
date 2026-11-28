@@ -1,4 +1,3 @@
-import { IMAGE_BLOCK_TOKENS } from "openclaw/plugin-sdk/agent-core";
 import {
   type AgentMessage,
   type assembleHarnessContextEngine,
@@ -8,6 +7,7 @@ import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import {
   CodexContextAttachmentError,
   formatCodexContextSenderSuffix,
+  measureCodexContextImageChars,
   neutralizeCodexExplicitMentionSigils,
   projectContextEngineAssemblyForCodex,
   renderMessageBody,
@@ -131,7 +131,7 @@ export async function buildCodexSelectedHistoryItems(params: {
       continue;
     }
     const quoted = neutralizeCodexExplicitMentionSigils(separator + label + text);
-    used += quoted.length + (files?.images.length ?? 0) * IMAGE_BLOCK_TOKENS * 4;
+    used += quoted.length + measureCodexContextImageChars(files?.images ?? []);
     if (used > maxChars) {
       throw new CodexContextAttachmentError(HISTORY_OVERFLOW);
     }

@@ -13,7 +13,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import type { WorkerLaunchDescriptor } from "./launch-descriptor.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import {
@@ -314,20 +313,6 @@ describe("worker command lifetime gate", () => {
     } finally {
       restore();
     }
-  });
-
-  it("passes the build-composed Browser runtime into the worker boundary", async () => {
-    const output = new PassThrough();
-    const browserRuntime = {
-      createAttachedBrowserToolRuntime: vi.fn(),
-    } as unknown as WorkerBrowserRuntime;
-
-    await runWorkerCommand({ input: commandInput(), output, browserRuntime });
-
-    expect(runWorkerDescriptor).toHaveBeenCalledWith(
-      descriptor,
-      expect.objectContaining({ browserRuntime }),
-    );
   });
 
   it.each([

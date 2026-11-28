@@ -582,6 +582,13 @@ public enum OpenClawChatGatewayRequests {
             timeoutMs: self.compactionTimeoutMs)
     }
 
+    public static func sessionPreview(sessionKey: String) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "sessions.preview",
+            params: ["keys": AnyCodable([sessionKey]), "limit": AnyCodable(6), "maxChars": AnyCodable(1200)],
+            timeoutMs: 4000)
+    }
+
     public static func history(
         sessionKey: String,
         agentID: String?,
@@ -627,6 +634,14 @@ public enum OpenClawChatGatewayRequests {
         return OpenClawChatGatewayRequest(
             method: "session.reactions.set",
             params: params,
+            timeoutMs: self.defaultTimeoutMs)
+    }
+
+    /// Replaces the set of sessions whose PRs this connection watches (src/gateway/server-methods/control-ui.ts).
+    public static func sessionPullRequestsSubscribe(sessionKeys: [String]) -> OpenClawChatGatewayRequest {
+        OpenClawChatGatewayRequest(
+            method: "controlUi.sessionPullRequests.subscribe",
+            params: ["sessionKeys": AnyCodable(sessionKeys)],
             timeoutMs: self.defaultTimeoutMs)
     }
 

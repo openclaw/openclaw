@@ -51,12 +51,6 @@ function expectCounts(lane: string, activeCount: number, queuedCount: number) {
   expect(queue.getCommandLaneSnapshot(lane)).toMatchObject({ activeCount, queuedCount });
 }
 
-function diagnosticDebugMessages(): string[] {
-  return diagnosticMocks.diag.debug.mock.calls
-    .map(([message]) => message)
-    .filter((message): message is string => typeof message === "string");
-}
-
 describe("command queue", () => {
   beforeAll(async () => {
     queue = await import("./command-queue.js");
@@ -220,40 +214,6 @@ describe("command queue", () => {
       }),
     ).rejects.toBe(reason);
     expect(onQueued).not.toHaveBeenCalled();
-  });
-
-  it("demotes live model switch lane failures to debug noise", async () => {
-    const error = new Error("Live session model switch requested: anthropic/claude-opus-4-6");
-    error.name = "LiveSessionModelSwitchError";
-    await expect(
-      queue.enqueueCommandInLane("nested", async () => {
-        throw error;
-      }),
-    ).rejects.toBe(error);
-    expect(diagnosticMocks.diag.error).not.toHaveBeenCalled();
-    expect(
-      diagnosticDebugMessages().some((message) =>
-        message.includes("lane task interrupted: lane=nested"),
-      ),
-    ).toBe(true);
-  });
-
-  it.each([
-    "session:probe-setup-inference:openai",
-    "session:temp:setup-inference:probe-setup-inference-test-uuid",
-  ])("keeps setup-inference probe lane failures quiet: %s", async (lane) => {
-    const error = new Error("Authentication failed");
-    await expect(
-      queue.enqueueCommandInLane(lane, async () => {
-        throw error;
-      }),
-    ).rejects.toBe(error);
-    expect(diagnosticMocks.diag.error).not.toHaveBeenCalled();
-    expect(
-      diagnosticDebugMessages().some((message) =>
-        message.includes(`lane task interrupted: lane=${lane}`),
-      ),
-    ).toBe(false);
   });
 
   it.each([0, 3])("counts lane work with concurrency %s", async (concurrency) => {

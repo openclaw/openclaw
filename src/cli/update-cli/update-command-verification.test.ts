@@ -10,11 +10,7 @@ import * as gatewayService from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { gitReleaseSlot } from "../../infra/git-release-paths.js";
 import * as stale from "../../infra/restart-stale-pids.js";
-import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
-import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
-import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import { isUpdateRunVerificationConfirmed } from "../../infra/update-run-verification.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -36,9 +32,6 @@ vi.mock("../../infra/update-run-ledger.js", async (importOriginal) => ({
   recordUpdateRunPhase: vi.fn(),
   recordUpdateRunStep: vi.fn(),
   recordUpdateRunVerification: vi.fn(),
-}));
-vi.mock("../../infra/update-run-report-health.js", () => ({
-  readUpdateRunReportHealth: vi.fn(async () => ({ kind: "unavailable" })),
 }));
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
@@ -467,7 +460,7 @@ it.each([true, false])(
   },
 );
 
-it("prefers a pending recovery observation over previously saved healthy facts", async () => {
+it("keeps a pending recovery observation unverified", async () => {
   result.status = "error";
   await expect(
     verifyGateway({
@@ -479,33 +472,13 @@ it("prefers a pending recovery observation over previously saved healthy facts",
       health: pendingHealth("still-starting", 19101),
     }),
   ).resolves.toMatchObject({ ok: false, stopReason: "still-starting" });
-  const saved: UpdateRunRecord["verification"] = {
-    versionMatch: true,
-    readyz: true,
-    settled: true,
-    runningVersion: "2026.9.5",
-    recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" },
-  };
-  const input = updateRunReportInputFromResult(result);
-  expect(input.verification).toMatchObject({ readyz: false, settled: false });
-  expect(input.steps).toContainEqual(
+  expect(result.verification).toMatchObject({ readyz: false, settled: false });
+  expect(result.steps).toContainEqual(
     expect.objectContaining({
-      detail: expect.stringContaining("readiness is pending"),
+      advisory: expect.objectContaining({
+        message: expect.stringContaining("readiness is pending"),
+      }),
     }),
-  );
-  const publicReport = await prepareUpdateFailureReport(
-    {
-      attemptId: "pending-recovery",
-      result,
-      recordedRun: { runId: "pending-recovery", steps: input.steps, verification: saved },
-    },
-    { env: {}, stateDir: "/fixture/state" },
-  );
-  expect(publicReport.body).not.toContain("verified serving");
-  expect(publicReport.body).toContain("readiness is pending");
-  expect(readUpdateRunReportHealth).toHaveBeenLastCalledWith(
-    expect.objectContaining({ readyz: false, settled: false, port: 19101 }),
-    expect.anything(),
   );
 });
 

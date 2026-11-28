@@ -273,3 +273,35 @@ it.for(["usage", "removed", "failed"] as const)(
     }
   },
 );
+
+it("backs off consecutive expiry renewal failures instead of spinning at 0ms", async () => {
+  const harness = await createRenewalLifecycle();
+  const inventoryOwner = resolvePreparedModelRuntimeOwnerBySnapshot(owner)!;
+  const acquisitions = mocks.runPreparedModelCatalogWorker.mock.calls.length;
+  mocks.runPreparedModelCatalogWorker.mockRejectedValue(new Error("synthetic expiry failure"));
+
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  try {
+    vi.setSystemTime(1_000_000);
+    inventoryOwner.catalogInventory!.providers.get("custom")!.expiresAt = 999_999;
+
+    owner.refreshExpiredModelCatalog!();
+    for (const [elapsed, failures, expiresAt] of [
+      [0, 1, 1_030_000],
+      [29_999, 1, 1_030_000],
+      [1, 2, 1_090_000],
+      [59_999, 2, 1_090_000],
+      [1, 3, 1_210_000],
+    ] as const) {
+      await vi.advanceTimersByTimeAsync(elapsed);
+      expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(acquisitions + failures);
+      expect(inventoryOwner.catalogInventory!.providers.get("custom")).toMatchObject({
+        discoveryFailures: failures,
+        expiresAt,
+      });
+      expect(harness.broadcast).toHaveBeenCalledTimes(1);
+    }
+  } finally {
+    vi.useRealTimers();
+  }
+});

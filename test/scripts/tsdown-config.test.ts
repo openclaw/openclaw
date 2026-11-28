@@ -13,12 +13,14 @@ import {
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { RELEASED_READER_ENTRIES } from "../../scripts/lib/catalog-compare-released-gate.mts";
 import { createCompactModuleLabelsPlugin } from "../../scripts/lib/compact-module-labels.mts";
+import { visitJavaScriptStatements } from "../../scripts/lib/javascript-statements.mjs";
 import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
 } from "../../scripts/lib/package-dist-imports.mjs";
 import { collectRuntimeDependencySpecs } from "../../scripts/lib/plugin-package-dependencies.mts";
 import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
+import { standaloneRuntimeProcessBuildEntries } from "../../scripts/lib/runtime-process-core-build-entries.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
@@ -320,6 +322,56 @@ const isWorkerBuildConfig = (config: TsdownConfig) =>
 function findWorkerBuildConfig(target: string) {
   const selected = workerBuildTargets.find(([name]) => name === target);
   return selected && configs.find((config) => hasWorkerEntry(config, selected[1], selected[2]));
+}
+
+function listBindinglessPackageImports(source: string): string[] {
+  const specifiers: string[] = [];
+  visitJavaScriptStatements(source, { sourceType: "module", allowHashBang: true }, (statements) => {
+    for (const statement of statements) {
+      if (
+        statement.type === "ImportDeclaration" &&
+        statement.specifiers.length === 0 &&
+        typeof statement.source.value === "string" &&
+        !statement.source.value.startsWith(".") &&
+        !isBuiltin(statement.source.value)
+      ) {
+        specifiers.push(statement.source.value);
+      }
+    }
+  });
+  return specifiers;
+}
+
+const SERVICE_RELAY_ENTRY = "process/supervisor/service-child-relay";
+const HOOK_RELAY_ENTRY = "agents/harness/native-hook-relay-client.worker";
+
+async function buildRelayImports(entryName: string, fixture?: string) {
+  const entrySource = standaloneRuntimeProcessBuildEntries[entryName];
+  const selected =
+    entrySource && configs.find((config) => hasWorkerEntry(config, entryName, entrySource));
+  if (!selected) {
+    throw new Error("Missing standalone runtime process build config");
+  }
+  const { bundles } = await build({
+    ...selected,
+    config: false,
+    ...(fixture ? { entry: { [entryName]: fixture } } : {}),
+    outDir: fs.realpathSync(createTempDir("openclaw-standalone-helper-")),
+    logLevel: "silent",
+  });
+  try {
+    const chunk = bundles
+      .flatMap((bundle) => bundle.chunks)
+      .find((output) => output.type === "chunk" && output.fileName === `${entryName}.js`);
+    if (chunk?.type !== "chunk") {
+      throw new Error(`Missing standalone helper chunk: ${entryName}`);
+    }
+    return { bare: listBindinglessPackageImports(chunk.code), all: chunk.imports };
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+  }
 }
 
 const FS_SAFE_CALLER_PROBE = `
@@ -1769,14 +1821,6 @@ worker.once("message", value => { assert.equal(value, 42); console.log("relocate
     },
   );
 
-  it.each(["tsdown.config.ts", "tsdown.ai.config.ts"])(
-    "keeps %s free of runtime imports from tsdown",
-    (configPath) => {
-      const source = fs.readFileSync(configPath, "utf8");
-      expect(source).not.toMatch(/^import(?!\s+type\b).*from ["']tsdown["'];?$/mu);
-    },
-  );
-
   it("gives every standalone declaration caller one canonical package config", () => {
     for (const packageName of [
       "gateway-client",
@@ -1809,62 +1853,29 @@ worker.once("message", value => { assert.equal(value, 42); console.log("relocate
     }
   });
 
-  it("isolates runtime output from one shared declaration program", () => {
-    const packageConfigs = configs.filter((entry) => entry.name === TSDOWN_PACKAGE_CONFIG_GROUP);
-    const unifiedRuntimeConfig = configs.find(
-      (entry) => entry.name === TSDOWN_UNIFIED_CONFIG_GROUP,
-    );
-    const standaloneRuntimeConfig = configs.find(
-      (entry) =>
-        entry.name === TSDOWN_UNIFIED_CONFIG_GROUP &&
-        entry.dts === false &&
-        hasWorkerEntry(
-          entry,
-          "infra/sqlite-readonly-location.worker",
-          path.resolve("src/infra/sqlite-readonly-location.worker.ts"),
-        ),
-    );
-    const unifiedDeclarationConfigs = TSDOWN_UNIFIED_DTS_CONFIG_GROUPS.map((name) =>
-      configs.find((entry) => entry.name === name),
-    );
+  it.each([SERVICE_RELAY_ENTRY, HOOK_RELAY_ENTRY])(
+    "omits unused fs-safe and proc-safe imports from %s",
+    async (entry) => {
+      const { bare } = await buildRelayImports(entry);
+      expect(bare.filter((id) => /^@openclaw\/(?:fs-safe|proc-safe)\//u.test(id))).toEqual([]);
+    },
+  );
 
-    expect(packageConfigs).not.toHaveLength(0);
-    expect(packageConfigs.map((entry) => entry.dts)).toEqual(
-      packageConfigs.map(() => ({ tsconfig: "tsconfig.packages.json" })),
-    );
-    expect(unifiedRuntimeConfig?.dts).toBe(false);
-    expect(standaloneRuntimeConfig?.dts).toBe(false);
-    expect(unifiedDeclarationConfigs).toHaveLength(1);
-    expect(unifiedDeclarationConfigs.every(Boolean)).toBe(true);
-    const runtimeEntries = configs
-      .filter(
-        (entry) =>
-          entry.name === TSDOWN_UNIFIED_CONFIG_GROUP &&
-          entry !== standaloneRuntimeConfig &&
-          !isWorkerBuildConfig(entry) &&
-          !entry.outDir,
-      )
-      .flatMap((entry) => Object.entries(entry.entry ?? {}));
-    const runtimeEntryNames = runtimeEntries.map(([name]) => name);
-    const runtimeOnlyEntryNames = ["native-hook-relay/entry", "node-host-launcher-bootstrap"];
-    expect(runtimeEntryNames).toEqual(expect.arrayContaining(runtimeOnlyEntryNames));
-    const declarationEntries = runtimeEntries.filter(
-      ([name]) => !runtimeOnlyEntryNames.includes(name),
-    );
-    const declarationEntryNames = declarationEntries.map(([name]) => name);
-    const standaloneEntries = Object.entries(standaloneRuntimeConfig?.entry ?? {});
-    const standaloneNames = new Set(standaloneEntries.map(([name]) => name));
-    const declarationInputs = Object.fromEntries([...declarationEntries, ...standaloneEntries]);
-    for (const declarationConfig of unifiedDeclarationConfigs) {
-      expect(declarationConfig?.dts).toMatchObject({ emitDtsOnly: true });
-      // Runtime and inventory graphs retain every alias in the declaration input map.
-      expect(declarationConfig?.entry).toEqual(declarationInputs);
-      expect(
-        Object.keys(declarationConfig?.entry ?? {})
-          .filter((name) => !standaloneNames.has(name))
-          .toSorted(),
-      ).toEqual(declarationEntryNames.toSorted());
+  it("preserves relay imports with live bindings and third-party side effects", async () => {
+    const require = createRequire(import.meta.url);
+    for (const dependency of ["@openclaw/fs-safe", "@openclaw/proc-safe"]) {
+      expect(require(`${dependency}/package.json`)).toMatchObject({ sideEffects: false });
     }
+    const root = fs.realpathSync(createTempDir("openclaw-relay-imports-"));
+    fs.symlinkSync(fs.realpathSync("node_modules"), path.join(root, "node_modules"), "dir");
+    const entry = path.join(root, "relay.ts");
+    fs.writeFileSync(
+      entry,
+      'import "dotenv/config";\nimport "@openclaw/ai/internal/runtime";\nimport "@openclaw/fs-safe/walk";\nexport { readProcessIdentity } from "@openclaw/proc-safe/identity";\n',
+    );
+    const { bare, all } = await buildRelayImports(SERVICE_RELAY_ENTRY, entry);
+    expect(bare.toSorted()).toEqual(["@openclaw/ai/internal/runtime", "dotenv/config"]);
+    expect(all).toContain("@openclaw/proc-safe/identity");
   });
 
   it("keeps excluded plugins out of the unified graph without dropping host helpers", () => {

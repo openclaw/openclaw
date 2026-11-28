@@ -95,7 +95,7 @@ afterAll(async () => {
   await state.cleanup();
 });
 
-async function archive() {
+async function archive(maxBytes = 4096) {
   const batch = await prepareSessionColdBatchInWorker({
     databaseOptions: fixture.options,
     admissionIdentities: [],
@@ -103,7 +103,7 @@ async function archive() {
     cooledSessionIds: [],
     beforeMs: 100,
     maxTranscripts: 128,
-    maxBytes: 4096,
+    maxBytes,
   });
   return mutateSessionColdTranscriptInWorker(
     {
@@ -429,7 +429,16 @@ it("embeds every chunk for a self-contained backup and re-externalizes it", asyn
   const plan = restorationPlan(descriptor);
   // All original files are absent: successful verification depends on the embedded child blobs.
   await prepareSessionColdRestoreInWorker(plan);
-  expect((await archive()).externalizedTranscripts).toBe(1);
+  const decompress = vi.spyOn(zlib, "zstdDecompressSync");
+  try {
+    expect((await archive(1)).externalizedTranscripts).toBe(0);
+    expect(decompress).toHaveBeenCalledTimes(1);
+    decompress.mockClear();
+    expect((await archive()).externalizedTranscripts).toBe(1);
+    expect(decompress).toHaveBeenCalledTimes(chunks.length);
+  } finally {
+    decompress.mockRestore();
+  }
   // Publication leaves child blobs for bounded, recoverable cleanup.
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();

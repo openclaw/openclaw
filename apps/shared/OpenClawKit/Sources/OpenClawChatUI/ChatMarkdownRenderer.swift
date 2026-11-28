@@ -29,24 +29,39 @@ struct ChatMarkdownRenderer: View {
 
         case response
         case thinking
+        case document
+
+        private var usesTranscriptSize: Bool {
+            #if os(iOS)
+            self == .response
+            #else
+            false
+            #endif
+        }
+
+        var bodyScale: CGFloat {
+            self.usesTranscriptSize ? OpenClawChatTypography.transcriptBodySize / OpenClawChatTypography.bodySize : 1
+        }
 
         var headingStyle: HeadingStyle {
-            self == .response ? .hierarchy : .prose
+            self == .thinking ? .prose : .hierarchy
         }
 
         var proseFont: Font {
-            self == .response
-                ? OpenClawChatTypography.body
-                : OpenClawChatTypography.callout.italic()
+            if self.usesTranscriptSize { return OpenClawChatTypography.transcriptBody }
+            return self == .thinking ? OpenClawChatTypography.callout.italic() : OpenClawChatTypography.body
         }
 
         var inlineMath: InlineMathTypography {
-            self == .response ? .body : .callout
+            if self.usesTranscriptSize {
+                return .init(size: OpenClawChatTypography.transcriptBodySize, relativeTo: .body)
+            }
+            return self == .thinking ? .callout : .body
         }
 
         func headingFont(level: Int) -> Font {
             switch self.headingStyle {
-            case .hierarchy: OpenClawChatTypography.heading(level: level)
+            case .hierarchy: OpenClawChatTypography.heading(level: level, transcript: self.usesTranscriptSize)
             case .prose: self.proseFont
             }
         }
@@ -54,7 +69,7 @@ struct ChatMarkdownRenderer: View {
 
     struct InlineMathTypography: Equatable {
         static let body = Self(size: OpenClawChatTypography.bodySize, relativeTo: .body)
-        static let callout = Self(size: OpenClawChatTypography.scaled(16), relativeTo: .callout)
+        static let callout = Self(size: 16, relativeTo: .callout)
 
         let size: CGFloat
         let relativeTo: Font.TextStyle
@@ -74,16 +89,21 @@ struct ChatMarkdownRenderer: View {
 
     var reveal: ChatMarkdownProseReveal?
 
+    @Environment(\.self) private var environment
     @ScaledMetric private var inlineMathFontSize: CGFloat
+    /// Together with the stack spacing, leave one body em beside a quote.
+    @ScaledMetric(relativeTo: .body) private var quoteGap: CGFloat = 7
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openURL) private var parentOpenURL
+    @Environment(\.openClawToastPresenter) private var toastPresenter
+    /// macOS only: the iPhone confirms through its toast instead.
     @State private var copiedFilePath: String?
 
     init(
         text: String,
         context: Context,
         variant: ChatMarkdownVariant,
-        typography: Typography = .response,
+        typography: Typography = .document,
         textColor: Color,
         isComplete: Bool = true)
     {
@@ -99,7 +119,7 @@ struct ChatMarkdownRenderer: View {
         snapshot: ChatMarkdownRenderSnapshot,
         context: Context,
         variant: ChatMarkdownVariant,
-        typography: Typography = .response,
+        typography: Typography = .document,
         textColor: Color,
         reveal: ChatMarkdownProseReveal? = nil)
     {
@@ -135,6 +155,7 @@ struct ChatMarkdownRenderer: View {
     @Environment(\.openClawChatMarkdownFileLinks) private var fileLinksEnabled
     @Environment(\.openClawChatMarkdownFileLabels) private var inheritedFileLabels
     #if os(iOS)
+    @Environment(\.openClawChatColumn) private var column
     @Environment(\.openClawReadingPosition) private var readingPosition
     @Environment(\.openClawReadingAnswerRun) private var readingAnswerRun
     #endif
@@ -154,9 +175,13 @@ struct ChatMarkdownRenderer: View {
     var body: some View {
         let snapshot = self.snapshot
         let fileLabels = self.fileLabels(for: snapshot)
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: 10 * self.typography.bodyScale) {
             ForEach(Array(snapshot.blocks.enumerated()), id: \.offset) { entry in
-                self.blockView(entry.element, index: entry.offset, fileLabels: fileLabels)
+                self.blockView(
+                    entry.element,
+                    index: entry.offset,
+                    isLast: entry.offset == snapshot.blocks.count - 1,
+                    fileLabels: fileLabels)
                     #if os(iOS)
                         .background {
                             if let owner = self.readingPosition,
@@ -171,6 +196,11 @@ struct ChatMarkdownRenderer: View {
 
             if !snapshot.images.isEmpty {
                 InlineImageList(images: snapshot.images)
+                    #if os(iOS)
+                        .frame(
+                            maxWidth: self.typography == .document ? nil : self.column.bubbleAndMediaMaxWidth,
+                            alignment: self.context == .user ? .trailing : .leading)
+                    #endif
             }
         }
         .environment(\.openClawChatMarkdownFileLabels, fileLabels)
@@ -181,7 +211,11 @@ struct ChatMarkdownRenderer: View {
             }
             // No file viewer exists on this surface yet; copying keeps the path usable.
             ChatPasteboard.copy(file.path)
-            self.copiedFilePath = file.path
+            if let toastPresenter {
+                toastPresenter.post(.copied(String(localized: "Path copied")))
+            } else {
+                self.copiedFilePath = file.path
+            }
             return .handled
         })
         .overlay(alignment: .topTrailing) {
@@ -222,32 +256,42 @@ struct ChatMarkdownRenderer: View {
     private func blockView(
         _ block: ChatMarkdownRenderedBlock,
         index: Int,
+        isLast: Bool,
         fileLabels: [String: String]?) -> some View
     {
         switch block {
         case let .prose(prose):
-            self.proseText(prose, index: index, fileLabels: fileLabels)
+            self.proseText(prose, index: index, fileLabels: fileLabels, font: self.typography.proseFont)
                 .font(self.typography.proseFont)
                 .foregroundStyle(self.textColor)
                 .tint(self.linkColor)
                 .textSelection(.enabled)
-                .lineSpacing(self.variant == .compact ? 2 : 4)
+                .lineSpacing((self.variant == .compact ? 2 : 4) * self.typography.bodyScale)
                 .modifier(ChatInlineMathAccessibilityModifier(label: prose.inlineAccessibilityText))
         case let .heading(level, prose):
-            self.proseText(prose, index: index, fileLabels: fileLabels)
-                .font(self.typography.headingFont(level: level))
+            let font = self.typography.headingFont(level: level)
+            self.proseText(prose, index: index, fileLabels: fileLabels, font: font)
+                .font(font)
                 .foregroundStyle(self.textColor)
                 .tint(self.linkColor)
                 .textSelection(.enabled)
-                .lineSpacing(self.variant == .compact ? 2 : 4)
+                .lineSpacing((self.variant == .compact ? 2 : 4) * self.typography.bodyScale)
                 .modifier(ChatInlineMathAccessibilityModifier(label: prose.inlineAccessibilityText))
                 .accessibilityAddTraits(.isHeader)
         case let .code(code):
-            ChatCodeBlockView(block: code)
+            ChatCodeBlockView(block: code, bodyScale: self.typography.bodyScale)
         case let .math(math):
-            ChatMathBlockView(block: math, textColor: self.textColor)
+            ChatMathBlockView(block: math, textColor: self.textColor, bodyScale: self.typography.bodyScale)
         case let .table(table):
+            #if os(iOS)
+            if self.fileLinksEnabled {
+                self.tableView(table).tint(self.linkColor)
+            } else {
+                self.tableView(table)
+            }
+            #else
             self.tableView(table)
+            #endif
         case let .list(list):
             self.listView(list)
         case let .disclosure(disclosure):
@@ -257,6 +301,24 @@ struct ChatMarkdownRenderer: View {
                 variant: self.variant,
                 typography: self.typography,
                 textColor: self.textColor)
+        case let .quote(blocks):
+            // Web chat-text blockquote: a 2pt bar, 12pt to the text, ink at 78% (text.css).
+            ChatMarkdownRenderer(
+                snapshot: ChatMarkdownRenderSnapshot(blocks: blocks),
+                context: self.context,
+                variant: self.variant,
+                typography: self.typography,
+                textColor: self.textColor.opacity(0.78))
+                .padding(EdgeInsets(top: 2, leading: 12, bottom: 2, trailing: 10))
+                .overlay(alignment: .leading) {
+                    Capsule()
+                        .fill(self.textColor.opacity(0.16))
+                        .frame(width: 2)
+                        .padding(.vertical, 2)
+                        .accessibilityHidden(true)
+                }
+                .padding(.top, index > 0 ? self.quoteGap * self.typography.bodyScale : 0)
+                .padding(.bottom, isLast ? 0 : self.quoteGap * self.typography.bodyScale)
         case .thematicBreak:
             Divider()
                 .accessibilityHidden(true)
@@ -277,10 +339,14 @@ struct ChatMarkdownRenderer: View {
             isStreaming: !self.snapshot.isComplete)
     }
 
-    private func proseText(_ prose: ChatMarkdownProse, index: Int, fileLabels: [String: String]?) -> SwiftUI.Text {
+    private func proseText(
+        _ prose: ChatMarkdownProse, index: Int, fileLabels: [String: String]?, font: Font) -> SwiftUI.Text
+    {
         guard let reveal = self.reveal, reveal.blockIndex == index else {
             return prose.renderedText(
                 fontSize: self.inlineMathFontSize,
+                font: font,
+                environment: self.environment,
                 textColor: self.textColor,
                 colorScheme: self.colorScheme,
                 fileLabels: fileLabels)
@@ -293,12 +359,15 @@ struct ChatMarkdownRenderer: View {
     /// File chips only in message bodies' response text (web `fileLinks`); the outermost renderer
     /// labels them across its whole message and hands those labels to nested renderers.
     private func fileLabels(for snapshot: ChatMarkdownRenderSnapshot) -> [String: String]? {
-        guard self.fileLinksEnabled, self.typography == .response else { return nil }
+        guard self.fileLinksEnabled, self.typography != .thinking else { return nil }
         return self.inheritedFileLabels ?? ChatMarkdownInlineChips.shortestFileLabels(snapshot.filePaths)
     }
 
     private var linkColor: Color {
-        self.context == .user ? self.textColor : OpenClawChatTheme.accent
+        #if os(iOS)
+        if self.fileLinksEnabled { return OpenClawChatTheme.messageLink }
+        #endif
+        return self.context == .user ? self.textColor : OpenClawChatTheme.accent
     }
 }
 
@@ -434,6 +503,14 @@ struct ChatMarkdownRenderSnapshot {
                         preparesReveal: false,
                         defaultDisclosureSummary: defaultDisclosureSummary)
                 }))
+        case let .quote(blocks):
+            .quote(blocks.map {
+                Self.renderedBlock(
+                    $0,
+                    isComplete: isComplete,
+                    preparesReveal: false,
+                    defaultDisclosureSummary: defaultDisclosureSummary)
+            })
         case .thematicBreak:
             .thematicBreak
         }
@@ -463,6 +540,8 @@ struct ChatMarkdownRenderSnapshot {
                 self.filePaths(in: list)
             case let .disclosure(disclosure):
                 disclosure.summary.filePaths + self.filePaths(in: disclosure.blocks)
+            case let .quote(blocks):
+                self.filePaths(in: blocks)
             case .code, .math, .thematicBreak:
                 []
             }
@@ -493,6 +572,7 @@ enum ChatMarkdownRenderedBlock {
     case table(ChatMarkdownTable)
     case list(ChatMarkdownList)
     case disclosure(ChatMarkdownRenderedDisclosure)
+    case quote([ChatMarkdownRenderedBlock])
     case thematicBreak
 }
 
@@ -536,7 +616,7 @@ private struct ChatMarkdownDisclosureView: View {
                 variant: self.variant,
                 typography: self.typography,
                 textColor: self.textColor)
-                .padding(.top, self.variant == .compact ? 4 : 6)
+                .padding(.top, (self.variant == .compact ? 4 : 6) * self.typography.bodyScale)
         } label: {
             ChatMarkdownRenderer(
                 snapshot: ChatMarkdownRenderSnapshot(blocks: [.prose(self.disclosure.summary)]),
@@ -628,17 +708,24 @@ struct ChatMarkdownProse {
 
     func renderedText(
         fontSize: CGFloat,
+        font: Font,
+        environment: EnvironmentValues,
         textColor: Color,
         colorScheme: ColorScheme,
         fileLabels: [String: String]?) -> SwiftUI.Text
     {
         guard let inlineContent else {
-            return ChatMarkdownInlineChips.text(self.attributed, fileLabels: fileLabels)
+            return ChatMarkdownInlineChips.text(
+                self.attributed,
+                fileLabels: fileLabels,
+                font: font,
+                environment: environment)
         }
         return inlineContent.reduce(SwiftUI.Text("")) { text, content in
             switch content {
             case let .text(attributed):
-                return text + ChatMarkdownInlineChips.text(attributed, fileLabels: fileLabels)
+                return text + ChatMarkdownInlineChips.text(
+                    attributed, fileLabels: fileLabels, font: font, environment: environment)
             case let .math(span):
                 guard let rendered = ChatInlineMathImageCache.image(
                     latex: span.latex,

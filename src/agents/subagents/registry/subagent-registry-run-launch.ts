@@ -26,6 +26,7 @@ import {
 } from "../swarm/swarm-collector.js";
 import { bindSwarmRunReservation, ownsSwarmRunReservation } from "../swarm/swarm-scheduler.js";
 import { resolveSubagentChildAgentId } from "./subagent-child-owner-match.js";
+import { hasSubagentKill } from "./subagent-control-kill-intent.js";
 import { bindSubagentExecRequestOwners } from "./subagent-exec-request-ownership.js";
 import {
   getCurrentSubagentRunOwner,
@@ -428,8 +429,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
           !isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) ||
           !current ||
           !ownsSession() ||
-          current.killIntent ||
-          current.killReconciliation ||
+          hasSubagentKill(current) ||
           getGatewayContextResolver(current) !== gatewayContextResolver ||
           (gatewayContextResolver &&
             (!gatewayContext || gatewayContextResolver() !== gatewayContext))
@@ -523,8 +523,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
         const terminalBeforeAcceptance =
           current.collectorCompletion !== undefined && current.swarmLaunchPending === true;
         if (
-          current.killIntent ||
-          current.killReconciliation ||
+          hasSubagentKill(current) ||
           waitForPendingSubagentKillClaim(current, context.admission) ||
           (current.swarmLaunchPending === true &&
             typeof current.execution.endedAt === "number" &&

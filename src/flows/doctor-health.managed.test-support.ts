@@ -48,6 +48,10 @@ import {
 import { ensureSessionTranscriptArchiveSchema } from "../state/openclaw-agent-session-transcript-archive-schema.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  createDoctorHealthContribution,
+  renderStructuredHealthFindings,
+} from "./doctor-health-contribution.js";
 import { useDoctorHealthFixture } from "./doctor-health.fixture.test-support.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 const { mocks, createDoctorRuntime, withDoctorState } =
@@ -273,6 +277,26 @@ async function runManagedRepair(
     });
     mocks.runContributions.mockImplementation(async (ctx) => {
       events.push("repair");
+      // Doctor's own stop holds diagnostics for after the restart; an updater's run does not.
+      expect(ctx.afterRestartContributions !== undefined).toBe(
+        ctx.gatewayMaintenanceActive === true && !outcome.startsWith("update-"),
+      );
+      ctx.afterRestartContributions?.push(
+        createDoctorHealthContribution("doctor:fixture-diagnostic", "Fixture diagnostic", {
+          pending: "diagnostic-only",
+          placement: "after-restart",
+          async run(diagnosisCtx) {
+            events.push("diagnose");
+            renderStructuredHealthFindings(diagnosisCtx, [
+              {
+                checkId: "core/doctor/fixture-diagnostic",
+                severity: "warning",
+                message: `fixture diagnostic finding (Gateway ${running ? "running" : "stopped"})`,
+              },
+            ]);
+          },
+        }),
+      );
       expect(ctx.gatewayMaintenanceActive).toBe(!inspectionOnly && !declined);
       if (interactive) {
         expect(ctx.prompter.shouldRepair).toBe(false);
@@ -432,7 +456,8 @@ async function runManagedRepair(
       }
       if (inconclusiveActivation) {
         await run;
-        expect(events).toEqual(["repair"]);
+        // Diagnostics still run when Doctor leaves the Gateway stopped.
+        expect(events).toEqual(["repair", "diagnose"]);
         expect(running).toBe(false);
         expect(mocks.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
         expect(runtime.log).toHaveBeenCalledWith(
@@ -491,9 +516,25 @@ async function runManagedRepair(
         );
       }
       // Declined, update-owned and inconclusive activation cases returned above.
+      // A refusal summary closes the report inside the stop, so its diagnostics run first.
       expect(events).toEqual(
-        inspectionOnly ? ["repair"] : [...(initiallyStopped ? [] : ["stop"]), "repair", "restart"],
+        inspectionOnly
+          ? ["repair"]
+          : [
+              ...(initiallyStopped ? [] : ["stop"]),
+              "repair",
+              ...(outcome === "config-refused"
+                ? ["diagnose", "restart"]
+                : ["restart", ...(outcome === "update-legacy" ? [] : ["diagnose"])]),
+            ],
       );
+      if (!inspectionOnly && outcome !== "update-legacy") {
+        // The finding reaches the report whether or not the restart succeeded.
+        const gateway = is("config-refused", "restart-unhealthy") ? "stopped" : "running";
+        expect(runtime.log).toHaveBeenCalledWith(
+          `- fixture diagnostic finding (Gateway ${gateway})`,
+        );
+      }
       if (!inspectionOnly) {
         expect(restart).toHaveBeenCalledWith(expect.objectContaining({ preserveDefinition: true }));
         expect(mocks.waitForGatewayHealthyRestart).toHaveBeenCalledWith(

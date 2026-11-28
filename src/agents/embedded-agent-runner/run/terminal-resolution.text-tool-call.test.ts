@@ -22,6 +22,7 @@ function makeTextCallInput(overrides: AttemptOverrides = {}, text = toolCallText
     attemptOverrides: {
       assistantTexts: [text],
       textToolCallAttempt: true,
+      textToolCallName: overrides.textToolCallAttempt === false ? undefined : "write",
       ...overrides,
     },
     payloadsWithToolMedia: [{ text }],
@@ -70,6 +71,71 @@ it("nudges once, then returns a visible failure instead of successful JSON text"
     "⚠️ The model wrote a tool call as text instead of calling the tool. No tool ran for that call. Please try again or use a model with native tool calling.";
   expect(repeated.result.payloads).toEqual([{ text: failureText, isError: true }]);
 });
+
+it.each([true, false])(
+  "does not accept text calls in scheduled runs (replay safe: %s)",
+  async (replaySafe) => {
+    const input = makeTextCallInput({
+      toolMetas: [{ toolName: replaySafe ? "read" : "write", replaySafe, isError: false }],
+      itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+      replayMetadata: { replaySafe, hadPotentialSideEffects: !replaySafe },
+    });
+    input.runParams.trigger = "cron";
+    input.runParams.terminalReplyExpectation = "optional";
+
+    const first = await resolveEmbeddedRunTerminal(input);
+    expect(first.action).toBe(replaySafe ? "retry" : "complete");
+    expect(input.sessionPromptState.activateInternalPrompt).toHaveBeenCalledTimes(
+      Number(replaySafe),
+    );
+    const terminal = replaySafe ? await resolveEmbeddedRunTerminal(input) : first;
+    expectComplete(terminal);
+    expect(terminal.result.meta.error).toMatchObject({ kind: "incomplete_turn" });
+    expect(terminal.result.payloads?.[0]?.text).toContain("No tool ran for that call");
+  },
+);
+
+it("rejects a corrective answer that still made no native call", async () => {
+  const input = makeTextCallInput();
+  input.runParams.terminalReplyExpectation = "optional";
+  await resolveEmbeddedRunTerminal(input);
+  const recovery = makeTextCallInput({ textToolCallAttempt: false }, "done");
+  recovery.runParams.terminalReplyExpectation = "optional";
+  recovery.retryState = input.retryState;
+
+  const result = await resolveEmbeddedRunTerminal(recovery);
+  expectComplete(result);
+  expect(result.result.meta.error).toMatchObject({ kind: "incomplete_turn" });
+  expect(result.result.payloads?.[0]?.text).toContain("No tool ran for that call");
+});
+
+it.each(["NO_REPLY", "unrelated read"])(
+  "does not settle a pending write with %s",
+  async (reply) => {
+    const input = makeTextCallInput();
+    input.runParams.trigger = "cron";
+    input.runParams.terminalReplyExpectation = "optional";
+    await resolveEmbeddedRunTerminal(input);
+    const recovery = makeTextCallInput(
+      {
+        textToolCallAttempt: false,
+        toolMetas:
+          reply === "unrelated read"
+            ? [{ toolName: "read", isError: false, replaySafe: true }]
+            : [],
+      },
+      reply === "NO_REPLY" ? reply : "done",
+    );
+    recovery.runParams.trigger = "cron";
+    recovery.runParams.terminalReplyExpectation = "optional";
+    recovery.retryState = input.retryState;
+
+    const result = await resolveEmbeddedRunTerminal(recovery);
+    expectComplete(result);
+    expect(result.result.meta.error).toMatchObject({ kind: "incomplete_turn" });
+    expect(result.result.payloads?.[0]?.text).toContain("No tool ran for that call");
+  },
+);
 
 it("accepts a real answer after the corrective retry", async () => {
   const input = makeTextCallInput();

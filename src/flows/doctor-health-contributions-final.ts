@@ -8,6 +8,7 @@ import {
   runBundledHealthFindingNote,
   runCoreHealthFindingNote,
 } from "./doctor-health-contribution-core.js";
+import { checkWriteConfigHealthPending } from "./doctor-health-contribution-runners.config-plan.js";
 import {
   collectWriteConfigHealthFindings,
   runWriteConfigHealth,
@@ -85,14 +86,25 @@ async function collectWorkspaceStatusPluginVersionReadiness(params: {
 const CHANNEL_PACKAGE_STATE_CAPABILITIES_CHECK_ID =
   "core/doctor/channel-package-state-capabilities";
 
-async function runHeartbeatRetirementHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeMigrateHeartbeatCadenceToCron } =
-    await import("../commands/doctor-heartbeat-retirement.js");
-  await maybeMigrateHeartbeatCadenceToCron({
+function heartbeatRetirementInputs(ctx: DoctorHealthFlowContext) {
+  return {
     cfg: ctx.configResult.heartbeatMigrationSource ?? ctx.cfg,
     shouldRepair: ctx.prompter.shouldRepair,
     env: ctx.env,
-  });
+  };
+}
+
+async function runHeartbeatRetirementHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeMigrateHeartbeatCadenceToCron } =
+    await import("../commands/doctor-heartbeat-retirement.js");
+  await maybeMigrateHeartbeatCadenceToCron(heartbeatRetirementInputs(ctx));
+}
+
+/** Both heartbeat contributions run the same retirement; the second finds the first's result. */
+async function checkHeartbeatRetirementContributionPending(ctx: DoctorHealthFlowContext) {
+  const { checkHeartbeatRetirementPending } =
+    await import("../commands/doctor-heartbeat-retirement.js");
+  return checkHeartbeatRetirementPending(heartbeatRetirementInputs(ctx));
 }
 
 export function resolveFinalDoctorHealthContributions(params: {
@@ -217,38 +229,45 @@ export function resolveFinalDoctorHealthContributions(params: {
     ),
     createDoctorHealthContribution("doctor:security", "Security", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/security"],
       run: runSecurityHealth,
     }),
     createDoctorHealthContribution("doctor:web-fetch-proxy", "Web fetch proxy", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "inspection", scope: "run" },
       run: runWebFetchProxyHealth,
     }),
     createDoctorHealthContribution("doctor:bundle-lsp-env", "Bundle LSP environment", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "inspection", scope: "agent" },
       run: runBundleLspEnvHealth,
     }),
     createDoctorHealthContribution("doctor:github-projects", "GitHub projects", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "standalone" },
       run: runGitHubProjectHealth,
     }),
     createDoctorHealthContribution("doctor:browser", "Browser", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       healthCheckIds: ["core/doctor/browser"],
       run: runBrowserHealth,
     }),
     createDoctorHealthContribution("doctor:oauth-tls", "OAuth TLS", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/oauth-tls"],
       run: runOpenAIOAuthTlsHealth,
     }),
     createDoctorHealthContribution("doctor:hooks-model", "Hooks model", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/hooks-model"],
       async run(ctx) {
@@ -270,6 +289,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:legacy-output-cap", "Saved model output caps", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/legacy-output-cap"],
       run: (ctx) =>
@@ -288,6 +308,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     ).map(([name, label, scope]) =>
       createDoctorHealthContribution(`doctor:${name}`, label, {
         pending: "diagnostic-only",
+        placement: "after-restart",
         updateWork: { kind: "inspection", scope },
         healthCheckIds: [`core/doctor/${name}`],
         run: (ctx) => runCoreHealthFindingNote(ctx, `core/doctor/${name}`),
@@ -298,6 +319,7 @@ export function resolveFinalDoctorHealthContributions(params: {
       "Skill Workshop tool policy",
       {
         pending: "diagnostic-only",
+        placement: "after-restart",
         updateWork: { kind: "inspection", scope: "agent" },
         run: (ctx) => runBundledHealthFindingNote(ctx, "skill-workshop/tool-policy"),
       },
@@ -313,6 +335,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:workspace-status", "Workspace status", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
         description: "Workspace plugin/status diagnostics are exposed as findings.",
@@ -351,6 +374,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:workspace-alias", "Workspace alias", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       healthChecks: {
         description:
           "Persisted workspace aliases must resolve to the resolved target that owns their stored state.",
@@ -407,6 +431,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:bootstrap-size", "Bootstrap size", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "standalone" },
       healthCheckIds: ["core/doctor/bootstrap-size"],
       async run(ctx) {
@@ -416,6 +441,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:memory-provenance", "Memory provenance", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       healthChecks: {
         description:
           "Root MEMORY.md and USER.md with untrusted provenance are excluded from automatic context.",
@@ -448,6 +474,7 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatCadenceMigrationFindings(ctx.cfg, ctx.env);
           },
         },
+        pending: checkHeartbeatRetirementContributionPending,
         run: runHeartbeatRetirementHealth,
       },
     ),
@@ -464,6 +491,7 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatScratchMigrationFindings(ctx.cfg, ctx.env);
           },
         },
+        pending: checkHeartbeatRetirementContributionPending,
         run: runHeartbeatRetirementHealth,
       },
     ),
@@ -504,6 +532,15 @@ export function resolveFinalDoctorHealthContributions(params: {
             return collectHeartbeatTaskMigrationFindings(ctx.cfg, ctx.env);
           },
         },
+        async pending(ctx) {
+          const { checkHeartbeatTaskMigrationPending } =
+            await import("../commands/doctor-heartbeat-task-migration.js");
+          return checkHeartbeatTaskMigrationPending({
+            cfg: ctx.cfg,
+            shouldRepair: ctx.prompter.shouldRepair,
+            env: ctx.env,
+          });
+        },
         async run(ctx) {
           const { maybeMigrateHeartbeatTasksToCron } =
             await import("../commands/doctor-heartbeat-task-migration.js");
@@ -525,12 +562,14 @@ export function resolveFinalDoctorHealthContributions(params: {
       run: params.runShellCompletionHealth,
     }),
     createDoctorHealthContribution("doctor:gateway-health", "Gateway health", {
+      // Stays inside the stop: memory search and the Gateway daemon repair read its probe.
       pending: "diagnostic-only",
       healthCheckIds: ["core/doctor/gateway-health"],
       run: params.runGatewayHealthChecks,
     }),
     createDoctorHealthContribution("doctor:whatsapp-responsiveness", "WhatsApp responsiveness", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "inspection", scope: "run" },
       healthChecks: {
         description: "Gateway pressure and local TUI observations when WhatsApp is enabled.",
@@ -579,6 +618,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     }),
     createDoctorHealthContribution("doctor:device-pairing", "Device pairing", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       healthChecks: {
         description: "Device pairing requests and stale device-auth records are findings.",
         defaultEnabled: false,
@@ -606,12 +646,14 @@ export function resolveFinalDoctorHealthContributions(params: {
         defaultEnabled: false,
         detect: collectWriteConfigHealthFindings,
       },
+      pending: (ctx) => checkWriteConfigHealthPending(ctx),
       async run(ctx) {
         await runWriteConfigHealth(ctx);
       },
     }),
     createDoctorHealthContribution("doctor:workspace-suggestions", "Workspace suggestions", {
       pending: "diagnostic-only",
+      placement: "after-restart",
       updateWork: { kind: "standalone" },
       healthCheckIds: ["core/doctor/workspace-suggestions"],
       async run(ctx) {

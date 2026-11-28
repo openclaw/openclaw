@@ -11,7 +11,6 @@ const mocks = vi.hoisted(() => {
     loadBundledManifestRegistry: vi.fn(),
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
-    loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
   };
 });
 
@@ -31,9 +30,9 @@ vi.mock("./manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: mocks.loadPluginManifestRegistryForInstalledIndex,
 }));
 
+// mock-isolation: Resolve fixture manifest contracts without loading the runtime plugin registry.
 vi.mock("./plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: mocks.loadPluginManifestRegistryForPluginRegistry,
-  loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
 }));
 
 import {
@@ -88,7 +87,6 @@ describe("resolvePluginConfigContractsById", () => {
     mocks.findBundledPluginMetadataById.mockReset();
     mocks.loadBundledManifestRegistry.mockReset().mockReturnValue(createRegistry());
     mocks.loadPluginManifestRegistryForInstalledIndex.mockReset().mockReturnValue(createRegistry());
-    mocks.loadPluginRegistrySnapshot.mockReset().mockReturnValue({ plugins: [] });
   });
 
   it("uses a supplied manifest registry as the authoritative contract source", () => {
