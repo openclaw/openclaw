@@ -168,7 +168,7 @@ describe("configured MCP servers on CLI turns", () => {
   });
 
   afterEach(async () => {
-    await fixture.settle();
+    await fixture.cleanup();
     clearRuntimeConfigSnapshot();
     resetCliRunnerPrepareTestDeps();
     cliBackendsTesting.resetDepsForTest();
