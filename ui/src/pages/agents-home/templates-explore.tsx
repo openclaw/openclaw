@@ -351,58 +351,46 @@ export function TemplatesExplore(
                     if (!current.isCurrent()) {
                       return { entries: [], featured: [], sections: [] };
                     }
-                    if (overview) {
-                      const catalog = await readTemplatesOverview(
+                    if (!overview) {
+                      const entries = await searchTemplates(
                         current.scope.client,
-                        SECTION_SIZE,
+                        current.query,
+                        undefined,
+                        {
+                          category: current.category || undefined,
+                        },
                       );
-                      if (!current.isCurrent()) {
-                        return { entries: [], featured: [], sections: [] };
-                      }
-                      if (catalog) {
-                        return {
-                          entries: [],
-                          featured: catalog.featured,
-                          sections: templateCategories.slice(1).flatMap((category) => {
-                            const section = catalog.sections.find(
-                              (candidate) => candidate.category === category[0],
-                            );
-                            return section?.entries.length ? [{ ...section, category }] : [];
-                          }),
-                        };
-                      }
+                      return { entries, featured: [], sections: [] };
                     }
-                    const [entries, featured, sections] = await Promise.all([
-                      overview
-                        ? Promise.resolve([])
-                        : searchTemplates(current.scope.client, current.query, undefined, {
-                            category: current.category || undefined,
+                    const catalog = await readTemplatesOverview(current.scope.client, SECTION_SIZE);
+                    if (!current.isCurrent()) {
+                      return { entries: [], featured: [], sections: [] };
+                    }
+                    if (catalog) {
+                      return {
+                        entries: [],
+                        featured: catalog.featured,
+                        sections: templateCategories.slice(1).flatMap((category) => {
+                          const section = catalog.sections.find(
+                            (candidate) => candidate.category === category[0],
+                          );
+                          return section?.entries.length ? [{ ...section, category }] : [];
+                        }),
+                      };
+                    }
+                    const [featured, sections] = await Promise.all([
+                      searchTemplates(current.scope.client, "", SECTION_SIZE, { featured: true }),
+                      Promise.all(
+                        templateCategories.slice(1).map(async (category) => ({
+                          category,
+                          entries: await searchTemplates(current.scope.client, "", SECTION_SIZE, {
+                            category: category[0],
                           }),
-                      overview
-                        ? searchTemplates(current.scope.client, "", SECTION_SIZE, {
-                            featured: true,
-                          })
-                        : Promise.resolve([]),
-                      overview
-                        ? Promise.all(
-                            templateCategories
-                              .slice(1)
-                              .map(async (category): Promise<TemplateSection> => ({
-                                category,
-                                entries: await searchTemplates(
-                                  current.scope.client,
-                                  "",
-                                  SECTION_SIZE,
-                                  {
-                                    category: category[0],
-                                  },
-                                ),
-                              })),
-                          )
-                        : Promise.resolve([]),
+                        })),
+                      ),
                     ]);
                     return {
-                      entries,
+                      entries: [],
                       featured,
                       sections: sections.filter((section) => section.entries.length > 0),
                     };
