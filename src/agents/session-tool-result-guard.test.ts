@@ -209,8 +209,7 @@ describe("installSessionToolResultGuard", () => {
       session: { totalOutputChars: 128, output: { length: 1 }, outputFile },
     });
     expect(output.details).toMatchObject({
-      fullOutputPath: outputFile.path,
-      spillTruncated: true,
+      spill: { path: outputFile.path, truncated: true },
     });
     expect(output.content[0]).toMatchObject({
       text: expect.stringContaining("file limit was discarded"),

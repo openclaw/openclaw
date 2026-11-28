@@ -247,7 +247,10 @@ function resolveProviderDiscoveryEntryPlugins(
   const pluginRecords = manifestRegistry.plugins.filter((plugin) => pluginIdSet.has(plugin.id));
   const { providers: manifestProviders, runtimeManifestCatalogProviders } =
     prepareManifestCatalogDiscovery(
-      pluginRecords,
+      // Entry-only callers can exclude manifest providers. Full discovery still needs runtime coverage.
+      params.discoveryEntriesOnly === true && params.includeManifestModelCatalogProviders === false
+        ? []
+        : pluginRecords,
       params.config ?? {},
       params.includeManifestModelCatalogProviders !== false,
     );
@@ -351,15 +354,15 @@ export function planPluginDiscoveryRuntime(
         (typeof provider.resolveSyntheticAuth === "function" ||
           typeof provider.prepareSyntheticAuth === "function")),
   );
+  if (params.discoveryEntriesOnly === true) {
+    return { kind: "entries", providers: entryProviders };
+  }
   const runtimeEntryProviders = resolveRuntimeEntryProviders(entryResult);
   const authProviders = params.includeSyntheticAuthProviders
     ? entryProviders.filter(
         (provider) => provider.resolveSyntheticAuth || provider.prepareSyntheticAuth,
       )
     : [];
-  if (params.discoveryEntriesOnly === true) {
-    return { kind: "entries", providers: entryProviders };
-  }
   if (
     entryResult.providers.length > 0 &&
     entryResult.complete &&

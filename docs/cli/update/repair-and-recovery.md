@@ -218,9 +218,6 @@ change persisted state. When a fresh copy is needed, standalone `doctor --fix`
 snapshots databases under its own maintenance custody with a single isolated backup worker.
 Shared database families larger than 64 MiB keep discovery copies in an isolated process
 so a slow copy does not block Doctor's main thread from processing cancellation.
-Official image activation keeps one such copy per container: after a capture
-succeeds, later starts of the same container skip the repeated full copy, keep
-that copy, and still retire other superseded Doctor captures.
 Standalone Doctor keeps only its newest sealed capture, whatever its age. Each
 successful standalone `doctor --fix` capture retires older eligible copies and names
 each removal in the debug log (`openclaw --log-level debug doctor --fix`). Manual

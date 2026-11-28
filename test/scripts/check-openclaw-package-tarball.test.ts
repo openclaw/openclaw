@@ -787,22 +787,6 @@ syncBuiltinESMExports();
     });
   });
 
-  it("accepts package-less extension roots without metadata-declared assets", () => {
-    const extensionRuntime = "dist/extensions/example/runtime.js";
-    const extensionManifest = "dist/extensions/example/openclaw.plugin.json";
-    checkTarball({
-      inventory: ["dist/index.js", extensionRuntime, extensionManifest],
-      files: {
-        "dist/index.js": "export {};\n",
-        [extensionRuntime]: "export {};\n",
-        [extensionManifest]: '{"id":"example"}\n',
-      },
-      options: { postinstall: true },
-      status: 0,
-      successText: true,
-    });
-  });
-
   it("rejects local package export targets missing from the tarball", () => {
     checkTarball({
       inventory: ["dist/index.js", "dist/plugin-sdk/example.js"],

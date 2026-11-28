@@ -1,11 +1,55 @@
 import { expect, it } from "vitest";
-import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiSessionUrl,
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Add MCP server dialog" });
+const suite = createControlUiE2eSuite({ name: "MCP server settings" });
 const existing = "production_documentation_search_index_for_customer_support_knowledge_base";
 suite.define(() => {
+  it("previews the requested switch without enabling sign-in before the save", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const server = { url: "https://docs.example.invalid/mcp", auth: "oauth" };
+      const saved = (enabled: boolean) =>
+        configSnapshot(
+          { mcp: { servers: { docs: { ...server, enabled } } } },
+          enabled ? "on" : "off",
+        );
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "mcp.authLogin"],
+        methodResponses: { "config.get": saved(false) },
+      });
+      await page.goto(suite.server.baseUrl + "settings/mcp");
+      const card = page.locator("openclaw-mcp-servers-card");
+      await card.getByRole("button", { name: /^docs /u }).click();
+      const toggle = card.getByRole("switch", { name: "docs", exact: true });
+      const signIn = card.getByRole("button", { name: "Sign in to docs" });
+      await gateway.deferNext("config.patch");
+      await toggle.click();
+      await gateway.waitForRequest("config.patch");
+      expect(await toggle.isChecked()).toBe(true);
+      await page.getByText("Saving…", { exact: true }).waitFor();
+      expect(await toggle.evaluate((el) => el === document.activeElement)).toBe(true);
+      expect(await signIn.count()).toBe(0);
+      await gateway.rejectDeferred("config.patch", {
+        code: "UNAVAILABLE",
+        message: "Configuration could not be saved.",
+      });
+      await card.getByRole("alert").waitFor();
+      expect(await toggle.isChecked()).toBe(false);
+      await gateway.deferNext("config.patch");
+      await toggle.press("Space");
+      await gateway.waitForRequest("config.patch", { after: 1 });
+      await gateway.setMethodResponse("config.get", saved(true));
+      await gateway.resolveDeferred("config.patch", saved(true));
+      await signIn.waitFor();
+      expect(await toggle.isChecked()).toBe(true);
+      expect(await card.getByRole("alert").count()).toBe(0);
+    });
+  });
   it.each(["settings", "composer"] as const)(
     "keeps a long duplicate name and both dialog actions inside the phone form from %s",
     async (entry) => {

@@ -621,7 +621,7 @@ it("captures helpers, assets and npm packages with builtin names for each reload
     const plugin = host(artifact.resolve(path.join(source, "index.ts"))) as {
       read: () => Promise<string[]>;
     };
-    return { artifact, host, plugin };
+    return { artifact, plugin };
   };
   const a = load("A");
   const b = load("B");

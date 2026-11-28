@@ -142,8 +142,11 @@ type ModelPromptProjectionParams = {
   text: string;
   assertCurrent: () => void;
   assertWritable: () => void;
-  /** The turn already reached a provider: with no projection, its transcript text is frozen. */
-  dispatched: boolean;
+  /**
+   * An `external` harness (its runtime builds the prompt) already dispatched the turn without
+   * a projection: its transcript text stays frozen. A `captures` dispatch never reaches here.
+   */
+  externalDispatch: boolean;
   onCommitted: (
     admission: UserTurnTranscriptAdmissionReceipt,
     message: PersistedUserTurnMessage,
@@ -157,7 +160,7 @@ export function preparePersistedModelPromptProjection(
     prepareModelPromptProjection(params.message, params.text);
     return undefined;
   }
-  if (params.dispatched) {
+  if (params.externalDispatch) {
     return undefined;
   }
   params.assertWritable();
