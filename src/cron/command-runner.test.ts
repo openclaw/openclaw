@@ -236,6 +236,17 @@ it.each([
     diagnostic: { exitCode: 7 },
   },
   {
+    script: "process.stdout.write('NO_REPLY\\n', () => process.exit(1))",
+    options: { timeoutSeconds: 5 },
+    expected: {
+      error: "command exited with code 1",
+      errorClassification: { kind: "permanent" },
+      failureNotificationDetail: { kind: "command-exit", exitCode: 1 },
+      replyDisposition: "silent",
+    },
+    diagnostic: { exitCode: 1 },
+  },
+  {
     script: "setInterval(() => {}, 1000)",
     options: { timeoutSeconds: 5, noOutputTimeoutSeconds: 0.05 },
     expected: {
