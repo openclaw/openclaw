@@ -3138,5 +3138,20 @@ describe("diagnostics-otel service", () => {
       parameters: { type: "object" },
     });
   });
+
+
+  test("treats a non-finite metric interval as invalid", async () => {
+    process.env.OTEL_METRIC_EXPORT_INTERVAL = "1e309";
+
+    await startServiceFixture(["traces", "metrics"]);
+
+    expect(mockCallArg(metricReaderCtor, 0)).toMatchObject({
+      exportIntervalMillis: 60_000,
+      exportTimeoutMillis: 30_000,
+    });
+    expect(diagWarn).toHaveBeenCalledWith(
+      "OTEL_METRIC_EXPORT_INTERVAL (Infinity) is invalid, expected number greater than 0, using default.",
+    );
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
