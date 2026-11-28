@@ -7,7 +7,10 @@ import { planCronSelfScratchTurn } from "./mock-openai-cron-self-scratch.js";
 import { planCronSendContinueTurn } from "./mock-openai-cron-send-continue.js";
 import { planCronTrustedOwnerTurn } from "./mock-openai-cron-trusted-owner.js";
 import { planHookAutomationsScopeTurn } from "./mock-openai-hook-automations-scope.js";
-import { planOwnerCompletionTurn } from "./mock-openai-owner-completion.js";
+import {
+  planOwnerCompletionTurn,
+  planRequesterCompletionTurn,
+} from "./mock-openai-owner-completion.js";
 
 /** Scripted cron and hook automation turns, checked in a fixed order. */
 export function planAutomationScenarioTurn(params: {
@@ -25,6 +28,7 @@ export function planAutomationScenarioTurn(params: {
     planCronTrustedOwnerTurn(params) ??
     planCronSelfScratchTurn(params) ??
     planHookAutomationsScopeTurn(params) ??
-    planOwnerCompletionTurn(params)
+    planOwnerCompletionTurn(params) ??
+    planRequesterCompletionTurn(params)
   );
 }
