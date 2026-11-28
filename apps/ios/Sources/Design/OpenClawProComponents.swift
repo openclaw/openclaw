@@ -6,6 +6,7 @@ enum OpenClawProMetric {
     static let cardRadius: CGFloat = 16
     static let controlRadius: CGFloat = 12
     static let compactControlSize: CGFloat = 36
+    // periphery:ignore - DESIGN.md specifies this shared inset for clearance above persistent navigation.
     static let bottomScrollInset: CGFloat = 96
 }
 

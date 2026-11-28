@@ -66,7 +66,9 @@ enum OpenClawBrand {
     static let carapaceSea = Color(red: 79 / 255.0, green: 200 / 255.0, blue: 174 / 255.0)
     static let uiAccent = OpenClawIOSBrand.accent
     static let uiAccentFill = uiAccent
+    // periphery:ignore - Keep the legacy UIKit hot-accent fill name for source compatibility.
     static let uiAccentHot = uiAccentFill
+    // periphery:ignore - Keep the legacy UIKit hot-accent foreground name for source compatibility.
     static let uiAccentHotForeground = uiAccent
     static let uiVoid = adaptiveUIColor(light: (247, 246, 245), dark: (27, 27, 26))
     static let uiObsidian = adaptiveUIColor(light: (251, 250, 250), dark: (43, 43, 41))
@@ -78,7 +80,9 @@ enum OpenClawBrand {
 
     static let accent = Color(uiColor: Self.uiAccent)
     static let accentFill = Color(uiColor: Self.uiAccentFill)
+    // periphery:ignore - Keep the legacy SwiftUI hot-accent fill name for source compatibility.
     static let accentHot = Color(uiColor: Self.uiAccentHot)
+    // periphery:ignore - Keep the legacy SwiftUI hot-accent foreground name for source compatibility.
     static let accentHotForeground = Color(uiColor: Self.uiAccentHotForeground)
     static let canvas = Color(uiColor: Self.uiVoid)
     static let surfaceRaised = Color(uiColor: Self.uiObsidian)
@@ -90,7 +94,9 @@ enum OpenClawBrand {
     static let text = Color(uiColor: adaptiveUIColor(light: (53, 53, 49), dark: (221, 221, 215)))
     static let textSecondary = Color(uiColor: Self.uiTextSecondary)
     static let textTertiary = Color(uiColor: adaptiveUIColor(light: (139, 138, 132), dark: (133, 132, 126)))
+    // periphery:ignore - Keep the legacy SwiftUI name for the canvas color for source compatibility.
     static let void = canvas
+    // periphery:ignore - Keep the legacy SwiftUI name for the raised surface color for source compatibility.
     static let obsidian = surfaceRaised
     static let danger = Color(uiColor: Self.uiDanger)
     static let ok = Color(uiColor: Self.uiOK)
