@@ -29,7 +29,7 @@ function bundledArtifact(
   const bundledPluginsDir = path.join(tempDirs.make("openclaw-public-surface-loader-"), "dist");
   const modulePath = writeArtifact(path.join(bundledPluginsDir, "demo", basename), contents);
   setBundledDir(bundledPluginsDir, trust);
-  return { bundledPluginsDir, modulePath };
+  return { modulePath };
 }
 function pluginFixture(type = "commonjs") {
   const root = tempDirs.make("openclaw-public-surface-loader-");
