@@ -1,6 +1,7 @@
 import childProcess, { type ChildProcess, type SpawnOptions } from "node:child_process";
 import { Socket } from "node:net";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
 import { serialize } from "node:v8";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -120,6 +121,10 @@ export function createSqliteReadOnlyWorkerSession(
   let sequence = 0;
   let pendingOperation: Promise<SqliteReadOnlyWorkerValue> | undefined;
   let stderr = "";
+  const stderrDecoder = new StringDecoder("utf8");
+  const appendStderr = (text: string) => {
+    stderr = sliceUtf16Safe(stderr + text, -SQLITE_READONLY_STDERR_TAIL_CHARS);
+  };
   let outputBytes = 0;
   let pending:
     | {
@@ -208,6 +213,7 @@ export function createSqliteReadOnlyWorkerSession(
   const finishClose = async (code: number | null, signal: NodeJS.Signals | null) => {
     nativeClosed = true;
     retired = true;
+    appendStderr(stderrDecoder.end());
     const failure =
       pending?.failure ??
       createSqliteReadOnlyWorkerError(
@@ -233,7 +239,7 @@ export function createSqliteReadOnlyWorkerSession(
   const captureOutput = (data: Buffer, isStderr: boolean) => {
     outputBytes += data.length;
     if (isStderr) {
-      stderr = sliceUtf16Safe(stderr + data.toString("utf8"), -SQLITE_READONLY_STDERR_TAIL_CHARS);
+      appendStderr(stderrDecoder.write(data));
     }
     if (outputBytes > SQLITE_READONLY_WORKER_MAX_BUFFER) {
       retire(createSqliteReadOnlyWorkerError("exceeded its output buffer", stderr));
@@ -346,6 +352,7 @@ export function createSqliteReadOnlyWorkerSession(
       }
       return (pendingOperation = new Promise<SqliteReadOnlyWorkerValue>((resolve, reject) => {
         stderr = "";
+        stderrDecoder.end();
         outputBytes = 0;
         const abort = () => retire(options.signal?.reason);
         let timer: ReturnType<typeof setTimeout> | undefined;
