@@ -1,7 +1,9 @@
 import type { PluginLogger } from "openclaw/plugin-sdk/plugin-entry";
-import type {
-  RealtimeVoiceAgentConsultRunner,
-  RealtimeVoiceGatewayControl,
+import {
+  buildRealtimeVoiceAgentCancelProviderResult,
+  isUserInitiatedAgentRunAbortReason,
+  type RealtimeVoiceAgentConsultRunner,
+  type RealtimeVoiceGatewayControl,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   extractErrorCode,
@@ -503,6 +505,17 @@ export class OpenAIQuicksilverDelegationController {
       ) {
         runner.claimAppend?.();
         this.revokeRequesterFinal();
+        const delegationId = this.activeDelegationId;
+        if (!signal.aborted && delegationId && isUserInitiatedAgentRunAbortReason(error)) {
+          this.pendingDelegation = undefined;
+          this.consultController?.abort(error);
+          // Only native delegation needs this equivalent of the tool result.
+          this.sendAppend(
+            buildRealtimeVoiceAgentCancelProviderResult().message,
+            "commentary",
+            delegationId,
+          );
+        }
         return;
       }
       const reason = this.formatErrorMessage(error).replaceAll(/\s+/g, " ").trim();

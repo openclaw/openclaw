@@ -355,6 +355,7 @@ export function createTalkClientAgentConsultRunner(params: {
                     ownerConnId: params.ownerConnId,
                     controlUiVisible: false,
                     kind: "chat-send",
+                    talkConsult: true,
                     sourceInput,
                   }),
                 )

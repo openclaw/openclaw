@@ -63,7 +63,10 @@ import {
   resolveTalkRealtimeProviderInstructions,
   resolveTalkClientLaunchError,
 } from "../session-config.js";
-import { readTalkRealtimeInitialItems } from "../session-history.js";
+import {
+  buildTalkRealtimeHistoryInstructions,
+  readTalkRealtimeInitialItems,
+} from "../session-history.js";
 import { restoreTalkSessionTarget } from "../session-start.js";
 import { requirePreparedTalkSessionTarget } from "../session-target.js";
 import {
@@ -197,7 +200,8 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
       const instructions =
         controlSource === "delegation"
           ? normalizeOptionalString(providerInstructions)
-          : buildRealtimeInstructions(providerInstructions);
+          : buildRealtimeInstructions(providerInstructions) +
+            buildTalkRealtimeHistoryInstructions(initialItems);
       const requestedVoiceSessionId = normalizeOptionalString(params.voiceSessionId);
       const ownsProvider =
         wantsGatewayControl || providerCapabilities?.handlesAgentConsult === true;

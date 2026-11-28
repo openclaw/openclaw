@@ -116,6 +116,7 @@ export {
   type RealtimeVoiceAgentTalkbackQueue,
   type RealtimeVoiceAgentTalkbackResult,
 } from "../talk/agent-talkback-runtime.js";
+export { isUserInitiatedAgentRunAbortReason } from "../agents/run-termination.js";
 export {
   buildRealtimeVoiceAgentCancelProviderResult,
   buildRealtimeVoiceAgentErrorProviderResult,

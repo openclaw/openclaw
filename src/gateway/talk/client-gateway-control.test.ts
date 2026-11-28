@@ -141,7 +141,7 @@ describe("Talk client Gateway control owner", () => {
       consultResult.resolve({ text: "The repository is clean." });
       const expectedResult =
         outcome === "cancelled"
-          ? expect.objectContaining({ status: "cancelled" })
+          ? expect.objectContaining({ status: "cancelled_by_user" })
           : { result: "The repository is clean." };
       await vi.waitFor(() =>
         expect(bridge.submitToolResult).toHaveBeenCalledWith("call-consult", expectedResult),
@@ -263,7 +263,7 @@ describe("Talk client Gateway control owner", () => {
           await vi.waitFor(() =>
             expect(bridge.submitToolResult).toHaveBeenCalledWith(
               "call-long",
-              expect.objectContaining({ status: "cancelled" }),
+              expect.objectContaining({ status: "cancelled_by_user" }),
             ),
           );
         }
