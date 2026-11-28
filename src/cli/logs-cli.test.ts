@@ -101,6 +101,23 @@ it("writes output directly to stdout/stderr", async () => {
   expectText(stderr, ["Log tail truncated (increase --limit or --max-bytes).", "Log cursor reset"]);
 });
 
+it("points to the source file instead of a larger request at both tail limits", async () => {
+  callGatewayFromCli.mockResolvedValueOnce(
+    logPage(["recent entry"], undefined, { truncated: true }),
+  );
+  const { stdout, stderr } = await run(["--limit", "5000", "--max-bytes", "1000000"]);
+  expectText(stdout, [logFile, "recent entry"]);
+  expectText(stderr, ["log file", "Gateway host"], ["increase --limit", "increase --max-bytes"]);
+});
+
+it("offers the original source when only the byte budget can increase", async () => {
+  callGatewayFromCli.mockResolvedValueOnce(
+    logPage(["recent entry"], undefined, { truncated: true }),
+  );
+  const { stderr } = await run(["--limit", "5000"]);
+  expectText(stderr, ["--max-bytes", "log file"], ["--limit"]);
+});
+
 it("reports a byte-budget re-anchor without claiming rotation in JSON output", async () => {
   callGatewayFromCli.mockResolvedValueOnce(
     logPage(["line after skipped burst"], undefined, {

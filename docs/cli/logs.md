@@ -29,6 +29,12 @@ query; omitting both keeps local timestamps.
 values exit with status `1` and name the option and accepted values on stderr,
 without requiring debug mode.
 
+One request can return up to 5,000 lines and read up to 1,000,000 bytes.
+For earlier entries, open the reported log file on the Gateway host. If the CLI
+falls back to the local systemd journal, check that journal instead. In text
+output the source appears under `Log file:` or `Log source:`; in JSON output,
+look for the `meta` record.
+
 Polling intervals larger than 2,147,000,000 ms are capped at that value to avoid timer overflow.
 
 ## Shared Gateway RPC options
