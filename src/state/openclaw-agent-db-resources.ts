@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import fs from "node:fs";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
@@ -100,6 +101,34 @@ registerAgentDatabaseReaderCloser(async (candidates, retainedPaths) => {
   }
 });
 
+function tryRealpath(pathname: string): string {
+  const resolved = path.resolve(pathname);
+  try {
+    return fs.realpathSync(resolved);
+  } catch {
+    const parent = path.dirname(resolved);
+    if (parent !== resolved) {
+      try {
+        return path.join(fs.realpathSync(parent), path.basename(resolved));
+      } catch {
+        return resolved;
+      }
+    }
+    return resolved;
+  }
+}
+
+function sameAgentDbPath(a: string, b: string): boolean {
+  return a === b || tryRealpath(a) === tryRealpath(b);
+}
+
+function isInsideAgentDbRoot(rootPath: string, targetPath: string): boolean {
+  return (
+    isPathInside(rootPath, targetPath) ||
+    isPathInside(tryRealpath(rootPath), tryRealpath(targetPath))
+  );
+}
+
 export function matchesAgentDatabaseClose(
   selection: AgentDatabaseCloseSelection,
   resource:
@@ -111,11 +140,11 @@ export function matchesAgentDatabaseClose(
 ): boolean {
   return (
     (selection.path === undefined ||
-      selection.path === resource.path ||
+      sameAgentDbPath(selection.path, resource.path) ||
       (resource.ownership === "unresolved" &&
         matchesAgentDatabaseReadCandidatePath(resource, selection.path))) &&
     (selection.rootPath === undefined ||
-      isPathInside(selection.rootPath, resource.path) ||
+      isInsideAgentDbRoot(selection.rootPath, resource.path) ||
       (resource.ownership === "unresolved" &&
         matchesAgentDatabaseReadCandidatePath(resource, selection.rootPath))) &&
     (selection.agentId === undefined ||

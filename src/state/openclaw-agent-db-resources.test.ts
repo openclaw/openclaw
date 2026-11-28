@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
@@ -14,6 +15,7 @@ import {
   isAgentDatabaseClosing as isClosing,
   drainAgentDatabaseResources as drainResources,
   hasOpenClawAgentDatabaseAsyncResources as hasResources,
+  matchesAgentDatabaseClose,
   registerOpenClawAgentDatabaseReadCandidateResource as registerCandidate,
   revokeAgentDatabaseResources as revokeResources,
 } from "./openclaw-agent-db-resources.js";
@@ -498,3 +500,28 @@ it.each([
     release();
   },
 );
+
+it("matches symlinked and canonical paths in matchesAgentDatabaseClose", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-db-symlink-"));
+  try {
+    const realRoot = path.join(base, "real-state");
+    const linkRoot = path.join(base, "link-state");
+    fs.mkdirSync(path.join(realRoot, "agents", "main"), { recursive: true });
+    fs.symlinkSync(realRoot, linkRoot, process.platform === "win32" ? "junction" : "dir");
+
+    const realDbPath = path.join(realRoot, "agents", "main", "openclaw-agent.sqlite");
+    const linkDbPath = path.join(linkRoot, "agents", "main", "openclaw-agent.sqlite");
+    fs.writeFileSync(realDbPath, "");
+
+    const readerResource = {
+      agentId: "main",
+      path: realDbPath,
+      ownership: "known" as const,
+    };
+
+    expect(matchesAgentDatabaseClose({ path: linkDbPath }, readerResource)).toBe(true);
+    expect(matchesAgentDatabaseClose({ rootPath: linkRoot }, readerResource)).toBe(true);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
