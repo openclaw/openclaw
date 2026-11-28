@@ -220,7 +220,7 @@ describe("system service update as the unit's account", () => {
       {
         mode: "start",
         driverPid: process.ppid,
-        root: fs.realpathSync(root),
+        root,
         candidateVersion: "2026.11.16",
         unit: "openclaw-gateway.service",
       },

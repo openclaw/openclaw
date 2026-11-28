@@ -140,7 +140,9 @@ async function scheduleSettle(
     mode,
     // The installed updater that started this Doctor child; it restores the package, if at all.
     driverPid: process.ppid,
-    root: await fs.realpath(params.root),
+    // The installation path as the unit uses it, not its target: a release-slot install
+    // selects the previous release by moving this link.
+    root: params.root,
     candidateVersion: params.candidateVersion,
     candidateBuildId: await readBuiltGatewayBuildId(params.root),
     unit: execution.unitName,
