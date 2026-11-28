@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { collectConfiguredAgentHarnessRuntimes as collect } from "./harness-runtimes.js";
 
-function makeConfig(defaults: unknown = {}, entries: unknown = {}) {
+function makeConfig(defaults: unknown, entries: unknown = {}) {
   return createCanonicalAgentConfigFixture({ agents: { defaults, entries } }).config;
 }
 
