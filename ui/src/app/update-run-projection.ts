@@ -3,6 +3,7 @@ import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update
 import { formatDurationPrecise } from "../../../src/infra/format-time/format-duration.ts";
 import {
   projectUpdateRunHistory,
+  projectHistoricalSucceededUpdateRun,
   type UpdateRunServingIdentity,
 } from "../../../src/infra/update-run-history-projection.ts";
 import { renderUpdateRunSummary } from "../../../src/infra/update-run-notice.ts";
@@ -72,9 +73,11 @@ export function projectUpdateRun(
   const visibleSteps = run.steps.filter(({ step }) => !step.startsWith("finalize:doctor-lint:"));
   const repairRun = isUpdateRepairRun(run);
   const managedByOcm = run.target.installationMethod === "ocm";
-  const historical = connected ? projectUpdateRunHistory(run, serving) : null;
+  const historicalFailure = connected ? projectUpdateRunHistory(run, serving) : null;
+  const historicalSuccess = connected ? projectHistoricalSucceededUpdateRun(run, serving) : null;
+  const historical = historicalFailure ?? historicalSuccess;
   const targetNote =
-    historical && serving && isServingUpdateTarget(run, serving)
+    historicalFailure && serving && isServingUpdateTarget(run, serving)
       ? t("updates.run.servingTarget")
       : null;
   const summary = historical
