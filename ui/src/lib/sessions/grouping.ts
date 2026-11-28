@@ -398,17 +398,12 @@ function orderedGroupIds(
   if (mode === "date") {
     return DATE_BUCKET_ORDER.filter((id) => byId.has(id));
   }
-  if (mode === "category") {
-    const known = normalizeUniqueTrimmedStringList(knownCategories);
-    const extras = [...byId.keys()]
-      .filter((id) => id !== UNGROUPED_ID && !known.includes(id))
-      .toSorted((a, b) => a.localeCompare(b));
-    return [...known, ...extras, UNGROUPED_ID];
-  }
-  const ids = [...byId.keys()].filter((id) => id !== UNGROUPED_ID);
-  ids.sort((a, b) => a.localeCompare(b));
-  if (byId.has(UNGROUPED_ID)) {
+  const known = mode === "category" ? normalizeUniqueTrimmedStringList(knownCategories) : [];
+  const ids = [...byId.keys()]
+    .filter((id) => id !== UNGROUPED_ID && !known.includes(id))
+    .sort((a, b) => a.localeCompare(b));
+  if (mode === "category" || byId.has(UNGROUPED_ID)) {
     ids.push(UNGROUPED_ID);
   }
-  return ids;
+  return [...known, ...ids];
 }
