@@ -37,7 +37,17 @@ const systemd = vi.hoisted(() => ({
   readAccount: vi.fn<(user: string) => Promise<unknown>>(),
   runuser: vi.fn<() => Promise<string | undefined>>(),
   entry: vi.fn<() => Promise<string | undefined>>(),
+  candidateRoot: undefined as string | undefined,
 }));
+vi.mock("../../infra/openclaw-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/openclaw-root.js")>();
+  return {
+    ...actual,
+    resolveOpenClawPackageRootSync: (
+      options: Parameters<typeof actual.resolveOpenClawPackageRootSync>[0],
+    ) => systemd.candidateRoot ?? actual.resolveOpenClawPackageRootSync(options),
+  };
+});
 vi.mock("../../daemon/systemd-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd-scope.js")>()),
   findInstalledSystemdGatewayScope: systemd.findScope,
@@ -190,6 +200,7 @@ beforeEach(() => {
   systemd.runuser.mockReset().mockResolvedValue(undefined);
   systemd.readAsRoot.mockReset().mockResolvedValue(serviceCommand());
   systemd.entry.mockReset().mockResolvedValue(path.join(root, "dist", "index.js"));
+  systemd.candidateRoot = undefined;
 });
 
 afterEach(() => {
@@ -412,9 +423,17 @@ function serviceVerdict(overrides: Partial<UpdateAdmissionVerdict> = {}): Update
 
 describe("candidate admission run as the unit's account", () => {
   it("admits with the verdict the service account's own admission gave for its state", async () => {
-    // Installed updaters stage the candidate in a private directory.
-    fs.chmodSync(home, 0o700);
-    const homeMode = fs.statSync(home).mode & 0o7777;
+    // Installed updaters stage the candidate in a private directory of their own.
+    const stage = dirs.make("service-account-stage-");
+    fs.chmodSync(stage, 0o755);
+    const privateStage = path.join(stage, ".openclaw.update-stage-test");
+    systemd.candidateRoot = path.join(privateStage, "lib", "node_modules", "openclaw");
+    fs.mkdirSync(systemd.candidateRoot, { recursive: true, mode: 0o755 });
+    fs.chmodSync(privateStage, 0o700);
+    fs.copyFileSync(
+      new URL("../../../package.json", import.meta.url),
+      path.join(systemd.candidateRoot, "package.json"),
+    );
     const accountProcess = installAccountProcess({
       stdout: JSON.stringify(serviceVerdict()),
       code: 0,
@@ -470,8 +489,8 @@ describe("candidate admission run as the unit's account", () => {
     expect(accountProcess.read("context-mode")).toMatch(/^-r--------[@+.]? /u);
     const handoff = accountProcess.read("argv").trim().split("\n").at(-1)!;
     expect(fs.existsSync(path.dirname(handoff))).toBe(false);
-    // The traverse bit added for the account's admission is gone again.
-    expect(fs.statSync(home).mode & 0o7777).toBe(homeMode);
+    // The stage keeps its mode: here the account owns it, so nothing needed widening.
+    expect(fs.statSync(privateStage).mode & 0o777).toBe(0o700);
     // Nothing of this process's own (broken) state was read or changed.
     expect(snapshotUpdateFixtureFiles(home)).toEqual(before);
   });

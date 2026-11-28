@@ -13,40 +13,49 @@ import {
 } from "./update-command-service-account-run.js";
 
 /**
- * Installed updaters stage the candidate in a private (0700) directory, which the account
- * cannot enter. For the account's admission only, root adds the traverse bit for others to
- * its own ancestors that lack it (no listing, no write), and puts each mode back after.
- * The package's own files are world-readable, as npm installs them.
+ * Installed updaters stage the candidate in a private (0700) directory of their own
+ * (`.openclaw.update-stage-*`) that holds only the staged package, which the account cannot
+ * enter. For the account's admission, root adds the traverse bit of the class the account
+ * falls in to that one directory and puts its mode back after; the package's files are
+ * world-readable as npm installs them. If any other ancestor is not traversable for the
+ * account (judged by owner, primary group, then others), nothing changes and admission
+ * refuses.
  */
-async function grantStagedReleaseTraversal(candidateRoot: string) {
-  const changed: { directory: string; mode: number }[] = [];
+async function grantStagedReleaseTraversal(
+  candidateRoot: string,
+  account: { uid: number; gid: number },
+) {
+  const traverseBit = (info: { uid: number; gid: number }) =>
+    info.uid === account.uid ? 0o100 : info.gid === account.gid ? 0o010 : 0o001;
+  let changed: { directory: string; mode: number } | undefined;
   const restore = async () => {
-    for (const { directory, mode } of changed.toReversed()) {
-      await fs.chmod(directory, mode);
+    if (changed) {
+      await fs.chmod(changed.directory, changed.mode);
     }
   };
-  try {
-    const real = await fs.realpath(candidateRoot);
-    for (let directory = real; ; directory = path.dirname(directory)) {
-      const info = await fs.lstat(directory);
-      if (!info.isDirectory()) {
-        throw new Error("the staged release path is not a directory chain");
-      }
-      if ((info.mode & 0o001) === 0) {
-        // Only directories this updater owns, i.e. root's.
-        if (info.uid !== (process.getuid?.() ?? 0)) {
-          throw new Error("the staged release path is not owned by this updater");
-        }
-        changed.push({ directory, mode: info.mode & 0o7777 });
-        await fs.chmod(directory, (info.mode & 0o7777) | 0o001);
-      }
-      if (directory === path.dirname(directory)) {
-        break;
-      }
+  const real = await fs.realpath(candidateRoot);
+  for (let directory = real; ; directory = path.dirname(directory)) {
+    const info = await fs.lstat(directory);
+    if (!info.isDirectory()) {
+      await restore();
+      throw new Error("the staged release path is not a directory chain");
     }
-  } catch (error) {
-    await restore();
-    throw error;
+    const bit = traverseBit(info);
+    if ((info.mode & bit) === 0) {
+      if (
+        changed ||
+        !path.basename(directory).startsWith(".openclaw.update-stage-") ||
+        info.uid !== (process.getuid?.() ?? 0)
+      ) {
+        await restore();
+        throw new Error("the staged release is inside a directory the account cannot enter");
+      }
+      changed = { directory, mode: info.mode & 0o7777 };
+      await fs.chmod(directory, changed.mode | bit);
+    }
+    if (directory === path.dirname(directory)) {
+      break;
+    }
   }
   return { restore };
 }
@@ -99,7 +108,7 @@ export async function admitAsServiceAccount(
   let result: Awaited<ReturnType<typeof runReleaseAsServiceAccount>>;
   let traversal: Awaited<ReturnType<typeof grantStagedReleaseTraversal>> | undefined;
   try {
-    traversal = await grantStagedReleaseTraversal(facts.candidateRoot);
+    traversal = await grantStagedReleaseTraversal(facts.candidateRoot, execution);
     const file = await handoff.write("context.json", JSON.stringify(context));
     result = await runReleaseAsServiceAccount(execution, handoff, {
       root: facts.candidateRoot,
