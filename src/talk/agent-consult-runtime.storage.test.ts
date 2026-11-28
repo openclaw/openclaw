@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readSessionMessageIdentity } from "../../packages/gateway-client/src/session-projection-message-identity.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
@@ -8,6 +9,8 @@ import { SessionManager } from "../agents/sessions/index.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createMeetingRealtimeEngineBindings } from "../meeting-bot/agent-consult.js";
+import { TEST_MEETING_PLATFORM_METADATA } from "../meeting-bot/observation-provenance.test-support.js";
 import { resolveMemoryAudienceFromEntry } from "../plugins/memory-audience.js";
 import { createRuntimeAgent } from "../plugins/runtime/runtime-agent.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
@@ -53,6 +56,77 @@ function createConsultFixture() {
 }
 
 describe("voice consult concrete store ownership", () => {
+  it("does not reuse a previously forked meeting transcript after switching to no tools", async () => {
+    const { cfg, agentRuntime, runEmbeddedAgent } = createConsultFixture();
+    const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, {
+      agentId: "main",
+    });
+    const parentKey = "agent:main:main";
+    const legacyKey = "agent:main:subagent:test-meeting:meeting-1";
+    const parentId = randomUUID();
+    const legacyId = randomUUID();
+    const privateText = "Private requester context, not meeting content";
+    for (const [sessionKey, sessionId] of [
+      [parentKey, parentId],
+      [legacyKey, legacyId],
+    ] as const) {
+      const target = { agentId: "main", sessionKey, sessionId, storePath };
+      await replaceSessionEntry(target, {
+        sessionId,
+        lifecycleRevision: randomUUID(),
+        chatType: "direct",
+        updatedAt: 1,
+      });
+      const manager = await SessionManager.openAsync(target, state.workspaceDir);
+      await manager.appendMessageAsync({
+        role: "user",
+        content: privateText,
+        timestamp: 1,
+      });
+    }
+    const bindings = createMeetingRealtimeEngineBindings({
+      platform: TEST_MEETING_PLATFORM_METADATA,
+      config: { realtime: { agentId: "main", toolPolicy: "none" } },
+      fullConfig: cfg,
+      runtime: { agent: agentRuntime },
+      logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() },
+    });
+    await expect(
+      bindings.consultAgent({
+        meetingSessionId: "meeting-1",
+        requesterSessionKey: parentKey,
+        transcript: [{ role: "user", text: "Meeting question" }],
+        args: { question: "Answer only the meeting question" },
+      }),
+    ).resolves.toEqual({ text: "Checked" });
+    const dispatched = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "meeting consult run");
+    const target = await resolveAgentRunSessionTarget({
+      ...dispatched,
+      missingSessionKey: "resolve-existing",
+    });
+    expect(target.sessionId).not.toBe(legacyId);
+    const transcript = await SessionManager.openAsync(target, state.workspaceDir);
+    expect(JSON.stringify(transcript.getEntries())).not.toContain(privateText);
+    expect(dispatched).toMatchObject({ toolsAllow: [], spawnedBy: parentKey });
+    expect(dispatched.prompt).toContain("Meeting question");
+    expect(dispatched.prompt).not.toContain(privateText);
+    const child = expectDefined(loadSessionEntry(target), "isolated meeting child");
+    const resolution = await resolveMemoryAudienceFromEntry(
+      { ...target, senderIsOwner: false },
+      child,
+    );
+    try {
+      expect(resolution).toMatchObject({ status: "granted", audience: { kind: "conversation" } });
+    } finally {
+      if (resolution.status === "granted") {
+        resolution.release();
+      }
+    }
+    expect(loadSessionEntry({ agentId: "main", sessionKey: legacyKey, storePath })?.sessionId).toBe(
+      legacyId,
+    );
+  });
+
   it("refreshes consult policy and delivery after an in-process write", async () => {
     const { runEmbeddedAgent, consult } = createConsultFixture();
     const sessionKey = "agent:main:voice-preparation";

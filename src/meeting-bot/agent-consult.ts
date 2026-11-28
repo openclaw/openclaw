@@ -33,7 +33,7 @@ export function createMeetingRealtimeEngineBindings(params: {
     };
   };
   fullConfig: OpenClawConfig;
-  runtime: PluginRuntime;
+  runtime: Pick<PluginRuntime, "agent">;
   logger: RuntimeLogger;
 }): {
   platform: MeetingRuntimePlatform;
@@ -147,7 +147,7 @@ async function consultMeetingAgent(
   params: {
     surface: MeetingAgentConsultSurface;
     config: OpenClawConfig;
-    runtime: PluginRuntime;
+    runtime: Pick<PluginRuntime, "agent">;
     logger: RuntimeLogger;
     agentId?: string;
     toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
@@ -158,7 +158,9 @@ async function consultMeetingAgent(
     : resolveDefaultAgentId(params.config);
   const requesterSessionKey =
     normalizeOptionalString(params.requesterSessionKey) ?? `agent:${agentId}:main`;
-  const sessionKey = `agent:${agentId}:subagent:${params.surface.id}:${params.meetingSessionId}`;
+  const toolFree = params.toolPolicy === "none";
+  // Do not resume an older consult whose transcript may contain forked requester history.
+  const sessionKey = `agent:${agentId}:subagent:${params.surface.id}:${toolFree ? "tool-free:" : ""}${params.meetingSessionId}`;
   return await consultRealtimeVoiceAgent({
     cfg: params.config,
     agentRuntime: params.runtime.agent,
@@ -169,7 +171,7 @@ async function consultMeetingAgent(
     lane: params.surface.lane,
     runIdPrefix: `${params.surface.id}:${params.meetingSessionId}`,
     spawnedBy: requesterSessionKey,
-    contextMode: "fork",
+    contextMode: toolFree ? "isolated" : "fork",
     args: params.args,
     transcript: params.transcript,
     surface: params.surface.surface,
