@@ -28,7 +28,7 @@ const { spawnState, freshSpawnState } = vi.hoisted(() => {
   return { spawnState: makeState(), freshSpawnState: makeState };
 });
 
-function processResult(code = 0, stdout = "", stderr = "") {
+function processResult(code: number, stdout = "", stderr = "") {
   return {
     failed: code !== 0,
     isCanceled: false,
