@@ -817,6 +817,11 @@ it.each([undefined, true, false])(
       expect(maintained?.origin.nextAction).toBeUndefined();
       expect(summary).not.toContain("openclaw plugins reload");
     }
+    await fs.rm(path.join(resolvePrefix(), "releases", ".trial"));
+    vi.mocked(runCommandWithTimeout).mockRejectedValueOnce(new Error("offline on a later boot"));
+    await bootReady();
+    await Promise.all(backgroundWork);
+    expect(await getUpdateRunAsync(run.runId, options)).toEqual(maintained);
   },
 );
 

@@ -118,8 +118,10 @@ export function schedulePluginMaintenance(): void {
       }
       // History is only an output: ordinary boots neither create runs nor send notices.
       const { lastRun } = await getUpdateRunStatusAsync();
+      const pluginStep = lastRun?.steps.find((entry) => entry.step === "plugins");
       if (
         lastRun?.after?.version === VERSION &&
+        (!pluginStep || pluginStep.status === "pending" || pluginStep.status === "in_progress") &&
         (!lastRun.after.buildId || lastRun.after.buildId === resolveRuntimeServiceBuildId())
       ) {
         await recordUpdateRunStepAsync(lastRun.runId, step);

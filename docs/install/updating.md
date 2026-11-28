@@ -229,10 +229,12 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    completion, fail the update, or trigger rollback.
 8. Every Gateway boot updates installed plugins in the background after core
    readiness, then reloads changed plugins through the existing runtime lifecycle.
-   A pending trial defers this work. Plugin failures and the next command appear in
-   matching update details; they do not delay or rewrite the core result, send
-   another result notice, or trigger rollback. A successful reload's warnings stay
-   in the plugin details without marking activation failed or requesting a retry.
+   A pending trial defers this work. The first plugin result and next command appear
+   in matching update details while that plugin step is unsettled; later boots do
+   not rewrite the recorded result. Failures otherwise use the Gateway warning log.
+   Plugin work does not delay or rewrite the core result, send another notice, or
+   trigger rollback. Successful reload warnings stay advisory in plugin details
+   without marking activation failed or requesting a retry.
 
 Saved update history does not grant or refuse a new release update. After taking
 its preparation lock and checking the installation, the serving release marks
