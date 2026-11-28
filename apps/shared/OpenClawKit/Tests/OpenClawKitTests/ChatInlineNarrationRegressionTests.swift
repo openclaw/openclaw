@@ -33,7 +33,8 @@ struct ChatInlineNarrationRegressionTests {
 
     private static func project(_ messages: [OpenClawChatMessage]) -> [ChatTranscriptRow] {
         ChatTranscriptRow.collapseCompletedWork(
-            ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: messages)), runWorking: false)
+            ChatTranscriptRow.build(from: ChatTranscriptRow.mergeToolResults(in: messages).answeredByOpenAI()),
+            runWorking: false)
     }
 
     private static func workID(_ row: ChatTranscriptRow) -> UUID? {

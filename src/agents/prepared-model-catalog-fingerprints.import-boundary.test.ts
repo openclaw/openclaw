@@ -27,6 +27,7 @@ registerHooks({
     }
     const resolved = nextResolve(specifier, context);
     if ([
+      "/config/bundled-channel-config-metadata.generated",
       "/agents/workspace",
       "/agents/auth-profiles",
       "/agents/model-selection",

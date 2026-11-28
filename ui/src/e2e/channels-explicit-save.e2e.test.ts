@@ -7,7 +7,11 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import { configSchema, objectSchema } from "./config-composer-fixtures.test-support.ts";
+import {
+  configSchema,
+  configSnapshot,
+  objectSchema,
+} from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -36,10 +40,14 @@ const schema = configSchema(
     channels: objectSchema("", {
       telegram: objectSchema("Telegram", {
         botToken: { type: "string", title: "Bot Token" },
+        textChunkLimit: { type: "integer", title: "Text chunk limit" },
       }),
     }),
   }),
-  { "channels.telegram.botToken": { sensitive: true, advanced: false } },
+  {
+    "channels.telegram.botToken": { sensitive: true, advanced: false },
+    "channels.telegram.textChunkLimit": { advanced: false },
+  },
 );
 
 const storedConfig = {
@@ -186,6 +194,78 @@ suite.define(() => {
       });
     });
   }
+
+  it.each(["Save", "Discard"] as const)(
+    "closes on %s before the follow-up read finishes",
+    async (choice) => {
+      await suite.withPage(
+        { viewport: { width: 1120, height: 800 }, reducedMotion: "reduce" },
+        async ({ page }) => {
+          const { gateway, detail } = await openChannels(page);
+          const limit = detail.getByRole("spinbutton");
+          const close = detail.getByRole("button", { name: "Close", exact: true });
+          const row = page.locator(".channels-item").filter({ hasText: "Telegram" }).first();
+          await limit.fill("3000");
+          await gateway.deferNext("config.patch");
+          await close.click();
+          await choose(page, "Save");
+          const patch = await gateway.waitForRequest("config.patch");
+          expect(JSON.parse((patch.params as { raw: string }).raw)).toEqual({
+            channels: { telegram: { textChunkLimit: 3000 } },
+          });
+          expect(await detail.isVisible()).toBe(true);
+          const followup = choice === "Save" ? "channels.status" : "config.get";
+          if (choice === "Discard") {
+            await gateway.rejectDeferred("config.patch", {
+              code: "INVALID_REQUEST",
+              message: "Invalid text chunk limit",
+            });
+            await expect
+              .poll(() => detail.getByRole("alert").textContent())
+              .toContain("Invalid text chunk limit");
+            expect(await limit.inputValue()).toBe("3000");
+          }
+          const after = await gateway.deferNext(followup);
+          if (choice === "Save") {
+            const saved = configSnapshot(
+              { channels: { telegram: { ...config.channels.telegram, textChunkLimit: 3000 } } },
+              "channel-config-2",
+              true,
+            );
+            await gateway.setMethodResponse("config.get", saved);
+            await gateway.resolveDeferred("config.patch", {
+              ok: true,
+              config: saved.config,
+              hash: saved.hash,
+            });
+          } else {
+            await close.click();
+            await choose(page, "Discard");
+          }
+          await gateway.waitForRequest(followup, { after });
+          await expect.poll(() => detail.count()).toBe(0);
+          expect(await row.textContent()).not.toContain("Unsaved changes");
+          await expect.poll(() => row.evaluate((button) => button.matches(":focus"))).toBe(true);
+          await page.keyboard.press("Enter");
+          await limit.waitFor();
+          expect(await limit.inputValue()).toBe(choice === "Save" ? "3000" : "");
+          await limit.fill("2000");
+          await gateway.rejectDeferred(followup, {
+            code: "UNAVAILABLE",
+            message: "Refresh unavailable",
+          });
+          const error =
+            choice === "Save"
+              ? detail.getByRole("alert")
+              : page.locator(".settings-save-indicator__reason");
+          await expect.poll(() => error.textContent()).toContain("Refresh unavailable");
+          expect(await detail.getByRole("status").textContent()).toBe("Unsaved changes");
+          expect(await limit.inputValue()).toBe("2000");
+          expect(await gateway.getRequests("config.patch")).toHaveLength(1);
+        },
+      );
+    },
+  );
 
   it("asks before Run setup, and starts setup once the edits are saved", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {

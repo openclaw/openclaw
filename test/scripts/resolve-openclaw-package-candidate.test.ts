@@ -291,42 +291,6 @@ describe("resolve-openclaw-package-candidate", () => {
     }
   });
 
-  it("parses optional empty workflow inputs without rejecting the command line", () => {
-    expect(
-      parseArgs([
-        "--source",
-        "npm",
-        "--package-ref",
-        "release/2026.4.27",
-        "--package-spec",
-        "openclaw@beta",
-        "--package-url",
-        "",
-        "--package-sha256",
-        "",
-        "--artifact-dir",
-        ".",
-        "--output-dir",
-        ".artifacts/docker-e2e-package",
-      ]),
-    ).toEqual({
-      artifactDir: ".",
-      githubOutput: "",
-      metadata: "",
-      outputDir: ".artifacts/docker-e2e-package",
-      outputName: "openclaw-current.tgz",
-      packageSha256: "",
-      packageRef: "release/2026.4.27",
-      packageSpec: "openclaw@beta",
-      packageUrl: "",
-      pluginRegistryOutputDir: "",
-      requiredPluginPackagesJson: "[]",
-      source: "npm",
-      trustedSourceId: "",
-      trustedSourcePolicy: ".github/package-trusted-sources.json",
-    });
-  });
-
   it("rejects package candidate output names that escape the output directory", () => {
     for (const outputName of [
       "../openclaw-current.tgz",

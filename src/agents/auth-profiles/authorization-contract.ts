@@ -14,7 +14,12 @@ export type AuthProfileAuthorization = {
  */
 export class AuthProfileAuthorizationError extends Error {
   readonly code: "MCP_AUTHORIZATION_RETIRED" | "MCP_AUTHORIZATION_UNAVAILABLE";
-  constructor(disposition: "retired" | "unavailable") {
+  /**
+   * The profile itself is gone: absent from its store, or its credential is retired or
+   * expired. Other retirements only end this capture's owner (state database, store path).
+   */
+  readonly accountGone: boolean;
+  constructor(disposition: "retired" | "unavailable", options?: { accountGone?: true }) {
     super(
       disposition === "retired"
         ? "MCP authorization was disconnected or replaced"
@@ -23,5 +28,6 @@ export class AuthProfileAuthorizationError extends Error {
     this.name = "McpConnectionAuthorityError";
     this.code =
       disposition === "retired" ? "MCP_AUTHORIZATION_RETIRED" : "MCP_AUTHORIZATION_UNAVAILABLE";
+    this.accountGone = options?.accountGone === true;
   }
 }

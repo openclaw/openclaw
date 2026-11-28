@@ -66,6 +66,8 @@ export function createCodexAppServerModelCatalog(runtime: string) {
   type Discovery = {
     models: CodexAppServerModel[];
     client: CodexAppServerClient;
+    /** The account Codex reported before listing; a different account lists again. */
+    account: string;
     isCurrent: () => boolean;
     listedAt: number;
     accountType?: "apiKey" | "chatgpt";
@@ -174,24 +176,26 @@ export function createCodexAppServerModelCatalog(runtime: string) {
             : {}),
         },
         async (request, client): Promise<Discovery> => {
-          // Codex refetches an uncached /models on every model/list and remembers no failure,
-          // so an unreachable endpoint costs its full timeout per call. Acquisition applies
-          // credential changes (a new client, or a re-login that advances the account revision),
-          // so an earlier discovery on this client and revision is still this account's catalog.
-          if (
-            reusable?.client === client &&
-            reusable.isCurrent() &&
-            performance.now() - reusable.listedAt < CODEX_MODEL_CACHE_TTL_MS
-          ) {
-            return reusable;
-          }
           try {
             // Codex serializes this read after login's delayed account/updated.
             // Drain startup before pinning the account revision for discovery.
-            await request<CodexGetAccountResponse>({
+            const current = await request<CodexGetAccountResponse>({
               method: "account/read",
               requestParams: { refreshToken: false },
             });
+            // Codex refetches an uncached /models on every model/list and remembers no failure,
+            // so an unreachable endpoint costs its full timeout per call. Reuse an earlier
+            // discovery only on the same client and account revision, for the account Codex
+            // reports now: an app-server not owned here can switch accounts without notifying.
+            const account = JSON.stringify(current);
+            if (
+              reusable?.client === client &&
+              reusable.account === account &&
+              reusable.isCurrent() &&
+              performance.now() - reusable.listedAt < CODEX_MODEL_CACHE_TTL_MS
+            ) {
+              return reusable;
+            }
             const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
             const listedAt = performance.now();
             const listed = await listAllCodexAppServerModels({
@@ -199,17 +203,17 @@ export function createCodexAppServerModelCatalog(runtime: string) {
               limit: 100,
               includeHidden: true,
             });
-            const account = await request<CodexGetAccountResponse>({
+            const settled = await request<CodexGetAccountResponse>({
               method: "account/read",
               requestParams: { refreshToken: false },
             });
-            const observedType = account.account?.type;
-            const accountType = account.requiresOpenaiAuth
+            const observedType = settled.account?.type;
+            const accountType = settled.requiresOpenaiAuth
               ? observedType === "apiKey" || observedType === "chatgpt"
                 ? observedType
                 : undefined
               : undefined;
-            return { models: listed.models, client, isCurrent, listedAt, accountType };
+            return { models: listed.models, client, account, isCurrent, listedAt, accountType };
           } catch (error) {
             // Discovery owns its deadline; retire unanswered work without aborting sibling leases.
             if (isCodexAppServerIndeterminateRequestCancellationError(error)) {

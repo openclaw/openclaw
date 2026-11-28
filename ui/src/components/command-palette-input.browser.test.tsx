@@ -55,6 +55,33 @@ describe.skipIf(!hasBrowserLayout)("command palette input layout", () => {
   }
   afterEach(() => vi.restoreAllMocks());
 
+  it("truncates a narrow Compose hint without truncating typed drafts", async () => {
+    const placeholder = "Ask me anything, or hand me something to do";
+    const { host, input } = mountInput(
+      "",
+      { mode: "compose", placeholder },
+      "width: 250px; font-family: monospace;",
+    );
+    await document.fonts.ready;
+    await threeFrames();
+    input.focus();
+    const lineHeight = Number.parseFloat(getComputedStyle(input).lineHeight);
+    expect(input.clientHeight).toBeCloseTo(lineHeight, 0);
+    expect(input.getAttribute("aria-label")).toBe(placeholder);
+    const hint = host.querySelector(".cmd-palette__placeholder")!;
+    expect(hint.textContent).toBe(placeholder);
+    expect(hint.scrollWidth).toBeGreaterThan(hint.clientWidth);
+    expect(getComputedStyle(hint).textOverflow).toBe("ellipsis");
+
+    edit(input, placeholder);
+    expect(input.clientHeight).toBeGreaterThan(lineHeight);
+    expect(getComputedStyle(hint).display).toBe("none");
+
+    edit(input, "");
+    expect(input.clientHeight).toBeCloseTo(lineHeight, 0);
+    expect(getComputedStyle(hint).display).not.toBe("none");
+  });
+
   it("preserves the prompt without remeasuring result navigation and measures again on reconnect", async () => {
     // A fixed width/font makes reconnection cross a wrapping boundary.
     const { host, input, props, renderInput } = mountInput(
