@@ -244,7 +244,87 @@ describe("confirmed visible message ownership", () => {
     });
   });
 
-  it.each(["key", "context"] as const)(
+  it.each([
+    { destination: "source", expectedRows: 0 },
+    { destination: "another chat", expectedRows: 1 },
+  ])(
+    "records $expectedRows extra rows for a Telegram action sent to $destination",
+    async ({ destination, expectedRows }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const { telegramPlugin } = await import("../../extensions/telegram/api.js");
+        const { executeSendAction } = await import("../infra/outbound/outbound-send-service.js");
+        const { params, storePath } = setup();
+        const cfg = { ...params.config, channels: { telegram: { botToken: "123:fixture" } } };
+        const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "100" }));
+        const plugin = {
+          ...createOutboundTestPlugin({
+            id: "telegram",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+          actions: telegramPlugin.actions,
+          messaging: { resolveOutboundSessionRoute: () => route },
+        };
+        const registry = captureActivePluginRegistrySnapshot();
+        setActivePluginRegistry(
+          createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]),
+        );
+        try {
+          const policyKey = "agent:main:policy";
+          await replaceSessionEntry(
+            { sessionKey: policyKey, storePath },
+            {
+              sessionId: "policy",
+              updatedAt: 1,
+              sandbox: "required",
+            },
+          );
+          const action = {
+            to: route.to,
+            message: "hello",
+            transcriptProducerSessionKey: route.sessionKey,
+          };
+          const result = await executeSendAction({
+            ...action,
+            ctx: {
+              cfg,
+              channel: "telegram",
+              channelPlugin: plugin,
+              params: action,
+              dryRun: false,
+              transcriptRoute: route,
+              input: {
+                cfg,
+                action: "send",
+                params: action,
+                sessionKey: policyKey,
+                sourceReplySessionKey:
+                  destination === "source" ? route.sessionKey : "agent:main:main",
+              },
+            },
+            threadId: route.threadId,
+          });
+          expect(result.handledBy).toBe("plugin");
+          expect(sendText).toHaveBeenCalledOnce();
+          const target = loadSessionEntryReadOnly({ sessionKey: route.sessionKey, storePath });
+          if (destination === "another chat") {
+            expect(target?.sandbox).toBe("required");
+          }
+          const events = target
+            ? await loadTranscriptEvents({
+                sessionKey: route.sessionKey,
+                sessionId: target.sessionId,
+                storePath,
+              })
+            : [];
+          expect(events.map(readTranscriptEventMessage).filter(Boolean)).toHaveLength(expectedRows);
+        } finally {
+          restoreActivePluginRegistrySnapshot(registry);
+        }
+      });
+    },
+  );
+
+  it.each(["key", "context", "split session"] as const)(
     "does not wait on or duplicate its active producing conversation by %s",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -272,7 +352,11 @@ describe("confirmed visible message ownership", () => {
           expect(
             await commitConfirmedVisibleMessage({
               ...params,
-              producer: { key: producerKey, agentId: "main" },
+              producer: {
+                key: kind === "split session" ? "agent:main:policy" : producerKey,
+                transcriptProducerKey: kind === "split session" ? producerKey : undefined,
+                agentId: "main",
+              },
             }),
           ).toEqual({ ok: true, skipped: true });
           expect(
@@ -289,7 +373,10 @@ describe("confirmed visible message ownership", () => {
     },
   );
 
-  it("does not confuse two topics of a producing chat", async () => {
+  it.each([
+    { label: "another topic", to: route.to, threadId: 7 },
+    { label: "another chat", to: "-100456", threadId: route.threadId },
+  ])("records one destination row for $label", async ({ to, threadId }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const { params, storePath } = setup();
       await replaceSessionEntry(
@@ -299,16 +386,20 @@ describe("confirmed visible message ownership", () => {
           updatedAt: 1,
           delivery: {
             kind: "external",
-            context: { channel: "telegram", to: route.to, threadId: 7 },
-            route: { channel: "telegram", target: { to: route.to }, thread: { id: "7" } },
-            origin: { provider: "telegram", to: route.to, threadId: 7 },
+            context: { channel: "telegram", to, threadId },
+            route: { channel: "telegram", target: { to }, thread: { id: String(threadId) } },
+            origin: { provider: "telegram", to, threadId },
           },
         },
       );
       expect(
         await commitConfirmedVisibleMessage({
           ...params,
-          producer: { key: "agent:main:main", agentId: "main" },
+          producer: {
+            key: route.sessionKey,
+            transcriptProducerKey: "agent:main:main",
+            agentId: "main",
+          },
         }),
       ).toMatchObject({ ok: true });
       const target = loadSessionEntryReadOnly({ sessionKey: route.sessionKey, storePath });
