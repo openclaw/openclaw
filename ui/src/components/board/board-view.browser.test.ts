@@ -69,7 +69,7 @@ async function updateSnapshot(view: OpenClawBoardView, overrides: Partial<BoardS
 }
 
 async function mount(
-  applyOps = vi.fn(async () => undefined),
+  applyOps = vi.fn(async (): Promise<void> => undefined),
   parent: HTMLElement = document.body,
 ): Promise<OpenClawBoardView> {
   const view = document.createElement("openclaw-board-view");
