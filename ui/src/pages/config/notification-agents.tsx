@@ -1,4 +1,5 @@
-import { action, createMemo, createOptimistic, createSignal, Errored, For, Show } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
+import type { WebPushAgentSelection } from "../../app/web-push.runtime.ts";
 import { ModalDialog } from "../../components/modal-dialog.tsx";
 import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { DialogHeader } from "../../components/solid/dialog-header.tsx";
@@ -7,7 +8,6 @@ import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsRow } from "../../components/solid/settings-ui.tsx";
 import { normalizeAgentLabel } from "../../lib/agents/display.ts";
 import type { AgentCapability } from "../../lib/agents/index.ts";
-import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
 export type NotificationAgentCatalog = Pick<
@@ -18,6 +18,8 @@ export type NotificationAgentOptions = {
   agentCatalog?: NotificationAgentCatalog;
   onLoadAgents?: () => void;
   presentationScope?: Promise<void>;
+  writePending?: boolean;
+  submission?: WebPushAgentSelection;
 };
 type Selection = { mode: "inherit" | "all" | "specific"; ids: string[] };
 type AgentRowProps = NotificationAgentOptions & {
@@ -37,8 +39,19 @@ export function NotificationAgentsRow(props: AgentRowProps) {
     scope();
     return undefined;
   });
+  const submit = (selection: Selection) => {
+    setDraft(undefined);
+    // The command owner publishes both the failure and the selection to retry.
+    void Promise.resolve(
+      props.onChange(
+        selection.mode === "inherit" ? undefined : selection.mode === "all" ? [] : selection.ids,
+      ),
+    ).catch(() => {});
+  };
+  const displayedIds = () =>
+    props.submission?.state === "pending" ? props.submission.agentIds : props.agentIds;
   const summary = createMemo(() => {
-    const ids = props.agentIds ?? props.inheritedAgentIds ?? [];
+    const ids = displayedIds() ?? props.inheritedAgentIds ?? [];
     const agents = props.agentCatalog?.agentsList?.agents;
     const selected = ids.map((id) => {
       const agent = agents?.find((entry) => entry.id === id);
@@ -55,7 +68,7 @@ export function NotificationAgentsRow(props: AgentRowProps) {
         ? t("configView.notifications.agentsSelected", { count: String(selected.length) })
         : (selected[0]?.name ?? full);
     const scoped = (names: string) =>
-      props.agentIds === undefined
+      displayedIds() === undefined
         ? t("configView.notifications.inheritAgents", { agents: names })
         : names;
     return { full: scoped(full), compact: scoped(compact) };
@@ -64,6 +77,19 @@ export function NotificationAgentsRow(props: AgentRowProps) {
     <>
       <SettingsRow
         title={t("configView.notifications.agents")}
+        description={
+          <Show when={props.submission}>
+            {(attempt) => (
+              <span role="status">
+                {t(
+                  attempt().state === "pending"
+                    ? "common.saving"
+                    : "configView.notifications.retryAgentSelection",
+                )}
+              </span>
+            )}
+          </Show>
+        }
         control={
           <button
             type="button"
@@ -73,14 +99,10 @@ export function NotificationAgentsRow(props: AgentRowProps) {
             aria-description={summary().full}
             title={summary().full}
             onClick={() => {
+              const ids = props.submission ? props.submission.agentIds : props.agentIds;
               setDraft({
-                mode:
-                  props.agentIds === undefined
-                    ? "inherit"
-                    : props.agentIds.length
-                      ? "specific"
-                      : "all",
-                ids: [...(props.agentIds ?? [])],
+                mode: ids === undefined ? "inherit" : ids.length ? "specific" : "all",
+                ids: ids ?? [],
               });
               props.onLoadAgents?.();
             }}
@@ -95,6 +117,7 @@ export function NotificationAgentsRow(props: AgentRowProps) {
           <AgentSelectionDialog
             {...props}
             selection={selection()}
+            onSave={submit}
             onDraft={setDraft}
             onClose={() => setDraft(undefined)}
           />
@@ -108,13 +131,11 @@ function AgentSelectionDialog(
   props: AgentRowProps & {
     selection: Selection;
     onDraft: (selection: Selection) => void;
+    onSave: (selection: Selection) => void;
     onClose: () => void;
   },
 ) {
   const [query, setQuery] = createSignal("");
-  const [saving, setSaving] = createOptimistic(false);
-  const [attempt, setAttempt] = createSignal<{ result: Promise<void> }>();
-  const outcome = createMemo(() => attempt()?.result.then(() => null), { loadingValue: undefined });
   // Keep unresolved saved IDs visible; absence from the authorized roster is not deletion.
   const rows = createMemo(() => {
     const agents = props.agentCatalog?.agentsList?.agents ?? [];
@@ -137,43 +158,15 @@ function AgentSelectionDialog(
   });
   const blocked = () =>
     props.disabled ||
-    saving() ||
+    props.writePending ||
     (props.selection.mode === "specific" && props.selection.ids.length === 0);
-  const save = action(function* (result: Promise<void>) {
-    setSaving(true);
-    try {
-      yield result;
-      props.onClose();
-    } catch {
-      /* The outcome slot retains the error and draft. */
-    }
-  });
-  const submit = () => {
-    if (blocked()) {
-      return;
-    }
-    const value =
-      props.selection.mode === "inherit"
-        ? undefined
-        : props.selection.mode === "all"
-          ? []
-          : props.selection.ids;
-    const result = Promise.resolve(props.onChange(value));
-    setAttempt({ result });
-    void save(result);
-  };
   return (
     <ModalDialog
       open
       label={t("configView.notifications.chooseAgents")}
       onOpenChange={(open) => {
-        if (!open && !saving()) {
+        if (!open) {
           props.onClose();
-        }
-      }}
-      onModal-cancel={(event: Event) => {
-        if (saving()) {
-          event.preventDefault();
         }
       }}
     >
@@ -181,7 +174,9 @@ function AgentSelectionDialog(
         class="oc-dialog"
         onSubmit={(event) => {
           event.preventDefault();
-          submit();
+          if (!blocked()) {
+            props.onSave(props.selection);
+          }
         }}
       >
         <DialogHeader
@@ -191,13 +186,12 @@ function AgentSelectionDialog(
               ? "configView.notifications.installedApp"
               : "configView.notifications.accountDefaults",
           )}
-          closeDisabled={saving()}
           onClose={() => props.onClose()}
         />
         <div class="oc-dialog__body">
           <SettingsSelect
             aria-label={t("configView.notifications.agentScope")}
-            disabled={props.disabled || saving()}
+            disabled={props.disabled}
             value={props.selection.mode}
             options={[
               ...(props.inherit
@@ -236,7 +230,6 @@ function AgentSelectionDialog(
                       checked={props.selection.ids.includes(row().id)}
                       disabled={
                         props.disabled ||
-                        saving() ||
                         (!props.selection.ids.includes(row().id) &&
                           props.selection.ids.length >= 128)
                       }
@@ -312,24 +305,24 @@ function AgentSelectionDialog(
                 : t("configView.notifications.selectAgentRequired")}
             </div>
           </Show>
-          <Show when={!saving()}>
-            <Errored
-              fallback={(error) => (
-                <p role="alert" class="cfg-field__error">
-                  {formatUiError(error())}
-                </p>
-              )}
-            >
-              {outcome()}
-            </Errored>
+          <Show when={props.submission}>
+            {(submission) => (
+              <p class="muted" role="status">
+                {t(
+                  submission().state === "pending"
+                    ? "common.saving"
+                    : "configView.notifications.reviewAgentSelection",
+                )}
+              </p>
+            )}
           </Show>
         </div>
         <openclaw-modal-actions class="oc-dialog__footer">
-          <button class="btn" type="button" disabled={saving()} onClick={() => props.onClose()}>
+          <button class="btn" type="button" onClick={() => props.onClose()}>
             {t("common.cancel")}
           </button>
           <button class="btn primary" type="submit" disabled={blocked()}>
-            {t(saving() ? "common.saving" : "common.save")}
+            {t("common.save")}
           </button>
         </openclaw-modal-actions>
       </form>

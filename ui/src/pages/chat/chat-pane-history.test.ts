@@ -819,7 +819,6 @@ it("keeps a cursor reset across failed hydration until authoritative retry commi
   request.mockResolvedValueOnce({ messages: [], windowReset: true });
   request.mockRejectedValueOnce(new Error("gateway unavailable"));
   request.mockResolvedValueOnce(historyPage([3, 4], { sessionId: "current" }));
-  Object.assign(state.settings, { compactSessionOpening: true });
   state.currentSessionId = "current";
   state.chatMessages = [1, 2, 3, 4].map((seq) => nativeHistoryMessage(seq));
   state.chatHistoryPagination = pagination(4, 2);

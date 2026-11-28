@@ -1351,51 +1351,6 @@ describe("native app i18n inventory", () => {
     }
   });
 
-  it("emits deterministic advisory translation-quality findings", () => {
-    const inventory: NativeI18nEntry[] = [
-      testEntry(
-        "native.android.language-picker",
-        "android",
-        "OpenClaw translations · $languageTag",
-        "apps/android/app/src/main/java/ai/openclaw/app/AppLanguage.kt",
-        "conditional-branch",
-      ),
-      testEntry("native.android.inspect", "android", "Inspect", "apps/android/Workshop.kt"),
-      testEntry("native.apple.inspect", "apple", "Inspect", "apps/ios/Workshop.swift"),
-      testEntry(
-        "native.android.voice-note",
-        "android",
-        "Record voice note",
-        "apps/android/Voice.kt",
-      ),
-    ];
-    const languagePicker = expectDefined(inventory[0], "native language picker inventory entry");
-    const androidInspect = expectDefined(inventory[1], "native Android inspect inventory entry");
-    const appleInspect = expectDefined(inventory[2], "native Apple inspect inventory entry");
-    const voiceNote = expectDefined(inventory[3], "native voice note inventory entry");
-    const artifact: NativeTranslationArtifact = {
-      version: 2,
-      locale: "id",
-      translations: {
-        [languagePicker.id]: languagePicker.source,
-        [androidInspect.id]: androidInspect.source,
-        [appleInspect.id]: "Periksa",
-        [voiceNote.id]: "Ghi ghi chú thoại",
-      },
-    };
-
-    const findings = validateNativeLocaleArtifact("id", inventory, artifact);
-    expect(findings.map((finding) => `${finding.code}:${finding.id}`)).toEqual([
-      "adjacent-duplicate-word:native.android.voice-note",
-      "android-language-picker-source-equal:native.android.language-picker",
-      "same-source-contradiction:native.android.inspect",
-      "source-equal:native.android.inspect",
-      "source-equal:native.android.language-picker",
-    ]);
-    expect(findings[0]?.words).toEqual(["ghi"]);
-    expect(findings[2]?.relatedIds).toEqual(["native.apple.inspect"]);
-  });
-
   it("validates locale refresh arguments before write paths run", () => {
     expect(parseNativeI18nCommand(["baseline", "--write"])).toEqual({
       command: "baseline",

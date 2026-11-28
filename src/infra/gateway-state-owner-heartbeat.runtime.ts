@@ -18,6 +18,8 @@ export type GatewayStateOwnerHeartbeatLoss = { type: "lost"; lockPath: string; e
 
 type HeartbeatCommand = "stop" | [string, string] | { type: "verify"; id: number; paths: string[] };
 
+export const heartbeatStartup = { pending: 0, active: 1, cancelled: 2 } as const;
+
 export type GatewayStateOwnerHeartbeatData = {
   clock?: "epoch";
   locks: Record<string, string>;
@@ -25,6 +27,8 @@ export type GatewayStateOwnerHeartbeatData = {
   failureMs: number;
   lastBeat: SharedArrayBuffer;
   events: MessagePort;
+  /** Older retained drivers can start this worker without the cold-stop handoff. */
+  startup?: Int32Array<SharedArrayBuffer>;
 };
 
 function selectHeartbeatClock(data: GatewayStateOwnerHeartbeatData, seed: bigint) {
@@ -255,6 +259,14 @@ export function runGatewayStateOwnerHeartbeat(
     }
   });
   parent?.on("close", stop);
+  if (
+    data.startup &&
+    Atomics.compareExchange(data.startup, 0, heartbeatStartup.pending, heartbeatStartup.active) !==
+      heartbeatStartup.pending
+  ) {
+    stop();
+    return;
+  }
   beat();
   parent?.postMessage(null, []);
 }

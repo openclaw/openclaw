@@ -58,7 +58,7 @@ Operator workflow:
 1. Open the Control UI and choose **MCP**.
 2. Review the summary cards for total, enabled, OAuth, and filtered servers.
 3. Use each server row for transport, auth, filter, timeout, and command hints.
-4. Toggle enablement when you want to keep a definition but exclude it from runtime discovery.
+4. Turn a server off to keep its definition but exclude it from runtime discovery. The switch shows your choice while it saves and returns to the saved setting if the write fails. Turning it on does not confirm a connection or make tools available immediately.
 5. Edit the scoped `mcp` config section for structural changes such as new servers, headers, TLS, OAuth metadata, or tool filters.
 6. Choose **Save** to persist config only, or **Save & Publish** to apply through the Gateway config path.
 7. Run `openclaw mcp doctor --probe` when you need live proof that the edited server starts and lists tools.

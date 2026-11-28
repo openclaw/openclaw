@@ -25,7 +25,10 @@ export async function prepareMissingRegistrationFixture() {
     providerStream.end();
   });
   streamMocks.streamSimple.mockImplementation(() => providerStream);
-  const publish = vi.spyOn(embeddedRuns, "attachActiveEmbeddedRun").mockImplementation(() => {});
+  const registrationAttempted = createDeferredCore();
+  const publish = vi.spyOn(embeddedRuns, "attachActiveEmbeddedRun").mockImplementation(() => {
+    registrationAttempted.resolve();
+  });
   const assertions = vi.fn(async () => {});
   const prepared = await prepareParkedNativeTask(
     assertions,
@@ -33,7 +36,16 @@ export async function prepareMissingRegistrationFixture() {
     session,
     finish,
   );
-  return { session, providerStream, answer, finish, publish, assertions, ...prepared };
+  return {
+    session,
+    providerStream,
+    answer,
+    finish,
+    publish,
+    assertions,
+    registrationAttempted: registrationAttempted.promise,
+    ...prepared,
+  };
 }
 
 /** Lease setup and teardown separately from a parked task's readiness deadline. */
