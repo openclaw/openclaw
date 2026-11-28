@@ -332,39 +332,52 @@ describe("channel ingress drain watchdog", () => {
     },
   );
 
-  it("dead-letters abandoned turns through the shared retry policy", async () => {
-    await withTempState(async (stateDir) => {
-      let clock = 10_000;
-      const queue = createTestIngressQueue(stateDir, { now: () => clock });
-      await queue.enqueue(
-        "abandoned",
-        { text: "deferred" },
-        { laneKey: "lane", receivedAt: clock },
-      );
-      const lifecycles: ChannelIngressDispatchLifecycle[] = [];
-      const drain = createChannelIngressDrain({
-        queue,
-        now: () => clock,
-        retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 0 },
-        dispatchClaimedEvent: async (_event, lifecycle) => {
-          lifecycles.push(lifecycle);
-          return { kind: "deferred" };
-        },
+  it.each(["abandoned", "failed"] as const)(
+    "applies the age grace only to delivery failures: %s",
+    async (outcome) => {
+      await withTempState(async (stateDir) => {
+        const clock = 10_000;
+        const queue = createTestIngressQueue(stateDir, { now: () => clock });
+        await queue.enqueue(
+          "abandoned",
+          { text: "deferred" },
+          { laneKey: "lane", receivedAt: clock },
+        );
+        const lifecycles: ChannelIngressDispatchLifecycle[] = [];
+        const drain = createChannelIngressDrain({
+          queue,
+          now: () => clock,
+          retryPolicy: { maxAttempts: 1, deadLetterMinAgeMs: 60_000 },
+          dispatchClaimedEvent: async (_event, lifecycle) => {
+            lifecycles.push(lifecycle);
+            return { kind: "deferred" };
+          },
+        });
+        try {
+          await drain.drainOnce();
+          await drain.waitForIdle();
+          const lifecycle = expectDefined(lifecycles[0], "dispatch lifecycle");
+          if (outcome === "abandoned") {
+            await lifecycle.onAbandoned();
+            expect(await queue.listPending()).toEqual([]);
+            expect(await queue.listFailed?.()).toMatchObject([
+              { id: "abandoned", reason: "retry-limit-exceeded" },
+            ]);
+          } else {
+            // The same error text from an ordinary failure must retain the age grace.
+            await expectDefined(
+              lifecycle.onFailed,
+              "failure callback",
+            )(new Error("turn-abandoned"));
+            expect(await queue.listPending()).toMatchObject([{ id: "abandoned", attempts: 1 }]);
+            expect(await queue.listFailed?.()).toEqual([]);
+          }
+        } finally {
+          drain.dispose();
+        }
       });
-      try {
-        await drain.drainOnce();
-        await drain.waitForIdle();
-        await expectDefined(lifecycles[0], "abandoned lifecycle").onAbandoned();
-
-        expect(await queue.listPending({ limit: "all" })).toEqual([]);
-        expect(await queue.listFailed?.({ limit: "all" })).toMatchObject([
-          { id: "abandoned", attempts: 0, reason: "retry-limit-exceeded" },
-        ]);
-      } finally {
-        drain.dispose();
-      }
-    });
-  });
+    },
+  );
 
   it("keeps a successor claim fenced from retired callbacks", async () => {
     await withTempState(async (stateDir) => {

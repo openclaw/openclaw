@@ -17,9 +17,12 @@ import { patchSessionEntryWithKey } from "../config/sessions/session-accessor.js
 import { createSubagentStopFixture } from "./server.subagent-stop-settlement.product.test-support.js";
 import { disconnectGatewayClient } from "./test-helpers.e2e.js";
 
-it("exhausts an aged inbound followup when its Gateway session was archived before processing", async () => {
+it("retains an exhausted young followup and replies to the next input after a Gateway restart", async () => {
   const sessionKey = "agent:main:ingress-abandonment";
   const queuedText = "ingress-proof-queued-input";
+  const nextText = "ingress-proof-next-input";
+  const delivered: string[] = [];
+  let nextRequests = 0;
   const modelStarted = createDeferred();
   const finishModel = createDeferred();
   let queuedRequests = 0;
@@ -27,15 +30,20 @@ it("exhausts an aged inbound followup when its Gateway session was archived befo
     modelId: "stop-proof",
     bindError: "Expected the synthetic model to bind locally",
     onRequest: async (request, response) => {
-      if ((await text(request)).includes(queuedText)) {
+      const body = await text(request);
+      const isNextInput = body.includes(nextText);
+      if (isNextInput) {
+        nextRequests++;
+      }
+      if (body.includes(queuedText)) {
         queuedRequests++;
       }
       modelStarted.resolve();
       await finishModel.promise;
       writeOpenAiResponsesText(response, {
-        text: "Acknowledged.",
-        responseId: "resp_ingress_proof",
-        messageId: "msg_ingress_proof",
+        text: isNextInput ? "Next input received." : "Acknowledged.",
+        responseId: isNextInput ? "resp_next_input" : "resp_ingress_proof",
+        messageId: isNextInput ? "msg_next_input" : "msg_ingress_proof",
       });
     },
   });
@@ -44,32 +52,40 @@ it("exhausts an aged inbound followup when its Gateway session was archived befo
     `${model.baseUrl}/v1`,
   );
   cfg.messages = { queue: { mode: "followup" } };
-  const gateway = await start();
+  let gateway = await start();
   const queue = createTestIngressQueue(state.stateDir);
   let deferredMode: "steer" | "followup" | undefined;
-  const drain = createChannelIngressDrain({
-    queue,
-    dispatchClaimedEvent: async (event, lifecycle) => {
-      const result = await dispatchReplyWithBufferedBlockDispatcherCore({
-        ctx: buildTestCtx({
-          AgentId: "main",
-          Provider: "test",
-          Surface: "test",
-          From: "user:ingress",
-          To: "channel:ingress",
-          SessionKey: sessionKey,
-          MessageSid: event.id,
-          Body: event.payload.text,
-          CommandBody: event.payload.text,
-        }),
-        cfg,
-        dispatcherOptions: { deliver: async () => undefined },
-        replyOptions: bindIngressLifecycleToReplyOptions(lifecycle),
-      });
-      deferredMode = result.deferredToActiveRun;
-      return result.deferredToActiveRun ? { kind: "deferred" } : { kind: "completed" };
-    },
-  });
+  const startDrain = (ingressQueue: ReturnType<typeof createTestIngressQueue>) =>
+    createChannelIngressDrain({
+      queue: ingressQueue,
+      dispatchClaimedEvent: async (event, lifecycle) => {
+        const result = await dispatchReplyWithBufferedBlockDispatcherCore({
+          ctx: buildTestCtx({
+            AgentId: "main",
+            Provider: "test",
+            Surface: "test",
+            From: "user:ingress",
+            To: "channel:ingress",
+            SessionKey: sessionKey,
+            MessageSid: event.id,
+            Body: event.payload.text,
+            CommandBody: event.payload.text,
+          }),
+          cfg,
+          dispatcherOptions: {
+            deliver: async (payload, info) => {
+              if (info.kind !== "tool" && payload.text) {
+                delivered.push(payload.text);
+              }
+            },
+          },
+          replyOptions: bindIngressLifecycleToReplyOptions(lifecycle),
+        });
+        deferredMode = result.deferredToActiveRun;
+        return result.deferredToActiveRun ? { kind: "deferred" } : { kind: "completed" };
+      },
+    });
+  let drain = startDrain(queue);
   await runQaGatewayFixture(
     async () => {
       await gateway.server.startupSettled;
@@ -82,7 +98,7 @@ it("exhausts an aged inbound followup when its Gateway session was archived befo
         }),
       ).resolves.toMatchObject({ status: "started" });
       await modelStarted.promise;
-      const receivedAt = Date.now() - 25 * 60 * 60_000;
+      const receivedAt = Date.now() - 3 * 60_000;
       await queue.enqueue(
         "queued-input",
         { text: queuedText },
@@ -91,7 +107,7 @@ it("exhausts an aged inbound followup when its Gateway session was archived befo
       for (let attempt = 0; attempt < 7; attempt++) {
         const claim = expectDefined(await queue.claim("queued-input"), "prior claim");
         await queue.release(claim, {
-          lastError: "previous attempt",
+          lastError: "turn-abandoned",
           releasedAt: receivedAt + attempt,
         });
       }
@@ -100,6 +116,7 @@ it("exhausts an aged inbound followup when its Gateway session was archived befo
       await drain.waitForIdle();
       expect(deferredMode).toBe("followup");
       expect(await queue.listClaims()).toMatchObject([{ id: "queued-input" }]);
+      await queue.enqueue("next-input", { text: nextText }, { laneKey: sessionKey });
       // The target was archived while this attempt waited behind the active turn.
       const archivedAt = Date.now();
       const archived = await patchSessionEntryWithKey(
@@ -122,15 +139,37 @@ it("exhausts an aged inbound followup when its Gateway session was archived befo
         failed: failed?.map(({ reason, message }) => ({ reason, message })),
         queuedModelRequests: queuedRequests,
       });
-      expect(pending).toEqual([]);
+      expect(pending.map((event) => event.id)).toEqual(["next-input"]);
       expect(failed).toMatchObject([
         {
           id: "queued-input",
+          payload: { text: queuedText },
           reason: "retry-limit-exceeded",
           message: "turn-abandoned",
         },
       ]);
       expect(queuedRequests).toBe(0);
+      // Restore the destination we deliberately archived to abandon the first followup.
+      await gateway.client.request("sessions.patch", {
+        key: sessionKey,
+        archived: false,
+        expectedSessionId: archived?.entry.sessionId,
+      });
+      drain.dispose();
+      await disconnectGatewayClient(gateway.client);
+      await gateway.server.close({ reason: "verify same-lane recovery" });
+      gateway = await start();
+      await gateway.server.startupSettled;
+      const reopened = createTestIngressQueue(state.stateDir);
+      drain = startDrain(reopened);
+      expect(await drain.drainOnce()).toEqual({ started: 1 });
+      await drain.waitForIdle();
+      expect(delivered).toEqual(["Next input received."]);
+      expect(nextRequests).toBe(1);
+      expect(await reopened.enqueue("next-input", { text: nextText })).toMatchObject({
+        kind: "completed",
+      });
+      expect(await drain.drainOnce()).toEqual({ started: 0 });
     },
     () => finishModel.resolve(),
     () => drain.dispose(),

@@ -249,6 +249,7 @@ export function createChannelIngressDrainOwner<
   const applyFailureDisposition = async (
     state: ActiveHandlerState<TPayload, TMetadata>,
     err: unknown,
+    retryPolicy = options.retryPolicy,
   ) => {
     const { claim } = state;
     if (err instanceof GatewayDrainingError) {
@@ -263,7 +264,7 @@ export function createChannelIngressDrainOwner<
       formatError,
       resolveNonRetryableFailure: (failure) =>
         resolveQueueCapDropFailure(failure, options.resolveNonRetryableFailure),
-      config: options.retryPolicy,
+      config: retryPolicy,
       now: now(),
     });
     if (disposition.kind === "fail") {
@@ -341,9 +342,9 @@ export function createChannelIngressDrainOwner<
   const createLifecycle = (
     state: ActiveHandlerState<TPayload, TMetadata>,
   ): ChannelIngressDispatchLifecycle => {
-    const onFailed = (error: unknown) =>
+    const settleFailure = (error: unknown, retryPolicy = options.retryPolicy) =>
       isPreAdoptionState(state)
-        ? state.settleOnce(() => applyFailureDisposition(state, error))
+        ? state.settleOnce(() => applyFailureDisposition(state, error, retryPolicy))
         : undefined;
     return {
       abortSignal: state.abortController.signal,
@@ -412,17 +413,20 @@ export function createChannelIngressDrainOwner<
         // stall watchdog race and dead-letter an about-to-complete event.
         clearStallTimer(state);
       },
-      onFailed,
+      onFailed: (error) => settleFailure(error),
       onCancelled: async () => {
         // Cancellation means ownership ended before delivery, so preserve every
         // prior retry fact while reopening the canonical row for replacement.
         await releaseUnadopted(state, { recordAttempt: false });
       },
-      // Abandonment is retryable, but it must still pass through the shared
-      // retry policy. Releasing directly here bypasses the attempt/age
-      // dead-letter gate and can replay the same accepted input forever.
-      onAbandoned: () => onFailed(new Error("turn-abandoned")),
-      onDropped: (reason) => onFailed(new IngressQueueCapDropError(reason)),
+      // A runner giving up before adoption can block every later input on this lane.
+      // Keep the attempt limit and backoff, but reserve the age grace for delivery failures.
+      onAbandoned: () =>
+        settleFailure(new Error("turn-abandoned"), {
+          ...options.retryPolicy,
+          deadLetterMinAgeMs: 0,
+        }),
+      onDropped: (reason) => settleFailure(new IngressQueueCapDropError(reason)),
     };
   };
 
