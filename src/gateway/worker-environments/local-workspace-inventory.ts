@@ -24,7 +24,10 @@ import {
   type WorkspaceManifestPathPolicy,
 } from "./workspace-manifest.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
-import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
+import {
+  buildCacheInputPaths,
+  IGNORED_WORKSPACE_BUILD_OUTPUT_ROOTS,
+} from "./workspace-path-exclusions.js";
 
 export function createLocalWorkspaceManifestReader(params: {
   store: LocalWorkspaceStore;
@@ -128,7 +131,10 @@ export function parseLocalWorkspaceSourcePaths(value: string): string[] {
   return paths;
 }
 
-/** Read guest ignore files with the host's index/config, never guest Git metadata. */
+/**
+ * Read guest ignore files with the host's index/config, never guest Git metadata.
+ * Lists only build-output roots: `isIgnoredWorkspaceBuildOutput` is the sole consumer of `paths`.
+ */
 export async function readLocalWorkspaceGitExclusions(
   root: string,
   projection: string,
@@ -143,6 +149,8 @@ export async function readLocalWorkspaceGitExclusions(
     "--exclude-standard",
     "--directory",
     "-z",
+    "--",
+    ...IGNORED_WORKSPACE_BUILD_OUTPUT_ROOTS,
   ]);
   return { paths: new Set(decodeLocalWorkspaceGitPaths(listed)), retainedPaths };
 }

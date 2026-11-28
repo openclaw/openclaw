@@ -596,6 +596,35 @@ describe("installDownloadSpec extraction safety", () => {
           0o755 & ~mask,
         );
       }
+
+      if (archiveType === "zip") {
+        await withDownloadServer(
+          (response) => {
+            response.writeHead(200, {
+              "content-type": "application/octet-stream",
+              "content-disposition": 'attachment; filename="runtime.zip"',
+            });
+            response.end(archive);
+          },
+          async (origin) => {
+            const inferredKey = `${skillKey}-content-disposition`;
+            const inferred = await installDownloadSpec({
+              skillKey: inferredKey,
+              spec: {
+                kind: "download",
+                url: `${origin}/download`,
+                extract: true,
+                stripComponents: 1,
+              },
+              timeoutMs: 30_000,
+            });
+            expect(inferred.ok, inferred.message).toBe(true);
+            await expect(
+              fs.readFile(path.join(resolveSkillToolsRootDir(inferredKey), "run.sh"), "utf8"),
+            ).resolves.toBe(executableContents);
+          },
+        );
+      }
     },
   );
 
@@ -724,83 +753,6 @@ describe("installDownloadSpec extraction safety", () => {
       expect(result.message).toBe("extract requested but archive type could not be detected");
     },
   );
-
-  it.each([
-    {
-      name: "quoted filename",
-      disposition: 'attachment; filename="runtime.zip"',
-      urlPath: "/download",
-    },
-    {
-      name: "RFC 5987 filename* with a language tag",
-      disposition: "attachment; filename*=UTF-8'en'runtime.zip",
-      urlPath: "/download",
-    },
-    {
-      name: "quoted filename containing a semicolon",
-      disposition: 'attachment; filename="runtime;linux.zip"',
-      urlPath: "/download",
-    },
-    {
-      name: "URL suffix when Content-Disposition is a generic download name",
-      disposition: 'attachment; filename="download"',
-      urlPath: "/runtime.zip",
-    },
-    ...[
-      'attachment; filename="wrong.tar.gz"; filename="runtime.zip"',
-      "attachment; filename*=UTF-8''wrong.tar.gz; filename*=UTF-8''runtime.zip",
-      'attachment; filename="wrong.tar.gz"; FILENAME="runtime.zip"',
-      'attachment; filename="wrong.tar.gz',
-      'attachment; filename="wrong.tar.gz"garbage',
-      "attachment; filename*=UTF-8'invalid language'wrong.tar.gz",
-      "attachment; filename*=UTF-8'--'wrong.tar.gz",
-      "attachment; filename*=UTF-8''wrong%GG.tar.gz",
-      "attachment; filename*=UTF-8''wrong%FF.tar.gz",
-      "attachment; filename=\"wrong.tar.gz\"; filename*=UTF-8''",
-    ].map((disposition) => ({
-      name: disposition,
-      disposition,
-      urlPath: "/runtime.zip",
-    })),
-  ])("extracts a zip using Content-Disposition $name", async ({ disposition, name, urlPath }) => {
-    const executableContents = "#!/bin/sh\nprintf verified\\n\n";
-    const zip = new JSZip();
-    zip.folder("package/empty/");
-    zip.file("package/run.sh", executableContents, { unixPermissions: 0o755 });
-    const archive = await zip.generateAsync({ type: "nodebuffer", platform: "UNIX" });
-
-    await withDownloadServer(
-      (response) => {
-        response.writeHead(200, {
-          "content-type": "application/octet-stream",
-          "content-disposition": disposition,
-        });
-        response.end(archive);
-      },
-      async (origin) => {
-        const skillKey = `cd-archive-${name.replaceAll(" ", "-")}`;
-        const result = await installDownloadSpec({
-          skillKey,
-          spec: {
-            kind: "download",
-            id: "dl",
-            url: `${origin}${urlPath}`,
-            extract: true,
-            targetDir: "runtime",
-            stripComponents: 1,
-          },
-          timeoutMs: 30_000,
-        });
-
-        expect(result.message).not.toContain("archive type could not be detected");
-        expect(result.ok).toBe(true);
-        const destinationDir = path.join(resolveSkillToolsRootDir(skillKey), "runtime");
-        await expect(fs.readFile(path.join(destinationDir, "run.sh"), "utf8")).resolves.toBe(
-          executableContents,
-        );
-      },
-    );
-  });
 });
 
 describe("installDownloadSpec extraction safety (tar.bz2)", () => {

@@ -423,7 +423,7 @@ enum ChatComposerPasteSupport {
     }
 
     private static func defaultFileName(index: Int, ext: String) -> String {
-        "pasted-image-\(index + 1).\(ext)"
+        "\(OpenClawChatGeneratedAttachmentName.pasted(index: index)).\(ext)"
     }
 }
 #endif

@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 import * as gatewayLockPayload from "../infra/gateway-lock-payload.js";
+import * as gatewayLockRecovery from "../infra/gateway-lock-recovery-namespace.js";
 import * as gatewayStateOwner from "../infra/gateway-state-owner.js";
 import * as processAncestry from "../infra/restart-stale-pids.js";
 
@@ -8,6 +9,7 @@ const hostPlatform = process.platform;
 export function mockDoctorServicePlatform(platform: NodeJS.Platform): void {
   const actual = { ...gatewayStateOwner };
   const actualPayload = { ...gatewayLockPayload };
+  const classifyFileNamespace = gatewayLockRecovery.classifyGatewayLockProcessNamespace;
   const actualAncestry = { ...processAncestry };
   const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue(platform);
   // Service transports are synthetic; physical state and process probes keep the host rules.
@@ -40,8 +42,8 @@ export function mockDoctorServicePlatform(platform: NodeJS.Platform): void {
   vi.spyOn(gatewayLockPayload, "readGatewayLockProcessNamespace").mockImplementation(
     onHost(actualPayload.readGatewayLockProcessNamespace),
   );
-  vi.spyOn(gatewayLockPayload, "classifyGatewayLockProcessNamespace").mockImplementation(
-    onHost(actualPayload.classifyGatewayLockProcessNamespace),
+  vi.spyOn(gatewayLockRecovery, "classifyGatewayLockProcessNamespace").mockImplementation(
+    onHost(classifyFileNamespace),
   );
   vi.spyOn(gatewayLockPayload, "classifyGatewayOwnerProcessNamespace").mockImplementation(
     onHost(actualPayload.classifyGatewayOwnerProcessNamespace),

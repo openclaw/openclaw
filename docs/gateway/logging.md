@@ -66,6 +66,11 @@ order without blocking the Gateway main thread on filesystem checks. Normal
 shutdown drains queued writes; forced process exit retains a synchronous rescue
 for records that have not started writing.
 
+If a group- or world-writable ancestor without the sticky bit blocks both log directories,
+the dropped-record warning identifies the ancestor. Its owner can remove group and other
+write access (`chmod go-w`) for a private directory, or set the sticky bit (`chmod +t`)
+for an intentionally shared temp directory. No change to the log file is needed.
+
 If initial directory preparation fails, later records retry it. Once the path is
 repaired, writing resumes without a restart. Records dropped during the failure
 are not replayed.

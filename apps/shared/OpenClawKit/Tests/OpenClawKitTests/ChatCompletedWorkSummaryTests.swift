@@ -20,6 +20,28 @@ struct ChatCompletedWorkSummaryTests {
         #expect(message.activity == nil)
     }
 
+    @Test func `an activity log names its work in the Control UI's words`() {
+        func call(_ name: String, _ state: ChatToolActivityItem.State = .finished) -> ChatToolActivityItem {
+            ChatToolActivityItem(
+                id: UUID().uuidString, name: name, arguments: nil, details: nil, resultText: "ok", state: state,
+                liveDiffStat: nil)
+        }
+        let cases: [([ChatToolActivityItem], String)] = [
+            ([call("read"), call("edit")], "Read and changed files"),
+            ([call("read"), call("write")], "Read and changed files"),
+            ([call("read", .running), call("edit")], "Reading files, changed files"),
+            ([call("read"), call("grep")], "Read files"),
+            ([call("grep"), call("skills_search")], "Searched"),
+            ([call("read"), call("custom_tool")], "Read files"),
+            ([call("custom_tool")], "Used tools"),
+            ([call("sessions_send"), call("agents_wait")], "Sent messages, waited for agents"),
+            ([call("knowledge_lookup"), call("knowledge_remember")], "Read and updated memory"),
+        ]
+        for (items, expected) in cases {
+            #expect(ChatCompletedWorkSummary.headline(items) == expected)
+        }
+    }
+
     private static func decode(_ json: String) throws -> [OpenClawChatMessage] {
         try [JSONDecoder().decode(OpenClawChatMessage.self, from: Data(json.utf8))]
     }

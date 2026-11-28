@@ -184,7 +184,7 @@ export async function prepareCodexAppServerProcessRegistration(): Promise<
         "Cannot register the Codex child process: its direct-parent identity is unavailable. Retry.",
       );
     }
-    const command = await readCodexAppServerProcessCommand(spawned, deadline);
+    const command = await readCodexAppServerProcessCommand(spawned, deadline, "startup");
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(
         "Cannot register the Codex child process command: the child exited during inspection. Retry.",

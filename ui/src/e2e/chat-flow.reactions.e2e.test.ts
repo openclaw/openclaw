@@ -208,8 +208,22 @@ suite.define(() => {
         expect(
           (await gateway.waitForRequest("session.reactions.set", { after })).params,
         ).toMatchObject({ messageId, ...fields });
+      const setReaction = "session.reactions.set";
+      await gateway.deferNext(setReaction);
       await pick(footerPicker, "🎉");
-      await expectSet(0, { sessionKey, emoji: "🎉" });
+      await expectSet(0, { sessionKey, emoji: "🎉", remove: false });
+      await expect.poll(summary).toBe("🎉 You");
+      await tab.click();
+      expect(
+        await tabPicker.getByRole("button", { name: "🎉 1" }).getAttribute("aria-pressed"),
+      ).toBe("true");
+      await page.keyboard.press("Escape");
+      await gateway.rejectDeferred(setReaction, { message: "Reaction was not saved." });
+      await reactions.waitFor({ state: "detached" });
+      await page.getByText("Reaction was not saved.", { exact: false }).first().waitFor();
+      await message.locator(".chat-bubble").filter({ hasText: prompt }).hover();
+      await pick(footerPicker, "🎉");
+      await expectSet(1, { emoji: "🎉" });
       await expect.poll(summary).toBe("🎉 You");
       // A lone reaction shows no number, and the tab hangs off the message's own bubble.
       expect(await tab.textContent()).toBe("🎉");
@@ -221,18 +235,21 @@ suite.define(() => {
       await pick(tabPicker, "More…");
       // A complete emoji applies on input, so the OS picker needs no extra keystroke.
       await tabPicker.getByRole("searchbox", { name: "Search emoji…", exact: true }).fill("🦞");
-      await expectSet(1, { emoji: "🦞" });
+      await expectSet(2, { emoji: "🦞" });
       await expect.poll(summary).toBe("🎉 You; 🦞 You");
       expect(await tab.textContent()).toBe("🎉🦞2");
       // The opened tab lists the existing reactions; pressing one's own removes it.
       await expect
         .poll(() => tabPicker.locator(".chat-reaction-picker").getAttribute("data-phase"))
         .toBe("hidden");
+      await gateway.deferNext(setReaction);
       await tab.click();
       await tabPicker
         .locator('.chat-reaction-chip[aria-pressed="true"][aria-label="🦞 1"]')
         .click();
-      await expectSet(2, { emoji: "🦞", remove: true });
+      await expectSet(3, { emoji: "🦞", remove: true });
+      await expect.poll(summary).toBe("🎉 You");
+      await gateway.resolveDeferred(setReaction);
       await expect.poll(summary).toBe("🎉 You");
 
       const listRequests = (await gateway.getRequests("session.reactions.list")).length;

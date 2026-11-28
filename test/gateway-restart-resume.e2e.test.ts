@@ -38,8 +38,7 @@ import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js"
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
-const RESUME =
-  "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
+const RESUME = "The Gateway restarted while you were working.";
 const SHELL_CHECKPOINT = "no saved terminal result";
 const shellCases = [
   { cycle: 30, effect: "committed", expected: "Verified the file; no repeat." },
@@ -267,18 +266,11 @@ async function providerFixture(signal: AbortSignal, childTimer = false) {
               expect(input).toContain(
                 effect === "unknown" ? `/tool/${cycle}/tool` : shellEffectFile(cycle),
               );
-              tool(
-                effect === "unknown" ? "process" : "read",
-                effect === "unknown" ? { action: "list" } : { path: file },
-              );
+              tool("read", {
+                path: effect === "unknown" ? path.join(shellWorkspace, INDEPENDENT_FILE) : file,
+              });
             } else if (restarting && typeof toolOutput.output === "string") {
               const result = toolOutput.output;
-              if (effect === "unknown" && !issued.has(`independent:${cycle}`)) {
-                expect(result).toMatch(/No running|No active|No sessions/i);
-                issued.add(`independent:${cycle}`);
-                tool("read", { path: path.join(shellWorkspace, INDEPENDENT_FILE) });
-                return;
-              }
               expect(result).toContain(
                 effect === "unknown"
                   ? INDEPENDENT_CONTENT

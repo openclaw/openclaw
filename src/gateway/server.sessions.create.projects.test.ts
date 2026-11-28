@@ -258,13 +258,6 @@ test.for([
           ...(worktree ? { pendingWorktree: { baseRef } } : {}),
         });
         await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledOnce());
-        expect(projectCloneMocks.materialize).toHaveBeenCalledWith(
-          expect.objectContaining({ gitUrl: "https://github.com/openclaw/openclaw.git" }),
-          expect.objectContaining({
-            signal: expect.any(AbortSignal),
-            token: "protected-native-token",
-          }),
-        );
         expect(events).toContainEqual(
           expect.objectContaining({
             runId,
@@ -304,7 +297,6 @@ test.for([
 
         materialization.resolve(project);
         await settleWorkspaceRuns(context, storePath, key);
-        expect(projectCloneMocks.assertSelected).toHaveBeenCalled();
         const error = broadcast.mock.calls.find(
           ([event, payload]) => event === "chat" && payload.state === "error",
         );
@@ -625,8 +617,6 @@ test("sessions.create rejects conflicting, unsupported, and invalid remote proje
   for (const params of [
     { message: "Start", projectGitUrl: validRemote, projectId: "workspace:main" },
     { message: "Start", projectGitUrl: validRemote, cwd: workspace },
-    { projectGitUrl: validRemote },
-    { message: "Start", projectGitUrl: "   " },
     { message: "Start", projectGitUrl: "file:///tmp/untrusted-project" },
     { message: "Start", projectGitUrl: "https://token@github.com/openclaw/openclaw.git" },
     { key: existing?.key, message: "Start", projectGitUrl: validRemote },

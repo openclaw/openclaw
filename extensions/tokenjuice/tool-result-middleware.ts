@@ -84,7 +84,7 @@ export function createTokenjuiceAgentToolResultMiddleware(
     if (
       originalDetails?.timedOut === true ||
       originalDetails?.noOutputTimedOut === true ||
-      typeof originalDetails?.fullOutputPath === "string"
+      isRecord(originalDetails?.spill)
     ) {
       return undefined;
     }
