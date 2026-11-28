@@ -369,6 +369,13 @@ openclaw-appearance-background .settings-background-preview .session-background_
   max-height: none;
 }
 
+/* A wrapped subtitle link starts at the inset-free phone header's edge. */
+@media (max-width: 640px) {
+  main.content .content-header--settings:has(.page-subtitle .learn-more-link:focus-visible) {
+    overflow: visible;
+  }
+}
+
 .content-header--settings .page-header-actions {
   flex-wrap: wrap;
   max-width: 100%;

@@ -56,6 +56,45 @@ suite.define(() => {
     );
   });
 
+  it("paints the leading focus edge of Labs help when enlarged phone text wraps the link", async () => {
+    await suite.withPage(
+      { ...options, viewport: { width: 390, height: 844 } },
+      async ({ page }) => {
+        await installMockGateway(page, {
+          methodResponses: { "config.get": configSnapshot({}, "labs-focus") },
+        });
+        await page.goto(suite.server.baseUrl + "settings/general");
+        const typography = page.locator("#settings-appearance-typography");
+        await typography.locator(".settings-segmented__btn").filter({ hasText: "140%" }).click();
+        await expect
+          .poll(() => typography.locator(".settings-segmented__input:checked").inputValue())
+          .toBe("140");
+        await page.goto(suite.server.baseUrl + "settings/labs");
+        const labs = page.locator("openclaw-labs-page");
+        const link = labs.getByRole("link", { name: "Learn more" });
+        const decision = labs.getByRole("switch", { name: "Decision assistance" });
+        await decision.waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        const strip = await link.evaluate((anchor) => {
+          const bounds = anchor.getBoundingClientRect();
+          const header = anchor.closest(".content-header")!.getBoundingClientRect();
+          return {
+            left: bounds.left,
+            headerLeft: header.left,
+            y: Math.round(bounds.top + bounds.height / 2),
+          };
+        });
+        expect(strip.left).toBe(strip.headerLeft);
+        const clip = { x: Math.round(strip.left) - 4, y: strip.y, width: 2, height: 2 };
+        const resting = await page.screenshot({ clip, animations: "disabled" });
+        await decision.focus();
+        await decision.press("Shift+Tab");
+        expect(await link.evaluate((anchor) => anchor.matches(":focus-visible"))).toBe(true);
+        expect(await page.screenshot({ clip, animations: "disabled" })).not.toEqual(resting);
+      },
+    );
+  });
+
   it("keeps Labs decision readiness distinct and recovers a rejected save", async () => {
     await suite.withPage(options, async ({ page }) => {
       const saved = configSnapshot(
