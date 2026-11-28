@@ -153,6 +153,7 @@ struct ChatMarkdownRenderer: View {
     @Environment(\.openClawChatMarkdownFileLinks) private var fileLinksEnabled
     @Environment(\.openClawChatMarkdownFileLabels) private var inheritedFileLabels
     #if os(iOS)
+    @Environment(\.openClawChatColumn) private var column
     @Environment(\.openClawReadingPosition) private var readingPosition
     @Environment(\.openClawReadingAnswerRun) private var readingAnswerRun
     #endif
@@ -193,6 +194,11 @@ struct ChatMarkdownRenderer: View {
 
             if !snapshot.images.isEmpty {
                 InlineImageList(images: snapshot.images)
+                    #if os(iOS)
+                        .frame(
+                            maxWidth: self.typography == .document ? nil : self.column.bubbleAndMediaMaxWidth,
+                            alignment: self.context == .user ? .trailing : .leading)
+                    #endif
             }
         }
         .environment(\.openClawChatMarkdownFileLabels, fileLabels)

@@ -195,14 +195,38 @@ private enum ChatUIConstants {
     /// How far a reactions pill reaches into the user bubble. Less than the bubble's 14-point
     /// leading padding, so it never covers text.
     static let reactionOverlap: CGFloat = 8
+    /// A user's attachments sit above the bubble, outside it, as in the Control UI: images 8 pt
+    /// above the text (`--space-2`, ui/src/styles/chat/text.css:1578-1584), any other block one
+    /// block gap away (`--chat-block-gap`, 14 px at the default size; text.css:1548-1575,
+    /// base.css:311 and 322).
+    static let userMediaToTextSpacing: CGFloat = 8
+    static let userBlockSpacing: CGFloat = 14
+    /// Several images become square tiles, three to a row (two for two or four images), 4 pt apart,
+    /// at most 128 pt: `--chat-user-image-grid-size` in ui/src/styles/chat/message-layout.css:563-603.
+    static let userImageTileMax: CGFloat = 128
+    static let userImageTileGap: CGFloat = 4
     #else
     /// Web `--radius-md` (ui/src/styles/base.css:366) on the user bubble.
     static let bubbleCorner: CGFloat = 10
     #endif
     static let onboardingBubbleCorner: CGFloat = 18
+
+    /// The images past the four a message shows.
+    static func imagesNotShown(_ count: Int) -> String {
+        count == 1 ? String(localized: "1 more image not shown")
+            : String(format: String(localized: "%lld more images not shown"), Int64(count))
+    }
 }
 
 #if os(iOS)
+extension ChatColumnLayout {
+    /// A gallery tile: three tiles and their gaps fit the user bubble's measure, at most 128 pt.
+    var userImageTileSide: CGFloat {
+        let gap = ChatUIConstants.userImageTileGap
+        return min(ChatUIConstants.userImageTileMax, ((self.bubbleAndMediaMaxWidth - 2 * gap) / 3).rounded(.down))
+    }
+}
+
 /// What the transcript attaches to a user bubble: its long-press menu and its reactions pill.
 struct ChatUserBubbleAccessories {
     let menu: () -> AnyView
@@ -514,7 +538,10 @@ struct ChatMessageBubble: View, @MainActor Equatable {
                 .contentShape(.accessibility, Rectangle())
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("chat-user-message-body")
-                .frame(maxWidth: self.column.userBubbleMaxWidth, alignment: .trailing)
+                #if !os(iOS)
+                // On iOS the text bubble and attachments are measured separately.
+                .frame(maxWidth: self.column.bubbleAndMediaMaxWidth, alignment: .trailing)
+                #endif
                 .frame(maxWidth: .infinity, alignment: .trailing)
         } else {
             // Replies span the reading column; only the avatar gutter (wide panes) narrows them.
@@ -631,8 +658,17 @@ extension ChatMessageBubble {
             if shouldRenderBubble {
                 if self.isUser {
                     #if os(iOS)
+                    let bubbleText = self.userBubbleText(text)
+                    let hasBubble = !bubbleText.isEmpty
                     VStack(alignment: .trailing, spacing: ChatUIConstants.userFooterSpacing) {
-                        self.userBubble(text: text, textColor: textColor)
+                        if !self.visibleInlineAttachments.isEmpty {
+                            self.userAttachments(hasBubble: hasBubble)
+                                .padding(.bottom, hasBubble ? self.userAttachmentsToTextSpacing : 0)
+                        }
+                        if hasBubble {
+                            self.userBubble(text: bubbleText, textColor: textColor)
+                                .frame(maxWidth: self.column.bubbleAndMediaMaxWidth, alignment: .trailing)
+                        }
                         self.footer
                             .padding(.trailing, self.style == .onboarding ? 8 : 0)
                     }
@@ -692,7 +728,15 @@ extension ChatMessageBubble {
     }
 
     private func messageContent(text: String, textColor: Color) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        #if os(iOS)
+        // A user's attachments sit above the bubble; the bubble keeps only the text.
+        let attachments = self.isUser ? [] : self.visibleInlineAttachments
+        let omittedImageAttachmentCount = self.isUser ? 0 : self.omittedImageAttachmentCount
+        #else
+        let attachments = self.visibleInlineAttachments
+        let omittedImageAttachmentCount = self.omittedImageAttachmentCount
+        #endif
+        return VStack(alignment: .leading, spacing: 10) {
             if self.isUser {
                 VStack(alignment: .leading, spacing: 4) {
                     self.userMessageText(text: text, textColor: textColor)
@@ -715,20 +759,20 @@ extension ChatMessageBubble {
             }
             #endif
 
-            if !self.visibleInlineAttachments.isEmpty {
-                ForEach(self.visibleInlineAttachments.indices, id: \.self) { idx in
+            if !attachments.isEmpty {
+                let imageGallery = ChatImageViewerItem.gallery(in: attachments)
+                ForEach(attachments.indices, id: \.self) { idx in
                     AttachmentRow(
-                        att: self.visibleInlineAttachments[idx],
+                        att: attachments[idx],
+                        imageGallery: imageGallery,
                         isUser: self.isUser,
                         textColor: textColor,
                         playbackAllowed: self.mediaPlaybackAllowed)
                 }
             }
 
-            if self.omittedImageAttachmentCount > 0 {
-                Text(String(
-                    format: String(localized: "Additional images hidden: %lld"),
-                    Int64(self.omittedImageAttachmentCount)))
+            if omittedImageAttachmentCount > 0 {
+                Text(ChatUIConstants.imagesNotShown(omittedImageAttachmentCount))
                     .font(OpenClawChatTypography.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -877,19 +921,168 @@ extension ChatMessageBubble {
     }
 }
 
+#if os(iOS)
+/// A user's attachments, above the bubble and outside it, aligned to the trailing edge as in the
+/// Control UI at phone width: one image at its own preview size, several as square tiles, other
+/// files as cards.
+extension ChatMessageBubble {
+    /// The bubble's text. An attachment-only send carries the app's wire fallback, which the person
+    /// did not write, so it draws no bubble.
+    fileprivate func userBubbleText(_ text: String) -> String {
+        guard !self.inlineAttachments.isEmpty,
+              text.trimmingCharacters(in: .whitespacesAndNewlines) == "See attached."
+        else { return text }
+        return ""
+    }
+
+    fileprivate var userAttachmentsToTextSpacing: CGFloat {
+        let last = self.visibleInlineAttachments.contains { !AttachmentRow.rendersImage($0) }
+            ? ChatUIConstants.userBlockSpacing
+            : ChatUIConstants.userMediaToTextSpacing
+        return last - ChatUIConstants.userFooterSpacing
+    }
+
+    /// Each part lifts on its own with the message's menu: a press on the attachments lifts them, a
+    /// press on the bubble lifts the bubble. Without a bubble, the reactions pill hangs on the
+    /// attachments instead.
+    @ViewBuilder
+    fileprivate func userAttachments(hasBubble: Bool) -> some View {
+        let shape = ChatBubbleShape(cornerRadius: ChatUIConstants.bubbleCorner)
+        let group = self.userAttachmentGroup
+        if let accessories = self.userBubbleAccessories {
+            if hasBubble {
+                group
+                    .contentShape(.contextMenuPreview, shape)
+                    .chatActionContextMenu { accessories.menu() }
+            } else {
+                ChatUserBubbleDecorations(bubble: group, shape: shape, accessories: accessories)
+            }
+        } else {
+            group
+        }
+    }
+
+    private var userAttachmentGroup: some View {
+        let attachments = self.visibleInlineAttachments
+        let images = attachments.filter(AttachmentRow.rendersImage)
+        let others = attachments.filter { !AttachmentRow.rendersImage($0) }
+        return VStack(alignment: .trailing, spacing: ChatUIConstants.userBlockSpacing) {
+            if images.count == 1 {
+                self.userAttachmentRow(images[0])
+            } else if images.count > 1 {
+                self.userImageTiles(images)
+            }
+            ForEach(others.indices, id: \.self) { index in
+                self.userAttachmentRow(others[index])
+                    .frame(maxWidth: self.column.bubbleAndMediaMaxWidth, alignment: .trailing)
+            }
+            if self.omittedImageAttachmentCount > 0 {
+                Text(ChatUIConstants.imagesNotShown(self.omittedImageAttachmentCount))
+                    .font(OpenClawChatTypography.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// Three tiles to a row, two for two or four images; the last row keeps to the trailing edge.
+    /// The rows fit the text bubble's measure, as every attachment above the bubble does.
+    private func userImageTiles(_ images: [OpenClawChatMessageContent]) -> some View {
+        let gap = ChatUIConstants.userImageTileGap
+        let columns = images.count == 2 || images.count == 4 ? 2 : 3
+        let side = self.column.userImageTileSide
+        let rows = stride(from: 0, to: images.count, by: columns).map {
+            Array(images[$0..<min($0 + columns, images.count)])
+        }
+        return VStack(alignment: .trailing, spacing: gap) {
+            ForEach(rows.indices, id: \.self) { row in
+                HStack(spacing: gap) {
+                    ForEach(rows[row].indices, id: \.self) { index in
+                        self.userAttachmentRow(rows[row][index], tileSide: side)
+                    }
+                }
+            }
+        }
+    }
+
+    private func userAttachmentRow(_ att: OpenClawChatMessageContent, tileSide: CGFloat? = nil) -> some View {
+        AttachmentRow(
+            att: att,
+            imageGallery: ChatImageViewerItem.gallery(in: self.visibleInlineAttachments, sentPhotos: true),
+            isUser: true,
+            textColor: self.textColor,
+            playbackAllowed: self.mediaPlaybackAllowed,
+            imageTileSide: tileSide,
+            messageAttachments: self.visibleInlineAttachments)
+    }
+}
+#endif
+
 /// The media leaf: it reads resolver readiness from the Gateway resources, so a health flip
 /// updates attachments and not the row that holds them.
 private struct AttachmentRow: View {
     @Environment(\.openClawChatDesktopLayout) private var isDesktopLayout
+    @Environment(\.openClawChatColumn) private var column
     @Environment(\.openClawChatGateway) private var gateway
 
     let att: OpenClawChatMessageContent
+    let imageGallery: [ChatImageViewerItem]
     let isUser: Bool
     let textColor: Color
     let playbackAllowed: @MainActor @Sendable () -> Bool
+    /// A square gallery tile for an image, when a user message carries several.
+    var imageTileSide: CGFloat?
+    /// A user message's attachments, so the viewer can load any of its sent photos, not only this one.
+    var messageAttachments: [OpenClawChatMessageContent] = []
+
+    /// Whether a user's attachment draws as an image (a managed artifact, or a sent photo) rather
+    /// than a card.
+    static func rendersImage(_ att: OpenClawChatMessageContent) -> Bool {
+        #if os(iOS)
+        if ChatUserImageSource.isRenderable(att) { return true }
+        #endif
+        return att.mediaKind == .image && self.fetchableArtifactId(att) != nil
+    }
 
     var body: some View {
-        if let artifactId = self.fetchableArtifactId, let kind = self.att.mediaKind {
+        #if os(iOS)
+        if self.isUser, let image = ChatUserImageSource(self.att) {
+            ChatMediaImageAttachment(
+                artifactId: image.loadID,
+                // A sent photo's name is the picker's ("photo-1A2B.jpg"), not something to read aloud.
+                label: self.nonEmptyAlt ?? String(localized: "Photo"),
+                width: self.att.width,
+                height: self.att.height,
+                tileSide: self.imageTileSide,
+                maxWidth: self.column.bubbleAndMediaMaxWidth,
+                memoryAlias: image.memoryAlias,
+                loadingLabel: String(localized: "Loading photo"),
+                resolverReady: image.local != nil || self.gateway?.isResolverReady() == true,
+                gallery: self.imageGallery,
+                load: { id in
+                    if let local = image.local { return .data(local) }
+                    return try await self.loadMedia(id, .image, nil)
+                },
+                viewerLoad: { [messageAttachments] id in
+                    // The viewer pages through the message's photos with this one loader. The bytes
+                    // the phone holds are the original; otherwise it asks for the upload as is
+                    // (`.native`), not the transcript's thumbnail.
+                    let page = messageAttachments.first { ChatUserImageSource.pageID($0) == id }
+                    let local = page.flatMap(ChatUserImageSource.init)?
+                        .local ?? (id == image.loadID ? image.local : nil)
+                    if let local { return .data(local) }
+                    return try await self.loadMedia(id, .image, .native)
+                })
+        } else {
+            self.gatewayMedia
+        }
+        #else
+        self.gatewayMedia
+        #endif
+    }
+
+    @ViewBuilder
+    private var gatewayMedia: some View {
+        if let artifactId = Self.fetchableArtifactId(self.att), let kind = self.att.mediaKind {
             let resolverReady = self.gateway?.isResolverReady() == true
             switch kind {
             case .file:
@@ -903,7 +1096,12 @@ private struct AttachmentRow: View {
                 ChatMediaImageAttachment(
                     artifactId: artifactId,
                     label: self.attachmentLabel,
+                    width: self.att.width,
+                    height: self.att.height,
+                    tileSide: self.imageTileSide,
+                    maxWidth: self.column.bubbleAndMediaMaxWidth,
                     resolverReady: resolverReady,
+                    gallery: self.imageGallery,
                     load: { try await self.loadMedia($0, .image, nil) })
             case .audio:
                 // A busy Gateway inspector can omit playback metadata. Let its
@@ -944,6 +1142,7 @@ private struct AttachmentRow: View {
             Image(systemName: OpenClawChatPickerAttachmentMetadata.fileIcon(
                 mimeType: self.att.mimeType ?? "",
                 fileName: self.att.fileName ?? ""))
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(self.isAudio && self.att.durationSeconds != nil && self.att.url == nil
                     ? String(localized: "Voice note") : self.attachmentLabel)
@@ -965,20 +1164,35 @@ private struct AttachmentRow: View {
             Spacer()
         }
         .padding(10)
-        .background(self.isUser
-            ? Color.white.opacity(self.isDesktopLayout ? 0.04 : 0.2)
-            : Color.black.opacity(0.04))
+        .background(self.fallbackRowSurface)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        // Name and size read as one card.
+        .accessibilityElement(children: .combine)
+    }
+
+    private var fallbackRowSurface: Color {
+        #if os(iOS)
+        // A user's cards sit on the canvas above the bubble, in the image placeholder's ink.
+        if self.isUser { return OpenClawChatTheme.assistantText.opacity(0.07) }
+        #endif
+        return self.isUser
+            ? Color.white.opacity(self.isDesktopLayout ? 0.04 : 0.2)
+            : Color.black.opacity(0.04)
     }
 
     private var isAudio: Bool {
         self.att.mediaKind == .audio
     }
 
-    private var fetchableArtifactId: String? {
-        guard let kind = self.att.mediaKind else { return nil }
-        let value = self.att.artifactId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    private static func fetchableArtifactId(_ att: OpenClawChatMessageContent) -> String? {
+        guard let kind = att.mediaKind else { return nil }
+        let value = att.artifactId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return !value.isEmpty && kind.acceptsManagedArtifactID(value) ? value : nil
+    }
+
+    private var nonEmptyAlt: String? {
+        let alt = self.att.alt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return alt.isEmpty ? nil : alt
     }
 
     private var attachmentLabel: String {
