@@ -32,8 +32,8 @@ import {
 import { readPackageVersion } from "./shared.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import {
-  assertGatewayServiceAdmissionUnchanged,
   GatewayServiceUpdateOwnershipError,
+  assertGatewayServiceAdmissionUnchanged,
   inspectManagedGatewayServiceBeforeUpdate,
   readGatewayServiceStateForUpdate,
   resolveUpdatedGatewayRestartPort,
@@ -48,6 +48,9 @@ import type {
   UpdateFinalizationLifecycle,
   UpdateFinalizationPhase,
 } from "./update-finalization-lifecycle.js";
+
+// Admission errors are not service outcomes, including ordinary filesystem/worker failures.
+class RepairRecoveryAdmissionError extends Error {}
 
 function stoppedGatewayGuidance(reason: string, env: NodeJS.ProcessEnv): string {
   return `Gateway service remains stopped: ${reason}. After resolving this, start it with \`${formatCliCommand("openclaw gateway start", env)}\`, then check \`${formatCliCommand("openclaw gateway status --deep", env)}\`.`;
@@ -176,6 +179,13 @@ export async function restoreRepairGateway(params: {
 }> {
   const { env, phase, originalRunId } = params;
   const runIds = [originalRunId, params.repairRunId];
+  const admitRecovery = async () => {
+    try {
+      await assertUpdateRecoveryAdmission({ env });
+    } catch (cause) {
+      throw new RepairRecoveryAdmissionError(formatErrorMessage(cause), { cause });
+    }
+  };
   // A mark stays on its run; a receipt from this or an earlier repair resolves it.
   const risk = () =>
     findUnverifiedDataAtRisk(
@@ -214,9 +224,18 @@ export async function restoreRepairGateway(params: {
         );
       }
     };
+    const expectedVersion = await readPackageVersion(params.root);
+    const expectedBuildId = await readBuiltGatewayBuildId(params.root);
+    // Capture the selected binding; native preparation verifies it again before mutation.
     const state = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs);
     assertDoctorServiceSelection(env, state.env);
     const verdict = await inspectManagedGatewayServiceBeforeUpdate({ root: params.root, state });
+    await admitRecovery();
+    const port = await resolveUpdatedGatewayRestartPort({
+      config: params.config,
+      serviceEnv: state.env,
+      serviceCommand: state.command,
+    });
     assertCurrent();
     if (verdict.kind !== "owned") {
       return {
@@ -224,15 +243,6 @@ export async function restoreRepairGateway(params: {
         warning: stoppedGatewayGuidance("its ownership could not be verified", env),
       };
     }
-    const port = await resolveUpdatedGatewayRestartPort({
-      config: params.config,
-      serviceEnv: state.env,
-      serviceCommand: state.command,
-    });
-    const expectedVersion = await readPackageVersion(params.root);
-    const expectedBuildId = await readBuiltGatewayBuildId(params.root);
-    await assertUpdateRecoveryAdmission({ env });
-    assertCurrent();
     if (!state.running && readPendingStop().started) {
       return {
         restart: false,
@@ -244,33 +254,30 @@ export async function restoreRepairGateway(params: {
     }
     const restart = !state.running;
     if (restart) {
-      const beforeMutation = async () => {
-        await assertUpdateRecoveryAdmission({ env });
-        const current = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs);
-        assertDoctorServiceSelection(env, current.env);
-        const serviceUpdateVerdict = await inspectManagedGatewayServiceBeforeUpdate({
-          root: params.root,
-          state: current,
-        });
-        assertGatewayServiceAdmissionUnchanged(
-          { serviceUpdateVerdict: verdict },
-          serviceUpdateVerdict,
-        );
-        if (readPendingStop().started) {
-          throw new Error(
-            "Recovered update's Gateway stop intent changed. Run openclaw gateway status --deep.",
-          );
-        }
-        assertCurrent();
-      };
-      await beforeMutation();
       await service.start({
         env: state.env,
         stdout: params.json ? process.stderr : process.stdout,
         preserveDefinition: true,
+        beforeMutation: async () => {
+          await admitRecovery();
+          const current = await readGatewayServiceStateForUpdate(service, env, params.timeoutMs);
+          assertDoctorServiceSelection(env, current.env);
+          const currentVerdict = await inspectManagedGatewayServiceBeforeUpdate({
+            root: params.root,
+            state: current,
+          });
+          assertGatewayServiceAdmissionUnchanged({ serviceUpdateVerdict: verdict }, currentVerdict);
+          assertCurrent();
+        },
         assertCurrent,
-        beforeEffect: assertCurrent,
-        beforeMutation,
+        beforeEffect: () => {
+          assertCurrent();
+          if (readPendingStop().started) {
+            throw new Error(
+              "Recovered update's Gateway stop intent changed. Run openclaw gateway status --deep.",
+            );
+          }
+        },
       });
     }
     // Keep startup evidence independent of readiness failures and later stopped snapshots.
@@ -316,7 +323,11 @@ export async function restoreRepairGateway(params: {
     }
     return { restart, verification };
   }).catch((error: unknown) => {
-    if (hasCommandProcessCleanupError(error) || risk()) {
+    if (
+      hasCommandProcessCleanupError(error) ||
+      risk() ||
+      error instanceof RepairRecoveryAdmissionError
+    ) {
       throw error;
     }
     // An unmanaged service (for example a non-default state dir) is not this
@@ -324,9 +335,11 @@ export async function restoreRepairGateway(params: {
     if (error instanceof GatewayServiceUpdateOwnershipError) {
       return { restart: false, warning: stoppedGatewayGuidance(error.message, env) };
     }
-    throw new Error(
-      `Gateway recovery after update repair failed: ${formatErrorMessage(error)}. After resolving the failure, start it with \`${formatCliCommand("openclaw gateway start", env)}\`, then check \`${formatCliCommand("openclaw gateway status --deep", env)}\`.`,
-      { cause: error },
-    );
+    // Repair maintenance already finished; a Gateway that will not come back is
+    // its next step, not a failed repair. Startup evidence stays recorded.
+    return {
+      restart: false,
+      warning: `Gateway recovery after update repair was not verified: ${formatErrorMessage(error)}. After resolving the failure, start it with \`${formatCliCommand("openclaw gateway start", env)}\`, then check \`${formatCliCommand("openclaw gateway status --deep", env)}\`.`,
+    };
   });
 }

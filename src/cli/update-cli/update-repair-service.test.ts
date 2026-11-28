@@ -62,6 +62,7 @@ beforeEach(async () => {
     start: vi.fn(async (args) => {
       await args.beforeMutation?.();
       args.assertCurrent?.();
+      args.beforeEffect?.();
       events.push("start");
     }),
   });
@@ -221,6 +222,175 @@ it("finalizes an interrupted managed update, then starts and verifies its stoppe
   );
   await repair(false);
   expect(service.start).toHaveBeenCalledTimes(1);
+});
+
+it("does not start a rebound service after native preparation", async () => {
+  seed(true);
+  vi.mocked(service.start).mockImplementation(async (args) => {
+    vi.mocked(service.readCommand).mockResolvedValue({
+      programArguments: [process.execPath, state.path("openclaw.mjs"), "gateway"],
+      sourcePath: state.path("gateway.service"),
+      environment: { OPENCLAW_STATE_DIR: state.path("other-state") },
+    });
+    await args.beforeMutation?.();
+    args.beforeEffect?.();
+    events.push("start");
+  });
+  await repair();
+  expect(events).toEqual(["finalized"]);
+  expect(healthApi.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+  expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
+    expect.objectContaining({ status: "warning", restart: false }),
+  );
+});
+
+it("fails repair when interrupted database publication appears before restoration", async () => {
+  seed(true);
+  vi.mocked(service.readCommand).mockImplementation(async () => {
+    if (events.includes("finalized")) {
+      const { resolveOpenClawStateSqlitePath } =
+        await import("../../state/openclaw-state-db.paths.js");
+      const path = await import("node:path");
+      await fs.mkdir(
+        path.join(
+          path.dirname(resolveOpenClawStateSqlitePath(process.env)),
+          ".openclaw-restore-regression",
+        ),
+        { recursive: true },
+      );
+    }
+    return {
+      programArguments: [process.execPath, state.path("openclaw.mjs"), "gateway"],
+      sourcePath: state.path("gateway.service"),
+    };
+  });
+  await repair();
+  expect(events).toContain("finalized");
+  expect(events).not.toContain("start");
+  expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  expect(defaultRuntime.writeJson).not.toHaveBeenCalledWith(
+    expect.objectContaining({ status: "warning" }),
+  );
+});
+
+it("fails repair when database publication is interrupted during native preparation", async () => {
+  seed(true);
+  vi.mocked(service.start).mockImplementation(async (args) => {
+    const { resolveOpenClawStateSqlitePath } =
+      await import("../../state/openclaw-state-db.paths.js");
+    const path = await import("node:path");
+    await fs.mkdir(
+      path.join(
+        path.dirname(resolveOpenClawStateSqlitePath(process.env)),
+        ".openclaw-restore-late",
+      ),
+    );
+    await args.beforeMutation?.();
+    args.beforeEffect?.();
+    events.push("start");
+  });
+  await repair();
+  expect(events).not.toContain("start");
+  expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+});
+
+it("fails repair when the recovery directory cannot be read", async () => {
+  seed(true);
+  const { resolveOpenClawStateSqlitePath } = await import("../../state/openclaw-state-db.paths.js");
+  const path = await import("node:path");
+  const parent = path.dirname(resolveOpenClawStateSqlitePath(process.env));
+  const readdir = fs.readdir;
+  const denied = Object.assign(new Error("synthetic recovery directory read denied"), {
+    code: "EACCES",
+  });
+  vi.spyOn(fs, "readdir").mockImplementation((...args) => {
+    if (args[0] === parent && events.includes("finalized")) {
+      return Promise.reject(denied);
+    }
+    return readdir(...args);
+  });
+  await repair();
+  expect(events).not.toContain("start");
+  expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+  expect(defaultRuntime.error).toHaveBeenCalledWith(expect.stringContaining(denied.message));
+  expect(defaultRuntime.writeJson).not.toHaveBeenCalledWith(
+    expect.objectContaining({ status: "warning" }),
+  );
+});
+
+it("prints manual Gateway recovery guidance in normal terminal output", async () => {
+  seed(true);
+  vi.mocked(service.start).mockRejectedValue(new Error("native start failed"));
+  await repair(false);
+  expect(defaultRuntime.log).toHaveBeenCalledWith(
+    expect.stringMatching(
+      /native start failed.*openclaw gateway start.*openclaw gateway status --deep/,
+    ),
+  );
+  expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+});
+
+it("does not revoke a successful repair start during post-effect authority checks", async () => {
+  const original = seed(true);
+  vi.mocked(service.start).mockImplementation(async (args) => {
+    args.beforeEffect?.();
+    const active = listUpdateRuns().find(({ status }) => status === "running")!;
+    expect(active.runId).not.toBe(original);
+    const updated = recordUpdateRunStep(active.runId, {
+      step: "service-start",
+      status: "completed",
+      endedAtMs: Date.now(),
+    });
+    expect(updated?.steps).toContainEqual(
+      expect.objectContaining({ step: "service-start", status: "completed" }),
+    );
+    args.assertCurrent?.();
+    events.push("start");
+  });
+
+  await repair();
+
+  expect(events).toEqual(["finalized", "start", "verified"]);
+  expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
+    expect.objectContaining({ status: "ok", restart: true }),
+  );
+});
+
+it("does not start when native preparation retires the pending repair stop", async () => {
+  const original = seed(true);
+  vi.mocked(service.start).mockImplementation(async (args) => {
+    // Native preparation awaits before its final dispatch callback.
+    await Promise.resolve();
+    const active = listUpdateRuns().find(({ status }) => status === "running")!;
+    expect(active.runId).not.toBe(original);
+    const updated = recordUpdateRunStep(active.runId, {
+      step: "service-start",
+      status: "completed",
+      endedAtMs: Date.now(),
+    });
+    expect(updated?.steps).toContainEqual(
+      expect.objectContaining({ step: "service-start", status: "completed" }),
+    );
+    args.beforeEffect?.();
+    events.push("start");
+  });
+
+  await repair();
+
+  expect(events).toEqual(["finalized"]);
+  expect(healthApi.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+  expect(listUpdateRuns()[0]?.status).toBe("succeeded");
+  expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      status: "warning",
+      restart: false,
+      postUpdate: expect.objectContaining({
+        doctor: expect.objectContaining({
+          warnings: [expect.stringContaining("Gateway stop intent changed")],
+        }),
+      }),
+    }),
+  );
 });
 
 it.each(["recorded native handoff", "legacy activating phase"])(
@@ -619,7 +789,8 @@ it.each(["thrown", "stopped"])(
       );
     }
     await repair();
-    expect(listUpdateRuns()[0]?.status).toBe("failed");
+    // Repair maintenance finished; the unverified Gateway is reported as its next step.
+    expect(listUpdateRuns()[0]?.status).toBe("succeeded");
     vi.mocked(service.readRuntime).mockResolvedValue({ status: "stopped" });
     await repair();
     expect(service.start).not.toHaveBeenCalled();
@@ -656,7 +827,7 @@ it("does not start the Gateway while a helper still owns its installation", asyn
 });
 
 it.each(["start failure", "unverified health"])(
-  "reports %s with the deep status command",
+  "completes repair with a %s warning naming the recovery commands",
   async (reason) => {
     seed(true);
     if (reason === "start failure") {
@@ -664,13 +835,22 @@ it.each(["start failure", "unverified health"])(
     }
     vi.mocked(healthApi.waitForGatewayHealthyRestart).mockResolvedValue(failedHealth("stopped"));
     await repair();
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw gateway status --deep"),
+    expect(listUpdateRuns()[0]?.status).toBe("succeeded");
+    expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: "warning",
+        restart: false,
+        postUpdate: expect.objectContaining({
+          doctor: expect.objectContaining({
+            warnings: [
+              expect.stringMatching(
+                /Gateway recovery after update repair was not verified.*openclaw gateway start.*openclaw gateway status --deep/,
+              ),
+            ],
+          }),
+        }),
+      }),
     );
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw gateway start"),
-    );
-    expect(listUpdateRuns()[0]?.status).toBe("failed");
   },
 );
 
@@ -693,7 +873,8 @@ it.each([
       );
     }
     await repair();
-    expect(listUpdateRuns()[0]?.status).toBe("failed");
+    // Repair maintenance finished; the unverified Gateway is reported as its next step.
+    expect(listUpdateRuns()[0]?.status).toBe("succeeded");
     if (status === "running") {
       vi.mocked(service.readRuntime).mockResolvedValue({ status: "running", pid: 4242 });
     } else {

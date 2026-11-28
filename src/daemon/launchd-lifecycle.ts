@@ -184,6 +184,7 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
   plistPath: string;
   onMutation?: (mode: "enable" | "bootstrap") => void;
   assertCurrent?: () => void;
+  beforeEffect?: () => void;
   retryPendingTeardown?: boolean;
   preserveAutoStart?: boolean;
   deadline?: GatewayServiceControlArgs["deadline"];
@@ -267,6 +268,7 @@ async function prepareLaunchAgentActivation(
     plistPath,
     onMutation: reportMutation,
     assertCurrent,
+    beforeEffect: args.beforeEffect,
     preserveAutoStart,
     retryPendingTeardown: preserveDefinition,
     deadline,
@@ -288,7 +290,7 @@ async function prepareLaunchAgentActivation(
         return false;
       }
       assertCurrent?.();
-      const result = await execLaunchctl(["enable", serviceTarget], deadline);
+      const result = await execLaunchctl(["enable", serviceTarget], deadline, args.beforeEffect);
       if (result.code === 0) {
         reportMutation("enable");
       }
@@ -303,6 +305,7 @@ async function prepareLaunchAgentActivation(
       let start = await execLaunchctl(
         ["kickstart", ...(action === "restart" ? ["-k"] : []), serviceTarget],
         deadline,
+        args.beforeEffect,
       );
       if (action === "restart" && start.code === 0) {
         reportMutation("kickstart");
@@ -315,7 +318,7 @@ async function prepareLaunchAgentActivation(
           return;
         }
         assertCurrent?.();
-        start = await execLaunchctl(["kickstart", serviceTarget], deadline);
+        start = await execLaunchctl(["kickstart", serviceTarget], deadline, args.beforeEffect);
       }
       if (start.code !== 0) {
         throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());

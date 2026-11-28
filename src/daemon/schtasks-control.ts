@@ -174,6 +174,7 @@ export async function runScheduledTaskOrThrow(params: {
   beforeMutation?: GatewayServiceControlArgs["beforeMutation"];
   prepareEffect?: GatewayServiceControlArgs["prepareEffect"];
   allowFallback?: boolean;
+  beforeEffect?: () => void;
 }): Promise<ScheduledTaskActivation> {
   const command =
     (await readScheduledTaskCommand(params.env).catch(ignoreNonCleanupCommandError)) ?? null;
@@ -181,6 +182,7 @@ export async function runScheduledTaskOrThrow(params: {
   await params.beforeMutation?.();
   await params.prepareEffect?.();
   params.assertCurrent?.();
+  params.beforeEffect?.();
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
@@ -196,7 +198,7 @@ export async function runScheduledTaskOrThrow(params: {
     return "scheduled-task";
   }
   if (params.allowFallback !== false && !shouldManageGatewayListenerPort(params.env)) {
-    await launchFallbackTaskScript(params.env, command, params.assertCurrent);
+    await launchFallbackTaskScript(params.env, command, params.assertCurrent, params.beforeEffect);
     return "direct-fallback";
   }
   throw new Error(
@@ -456,6 +458,7 @@ export async function startScheduledTask({
   assertCurrent,
   beforeMutation,
   prepareEffect,
+  beforeEffect,
   preserveAutoStart,
 }: GatewayServiceControlArgs): Promise<void> {
   const effectiveEnv = env ?? (process.env as GatewayServiceEnv);
@@ -471,6 +474,7 @@ export async function startScheduledTask({
       stdout,
       () => reportMutation("startup-entry-start"),
       assertCurrent,
+      beforeEffect,
     );
     return;
   }
@@ -547,7 +551,10 @@ export async function startScheduledTask({
     await changeScheduledTaskEnabledState({
       env: effectiveEnv,
       enabled: true,
-      beforeMutation: assertSelected,
+      beforeMutation: async () => {
+        await assertSelected();
+        beforeEffect?.();
+      },
       assertCurrent,
     });
     reportMutation("enable");
@@ -558,6 +565,7 @@ export async function startScheduledTask({
     assertCurrent,
     beforeMutation,
     prepareEffect,
+    beforeEffect,
     allowFallback: preserveAutoStart !== true,
     env: effectiveEnv,
     scriptPath: resolveTaskScriptPath(effectiveEnv),

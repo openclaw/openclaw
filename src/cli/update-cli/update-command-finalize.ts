@@ -693,8 +693,8 @@ async function updateFinalizeCommandInternal(
           defaultRuntime.log(theme.muted("Update finalization completed."));
         } else if (result.status === "warning" && !markRefusal) {
           defaultRuntime.log(theme.warn("Update finalization completed with warnings."));
-          if (retained) {
-            defaultRuntime.log(theme.warn(retained.nextAction));
+          for (const warning of [gateway?.warning, retained?.nextAction].flatMap((w) => w ?? [])) {
+            defaultRuntime.log(theme.warn(warning));
           }
         } else {
           defaultRuntime.log(theme.error("Update finalization failed."));
