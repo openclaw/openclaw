@@ -197,6 +197,15 @@ it("preserves filter-chip order, session-only title, labels, and clear callbacks
   expect(onClearSessions).toHaveBeenCalledOnce();
 });
 
+it("shows a count without exposing routing keys for a multiple-session filter", () => {
+  const props = usageFixture({}, { selectedSessions: ["agent:main:first", "agent:main:second"] });
+  const { container } = mountView(() => renderFilterChips([], props));
+
+  const chip = container.querySelector(".filter-chip");
+  expect(chip?.textContent).toContain("Session: 2 sessions");
+  expect(chip?.getAttribute("title")).toBeNull();
+});
+
 it("cost windows preserve sub-cent totals and day columns across refreshes", () => {
   const day = dailyEntry("2026-07-01", 300, 0.003);
   const [daily, setDaily] = createSignal([day]);

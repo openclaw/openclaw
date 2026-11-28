@@ -301,6 +301,9 @@ describe("renderUsage", () => {
     expect(textAt(container, ".session-detail-title")).toBe(
       `${"a".repeat(19)}🚀${"b".repeat(28)}…`,
     );
+    expect(container.querySelector(".session-detail-title span")?.getAttribute("title")).toBe(
+      label,
+    );
   });
 
   it("retains an open query menu while selecting multiple options", async () => {

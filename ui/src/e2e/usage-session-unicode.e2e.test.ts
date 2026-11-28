@@ -74,7 +74,7 @@ suite.define(() => {
           .filter({ has: page.locator(".filter-chip-label") });
         const label = chip.locator(".filter-chip-label");
         await expect.poll(() => label.textContent(), { timeout: 10_000 }).toContain(key);
-        await expect.poll(() => chip.getAttribute("title")).toBe(key);
+        await expect.poll(() => chip.getAttribute("title")).toBeNull();
 
         const overviewScope = { projection: "overview" };
         const previousRequests = (await gateway.getRequests("sessions.usage", overviewScope))
@@ -94,7 +94,7 @@ suite.define(() => {
         });
         await expect.poll(() => row.count()).toBe(0);
 
-        await expect.poll(() => chip.getAttribute("title")).toBe(key);
+        await expect.poll(() => chip.getAttribute("title")).toBeNull();
         await expect.poll(() => label.textContent()).toBe("Session: 1234567…");
       },
     );

@@ -9,6 +9,7 @@ import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { useProviderDisplayLabel } from "../../lib/reactive/provider-presentation.tsx";
 import "../../components/tooltip.ts";
+import { usageSessionKeyLabel, usageSessionName } from "./helpers.ts";
 import { formatAnalysisCost, formatUsageTokens } from "./metrics.ts";
 import type { UsageProps, UsageSessionEntry } from "./types.ts";
 
@@ -221,13 +222,8 @@ function SessionRows(props: {
   return (
     <For each={props.sessions} keyed={(session) => session.key}>
       {(session) => {
-        const label = () => {
-          const raw = session().label || session().key;
-          // Agent session keys often include a token query param; remove it for readability.
-          return raw.startsWith("agent:") && raw.includes("?token=")
-            ? raw.slice(0, raw.indexOf("?token="))
-            : raw;
-        };
+        const name = createMemo(() => usageSessionName(session()));
+        const label = () => name() ?? usageSessionKeyLabel(session().key);
         const meta = createMemo(() => {
           i18nRevision();
           return buildSessionMeta(session(), providerDisplayLabel);
@@ -265,7 +261,7 @@ function SessionRows(props: {
               }
               onSelect(event);
             }}
-            title={session().key}
+            title={name()}
           >
             <button
               ref={(element) => (selection = element)}

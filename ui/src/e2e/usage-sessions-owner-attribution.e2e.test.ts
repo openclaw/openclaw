@@ -32,7 +32,6 @@ const viewport = { height: 900, width: 1_440 };
 
 const PROOF_SESSION_ID = "tg-dm-owner-attribution-proof";
 const PROOF_STORE_KEY = "agent:main:telegram:dm";
-const PROOF_LABEL = "Telegram DM";
 
 async function capture(page: Page, name: string, proofSuite = suite) {
   if (!captureUiProof) {
@@ -87,11 +86,15 @@ const ownerScenarios = [
     resetCurrentSession: false,
     sessionId: PROOF_SESSION_ID,
     storeKey: PROOF_STORE_KEY,
+    label:
+      "Telegram DM: reconcile the platform invoices and share the itemized infrastructure costs with the delivery team",
   },
   {
     resetCurrentSession: true,
     sessionId: `${PROOF_SESSION_ID}-reset`,
     storeKey: `${PROOF_STORE_KEY}-reset`,
+    label:
+      "Telegram DM: review the delivery budget after restarting the session and confirm the infrastructure allocations",
   },
 ] as const;
 
@@ -157,6 +160,8 @@ const ownerSuite = createControlUiE2eSuite({
       };
       await state.writeConfig(config);
       setRuntimeConfigSnapshot(config);
+      const { ensureGatewayOwnerProfile } = await import("../../../src/state/user-profiles.js");
+      ensureGatewayOwnerProfile("Usage Proof", { env: state.env });
 
       for (const scenario of ownerScenarios) {
         for (const agentId of ["main", "opus"]) {
@@ -171,7 +176,7 @@ const ownerSuite = createControlUiE2eSuite({
           if (agentId === "main") {
             await upsertSessionEntryCore(scope, {
               sessionId: scenario.sessionId,
-              label: PROOF_LABEL,
+              label: scenario.label,
               updatedAt: now,
             });
           }
@@ -196,7 +201,7 @@ const ownerSuite = createControlUiE2eSuite({
             },
             {
               sessionId: "empty-current-session",
-              label: PROOF_LABEL,
+              label: scenario.label,
               updatedAt: Date.now(),
             },
           );
@@ -223,31 +228,48 @@ ownerSuite.define(() => {
     async (resetCurrentSession) => {
       const scenario = resetCurrentSession ? ownerScenarios[1] : ownerScenarios[0];
       await ownerSuite.withPage(
-        { locale: "en-US", serviceWorkers: "block", viewport },
+        { locale: "en-US", serviceWorkers: "block", viewport: { ...viewport, width: 820 } },
         async ({ page }) => {
           const pageErrors: string[] = [];
           page.on("pageerror", (error) => pageErrors.push(String(error)));
 
-          const url = new URL("usage", ownerSuite.server.baseUrl);
-          url.searchParams.set("gatewayUrl", `ws://127.0.0.1:${ownerPort}`);
+          const gatewayUrl = new URL(`ws://127.0.0.1:${ownerPort}`).href;
+          let sessionRequests = 0;
+          page.on("websocket", (socket) => {
+            if (socket.url() !== gatewayUrl) {
+              return;
+            }
+            socket.on("framesent", ({ payload }) => {
+              const frame: { type: string; method?: string } = JSON.parse(payload.toString());
+              if (frame.type === "req" && frame.method?.startsWith("sessions.")) {
+                sessionRequests++;
+              }
+            });
+          });
+
+          const url = new URL("settings/general", ownerSuite.server.baseUrl);
+          url.searchParams.set("gatewayUrl", gatewayUrl);
           await page.goto(url.toString());
           const confirmation = page.locator("openclaw-gateway-url-confirmation");
           await confirmation.waitFor();
           await confirmation
             .getByRole("button", { name: `Switch to 127.0.0.1:${ownerPort}`, exact: true })
             .click();
+          await waitForControlUiGatewayReady(page, controlUiE2eWaitTimeoutMs);
+          await page.goto(new URL("usage", ownerSuite.server.baseUrl).toString());
+          await waitForControlUiGatewayReady(page, controlUiE2eWaitTimeoutMs);
           const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
           await agentScope.locator(".agent-select__trigger").click();
           await agentScope
             .locator(".agent-select__option[data-agent-option]")
             .filter({ hasText: "All agents" })
             .click();
-          // The dismissed dialog can leave the pointer over a row and lift its title.
-          await page.mouse.move(0, 0);
-
-          const otherRow = page.locator(
-            `.session-bar-row[title="agent:opus:${scenario.sessionId}"]`,
-          );
+          const otherRow = page.locator(".session-bar-row").filter({
+            has: page.getByRole("button", {
+              name: `agent:opus:${scenario.sessionId}`,
+              exact: true,
+            }),
+          });
           // A rendered usage row proves the handshake and requested report both arrived.
           await otherRow.waitFor();
           await expect.poll(() => otherRow.count()).toBe(1);
@@ -255,7 +277,8 @@ ownerSuite.define(() => {
           await capture(page, "01-other-owner.png", ownerSuite);
 
           // The named family stays visible before its new current instance has a transcript.
-          const row = page.locator(`.session-bar-row[title="${scenario.storeKey}"]`);
+          const namedButton = page.getByRole("button", { name: scenario.label, exact: true });
+          const row = page.locator(".session-bar-row").filter({ has: namedButton });
           await row.waitFor();
           await expect.poll(() => row.count()).toBe(1);
           // Usage rows can render before the agent-name roster finishes.
@@ -278,13 +301,20 @@ ownerSuite.define(() => {
             await expect.poll(() => chip.getAttribute("data-agent-id")).toBe(agentId);
             await expect.poll(() => ownerRow.locator(".agent-row-chip").count()).toBe(1);
           }
-          const pair = page.locator(
-            `.session-bar-row[title="${scenario.storeKey}"], .session-bar-row[title="agent:opus:${scenario.sessionId}"]`,
-          );
-          await expect.poll(() => pair.count()).toBe(2);
           await expect.poll(() => page.locator(".session-bar-row").count()).toBe(4);
 
+          await page.mouse.move(0, 0);
           await row.scrollIntoViewIfNeeded();
+          const title = namedButton.locator(".session-bar-title");
+          expect(await title.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(
+            true,
+          );
+          const requestsBeforeHover = sessionRequests;
+          expect(requestsBeforeHover).toBeGreaterThan(0);
+          await title.hover();
+          const tooltip = page.getByRole("tooltip").filter({ hasText: scenario.label });
+          await tooltip.waitFor({ state: "visible" });
+          expect(sessionRequests).toBe(requestsBeforeHover);
           await capture(page, "02-current-owner.png", ownerSuite);
           expect(pageErrors).toEqual([]);
         },
@@ -491,9 +521,10 @@ suite.define(() => {
               const agentScope = page.locator(".agent-scope-control openclaw-agent-select");
               await agentScope.locator(".agent-select__trigger").click();
               await agentScope.locator('[data-agent-option][value="opus"]').click();
-              const selected = page.locator(
-                `.session-bar-row[title="${key}"] .session-bar-selection`,
-              );
+              const selected = page.getByRole("button", {
+                name: "Original usage session",
+                exact: true,
+              });
               await selected.click();
               const panel = page.locator(".session-detail-panel");
               const readDetails = async () => ({
