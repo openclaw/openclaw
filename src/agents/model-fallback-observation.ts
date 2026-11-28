@@ -292,6 +292,7 @@ export type ModelFallbackChainStopReason =
   | "agent_run_superseded_abort"
   | "session_placement_settlement_closed"
   | "terminal_abort_wrapper"
+  | "returned_terminal_error"
   | "local_runtime_coordination"
   | "transcript_not_continuable";
 
