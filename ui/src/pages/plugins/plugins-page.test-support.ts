@@ -7,6 +7,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { t } from "../../i18n/index.ts";
 import { createInitialConfigState } from "../../lib/config/config-state-model.ts";
 import type {
   PluginCatalogItem,
@@ -71,7 +72,7 @@ export function createPlugin(overrides: Partial<PluginCatalogItem> = {}): Plugin
   return {
     id: "workboard",
     name: "Workboard",
-    description: "Agent work queue and session handoff.",
+    description: t("subtitles.workboard"),
     origin: "bundled",
     installed: true,
     enabled: false,
