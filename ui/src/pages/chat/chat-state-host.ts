@@ -122,7 +122,7 @@ export type ChatPageHost = ChatHost &
       submissionAction?: Event,
     ) => Promise<boolean | void>;
     handleAbortChat: (options?: Parameters<typeof handleAbortChat>[1]) => Promise<void>;
-    removeQueuedMessage: (id: string) => void;
+    removeQueuedMessage: (id: string, source?: "remove" | "discard") => void;
     retryQueuedChatMessage: (id: string) => Promise<void>;
     steerQueuedChatMessage: (id: string) => Promise<void>;
     moveQueuedChatMessage: (id: string, targetId: string) => void;

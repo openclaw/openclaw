@@ -501,6 +501,7 @@ export function projectChatTranscript(
   transcript.entryAnimations.project(chatItems);
   transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys, {
     messages: props.messages,
+    showToolCalls: props.showToolCalls,
     search: search.open ? { query: search.query.trim(), empty: searchFiltering && isEmpty } : null,
   });
   const contentRows: PlacedContentRow[] = [];

@@ -40,6 +40,7 @@ import { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarant
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
 import { resolveSchemaMigrationIntegrityCheck } from "../state/schema-migration-backup-scope.js";
 import { isTruthyEnvValue } from "./env.js";
+import { readSqliteDatabaseIntegrityVerification } from "./sqlite-database-admission.js";
 import { findCanonicalSqliteIndexDrift } from "./sqlite-index-schema.js";
 import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
 import { sqliteIntegrityCheckSteps } from "./sqlite-integrity.js";
@@ -204,6 +205,7 @@ async function planAgentDatabaseMaintenance(
   context: {
     env: NodeJS.ProcessEnv;
     integrityCheck?: "quick" | "full";
+    reuseCleanCloseIntegrity?: boolean;
     prepared?: Pick<
       PreparedAgentDatabaseMigrationDiscovery,
       "versionMigrations" | "preparedTranscriptArchives"
@@ -363,8 +365,11 @@ async function planAgentDatabaseMaintenance(
     if (conditions["archive-files"] !== "none") {
       return finish(target, conditions);
     }
-    // Each Doctor run checks the current bytes (#175402). The child reads its own
-    // read-only connection; no write transaction surrounds a check that finds nothing.
+    // Boot can reuse the admission owner's full proof. Explicit Doctor checks current bytes.
+    if (context.reuseCleanCloseIntegrity && readSqliteDatabaseIntegrityVerification(database)) {
+      conditions.integrity = "none";
+      return finish(target, conditions);
+    }
     conditions.integrity = await readAsyncCondition(async () => {
       const controller = new AbortController();
       await runSqliteIntegrityOperationInWorker(
@@ -406,6 +411,7 @@ export async function planAgentDatabaseMigration(params: {
   configuredAgentDatabaseTargets: readonly { agentId: string; path: string }[];
   preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   integrityCheck?: "quick" | "full";
+  reuseCleanCloseIntegrity?: boolean;
   isSessionEntryStatePrepared?: (target: AgentDatabaseMigrationTarget) => boolean;
 }): Promise<AgentDatabaseMigrationPlan> {
   // A migration capture or artifact-preserving read serves stores through copies.
@@ -441,6 +447,7 @@ export async function planAgentDatabaseMigration(params: {
       await planAgentDatabaseMaintenance(target, {
         env: params.env,
         integrityCheck: params.integrityCheck,
+        reuseCleanCloseIntegrity: params.reuseCleanCloseIntegrity,
         prepared,
         registered,
         isSessionEntryStatePrepared: params.isSessionEntryStatePrepared,
