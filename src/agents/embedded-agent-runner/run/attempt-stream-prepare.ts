@@ -99,13 +99,13 @@ function prepareStream(
       !input.runAbortController.signal.aborted
     );
   };
+  // A settled-turn finalizer's answer is checked when its caller grants the revision budget.
+  const isFinalizer = attempt.operation === "settled-tool-finalization";
   const shouldRunBeforeAgentFinalize =
-    attempt.operation !== "settled-tool-finalization" &&
+    (!isFinalizer || attempt.maxBeforeAgentFinalizeRevisions !== undefined) &&
     hookRunner?.hasHooks("before_agent_finalize");
   const completionCheck =
-    attempt.operation !== "settled-tool-finalization" &&
-    !attempt.silentExpected &&
-    resolveReplyExpectation(attempt) !== "optional"
+    !isFinalizer && !attempt.silentExpected && resolveReplyExpectation(attempt) !== "optional"
       ? attempt.completionCheck
       : undefined;
   const onBeforeTerminalDelivery: Parameters<
