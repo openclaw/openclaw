@@ -1,0 +1,2 @@
+# Two fallback-owner table cases preserve direct and provider-wrapped transcript projection errors.
+15
