@@ -628,7 +628,9 @@ suite.define(() => {
       }
     }
     if (testCase.deviceLess) {
-      await page.locator(".sidebar-rail__bottom .sidebar-issues-button__count").waitFor();
+      expect(
+        await page.locator(".sidebar-rail__bottom .sidebar-issues-button__count").count(),
+      ).toBe(0);
       expect(await page.locator(".scope-upgrade-shell-status").count()).toBe(0);
     }
     for (let index = 0; index < (await panelControls.count()); index += 1) {

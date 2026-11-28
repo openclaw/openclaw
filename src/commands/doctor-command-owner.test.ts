@@ -33,7 +33,7 @@ it.each([{}, { channels: {} }, owners(), owners("*"), owners("telegram:*")])(
     expect(message).toContain("operator.admin");
     expect(message).toContain("no channel is required");
     expect(message).toContain("openclaw dashboard");
-    expect(message).toContain("Inbox > System > Limited access > Request admin");
+    expect(message).toContain("Settings > Profile > Your access > Request admin");
     expect(message).toContain("openclaw devices approve <requestId>");
     expect(message).toContain("For external channels");
     expect(message).toContain("commands.ownerAllowFrom");

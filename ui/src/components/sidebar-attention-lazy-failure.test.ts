@@ -5,10 +5,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { createSidebarAttentionStore } from "../app/sidebar-attention-store.ts";
 import { showToast } from "../lib/toast.ts";
-import {
-  createApplicationContextProvider,
-  hiddenScopeUpgradeCapability,
-} from "../test-helpers/application-context.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
 import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
@@ -54,7 +51,6 @@ async function mountAttention(entries?: SidebarInboxEntry[]) {
     },
     overlays: { snapshot: { approvalQueue: [] }, subscribe: () => () => {} },
     agentSelection: { state: { selectedId: null, scopeId: null }, subscribe: () => () => {} },
-    scopeUpgrade: hiddenScopeUpgradeCapability,
     agents: { state: { agentsList: null }, subscribe: () => () => {} },
   };
   // SAFETY: The fixture supplies exactly the owners observed by Inbox.

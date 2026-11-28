@@ -1,13 +1,11 @@
 import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
-import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { CustodianAlert } from "./custodian-alert-contract.ts";
 import type { IconName } from "./icon-data.ts";
-import {
-  resolveScopeUpgradeDismissal,
-  type SidebarAttentionDismissal,
-  type SidebarAttentionKind,
+import type {
+  SidebarAttentionDismissal,
+  SidebarAttentionKind,
 } from "./sidebar-attention-dismissals.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
 
@@ -23,7 +21,7 @@ type SidebarInboxEntryBase<
 
 export type SidebarAttentionItem = SidebarInboxEntryBase<"system"> & {
   type: "attention";
-  kind: Exclude<SidebarAttentionKind, "scopeUpgrade" | "outbox">;
+  kind: Exclude<SidebarAttentionKind, "outbox">;
   icon: IconName;
   label: string;
   detail: string;
@@ -44,10 +42,6 @@ export type SidebarInboxEntry =
       type: "approval";
       approval: ExecApprovalRequest;
     })
-  | (SidebarInboxEntryBase<"system"> & {
-      type: "scopeUpgrade";
-      state: Exclude<ScopeUpgradeState, { phase: "hidden" }>;
-    })
   | (SidebarInboxEntryBase<"mentions", "neutral"> & { type: "mention"; mention: MentionInboxItem })
   | (SidebarInboxEntryBase<"system"> & {
       type: "outbox";
@@ -62,24 +56,6 @@ export type SidebarInboxEntry =
       /** A stored dismissal kept while the row is shown without offering it. */
       retainedDismissal?: SidebarAttentionDismissal | null;
     });
-
-export function buildScopeUpgradeInboxEntry(params: {
-  scopes: readonly string[] | undefined;
-  state: ScopeUpgradeState;
-}): Extract<SidebarInboxEntry, { type: "scopeUpgrade" }> | null {
-  if (params.state.phase === "hidden") {
-    return null;
-  }
-  return {
-    type: "scopeUpgrade",
-    category: "system",
-    dismissal: resolveScopeUpgradeDismissal(params),
-    requiresAction: true,
-    severity:
-      params.state.phase === "error" || params.state.phase === "rejected" ? "error" : "warning",
-    state: params.state,
-  };
-}
 
 function inboxEntryArrivedAt(entry: SidebarInboxEntry): number | undefined {
   switch (entry.type) {
@@ -99,7 +75,6 @@ export function buildSidebarInboxEntries(params: {
   attention: readonly SidebarAttentionItem[];
   outbox?: readonly Extract<SidebarInboxEntry, { type: "outbox" }>[];
   mentions: readonly MentionInboxItem[];
-  scopeUpgrade: Extract<SidebarInboxEntry, { type: "scopeUpgrade" }> | null;
   update: Extract<SidebarInboxEntry, { type: "update" }> | null;
 }): SidebarInboxEntry[] {
   const approvals: SidebarInboxEntry[] = params.approvals.map((approval) => ({
@@ -127,7 +102,6 @@ export function buildSidebarInboxEntries(params: {
     ...approvals,
     ...(params.outbox ?? []),
     ...(params.update?.severity === "error" ? [params.update] : []),
-    ...(params.scopeUpgrade ? [params.scopeUpgrade] : []),
     ...errors,
     ...(params.update?.severity === "warning" ? [params.update] : []),
     ...warnings,

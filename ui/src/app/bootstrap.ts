@@ -315,7 +315,6 @@ export function bootstrapApplication(
     agentSelection,
     agents,
     overlays,
-    scopeUpgrade,
     connectionBootstrap,
   });
   const stopConfigWriteSuspension = bindUpdateConfigWriteInterlock(overlays, runtimeConfig);

@@ -1,7 +1,6 @@
 import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 
 registerEnglishCatalog(registerSidebarAttentionEnglish);
 
@@ -14,7 +13,7 @@ export function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hid
           : "connection.scopeUpgrade.guidance",
       );
     case "available":
-      return t("connection.scopeUpgrade.limited");
+      return t("profilePage.access.adminRequestHint");
     case "requesting":
       return t("connection.scopeUpgrade.requesting");
     case "pending":
@@ -33,7 +32,6 @@ export function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hid
 
 export function ScopeUpgradeActions(props: {
   state: Exclude<ScopeUpgradeState, { phase: "hidden" }>;
-  inbox?: boolean;
   onRequest: () => void;
   onRetry: () => void;
   onCancel: () => void;
@@ -42,17 +40,12 @@ export function ScopeUpgradeActions(props: {
     props.state.phase === "error"
       ? props.state.retryable
       : props.state.phase === "pending" || props.state.phase === "rejected";
-  const primaryClass = () =>
-    props.inbox
-      ? "sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-      : "btn primary";
   return (
     <>
       {props.state.phase === "available" || props.state.phase === "requesting" ? (
         <button
-          ref={sidebarAttentionFocusRef()}
           type="button"
-          class={primaryClass()}
+          class="btn primary"
           disabled={props.state.phase === "requesting"}
           onClick={() => props.onRequest()}
         >
@@ -65,21 +58,11 @@ export function ScopeUpgradeActions(props: {
       ) : retryable() || props.state.phase === "error" ? (
         <>
           {retryable() ? (
-            <button
-              ref={sidebarAttentionFocusRef()}
-              type="button"
-              class={primaryClass()}
-              onClick={() => props.onRetry()}
-            >
+            <button type="button" class="btn primary" onClick={() => props.onRetry()}>
               {t("connection.scopeUpgrade.retry")}
             </button>
           ) : null}
-          <button
-            ref={sidebarAttentionFocusRef()}
-            type="button"
-            class={props.inbox ? "sidebar-issues-panel__action" : "btn"}
-            onClick={() => props.onCancel()}
-          >
+          <button type="button" class="btn" onClick={() => props.onCancel()}>
             {t("connection.scopeUpgrade.cancel")}
           </button>
         </>

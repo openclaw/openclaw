@@ -325,8 +325,8 @@ connection closes.
 When the full `gateway` tool is available in chat, use `users.getRole` with an exact email alias or profile ID to inspect the assigned role, effective role, and source. An administrator can then use `users.setRole` with that profile ID and a configured role name, or an explicit `null` to clear the assignment and return to the mapped or default role. These actions use the requesting operator on the current Gateway, not a remote URL or token. A maintenance-only tool profile does not expose them.
 
 The Control UI distinguishes a role ceiling from limited browser pairing. When
-the authenticated role does not allow administrator access, its limited-access
-notice explains that device approval cannot grant it and does not offer
+the authenticated role does not allow administrator access, **Settings > Profile > Your access**
+explains that device approval cannot grant it and does not offer
 **Request admin**. Ask a Gateway administrator to change the role if more access
 is needed, then reconnect. A role that permits administrator access can still
 request an upgrade for a pairing-limited browser; approval and RPC authorization
@@ -1213,7 +1213,7 @@ that asks for a broader role or broader scopes creates a new pending upgrade
 request.
 
 A connected limited Control UI with broad read access can file that same pending request through
-**Inbox > System > Limited access > Request admin** without attempting a broader
+**Settings > Profile > Your access > Request admin** without attempting a broader
 reconnect. The request is bound to the signed device identity on the live connection. Approval still
 comes from `device.pair.approve` and therefore requires `operator.pairing` plus
 authority for every requested scope. After approval rotates the operator token,

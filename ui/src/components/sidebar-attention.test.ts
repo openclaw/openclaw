@@ -13,10 +13,7 @@ import {
   type SidebarAttentionStore,
 } from "../app/sidebar-attention-store.ts";
 import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
-import {
-  createApplicationContextProvider,
-  hiddenScopeUpgradeCapability,
-} from "../test-helpers/application-context.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
@@ -244,7 +241,6 @@ describe("sidebar attention refresh ownership", () => {
         state: { selectedId: null, scopeId: null },
         subscribe: () => () => undefined,
       },
-      scopeUpgrade: hiddenScopeUpgradeCapability,
       ...overrides,
       agents: { state: { agentsList: null }, subscribe: () => () => undefined },
     } as unknown as Parameters<typeof createSidebarAttentionStore>[0];

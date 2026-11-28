@@ -4,7 +4,6 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
-import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 
@@ -15,7 +14,6 @@ const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
   "openClawIdRequest",
   "openClawIdBrowserRequest",
   "openClawIdRecoveryUse",
-  "scopeUpgrade",
   "updateAvailable",
 ] as const;
 
@@ -143,24 +141,6 @@ export function dismissSidebarAttention(
   return next;
 }
 
-export function resolveScopeUpgradeDismissal(params: {
-  scopes: readonly string[] | undefined;
-  state: ScopeUpgradeState;
-}): SidebarAttentionDismissal | null {
-  // Manual repair and an actionable upgrade are distinct incidents.
-  return (params.state.phase === "guidance" || params.state.phase === "available") && params.scopes
-    ? {
-        kind: "scopeUpgrade",
-        signature: JSON.stringify([
-          params.state.phase === "guidance" && params.state.reason === "role"
-            ? "role-guidance"
-            : params.state.phase,
-          ...params.scopes.toSorted(),
-        ]),
-      }
-    : null;
-}
-
 export function resolveUpdateAttentionDismissal(params: {
   gatewayBootId?: string | null;
   updateAvailable?: UpdateAvailable | null;
@@ -244,18 +224,4 @@ export function reconcileSidebarAttentionDismissals(params: {
     saveDismissals(params.key, pruned);
   }
   return pruned;
-}
-
-export function clearSidebarAttentionDismissal(
-  key: string | null,
-  kind: SidebarAttentionKind,
-): SidebarAttentionDismissals {
-  const stored = loadDismissals(key);
-  if (!stored[kind]) {
-    return stored;
-  }
-  const next = { ...stored };
-  delete next[kind];
-  saveDismissals(key, next);
-  return next;
 }

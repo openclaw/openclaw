@@ -8,7 +8,7 @@ import type { ApplicationGateway, ApplicationGatewaySnapshot } from "./gateway.t
 
 export type ScopeUpgradeCapability = ReturnType<typeof createScopeUpgradeCapability>;
 
-/** App-lifetime state shared by every Inbox presenter and settings takeover. */
+/** Keep an explicit access request alive when the user leaves Profile. */
 export function createScopeUpgradeCapability(gateway: ApplicationGateway) {
   const listeners = createChangeListeners();
   let snapshot = gateway.snapshot;
