@@ -128,6 +128,34 @@ it("skips ACP reads without an ended run and observes newly written ACP metadata
   );
 });
 
+it.each([
+  ["visible spawned chat", "agent:main:dashboard:visible-child", true, false],
+  ["hidden subagent", childSessionKey, false, true],
+] as const)(
+  "replaces a completed run for a direct turn only outside a visible chat: %s",
+  async (_label, sessionKey, visible, replaces) => {
+    const run = { ...endedRun(), childSessionKey: sessionKey };
+    mockEndedRun(run);
+    const sessionEntry = {
+      sessionId: "child-session",
+      updatedAt: 1,
+      spawnedBy: "agent:main:main",
+      spawnDepth: 1,
+      ...(visible ? { createdVia: "spawn" as const } : {}),
+    };
+
+    await expect(
+      reactivate({
+        sessionKey,
+        task: "keep going",
+        session: { cfg: {}, activeSessionAgentId: "main", sessionEntry },
+      }),
+    ).resolves.toBe(replaces);
+
+    expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledTimes(replaces ? 1 : 0);
+  },
+);
+
 it("does not replace an ended row after its Gateway owner retires", async () => {
   mockEndedRun(endedRun({ runId: "run-ended" }));
   const resolveGatewayContext = vi.fn(() => undefined);
