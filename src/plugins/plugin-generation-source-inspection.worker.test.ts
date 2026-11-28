@@ -56,9 +56,6 @@ it("inspects the selected graph without acquiring original bytes on the caller t
       "import './dependency.mjs'; import 'missing-inspection-package'; throw new Error('must not execute');",
     "dependency.mjs": "export const value = 42;",
   });
-  for (let i = 0; i < 128; i++) {
-    fs.writeFileSync(path.join(rootDir, `${i}.txt`), "payload".repeat(1024));
-  }
   const identity = fs.statSync(entryFile, { bigint: true });
   const read = fs.readSync;
   let sourceReads = 0;
