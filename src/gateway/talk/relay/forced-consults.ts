@@ -318,9 +318,7 @@ export function submitForcedTalkRealtimeRelayToolResult(
     throw new Error("Cancelled realtime consult is missing its original turn");
   }
   if (cancelled) {
-    const providerResult = buildRealtimeVoiceAgentCancelProviderResult(
-      "OpenClaw cancelled this consult before completion. Do not restart it.",
-    );
+    const providerResult = buildRealtimeVoiceAgentCancelProviderResult();
     const existing = session.forcedTerminalProviderResults.get(forcedConsult.id);
     const terminal: ForcedTerminalProviderResult =
       existing?.epoch === session.toolResultEpoch

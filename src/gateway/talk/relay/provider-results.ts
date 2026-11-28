@@ -119,9 +119,7 @@ export function submitFinalProviderToolResult(params: {
       const cancellationEpoch = params.session.toolResultEpoch;
       await params.session.bridge.submitToolResult(
         providerCallId,
-        buildRealtimeVoiceAgentCancelProviderResult(
-          "OpenClaw cancelled this consult before completion. Do not restart it.",
-        ),
+        buildRealtimeVoiceAgentCancelProviderResult(),
         suppressedToolResultOptions(params.session),
       );
       if (

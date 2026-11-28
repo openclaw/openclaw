@@ -333,9 +333,7 @@ export function submitTalkRealtimeRelayToolResult(params: {
 
   if (cancelledAgentCall) {
     const cancellationEpoch = session.toolResultEpoch;
-    const providerResult = buildRealtimeVoiceAgentCancelProviderResult(
-      "OpenClaw cancelled this consult before completion. Do not restart it.",
-    );
+    const providerResult = buildRealtimeVoiceAgentCancelProviderResult();
     const submitCancellation = () => {
       if (
         relaySessions.get(session.id) !== session ||
@@ -649,9 +647,7 @@ export async function cancelTalkRealtimeRelayTurn(params: {
   for (const { handle, nativeCallIds } of forcedConsults) {
     session.harness.forcedConsults.markCancelled(handle);
     session.forcedTerminalProviderResults.set(handle.id, {
-      result: buildRealtimeVoiceAgentCancelProviderResult(
-        "OpenClaw cancelled this consult before completion. Do not restart it.",
-      ),
+      result: buildRealtimeVoiceAgentCancelProviderResult(),
       options: suppressedToolResultOptions(session),
       turnId,
       epoch: terminalEpoch,

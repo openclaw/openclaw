@@ -195,7 +195,10 @@ describe("RealtimeTalkSession consult handoff", () => {
         agentId: "voice",
         runId: "run-1",
       });
-      expect(submit).toHaveBeenCalledOnce();
+      expect(submit).toHaveBeenCalledExactlyOnceWith("call-1", {
+        status: "cancelled_by_user",
+        message: "The user stopped this task. Do not retry unless the user asks again.",
+      });
     },
   );
 
@@ -404,7 +407,7 @@ describe("RealtimeTalkSession consult handoff", () => {
       sessionKey: "agent:main:main",
       active: true,
       aborted: true,
-      message: "Cancelled the active OpenClaw run.",
+      message: "The user stopped this task. Do not retry unless the user asks again.",
       speak: true,
       show: true,
       suppress: false,

@@ -654,8 +654,8 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       sessionId: "relay-1",
       callId: "call-1",
       result: {
-        status: "cancelled",
-        message: "Cancelled the active OpenClaw run.",
+        status: "cancelled_by_user",
+        message: "The user stopped this task. Do not retry unless the user asks again.",
       },
     });
     void transport.stop();

@@ -368,7 +368,13 @@ export async function submitRealtimeTalkConsult(params: {
   };
   const submitAbortResult = async (): Promise<void> => {
     if (params.submitAbortResult !== false) {
-      await submitOnce(buildRealtimeVoiceAgentCancelProviderResult());
+      await submitOnce(
+        aborted || params.signal?.aborted
+          ? buildRealtimeVoiceAgentCancelProviderResult(
+              "The user stopped this task. Do not retry unless the user asks again.",
+            )
+          : buildRealtimeVoiceAgentCancelProviderResult(),
+      );
     }
   };
   const abortRun = () => {

@@ -86,8 +86,8 @@ const WORKING_RESULT = {
     "Tell the person briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.",
 };
 const CANCELLED_RESULT = {
-  status: "cancelled",
-  message: "OpenClaw cancelled this consult before completion. Do not restart it.",
+  status: "cancelled_by_user",
+  message: "The user stopped this task. Do not retry unless the user asks again.",
 };
 const DELIVERED_RESULT = {
   status: "already_delivered",
@@ -2620,16 +2620,16 @@ describe("talk realtime gateway relay", () => {
         mode: "cancel",
         suppress: expectedSuppress,
         providerResult: {
-          status: "cancelled",
-          message: "Cancelled the active OpenClaw run.",
+          status: "cancelled_by_user",
+          message: "The user stopped this task. Do not retry unless the user asks again.",
         },
       });
       expect(abortEmbeddedRun).toHaveBeenCalledTimes(1);
       expect(bridge.submitToolResult).toHaveBeenCalledWith(
         "call-1",
         {
-          status: "cancelled",
-          message: "Cancelled the active OpenClaw run.",
+          status: "cancelled_by_user",
+          message: "The user stopped this task. Do not retry unless the user asks again.",
         },
         expectedOptions,
       );
@@ -2729,7 +2729,10 @@ describe("talk realtime gateway relay", () => {
         expect(await cancellation).toMatchObject({
           ok: true,
           mode: "cancel",
-          providerResult: { status: "cancelled", message: "Cancelled the active OpenClaw run." },
+          providerResult: {
+            status: "cancelled_by_user",
+            message: "The user stopped this task. Do not retry unless the user asks again.",
+          },
         });
         expect(abortEmbeddedRun).toHaveBeenCalledTimes(1);
         expect(bridge.submitToolResult).not.toHaveBeenCalled();

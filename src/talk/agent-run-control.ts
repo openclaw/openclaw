@@ -298,7 +298,7 @@ export async function controlTalkAgentRun(
             ? await params.cancelRun(target.runId)
             : preparedOwner.exactOwner?.abort() === true);
     const message = aborted
-      ? "Cancelled the active OpenClaw run."
+      ? "The user stopped this task. Do not retry unless the user asks again."
       : "OpenClaw could not cancel the active run.";
     return {
       ok: aborted,

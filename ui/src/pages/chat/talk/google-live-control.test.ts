@@ -126,7 +126,7 @@ describe("GoogleLiveRealtimeTalkTransport control results", () => {
     const { client, transport, ws } = await startActiveControlFixture({
       mode: "cancel",
       aborted: true,
-      message: "Cancelled the active OpenClaw run.",
+      message: "The user stopped this task. Do not retry unless the user asks again.",
     });
 
     await sendControl({ client, ws }, "cancel that");

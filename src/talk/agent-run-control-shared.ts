@@ -16,7 +16,7 @@ const REALTIME_VOICE_AGENT_CONTROL_MODES = ["status", "steer", "cancel", "follow
 export type RealtimeVoiceAgentControlMode = (typeof REALTIME_VOICE_AGENT_CONTROL_MODES)[number];
 
 export type RealtimeVoiceAgentControlProviderResult = {
-  status: "cancelled";
+  status: "cancelled_by_user";
   message: string;
 };
 
@@ -220,10 +220,10 @@ export function buildRealtimeVoiceAgentControlSpeechMessage(text: string): strin
 
 /** Provider result payload used when the control tool cancels active work. */
 export function buildRealtimeVoiceAgentCancelProviderResult(
-  message = "Cancelled the active OpenClaw run.",
+  message = "The user stopped this task. Do not retry unless the user asks again.",
 ): RealtimeVoiceAgentControlProviderResult {
   return {
-    status: "cancelled",
+    status: "cancelled_by_user",
     message,
   };
 }

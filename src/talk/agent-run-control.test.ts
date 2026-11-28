@@ -291,8 +291,8 @@ describe("controlRealtimeVoiceAgentRun", () => {
       sessionId: "session-active",
       aborted: true,
       providerResult: {
-        status: "cancelled",
-        message: "Cancelled the active OpenClaw run.",
+        status: "cancelled_by_user",
+        message: "The user stopped this task. Do not retry unless the user asks again.",
       },
     });
     expect(deps.abortEmbeddedAgentRun).toHaveBeenCalledWith("session-active");
