@@ -12,7 +12,11 @@ import { buildGatewayConnectionDetailsWithResolvers } from "../../gateway/connec
 import { isLoopbackHost } from "../../gateway/net.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { resolveModelRefOverride } from "../../shared/model-ref-override.js";
-import { canonicalizeSpeechProviderId, listSpeechProviders } from "../../tts/provider-registry.js";
+import {
+  canonicalizeSpeechProviderId,
+  getSpeechProvider,
+  listSpeechProviders,
+} from "../../tts/provider-registry.js";
 import type { TtsResult } from "../../tts/tts-runtime-types.js";
 import { updateTtsPrefsAsync } from "../../tts/tts-settings-write-worker.js";
 import { resolveTtsPersonaList } from "../../tts/tts-settings.js";
@@ -369,7 +373,7 @@ export async function runTtsStateMutation(params: {
     throwExpectedCliError("--provider is required");
   }
   const provider = canonicalizeSpeechProviderId(params.provider, cfg);
-  if (!provider) {
+  if (!provider || !getSpeechProvider(provider, cfg)) {
     throw new Error(`Unknown speech provider: ${params.provider}`);
   }
   await updateTtsPrefsAsync(prefsPath, { provider });
