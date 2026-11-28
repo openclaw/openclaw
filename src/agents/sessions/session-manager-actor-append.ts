@@ -82,10 +82,20 @@ export async function appendSessionManagerActor(input: {
     };
     // The worker selects the current actor version under its writer FIFO;
     // the prepared append carries its own transcript and live-authority predicates.
-    const command = { commandId: randomUUID(), phaseId: "session-manager.append", append };
-    outcome = input.toolResult
-      ? await actor.appendToolResult(command, authority, observer)
-      : await actor.appendTranscriptEvent(command, authority, observer);
+    const run = async () => {
+      const command = { commandId: randomUUID(), phaseId: "session-manager.append", append };
+      return input.toolResult
+        ? await actor.appendToolResult(command, authority, observer)
+        : await actor.appendTranscriptEvent(command, authority, observer);
+    };
+    outcome = await run();
+    if (!captured && isForeignTranscriptAppendRefusal(outcome)) {
+      // Another process appended to this session (for example a tool that ran
+      // `openclaw message send` into its own conversation on a channel whose send runs
+      // locally). The worker rolled back and rehydrated from storage; this append
+      // selects no version, so it runs once more as a new command on that state.
+      outcome = await run();
+    }
   } catch (cause) {
     if (!captured) {
       if (hasSqliteWorkerOutcomeUnknown(cause)) {
@@ -162,4 +172,14 @@ export async function appendSessionManagerActor(input: {
         : {}),
     };
   }
+}
+
+const FOREIGN_TRANSCRIPT_APPEND_COLLISION =
+  "UNIQUE constraint failed: transcript_events.session_id, transcript_events.seq";
+
+function isForeignTranscriptAppendRefusal(outcome: SessionActorOutcome<AppendValue>): boolean {
+  return (
+    outcome.kind === "stale-version" &&
+    outcome.error?.message?.includes(FOREIGN_TRANSCRIPT_APPEND_COLLISION) === true
+  );
 }

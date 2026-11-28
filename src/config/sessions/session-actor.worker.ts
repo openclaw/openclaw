@@ -85,6 +85,22 @@ function errorFacts(error: unknown) {
     : { name: "Error", message: "Session actor command failed" };
 }
 
+/**
+ * Write receipts are process-local, so a transcript row committed by another process (for
+ * example `openclaw message send` mirroring a direct Slack delivery into the running turn's
+ * thread) leaves a resident's token current while its rawSeq is behind storage. The resident
+ * then allocates a seq that is already taken. Resident reuse stays read-free; only the
+ * resulting collision pays for re-hydration.
+ */
+function isTranscriptSeqCollision(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    error.message.includes(
+      "UNIQUE constraint failed: transcript_events.session_id, transcript_events.seq",
+    )
+  );
+}
+
 /** One instance belongs to the already serialized physical agent execution worker. */
 export function createSessionActorWorker(
   context: AgentWorkerOperationContext,
@@ -660,6 +676,23 @@ export function createSessionActorWorker(
             commandId: command.input.commandId,
             error: errorFacts(error),
           };
+        }
+        if (database && isTranscriptSeqCollision(error)) {
+          // Nothing committed. Re-hydrate from storage and refuse the version so the caller's
+          // single stale-version retry allocates past the foreign row.
+          residents.drop(target.sessionKey);
+          try {
+            const current = read(database, target);
+            observed.settled("stale-version");
+            return {
+              kind: "stale-version",
+              expected: command.input.expected ?? current.hot.version,
+              postimage: structuredClone(current.hot),
+              error: errorFacts(error),
+            };
+          } catch {
+            residents.drop(target.sessionKey);
+          }
         }
         const retained = residents.get(target.sessionKey);
         if (retained && database) {
