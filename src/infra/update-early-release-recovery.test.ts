@@ -8,11 +8,10 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { readUpdateLock } from "../update/store.js";
 import { waitForGatewayReady } from "./update-early-release-recovery-ready.js";
 import type { RecoveryPlan } from "./update-early-release-recovery-record.js";
-import { gatewayServiceControl } from "./update-early-release-recovery-service.js";
+import { gatewayServiceControl, type RunCommand } from "./update-early-release-recovery-service.js";
 import { startEarlyGitReleaseRecovery } from "./update-early-release-recovery-start.js";
 import type { StartDeps } from "./update-early-release-recovery-start.js";
 import * as recovery from "./update-early-release-recovery.js";
-import type { RunCommand } from "./update-early-release-recovery.js";
 import { getUpdateRunStatusAsync } from "./update-run-reader.js";
 import { createUpdateRunAsync, finishUpdateRunAsync } from "./update-run-write.async.js";
 

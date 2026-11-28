@@ -5,7 +5,6 @@ import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../daemon/launchd-plist.js";
 import { escapeXml } from "../shared/xml.js";
 import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "./gateway-shutdown-budget.js";
 import type { RecoveryPlan } from "./update-early-release-recovery-record.js";
-import type { CommandResult, RunCommand } from "./update-early-release-recovery.js";
 
 /**
  * The early release recovery's view of the two user service managers it runs under (see
@@ -14,6 +13,12 @@ import type { CommandResult, RunCommand } from "./update-early-release-recovery.
  * launchd gets a separate job in the GUI domain, which a Gateway bootout does not reach.
  * Remove with the recovery.
  */
+
+export type CommandResult = { code: number | null; output: string };
+export type RunCommand = (
+  argv: string[],
+  options?: { cwd?: string; stream?: boolean; timeoutMs?: number },
+) => Promise<CommandResult>;
 
 const ok = (result: CommandResult) => result.code === 0;
 

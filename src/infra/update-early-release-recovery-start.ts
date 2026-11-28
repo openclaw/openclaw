@@ -31,6 +31,7 @@ import {
   describeRecoveryJob,
   isRecoveryJobRunning,
   startRecoveryJob,
+  type RunCommand,
 } from "./update-early-release-recovery-service.js";
 import {
   buildCommit,
@@ -43,7 +44,6 @@ import {
   removeTree,
   runRecoveryCommand,
   commandTail,
-  type RunCommand,
 } from "./update-early-release-recovery.js";
 
 /**

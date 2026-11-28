@@ -22,7 +22,9 @@ import {
 import {
   gatewayServiceControl,
   recoveryJobRestarts,
+  type CommandResult,
   type GatewayServiceControl,
+  type RunCommand,
 } from "./update-early-release-recovery-service.js";
 
 /**
@@ -46,12 +48,6 @@ const DRIVER_EXIT_TIMEOUT_MS = 30 * 60_000;
 /** Each rebuild command's limit. */
 const COMMAND_TIMEOUT_MS = 60 * 60_000;
 const MAX_RESTARTS = 2;
-
-export type CommandResult = { code: number | null; output: string };
-export type RunCommand = (
-  argv: string[],
-  options?: { cwd?: string; stream?: boolean; timeoutMs?: number },
-) => Promise<CommandResult>;
 
 /** Runs a command; `stream` copies its output to this process's (the job log's) output. */
 export const runRecoveryCommand: RunCommand = (argv, options = {}) =>
