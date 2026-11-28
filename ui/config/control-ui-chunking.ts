@@ -269,6 +269,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/solid/radio-navigation.ts":
       // Share small navigation helpers without coupling their callers to page renderers.
       return "navigation-helpers";
+    case "packages/gateway-protocol/src/theme-builtins.ts":
+    case "ui/src/pages/config/config-page.tsx":
+      // Theme descriptions are used by Settings, not by the startup branding resolver.
+      return "config-page";
     case "ui/src/components/config-form.analyze.ts":
     case "ui/src/components/config-form.shared.ts":
     case "src/config/sensitive-paths.ts":

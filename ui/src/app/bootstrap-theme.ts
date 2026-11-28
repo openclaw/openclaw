@@ -1,13 +1,14 @@
 import {
-  BUILTIN_THEMES,
+  builtinThemeBrandingOverrides,
   resolveThemeBranding,
-} from "../../../packages/gateway-protocol/src/theme.ts";
+} from "../../../packages/gateway-protocol/src/theme-builtin-branding.ts";
 import { createChangeListeners } from "../../../src/shared/listeners.js";
 import { formatUiError } from "../lib/format-error.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGateway, ApplicationTheme, ApplicationThemePalette } from "./context.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
+import { nativeEmbedHost } from "./native-web-chrome.ts";
 import { backgroundPreferenceStorageKey } from "./settings-background.ts";
 import {
   bindUiPreferences,
@@ -25,8 +26,7 @@ import { applyTypefaceOverrides, resolveTypefaces, syncTypefaceStylesheets } fro
 
 function themeBranding(settings: UiPreferences, catalogTheme?: CatalogTheme) {
   return (
-    catalogTheme?.branding ??
-    resolveThemeBranding(BUILTIN_THEMES.find((theme) => theme.id === settings.theme))
+    catalogTheme?.branding ?? resolveThemeBranding(builtinThemeBrandingOverrides(settings.theme))
   );
 }
 
@@ -100,6 +100,21 @@ export function createApplicationTheme(
 ): ApplicationTheme & { dispose: () => void } {
   const { token: _token, ...initialPreferences } = initialSettings;
   let settings: UiPreferences = initialPreferences;
+  // Embedded iOS pages belong to the native app. Keep the saved web appearance
+  // intact while presenting the device color scheme and a native sans-serif UI.
+  const nativeIOS = typeof window !== "undefined" && nativeEmbedHost()?.platform === "ios";
+  const presentationPreferences = (): UiPreferences =>
+    nativeIOS
+      ? {
+          ...settings,
+          theme: "claw",
+          themeMode: "system",
+          accent: "theme",
+          fontUi: "system",
+          fontChat: "system",
+          customTheme: undefined,
+        }
+      : settings;
   let appliedPalette: ApplicationThemePalette | null = null;
   let systemThemeCleanup: (() => void) | undefined;
   const listeners = createChangeListeners();
@@ -114,19 +129,21 @@ export function createApplicationTheme(
     const generation = ++presentationGeneration;
     let preferencesPublished = false;
     const previousBranding = currentThemeBranding();
-    const branding = themeBranding(settings, catalog?.theme(settings.theme));
+    const presentation = presentationPreferences();
+    const catalogTheme = catalog?.theme(presentation.theme);
+    const branding = themeBranding(presentation, catalogTheme);
     setCurrentThemeBranding(branding);
-    syncThemePaletteStylesheet(settings.theme, () => {
+    syncThemePaletteStylesheet(presentation.theme, () => {
       // A slower palette cannot overwrite a newer selection or a disposed app.
       if (generation !== presentationGeneration) {
         return;
       }
-      applyThemePresentation(settings, catalog?.theme(settings.theme));
-      const mode = catalog?.theme(settings.theme)?.mode ?? settings.themeMode;
+      applyThemePresentation(presentation, catalogTheme);
+      const mode = catalogTheme?.mode ?? presentation.themeMode;
       appliedPalette = {
         revision: generation,
-        theme: settings.theme,
-        resolvedMode: resolveTheme(settings.theme, mode).endsWith("light") ? "light" : "dark",
+        theme: presentation.theme,
+        resolvedMode: resolveTheme(presentation.theme, mode).endsWith("light") ? "light" : "dark",
       };
       // Computed-style consumers need the applied palette, not just the new
       // preference. Synchronous application shares the publication below.
@@ -161,7 +178,7 @@ export function createApplicationTheme(
       catalog ||
       catalogLoading ||
       gateway.snapshot.phase !== "connected" ||
-      (!catalogRequested && !settings.theme.includes("/"))
+      (!catalogRequested && !presentationPreferences().theme.includes("/"))
     ) {
       return;
     }
@@ -203,11 +220,11 @@ export function createApplicationTheme(
 
   const syncSystemThemeListener = () => {
     detachSystemThemeListener();
-    if (settings.themeMode !== "system") {
+    if (presentationPreferences().themeMode !== "system") {
       return;
     }
     systemThemeCleanup = subscribeMediaQuery("(prefers-color-scheme: light)", () => {
-      if (settings.themeMode === "system") {
+      if (presentationPreferences().themeMode === "system") {
         publish();
       }
     });
@@ -264,7 +281,8 @@ export function createApplicationTheme(
 
   return {
     get branding() {
-      return themeBranding(settings, catalog?.theme(settings.theme));
+      const presentation = presentationPreferences();
+      return themeBranding(presentation, catalog?.theme(presentation.theme));
     },
     get catalog() {
       if (!catalogRequested) {
@@ -280,8 +298,9 @@ export function createApplicationTheme(
       return settings.themeMode;
     },
     get resolvedMode() {
-      const mode = catalog?.theme(settings.theme)?.mode ?? settings.themeMode;
-      return resolveTheme(settings.theme, mode).endsWith("light") ? "light" : "dark";
+      const presentation = presentationPreferences();
+      const mode = catalog?.theme(presentation.theme)?.mode ?? presentation.themeMode;
+      return resolveTheme(presentation.theme, mode).endsWith("light") ? "light" : "dark";
     },
     get appliedPalette() {
       return appliedPalette;
