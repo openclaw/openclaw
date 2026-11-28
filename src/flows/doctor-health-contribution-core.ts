@@ -36,17 +36,13 @@ function createDoctorHealthCheckContext<T extends object>(ctx: DoctorHealthFlowC
   };
 }
 
-export async function runStructuredHealthRepairs(
+/** The bundled and plugin checks `runStructuredHealthRepairs` runs in repair mode. */
+async function resolveStructuredHealthRepairChecks(
   ctx: DoctorHealthFlowContext,
   resolveCoreChecks: () => Promise<readonly DoctorHealthCheck[]>,
-): Promise<void> {
-  if (!ctx.prompter.shouldRepair) {
-    return;
-  }
+) {
   const { registerBundledHealthChecks } = await import("./bundled-health-checks.js");
   const { listExtensionHealthChecksForDoctor } = await import("./health-check-registry.js");
-  const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
-
   const workspaceDir = resolveDoctorWorkspaceDir(ctx.cfg, ctx.env);
   const availabilityFindings = registerBundledHealthChecks({
     cfg: ctx.cfg,
@@ -57,14 +53,55 @@ export async function runStructuredHealthRepairs(
     await resolveCoreChecks(),
     availabilityFindings,
   ).filter(isHealthCheckEnabledByDefault);
-  const result = await runDoctorHealthRepairs(
-    createDoctorHealthCheckContext(ctx, {
-      mode: "fix" as const,
-      env: ctx.env,
-      cwd: workspaceDir,
-    }),
-    { checks, progress: ctx.options.json !== true },
+  const context = createDoctorHealthCheckContext(ctx, {
+    mode: "fix" as const,
+    env: ctx.env,
+    cwd: workspaceDir,
+  });
+  return { availabilityFindings, checks, context };
+}
+
+/**
+ * Read-only: whether `runStructuredHealthRepairs` would repair, i.e. a plugin check with a
+ * repair reports a finding. It runs those checks' detects, which `doctor --lint` also runs
+ * read-only, so each such detect runs twice under `--fix`.
+ */
+async function checkStructuredHealthRepairsPending(
+  ctx: DoctorHealthFlowContext,
+  resolveCoreChecks: () => Promise<readonly DoctorHealthCheck[]>,
+): Promise<DoctorMaintenancePending> {
+  if (!ctx.prompter.shouldRepair) {
+    return "none";
+  }
+  const { checks, context } = await resolveStructuredHealthRepairChecks(ctx, resolveCoreChecks);
+  return checkDoctorHealthRepairsPending(context, checks);
+}
+
+export async function checkStructuredHealthRepairsContributionPending(
+  ctx: DoctorHealthFlowContext,
+): Promise<DoctorMaintenancePending> {
+  // The contribution list owns the core check inventory the plugin checks must not claim.
+  const { resolveDoctorContributionHealthChecks } =
+    await import("./doctor-health-contributions.js");
+  return checkStructuredHealthRepairsPending(ctx, resolveDoctorContributionHealthChecks);
+}
+
+export async function runStructuredHealthRepairs(
+  ctx: DoctorHealthFlowContext,
+  resolveCoreChecks: () => Promise<readonly DoctorHealthCheck[]>,
+): Promise<void> {
+  if (!ctx.prompter.shouldRepair) {
+    return;
+  }
+  const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
+  const { availabilityFindings, checks, context } = await resolveStructuredHealthRepairChecks(
+    ctx,
+    resolveCoreChecks,
   );
+  const result = await runDoctorHealthRepairs(context, {
+    checks,
+    progress: ctx.options.json !== true,
+  });
   reportDoctorRepairResult(ctx, result, [...availabilityFindings, ...result.remainingFindings]);
 }
 

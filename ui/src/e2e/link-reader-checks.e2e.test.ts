@@ -59,8 +59,9 @@ it("keeps check navigation, refresh, and long content usable in a narrow native 
         true,
       );
       await expect.poll(current).toEqual(["Discussion1"]);
-      await panel.locator(".lr-url").fill(url + "#comment-1");
-      await panel.locator(".lr-url").press("Enter");
+      // A comment's own link lands it below the section bar, as an anchored link from chat does.
+      await button("Overview").click();
+      await panel.locator(".lr-comment-time").click();
       await expect
         .poll(async () =>
           content.evaluate((node) => {

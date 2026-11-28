@@ -20,6 +20,9 @@ not prompt for embeddings. See [Configure](/cli/configure#memory-section).
 `openclaw setup` opens an interactive OpenClaw chat. On a fresh system, it
 falls through to guided onboarding. Use `-m`/`--message` for one request or
 `--baseline` to initialize config/workspace folders without the wizard.
+For offline help, use `openclaw setup --explain-error "<redacted error>"`.
+It prints local guidance without running setup or calling a model. Add `--json`
+for a single `reply` field; `--message` still requires working inference.
 
 For models that permit local execution, `setup --message` can verify inference
 without a running Gateway. Configurations with a required worker profile still
@@ -174,7 +177,15 @@ rejects explicit onboarding, Gateway, auth, reset, or daemon options instead of
 silently ignoring them. If an existing config is invalid, baseline setup preserves
 it and asks you to run `openclaw doctor --fix` to apply supported repairs before retrying.
 
-Use `openclaw setup --baseline --skip-bootstrap` to create the directories without
+Baseline setup writes no files into the workspace and does not run `git init`. The
+starter files (`AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `BOOTSTRAP.md`) are
+created by the agent's first conversation, through the Gateway or chat, which also runs
+the first-run bootstrap. Existing workspace files are never replaced. `--json` output
+reports this as `"starterFiles": "first-conversation"`, or `"skipped"` when
+`agents.defaults.skipBootstrap` is in effect. A one-shot
+`openclaw agent --local` run does not create them either.
+
+Use `openclaw setup --baseline --skip-bootstrap` to keep the first conversation from
 generating workspace bootstrap files. This persists `agents.defaults.skipBootstrap: true`
 as a local config override, preserves existing workspace files and included config files,
 and remains enabled on later baseline runs that omit the flag.

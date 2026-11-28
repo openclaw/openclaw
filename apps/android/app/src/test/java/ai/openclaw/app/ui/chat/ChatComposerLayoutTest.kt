@@ -10,7 +10,6 @@ import ai.openclaw.app.GatewayModelUnavailableReason
 import ai.openclaw.app.GatewayTalkSetupIssue
 import ai.openclaw.app.GatewayTalkSetupReadiness
 import ai.openclaw.app.GatewayTalkSetupState
-import ai.openclaw.app.GatewayTalkSetupTarget
 import ai.openclaw.app.GatewayTalkSetupTargetIssue
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.NodeApp
@@ -854,7 +853,7 @@ class ChatComposerLayoutTest {
           .joinToString("\n"),
       )
       assertEquals(0, model.pendingRunCount.value)
-      assertTrue(model.chatStreamingAssistantText.value == null)
+      assertTrue(model.chatStreamingAssistant.value?.text == null)
       val beginning = readerMarkerBounds(head, speaker = "You")
       val ending = readerMarkerBounds(tail, speaker = "You")
       assertTrue(
@@ -1339,7 +1338,7 @@ class ChatComposerLayoutTest {
           readiness.value.copy(
             realtimeTalk =
               GatewayTalkSetupState.NeedsSetup(
-                GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.ConfigureProvider, GatewayTalkSetupTarget.REALTIME_TALK),
+                GatewayTalkSetupIssue.Targeted(GatewayTalkSetupTargetIssue.ConfigureProvider),
               ),
           )
       }
@@ -6221,7 +6220,7 @@ class ChatComposerLayoutTest {
           model.chatSessionKey.value == sessionKey &&
             !model.chatHistoryLoading.value && model.chatHealthOk.value &&
             model.chatMessages.value.map { message -> message.content.mapNotNull { it.text }.joinToString("\n") } == texts &&
-            runReady && model.chatStreamingAssistantText.value == null &&
+            runReady && model.chatStreamingAssistant.value?.text == null &&
             model.chatPendingToolCalls.value.isEmpty() &&
             model.chatOutboxItems.value.isEmpty() && model.chatProgressCard.value == null &&
             questionsForSession(model.chatQuestions.value, sessionKey, model.mainSessionKey.value, "main").isEmpty()
@@ -6286,7 +6285,7 @@ class ChatComposerLayoutTest {
         if (actual.width > transcriptWidth + 1f || kotlin.math.abs(reference.right - actual.right) > 1f) {
           geometryFailures += "$label: user message exceeds transcript width or differs from confirmed trailing edge: $actual vs $reference"
         }
-        if (model.chatSelectedActiveRunPresentation.value.count > 0 && model.chatStreamingAssistantText.value == null) {
+        if (model.chatSelectedActiveRunPresentation.value.count > 0 && model.chatStreamingAssistant.value?.text == null) {
           val typing =
             composeRule
               .onNode(hasContentDescription("OpenClaw") and hasAnyDescendant(hasContentDescription("Working")))

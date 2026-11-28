@@ -22,56 +22,55 @@ const readerCatalogs = new WeakMap<
 export function availableLinkReaders(
   snapshot: ApplicationGatewaySnapshot,
 ): readonly ControlUiLinkReaderDescriptor[] {
-  const client = snapshot.client;
+  const { client, hello, phase, pluginCapabilities: capabilities } = snapshot;
   if (!client || client.offlineRecoveryRetired) {
     return EMPTY_LINK_READERS;
   }
+  const { recoveryScope } = client;
   const catalog = readerCatalogs.get(client);
-  const previous = catalog && catalog.recoveryScope === client.recoveryScope ? catalog : undefined;
-  if (snapshot.phase !== "connected") {
+  const previous = catalog?.recoveryScope === recoveryScope ? catalog : undefined;
+  if (phase !== "connected") {
     return previous?.readers ?? EMPTY_LINK_READERS;
   }
-  if (
-    previous &&
-    previous.hello === snapshot.hello &&
-    previous.capabilities === snapshot.pluginCapabilities
-  ) {
+  if (previous && previous.hello === hello && previous.capabilities === capabilities) {
     return previous.readers;
   }
-  const readers = (snapshot.pluginCapabilities?.controlUiLinkReaders ?? EMPTY_LINK_READERS).filter(
-    (reader) =>
-      snapshot.pluginCapabilities?.methods?.includes(reader.linkReader.detailMethod) === true &&
-      canCallGatewayMethod(snapshot, reader.linkReader.detailMethod, "operator.read", {
+  const retained: ControlUiLinkReaderDescriptor[] = [];
+  for (const reader of capabilities?.controlUiLinkReaders ?? EMPTY_LINK_READERS) {
+    const metadata = reader.linkReader;
+    const { detailMethod } = metadata;
+    if (
+      !capabilities?.methods?.includes(detailMethod) ||
+      !canCallGatewayMethod(snapshot, detailMethod, "operator.read", {
         requireAdvertisement: false,
-      }),
-  );
-  const retained = readers.map((reader) => {
+      })
+    ) {
+      continue;
+    }
     const prior = previous?.readers.find(
       (entry) => entry.pluginId === reader.pluginId && entry.id === reader.id,
     );
-    const metadata = reader.linkReader;
-    const priorMetadata = prior?.linkReader;
-    return prior &&
-      priorMetadata &&
-      prior.label === reader.label &&
-      prior.icon === reader.icon &&
-      priorMetadata.pathPattern === metadata.pathPattern &&
-      priorMetadata.detailMethod === metadata.detailMethod &&
-      priorMetadata.previewMethod === metadata.previewMethod &&
-      priorMetadata.imageMethod === metadata.imageMethod &&
-      priorMetadata.sessionScoped === metadata.sessionScoped &&
-      priorMetadata.progressive === metadata.progressive &&
-      priorMetadata.hosts.length === metadata.hosts.length &&
-      priorMetadata.hosts.every((host, index) => host === metadata.hosts[index])
-      ? prior
-      : reader;
-  });
-  readerCatalogs.set(client, {
-    recoveryScope: client.recoveryScope,
-    hello: snapshot.hello,
-    capabilities: snapshot.pluginCapabilities,
-    readers: retained,
-  });
+    if (prior) {
+      const old = prior.linkReader;
+      if (
+        prior.label === reader.label &&
+        prior.icon === reader.icon &&
+        old.pathPattern === metadata.pathPattern &&
+        old.detailMethod === detailMethod &&
+        old.previewMethod === metadata.previewMethod &&
+        old.imageMethod === metadata.imageMethod &&
+        old.sessionScoped === metadata.sessionScoped &&
+        old.progressive === metadata.progressive &&
+        old.hosts.length === metadata.hosts.length &&
+        old.hosts.every((host, index) => host === metadata.hosts[index])
+      ) {
+        retained.push(prior);
+        continue;
+      }
+    }
+    retained.push(reader);
+  }
+  readerCatalogs.set(client, { recoveryScope, hello, capabilities, readers: retained });
   return retained;
 }
 
@@ -93,11 +92,11 @@ export function startLinkReaderRouting(
   options: { shouldOpenExternally?: () => boolean } = {},
 ) {
   const handleClick = (event: MouseEvent) => {
-    if (
-      options.shouldOpenExternally?.() ||
-      !shouldHandleNavigationClick(event) ||
-      snapshot().phase !== "connected"
-    ) {
+    if (options.shouldOpenExternally?.() || !shouldHandleNavigationClick(event)) {
+      return;
+    }
+    const gateway = snapshot();
+    if (gateway.phase !== "connected") {
       return;
     }
     const path = event.composedPath();
@@ -109,13 +108,11 @@ export function startLinkReaderRouting(
       !path.some(
         (element) => element instanceof Element && element.localName === "openclaw-app-shell",
       ) ||
-      anchor.hasAttribute("download") ||
-      anchor.hasAttribute("data-file-path") ||
-      anchor.hasAttribute("data-link-reader-external")
+      anchor.matches("[download],[data-file-path],[data-link-reader-external]")
     ) {
       return;
     }
-    const target = resolveLinkReaderTarget(anchor.href, availableLinkReaders(snapshot()));
+    const target = resolveLinkReaderTarget(anchor.href, availableLinkReaders(gateway));
     if (!target) {
       return;
     }
@@ -127,10 +124,6 @@ export function startLinkReaderRouting(
         url: target.href,
         open: true,
         trigger: anchor,
-        newTab: !path.some(
-          (element) =>
-            element instanceof Element && element.localName === "openclaw-link-reader-panel",
-        ),
       },
     });
     if (!window.dispatchEvent(request)) {

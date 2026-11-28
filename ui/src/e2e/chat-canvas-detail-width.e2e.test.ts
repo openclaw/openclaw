@@ -148,7 +148,7 @@ suite.define(() => {
           }
           const geometry = await measure();
           console.log("Canvas reader geometry", geometry, "expanded", expanded);
-          expect.soft(geometry.panel - geometry.frame).toBeLessThanOrEqual(34);
+          expect.soft(geometry.frame).toBeCloseTo(geometry.panel, 0);
           expect(geometry.height).toBe(420);
           expect(await frame.evaluate((element) => element.style.height)).toBe("320px");
           expect(await frame.evaluate((element, previous) => element === previous, original)).toBe(
@@ -167,7 +167,7 @@ suite.define(() => {
               const geometry = await measure();
               return geometry.panel - geometry.frame;
             })
-            .toBeLessThanOrEqual(34);
+            .toBeCloseTo(0, 0);
           if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
             const screenshot = await takeControlUiScreenshotFrame(page, panel, [heading], {
               animations: "disabled",

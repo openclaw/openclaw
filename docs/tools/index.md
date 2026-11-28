@@ -203,6 +203,28 @@ automation `toolsAllow` lists.
 - [Per-agent sandbox and tool restrictions](/tools/multi-agent-sandbox-tools)
   documents agent-specific restrictions for delegated runs.
 
+## Large tool results
+
+Every tool result has a size limit before the model sees it. This applies to core
+tools, MCP tools, and plugin tools. The limit depends on the model's context
+window: 16,000 characters below 100,000 tokens, 32,000 from 100,000 tokens, and
+64,000 from 200,000 tokens. It is never more than 30% of the window.
+
+When a result is longer than the limit:
+
+- The model sees the beginning and the end of the result. A notice in the middle
+  gives the number of characters left out.
+- The full result is saved to an owner-only file in the OS temp directory (in
+  the workspace for sandboxed sessions). The notice names the file as
+  `Full output: <path>`. The agent can read the file in parts with `read`
+  (`offset`, `limit`, and `cursor` within a long line).
+- The OS temp-directory cleanup removes the file, the same as `exec` and
+  `web_fetch` output files. A tool that already saved its own output file, such
+  as `exec` or `web_fetch`, keeps that file, and the notice names it.
+
+If the file cannot be written, the model still sees the beginning and the end,
+with the character count but no file name.
+
 ## Extend capabilities
 
 Choose the extension path by the job you need OpenClaw to do:

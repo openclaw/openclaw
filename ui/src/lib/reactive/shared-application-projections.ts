@@ -4,9 +4,7 @@ import type { SessionPullRequestSnapshotStore } from "../session-pull-requests.t
 import { readRuntimeConfig } from "./domain-capabilities.ts";
 import { createSharedOwnerProjection } from "./shared-owner-projection.ts";
 
-export const sharedRuntimeConfigProjection = createSharedOwnerProjection(
-  (config: ApplicationContext["runtimeConfig"]) => readRuntimeConfig(config),
-);
+export const sharedRuntimeConfigProjection = createSharedOwnerProjection(readRuntimeConfig);
 
 export const sharedAgentsProjection = createSharedOwnerProjection(
   (agents: ApplicationContext["agents"]) => agents.state,

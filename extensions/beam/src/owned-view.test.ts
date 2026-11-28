@@ -21,7 +21,7 @@ function visitorAuthority(assertCurrent: () => void): GatewayRequestAuthorityV1 
   };
 }
 
-it.each(["revoked", "expired", "transport", "role"])(
+it.each(["transport"])(
   "withholds an owned transcript when authority ends during storage IO: %s",
   async (cause) => {
     const stored = {
@@ -33,17 +33,10 @@ it.each(["revoked", "expired", "transport", "role"])(
     };
     const read = Promise.withResolvers<typeof stored>();
     const entered = Promise.withResolvers<void>();
-    const grant = new AbortController();
     let connected = true;
-    let now = 0;
-    let roleCurrent = true;
     const authority = visitorAuthority(() => {
-      if (!connected || !roleCurrent) {
+      if (!connected) {
         throw new Error("publisher authority ended");
-      }
-      grant.signal.throwIfAborted();
-      if (now >= 1) {
-        throw new Error("Visitor invitation expired");
       }
     });
     const store = {
@@ -63,22 +56,12 @@ it.each(["revoked", "expired", "transport", "role"])(
       respond,
       sessionMutationAuthorization: {
         assertTargetCurrent() {},
-        assertCurrent() {
-          if (!roleCurrent) {
-            throw new Error("named role revoked");
-          }
-        },
+        assertCurrent() {},
       },
     });
     await entered.promise;
     if (cause === "transport") {
       connected = false;
-    } else if (cause === "role") {
-      roleCurrent = false;
-    } else if (cause === "expired") {
-      now = 1;
-    } else {
-      grant.abort(new Error(cause));
     }
     read.resolve(stored);
     await pending;

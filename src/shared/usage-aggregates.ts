@@ -18,6 +18,9 @@ type LatencyAccumulator = {
   min: number;
   max: number;
   p95Max: number;
+  timedMs: number;
+  timedTokens: number;
+  timedCost: number;
 };
 
 type CreatorUsage = NonNullable<SessionsUsageAggregates["byCreator"]>[number];
@@ -70,13 +73,25 @@ function sessionActivityDates(usage: NonNullable<SessionUsageEntry["usage"]>): s
 }
 
 function createLatencyAccumulator(): LatencyAccumulator {
-  return { count: 0, sum: 0, min: Number.POSITIVE_INFINITY, max: 0, p95Max: 0 };
+  return {
+    count: 0,
+    sum: 0,
+    min: Number.POSITIVE_INFINITY,
+    max: 0,
+    p95Max: 0,
+    timedMs: 0,
+    timedTokens: 0,
+    timedCost: 0,
+  };
 }
 
 // Session summaries carry no raw samples: weight averages by count and retain the largest p95.
 function mergeLatency(target: LatencyAccumulator, source: SessionLatencyStats): void {
   target.count += source.count;
   target.sum += source.avgMs * source.count;
+  target.timedMs += source.timedMs ?? 0;
+  target.timedTokens += source.timedTokens ?? 0;
+  target.timedCost += source.timedCost ?? 0;
   target.min = Math.min(target.min, source.minMs);
   target.max = Math.max(target.max, source.maxMs);
   target.p95Max = Math.max(target.p95Max, source.p95Ms);
@@ -90,6 +105,9 @@ function summarizeLatency(value: LatencyAccumulator): SessionLatencyStats {
     minMs: value.min === Number.POSITIVE_INFINITY ? 0 : value.min,
     maxMs: value.max,
     p95Ms: value.p95Max,
+    timedMs: value.timedMs || undefined,
+    timedTokens: value.timedTokens || undefined,
+    timedCost: value.timedCost || undefined,
   };
 }
 

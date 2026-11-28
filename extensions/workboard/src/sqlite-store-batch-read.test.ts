@@ -561,6 +561,29 @@ async function legacyDatabase(dbPath: string) {
 }
 
 describe("Workboard SQLite schema admission", () => {
+  test("uses a covering ID range and reads at most two keys for a card prefix", async () => {
+    await using stores = openKernel();
+    const { dbPath } = stores;
+    for (const index of [10, 11, 12, 2]) {
+      const card = fixtureCard(index);
+      await stores.cards.register(card.id, persisted(card));
+    }
+    const start = sqliteStatements.executed.length;
+    await expect(stores.cards.findCardIdsByPrefix("card-1")).resolves.toEqual([
+      "card-10",
+      "card-11",
+    ]);
+    const statements = sqliteStatements.executed.slice(start);
+    expect(statements).toEqual([
+      'select "id" from "workboard_cards" where "id" >= ? and "id" < ? order by "id" limit ?',
+    ]);
+    using db = new DatabaseSync(dbPath, { readOnly: true });
+    const plan = db.prepare(`EXPLAIN QUERY PLAN ${statements[0]}`).all("card-1", "card-2", 2);
+    expect(plan.map((row) => row.detail).join("\n")).toContain(
+      "SEARCH workboard_cards USING COVERING INDEX",
+    );
+  });
+
   // Inspects and repairs native SQLite indexes and EXPLAIN QUERY PLAN output.
   test("restores dropped card child indexes without changing the schema version", async () => {
     const dbPath = databasePath();

@@ -497,7 +497,7 @@ class ChatControllerReconnectRestoreTest {
       connect(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("partial reply", controller.streamingAssistantText.value)
+      assertEquals("partial reply", controller.streamingAssistant.value?.text)
       assertEquals(1, controller.messages.value.size)
 
       // The adopted run keeps consuming live deltas and its terminal event.
@@ -505,7 +505,7 @@ class ChatControllerReconnectRestoreTest {
         "chat",
         chatDeltaPayload("main", "run-active", 5, " more", "partial reply more"),
       )
-      assertEquals("partial reply more", controller.streamingAssistantText.value)
+      assertEquals("partial reply more", controller.streamingAssistant.value?.text)
       gateway.respondWith(
         "chat.history",
         history(
@@ -519,7 +519,7 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
 
       assertEquals(0, controller.pendingRunCount.value)
-      assertNull(controller.streamingAssistantText.value)
+      assertNull(controller.streamingAssistant.value?.text)
       assertEquals(2, controller.messages.value.size)
     }
 
@@ -568,7 +568,7 @@ class ChatControllerReconnectRestoreTest {
       assertEquals(historyCallsAfterLoad + 1, gateway.callCount("chat.history"))
       assertEquals(metadataCallsAfterLoad + 1, gateway.callCount("chat.metadata"))
       assertEquals(0, controller.pendingRunCount.value)
-      assertNull(controller.streamingAssistantText.value)
+      assertNull(controller.streamingAssistant.value?.text)
       assertNull(controller.errorText.value)
       assertTrue(controller.healthOk.value)
       assertEquals(1, controller.messages.value.size)
@@ -680,7 +680,7 @@ class ChatControllerReconnectRestoreTest {
 
       assertTrue(controller.healthOk.value)
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("working", controller.streamingAssistantText.value)
+      assertEquals("working", controller.streamingAssistant.value?.text)
       olderHistory.complete(history(emptyList()))
       runCurrent()
       assertEquals(listOf("keep working"), controller.messageTexts)
@@ -704,7 +704,7 @@ class ChatControllerReconnectRestoreTest {
         Triple(
           controller.pendingRunCount.value,
           controller.selectedActiveRunPresentation.value,
-          controller.streamingAssistantText.value,
+          controller.streamingAssistant.value?.text,
         )
       val settled = Triple(0, ChatActiveRunPresentation(), null)
 
@@ -754,7 +754,7 @@ class ChatControllerReconnectRestoreTest {
       if (++historyCalls == 1) firstHistory.await() else secondHistory.await()
     }
 
-    fun runState() = Triple(controller.pendingRunCount.value, controller.selectedActiveRunPresentation.value.runId, controller.streamingAssistantText.value)
+    fun runState() = Triple(controller.pendingRunCount.value, controller.selectedActiveRunPresentation.value.runId, controller.streamingAssistant.value?.text)
     val settled = Triple(0, null, null)
     try {
       reconnect(controller)
@@ -838,7 +838,7 @@ class ChatControllerReconnectRestoreTest {
         runCurrent()
         assertEquals(
           Triple(0, ChatActiveRunPresentation(), null),
-          Triple(controller.pendingRunCount.value, controller.selectedActiveRunPresentation.value, controller.streamingAssistantText.value),
+          Triple(controller.pendingRunCount.value, controller.selectedActiveRunPresentation.value, controller.streamingAssistant.value?.text),
         )
         assertEquals(
           "$clientRunId:user",
@@ -871,7 +871,7 @@ class ChatControllerReconnectRestoreTest {
         runCurrent()
         assertEquals(historyCalls, gateway.callCount("chat.history"))
         assertEquals(0, controller.pendingRunCount.value)
-        assertNull(controller.streamingAssistantText.value)
+        assertNull(controller.streamingAssistant.value?.text)
       } finally {
         releaseAck.complete(Unit)
         send.await()
@@ -914,7 +914,7 @@ class ChatControllerReconnectRestoreTest {
       assertEquals(listOf(queued.id, queued.id), attempts)
       assertEquals(1, controller.pendingRunCount.value)
       assertEquals(queued.id, controller.selectedActiveRunPresentation.value.runId)
-      assertEquals("working", controller.streamingAssistantText.value)
+      assertEquals("working", controller.streamingAssistant.value?.text)
 
       controller.handleGatewayEvent(
         "agent",
@@ -922,7 +922,7 @@ class ChatControllerReconnectRestoreTest {
       )
       assertEquals(
         Triple(0, ChatActiveRunPresentation(), null),
-        Triple(controller.pendingRunCount.value, controller.selectedActiveRunPresentation.value, controller.streamingAssistantText.value),
+        Triple(controller.pendingRunCount.value, controller.selectedActiveRunPresentation.value, controller.streamingAssistant.value?.text),
       )
     }
 
@@ -993,7 +993,7 @@ class ChatControllerReconnectRestoreTest {
         controller.handleGatewayEvent("agent", """{"sessionKey":"main","stream":"lifecycle","data":{"phase":"end"}}""")
         assertEquals(
           Triple(0, ChatActiveRunPresentation(), null),
-          Triple(controller.pendingRunCount.value, controller.selectedActiveRunPresentation.value, controller.streamingAssistantText.value),
+          Triple(controller.pendingRunCount.value, controller.selectedActiveRunPresentation.value, controller.streamingAssistant.value?.text),
         )
       } finally {
         firstResponse.completeExceptionally(GatewayRequestOutcomeUnknown("test complete"))
@@ -1102,7 +1102,7 @@ class ChatControllerReconnectRestoreTest {
       }
     }
 
-    fun runState() = Triple(controller.pendingRunCount.value, controller.selectedActiveRunPresentation.value.runId, controller.streamingAssistantText.value)
+    fun runState() = Triple(controller.pendingRunCount.value, controller.selectedActiveRunPresentation.value.runId, controller.streamingAssistant.value?.text)
     val settled = Triple(0, null, null)
     try {
       if (recoveredFirstRun) {
@@ -1148,7 +1148,7 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
       assertEquals(2, historyRequests)
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("second working", controller.streamingAssistantText.value)
+      assertEquals("second working", controller.streamingAssistant.value?.text)
       if (refreshSessionList) {
         gateway.respondWith(
           "sessions.list",
@@ -1242,7 +1242,7 @@ class ChatControllerReconnectRestoreTest {
 
       assertEquals(listOf("keep working", "transcript update"), controller.messageTexts)
       assertEquals(0, controller.pendingRunCount.value)
-      assertNull(controller.streamingAssistantText.value)
+      assertNull(controller.streamingAssistant.value?.text)
       recoveryHealth.complete("{}")
       runCurrent()
       assertTrue(controller.healthOk.value)
@@ -1265,7 +1265,7 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("working", controller.streamingAssistantText.value)
+      assertEquals("working", controller.streamingAssistant.value?.text)
       assertNull(controller.errorText.value)
     }
 
@@ -1603,7 +1603,7 @@ class ChatControllerReconnectRestoreTest {
       assertEquals(0, controller.pendingRunCount.value)
       assertEquals(listOf("keep working", "completed while offline"), controller.messageTexts)
       assertNull(controller.errorText.value)
-      assertNull(controller.streamingAssistantText.value)
+      assertNull(controller.streamingAssistant.value?.text)
       assertTrue(controller.pendingToolCalls.value.isEmpty())
     }
 
@@ -1624,7 +1624,7 @@ class ChatControllerReconnectRestoreTest {
 
       assertEquals(2, gateway.callCount("chat.history"))
       assertEquals(0, controller.pendingRunCount.value)
-      assertNull(controller.streamingAssistantText.value)
+      assertNull(controller.streamingAssistant.value?.text)
 
       advanceTimeBy(120_000)
       runCurrent()
@@ -1669,7 +1669,7 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("working", controller.streamingAssistantText.value)
+      assertEquals("working", controller.streamingAssistant.value?.text)
       assertNull(controller.errorText.value)
 
       releaseNewerRefresh.complete(
@@ -1679,7 +1679,7 @@ class ChatControllerReconnectRestoreTest {
 
       assertEquals(3, gateway.callCount("chat.history"))
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("still working", controller.streamingAssistantText.value)
+      assertEquals("still working", controller.streamingAssistant.value?.text)
       assertNull(controller.errorText.value)
     }
 
@@ -1755,7 +1755,7 @@ class ChatControllerReconnectRestoreTest {
       connect(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("working", controller.streamingAssistantText.value)
+      assertEquals("working", controller.streamingAssistant.value?.text)
       assertEquals(listOf("keep ownership"), controller.messageTexts)
     }
 
@@ -1834,12 +1834,12 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertNull(controller.streamingAssistantText.value)
+      assertNull(controller.streamingAssistant.value?.text)
 
       advanceRecoveryRetry()
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("working", controller.streamingAssistantText.value)
+      assertEquals("working", controller.streamingAssistant.value?.text)
       assertEquals(
         "$clientRunId:user",
         controller.messages.value
@@ -1850,7 +1850,7 @@ class ChatControllerReconnectRestoreTest {
         "chat",
         chatDeltaPayload("main", "canonical-run", 1, " now", "working now"),
       )
-      assertEquals("working now", controller.streamingAssistantText.value)
+      assertEquals("working now", controller.streamingAssistant.value?.text)
     }
 
   @Test
@@ -1872,7 +1872,7 @@ class ChatControllerReconnectRestoreTest {
       }
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("partial", controller.streamingAssistantText.value)
+      assertEquals("partial", controller.streamingAssistant.value?.text)
       assertEquals(1, controller.messages.value.size)
     }
 
@@ -1895,7 +1895,7 @@ class ChatControllerReconnectRestoreTest {
       connect(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("working", controller.streamingAssistantText.value)
+      assertEquals("working", controller.streamingAssistant.value?.text)
       assertEquals(listOf("survive reconnect"), controller.messageTexts)
     }
 
@@ -1920,12 +1920,12 @@ class ChatControllerReconnectRestoreTest {
       connect(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertNull(controller.streamingAssistantText.value)
+      assertNull(controller.streamingAssistant.value?.text)
       controller.handleGatewayEvent(
         "chat",
         chatDeltaPayload("main", localRunId, 1, "ours", "ours"),
       )
-      assertEquals("ours", controller.streamingAssistantText.value)
+      assertEquals("ours", controller.streamingAssistant.value?.text)
       controller.handleGatewayEvent(
         "agent",
         """{"sessionKey":"main","runId":"run-stale","seq":2,"stream":"assistant","data":{"text":"stale agent"}}""",
@@ -1939,7 +1939,7 @@ class ChatControllerReconnectRestoreTest {
         chatTerminalPayload("main", "run-stale", seq = 4, state = "error"),
       )
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("ours", controller.streamingAssistantText.value)
+      assertEquals("ours", controller.streamingAssistant.value?.text)
       assertTrue(controller.pendingToolCalls.value.isEmpty())
       assertNull(controller.errorText.value)
       assertEquals(listOf("local work"), controller.messageTexts)
@@ -1969,13 +1969,13 @@ class ChatControllerReconnectRestoreTest {
       connect(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("other working", controller.streamingAssistantText.value)
+      assertEquals("other working", controller.streamingAssistant.value?.text)
       assertEquals(listOf("local work", "local done"), controller.messageTexts)
       controller.handleGatewayEvent(
         "chat",
         chatDeltaPayload("main", localRunId, 1, "stale", "stale local"),
       )
-      assertEquals("other working", controller.streamingAssistantText.value)
+      assertEquals("other working", controller.streamingAssistant.value?.text)
     }
 
   @Test
@@ -1988,7 +1988,7 @@ class ChatControllerReconnectRestoreTest {
       )
       val controller = loadController(gateway)
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("old work", controller.streamingAssistantText.value)
+      assertEquals("old work", controller.streamingAssistant.value?.text)
 
       controller.onDisconnected("Reconnecting…")
       gateway.respondWith(
@@ -1998,11 +1998,11 @@ class ChatControllerReconnectRestoreTest {
       connect(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("current work", controller.streamingAssistantText.value)
+      assertEquals("current work", controller.streamingAssistant.value?.text)
       controller.handleGatewayEvent("chat", chatDeltaPayload("main", "run-a", 1, " stale", "old work stale"))
-      assertEquals("current work", controller.streamingAssistantText.value)
+      assertEquals("current work", controller.streamingAssistant.value?.text)
       controller.handleGatewayEvent("chat", chatDeltaPayload("main", "run-b", 1, " now", "current work now"))
-      assertEquals("current work now", controller.streamingAssistantText.value)
+      assertEquals("current work now", controller.streamingAssistant.value?.text)
     }
 
   @Test
@@ -2023,7 +2023,7 @@ class ChatControllerReconnectRestoreTest {
       recoverSeqGap(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("working", controller.streamingAssistantText.value)
+      assertEquals("working", controller.streamingAssistant.value?.text)
       assertEquals(listOf("survive gap"), controller.messageTexts)
     }
 
@@ -2046,7 +2046,7 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("working", controller.streamingAssistantText.value)
+      assertEquals("working", controller.streamingAssistant.value?.text)
       assertEquals(listOf("survive refresh"), controller.messageTexts)
     }
 
@@ -2063,7 +2063,7 @@ class ChatControllerReconnectRestoreTest {
         "agent",
         """{"sessionKey":"main","runId":"run-active","seq":2,"ts":10,"stream":"tool","data":{"phase":"start","name":"exec","toolCallId":"tool-1"}}""",
       )
-      assertEquals("partial", controller.streamingAssistantText.value)
+      assertEquals("partial", controller.streamingAssistant.value?.text)
       assertEquals(1, controller.pendingToolCalls.value.size)
 
       gateway.respondWith(
@@ -2076,7 +2076,7 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
 
       assertEquals(0, controller.pendingRunCount.value)
-      assertNull(controller.streamingAssistantText.value)
+      assertNull(controller.streamingAssistant.value?.text)
       assertTrue(controller.pendingToolCalls.value.isEmpty())
       assertEquals(listOf("keep working", "complete"), controller.messageTexts)
     }
@@ -2096,7 +2096,7 @@ class ChatControllerReconnectRestoreTest {
       recoverSeqGap(controller)
 
       assertEquals(0, controller.pendingRunCount.value)
-      assertNull(controller.streamingAssistantText.value)
+      assertNull(controller.streamingAssistant.value?.text)
       assertEquals(listOf("finished during gap"), controller.messageTexts)
 
       gateway.respondWith(
@@ -2207,7 +2207,7 @@ class ChatControllerReconnectRestoreTest {
       )
       controller.handleGatewayEvent("chat", chatTerminalPayload("main", firstRunId, seq = 3, state = "error"))
       runCurrent()
-      assertEquals("second working", controller.streamingAssistantText.value)
+      assertEquals("second working", controller.streamingAssistant.value?.text)
       assertNull(controller.errorText.value)
       controller.handleGatewayEvent(
         "chat",
@@ -2360,7 +2360,7 @@ class ChatControllerReconnectRestoreTest {
       runCurrent()
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("new reply", controller.streamingAssistantText.value)
+      assertEquals("new reply", controller.streamingAssistant.value?.text)
       assertNull(controller.errorText.value)
       assertEquals(listOf("slow first", "slow done", "newer work"), controller.messageTexts)
     }
@@ -2520,12 +2520,12 @@ class ChatControllerReconnectRestoreTest {
       recoverSeqGap(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertNull(controller.streamingAssistantText.value)
+      assertNull(controller.streamingAssistant.value?.text)
       controller.handleGatewayEvent(
         "chat",
         chatDeltaPayload("main", localRunId, 1, "ours", "ours"),
       )
-      assertEquals("ours", controller.streamingAssistantText.value)
+      assertEquals("ours", controller.streamingAssistant.value?.text)
       assertEquals(listOf("new work"), controller.messageTexts)
     }
 
@@ -2543,7 +2543,7 @@ class ChatControllerReconnectRestoreTest {
       recoverSeqGap(controller)
 
       assertEquals(1, controller.pendingRunCount.value)
-      assertEquals("still going", controller.streamingAssistantText.value)
+      assertEquals("still going", controller.streamingAssistant.value?.text)
       assertNull(controller.errorText.value)
       assertEquals(1, controller.messages.value.size)
     }

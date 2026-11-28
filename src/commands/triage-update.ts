@@ -1,8 +1,13 @@
 // Preserve one failed update as bounded diagnostics across the updater's fresh CLI handoff.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import path from "node:path";
+import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { z } from "zod";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { resolveStateDir } from "../config/paths.js";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { UpdateDoctorLintFindingSchema } from "../infra/update-doctor-lint-schema.js";
 import { normalizeUpdateDoctorLintFindings } from "../infra/update-doctor-lint.js";
 import { normalizeUpdateFailureFacts } from "../infra/update-failure-facts.js";
@@ -452,6 +457,69 @@ export async function readTriageUpdateFailure(
   } finally {
     await file.close();
   }
+}
+
+async function writeTriageText(
+  filePath: string,
+  content: string,
+  assertCurrent?: () => void,
+): Promise<void> {
+  await replaceFileAtomic({
+    allowDrvfsRenameRecovery: true,
+    filePath,
+    content,
+    mode: 0o600,
+    dirMode: 0o700,
+    copyFallbackOnPermissionError: true,
+    syncTempFile: true,
+    syncParentDir: true,
+    assertBeforeMutation: assertCurrent,
+  });
+}
+
+function updateDiagnosticArtifactName(kind: "lint" | "failure", id: string = randomUUID()): string {
+  // Shipped support redactors must not mistake a numeric UUID tail for an account ID.
+  return `openclaw-update-${kind}-${id.replaceAll("-", "_")}.json`;
+}
+
+async function writeUpdateFailureLintArtifact(
+  inventory: TriageUpdateFailure,
+  directory: string,
+  assertCurrent?: () => void,
+): Promise<string> {
+  const outputPath = path.join(directory, updateDiagnosticArtifactName("lint"));
+  await writeTriageText(outputPath, `${JSON.stringify(inventory)}\n`, assertCurrent);
+  return outputPath;
+}
+
+/** Preserve captured failure diagnostics for triage and its printed retry commands. */
+export async function writeTriageUpdateFailure(
+  failure: TriageUpdateFailure,
+  options: { env?: NodeJS.ProcessEnv; outputPath?: string; assertCurrent?: () => void } = {},
+): Promise<string> {
+  options.assertCurrent?.();
+  const env = options.env ?? process.env;
+  const stateDir = resolveStateDir(env);
+  const outputPath =
+    options.outputPath ??
+    path.join(stateDir, "logs", "support", updateDiagnosticArtifactName("failure"));
+  const inventory = sanitizeTriageUpdateFailure(failure, { env, stateDir }, "inventory");
+  let detail: string | undefined;
+  if ("result" in inventory && inventory.result.steps.some((step) => step.doctorLintFindings)) {
+    detail = await writeUpdateFailureLintArtifact(
+      inventory,
+      path.dirname(outputPath),
+      options.assertCurrent,
+    ).then(
+      (inventoryPath) => `Complete Doctor lint inventory: ${inventoryPath}`,
+      (error: unknown) =>
+        `Complete Doctor lint inventory unavailable: ${formatErrorMessage(error)}`,
+    );
+  }
+  options.assertCurrent?.();
+  const sanitized = sanitizeTriageUpdateFailure(inventory, { env, stateDir }, "artifact", detail);
+  await writeTriageText(outputPath, `${JSON.stringify(sanitized)}\n`, options.assertCurrent);
+  return outputPath;
 }
 
 export async function readPendingTriageUpdateFailure(

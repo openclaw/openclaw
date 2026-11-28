@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { Chalk } from "chalk";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +15,9 @@ import { GatewayTransportError } from "../gateway/transport-error.js";
 import { ExitError } from "../runtime.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-schema-versions.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerSkillsCli } from "./skills-cli.js";
 import { createCliTtyMock } from "./test-runtime-capture.js";
 
@@ -28,7 +34,9 @@ const mocks = await vi.hoisted(async () => {
     report,
     gateway: vi.fn(),
     config: vi.fn((_options?: unknown) => ({})),
-    bestEffortConfig: vi.fn((_options?: unknown) => ({})),
+    bestEffortConfig: vi.fn(
+      (_options?: Parameters<typeof import("../config/config.js").readBestEffortConfig>[0]) => ({}),
+    ),
     defaultAgent: vi.fn((_config: unknown, _context?: AgentSelectionContext) => "main"),
     inferredAgent: vi.fn((_config: unknown, _cwd: string): string | undefined => undefined),
     explicitAgent: vi.fn((_config: unknown, agent: string) => agent),
@@ -72,7 +80,8 @@ vi.mock("../config/config.js", async () => {
   };
 });
 // mock-isolation: Skill CLI fixtures own agent and workspace selection without host configuration.
-vi.mock("../agents/agent-scope.js", () => ({
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   listAgentIds: () => ["main"],
   resolveAgentIdByWorkspacePath: mocks.inferredAgent,
   resolveConfiguredAgentId: mocks.explicitAgent,
@@ -489,6 +498,40 @@ describe("skills cli commands", () => {
       workspaceDir: "/gateway/workspace-writer",
       eligible: ["calendar"],
       missingRequirements: [],
+    });
+  });
+  it("lists Gateway skills without reading newer local plugin metadata", async () => {
+    await withOpenClawTestState({ label: "skills-gateway-newer-schema" }, async (state) => {
+      await state.writeConfig({
+        gateway: { mode: "local", auth: { mode: "token", token: "test-token" } },
+        agents: { ownership: "explicit", entries: { main: { workspace: state.workspaceDir } } },
+        models: {
+          providers: {
+            example: { baseUrl: "https://example.invalid/v1", models: [] },
+          },
+        },
+      });
+      const databasePath = resolveOpenClawStateSqlitePath(state.env);
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      {
+        using database = new DatabaseSync(databasePath);
+        database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+      }
+      const before = await fs.readFile(databasePath);
+      const { readBestEffortConfig } =
+        await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+      mocks.bestEffortConfig.mockImplementation(readBestEffortConfig);
+      mocks.gateway.mockResolvedValue({ ...mocks.report, workspaceDir: "/gateway/inventory" });
+
+      await run("list --json");
+
+      expect(JSON.parse(stdout.at(-1) ?? "{}")).toMatchObject({
+        workspaceDir: "/gateway/inventory",
+        skills: [{ name: "calendar" }],
+      });
+      expectOptions(mocks.gateway, { method: "skills.status", params: { agentId: "main" } });
+      expect(mocks.status).not.toHaveBeenCalled();
+      expect(await fs.readFile(databasePath)).toEqual(before);
     });
   });
   it.each([

@@ -113,7 +113,7 @@ export type Row = Pick<GatewaySessionRow, "hasMessages"> & {
   selection: ReturnType<typeof readSessionListSelectionFacts>;
   /** One accepted selection snapshot shared by recents and list consumers. */
   selectionSnapshot?: SelectionRow;
-  materialized?: ReturnType<typeof rowProjection.materializeSessionRow>;
+  materialized?: ReturnType<typeof rowProjection.replaceSessionRowFacts>;
   materializedSequence?: number;
   profileRevision?: number;
   subagentRevision?: number;
@@ -692,9 +692,6 @@ export function acquireSessionRowEntry(params: {
   const refreshParents =
     reparented ||
     (parents.size > 0 && (!row.entry || !sameSessionRowChildLinkEntry(row.entry, entry)));
-  if (reparented) {
-    params.markRelated(row, "parents");
-  }
   const generation =
     !row.entry ||
     (row.entry.sessionId === entry.sessionId &&
@@ -735,6 +732,9 @@ export function acquireSessionRowEntry(params: {
     next = archive.demote(next);
   } else if (entry.archivedAt === undefined) {
     archive.forget(identity(next));
+  }
+  if (reparented) {
+    params.markRelated(row, "parents");
   }
   if (refreshChildren || refreshParents) {
     params.markRelated(next, refreshChildren ? (refreshParents ? "all" : "children") : "parents");

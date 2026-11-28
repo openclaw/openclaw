@@ -74,6 +74,27 @@ export async function migrateLegacyDoctorConfig(params: {
   return changes.length > 0;
 }
 
+/** Next steps once Doctor has tried and failed to recover an unparseable config. */
+export function formatUnparseableConfigNextSteps(): string {
+  return `Inspect the exact parse error with ${formatCliCommand("openclaw config validate")}, then hand-edit the file; or move it aside and run ${formatCliCommand("openclaw onboard")} to generate a fresh config.`;
+}
+
+/**
+ * Read-only: whether {@link prepareDoctorConfigRecovery} would restore a valid config it
+ * finds suspicious. Invalid configs are the caller's own work.
+ */
+export async function hasDoctorConfigRecoveryWork(snapshot: ConfigFileSnapshot): Promise<boolean> {
+  if (!snapshot.valid || resolveFutureConfigActionBlock({ action: "recover config", snapshot })) {
+    return false;
+  }
+  const recovery = await prepareConfigRecoveryFromContext(
+    createConfigIoContext({ configPath: snapshot.path }, transformDoctorRecoveryCandidate),
+    snapshot,
+    "doctor-repair",
+  );
+  return recovery !== null;
+}
+
 /** Repair active legacy bytes before considering an older backup. */
 export async function prepareDoctorConfigRecovery(params: {
   enabled: boolean;
@@ -183,21 +204,35 @@ export async function prepareDoctorConfigRecovery(params: {
       !parseConfigJson5(snapshot.raw).ok
     ) {
       throw new Error(
-        `Config at ${snapshot.path} is not parseable and cannot be repaired automatically. The file remains unchanged. Inspect the exact parse error with ${formatCliCommand("openclaw config validate")}, then hand-edit the file; or move it aside and run ${formatCliCommand("openclaw onboard")} to generate a fresh config.`,
+        `Config at ${snapshot.path} is not parseable and cannot be repaired automatically. The file remains unchanged. ${formatUnparseableConfigNextSteps()}`,
       );
     }
   }
   return { snapshotRead, activeConfigRepair };
 }
 
+// An explicit state, home or config location never takes the legacy file name.
+const legacyConfigFileDir = (env: NodeJS.ProcessEnv) =>
+  env.OPENCLAW_STATE_DIR?.trim() || env.OPENCLAW_HOME?.trim() || env.OPENCLAW_CONFIG_PATH?.trim()
+    ? undefined
+    : path.dirname(resolveCanonicalConfigPath(env));
+
+/** Read-only: whether {@link migrateLegacyDoctorConfig} would rename the legacy config file. */
+export async function hasPendingLegacyDoctorConfigFile(env: NodeJS.ProcessEnv): Promise<boolean> {
+  const dir = legacyConfigFileDir(env);
+  if (!dir) {
+    return false;
+  }
+  const { hasPendingLegacyConfigFileRename } =
+    await import("../infra/state-migrations.state-dir.js");
+  return hasPendingLegacyConfigFileRename(dir);
+}
+
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
-  if (
-    process.env.OPENCLAW_STATE_DIR?.trim() ||
-    process.env.OPENCLAW_HOME?.trim() ||
-    process.env.OPENCLAW_CONFIG_PATH?.trim()
-  ) {
+  const dir = legacyConfigFileDir(process.env);
+  if (!dir) {
     return [];
   }
   const { renameLegacyConfigFile } = await import("../infra/state-migrations.state-dir.js");
-  return renameLegacyConfigFile(path.dirname(resolveCanonicalConfigPath()));
+  return renameLegacyConfigFile(dir);
 }

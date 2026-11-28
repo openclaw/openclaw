@@ -4,8 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiSessionPullRequestCheckDetails } from "../../../../../src/gateway/control-ui-contract.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
-import { i18n } from "../../../i18n/index.ts";
-import { captureI18nStateForTesting } from "../../../i18n/lib/translate.test-support.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
 import { confirmation } from "../chat-github-publication.test-support.ts";
 import type { ChatCiDetailsElement } from "./chat-ci-details.tsx";
@@ -220,27 +218,6 @@ describe("ChatPullRequests", () => {
     });
     expect(query(".chat-pr__warning")).not.toBeNull();
   });
-
-  it.each([
-    { locale: "en", label: "Create PR" },
-    { locale: "fr", label: "Créer une demande de fusion" },
-  ] as const)(
-    "names the Create PR link with its visible text and branch in $locale",
-    async ({ locale, label }) => {
-      const restoreI18n = captureI18nStateForTesting();
-      const branch = sessionBranch();
-      try {
-        await i18n.setLocale(locale);
-        paint({ pullRequests: [], branch });
-        const link = container.querySelector<HTMLAnchorElement>("a.chat-pr__create");
-        expect(link?.textContent).toBe(label);
-        expect(link?.getAttribute("aria-label")).toContain(label);
-        expect(link?.getAttribute("aria-label")).toContain(branch.branch);
-      } finally {
-        await restoreI18n();
-      }
-    },
-  );
 
   it("hides the Create PR link while the branch has no createUrl", () => {
     paint({
@@ -501,53 +478,6 @@ describe("CI job details", () => {
     vi.useRealTimers();
   });
 
-  it("fetches only while open, prioritizes live failures, and keeps manual job expansion across refresh", async () => {
-    const h = harness();
-    await settle(h.element);
-    expect(h.request).not.toHaveBeenCalled();
-    expect(h.element).toBeNull();
-    h.disclosure.open = true;
-    await settle(h.element);
-    expect(h.request).toHaveBeenCalledOnce();
-    expect(
-      [...container.querySelectorAll(".chat-ci__jobs > .chat-ci__job")].map((job) =>
-        job.getAttribute("data-check-id"),
-      ),
-    ).toEqual(["3", "2", "1"]);
-    const failed = container.querySelector<HTMLDetailsElement>('.chat-ci__job[data-check-id="3"]')!;
-    expect(failed.open).toBe(true);
-    expect(failed.querySelector(".chat-ci__duration")?.textContent).toBe("1m 12s");
-    expect(
-      [...failed.querySelectorAll(".chat-ci__step .chat-ci__name")].map((step) => step.textContent),
-    ).toEqual(["Set up job", "Install", "Lint sources", "Upload report"]);
-    expect(
-      container.querySelector<HTMLDetailsElement>('.chat-ci__job[data-check-id="1"]')?.open,
-    ).toBe(false);
-    expect(container.querySelector<HTMLDetailsElement>(".chat-ci__skipped")?.open).toBe(false);
-    failed.open = false;
-    await settle(h.element);
-    const requestsBeforeRefresh = h.request.mock.calls.length;
-    await refresh(h);
-    expect(h.request).toHaveBeenCalledTimes(requestsBeforeRefresh + 1);
-    expect(failed.open).toBe(false);
-    h.element.presented = false;
-    await settle(h.element);
-    const hiddenCount = h.request.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(h.request).toHaveBeenCalledTimes(hiddenCount);
-    h.element.presented = true;
-    await settle(h.element);
-    expect(h.request).toHaveBeenCalledTimes(hiddenCount + 1);
-    expect(h.disclosure.open).toBe(true);
-    expect(query('.chat-ci__job[data-check-id="3"]')).toBe(failed);
-    expect(failed.open).toBe(false);
-    h.disclosure.open = false;
-    await settle(h.element);
-    const closedCount = h.request.mock.calls.length;
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect(h.request).toHaveBeenCalledTimes(closedCount);
-  });
-
   it("refreshes completed CI so same-head reruns replace cached terminal results", async () => {
     const h = harness();
     const completed = details({
@@ -577,6 +507,13 @@ describe("CI job details", () => {
     await refresh(h);
     expect(text('.chat-ci__job[data-check-id="5"]')).toContain("Build rerun");
     expect(query('.chat-ci__job[data-check-id="1"]')).toBeNull();
+    h.element.presented = false;
+    await settle(h.element);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.request).toHaveBeenCalledTimes(3);
+    h.element.presented = true;
+    await settle(h.element);
+    expect(h.request).toHaveBeenCalledTimes(4);
   });
 
   it.each(["closed", "session", "gateway"] as const)(

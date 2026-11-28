@@ -369,12 +369,6 @@
   }
 }
 
-@media (max-width: 400px) {
-  .transcripts-filters__advanced {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
 /* Search and a filter button replace the filter block; Filters renders these at the same query. */
 .transcripts-filters--phone {
   grid-template-columns: minmax(0, 1fr) auto;

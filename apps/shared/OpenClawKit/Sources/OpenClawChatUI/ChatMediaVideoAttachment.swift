@@ -173,7 +173,7 @@ final class ChatMediaVideoPlayer: ChatMediaPlayer {
     @ObservationIgnored private var rateObserver: (any NSObjectProtocol)?
     @ObservationIgnored private let playbackCoordinator: ChatMediaPlaybackCoordinator
 
-    init(
+    convenience init(
         loaded: OpenClawChatLoadedMedia,
         title: String,
         playbackAllowed: @escaping @MainActor @Sendable () -> Bool,
@@ -195,7 +195,22 @@ final class ChatMediaVideoPlayer: ChatMediaPlayer {
         case .preparing:
             throw ChatMediaVideoError.playbackStillPreparing
         }
-        self.player = AVPlayer(url: playbackURL)
+        self.init(
+            url: playbackURL,
+            title: title,
+            playbackAllowed: playbackAllowed,
+            temporaryFileURL: temporaryFileURL,
+            playbackCoordinator: playbackCoordinator)
+    }
+
+    init(
+        url: URL,
+        title: String,
+        playbackAllowed: @escaping @MainActor @Sendable () -> Bool,
+        temporaryFileURL: URL? = nil,
+        playbackCoordinator: ChatMediaPlaybackCoordinator = .shared)
+    {
+        self.player = AVPlayer(url: url)
         self.title = title
         self.playbackAllowed = playbackAllowed
         self.temporaryFileURL = temporaryFileURL

@@ -1,4 +1,5 @@
 import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
+import type { abortControlledSubagents } from "../../agents/subagents/cancel-descendants.js";
 import type { SessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
 import type {
@@ -7,7 +8,6 @@ import type {
 } from "../../sessions/session-controller.stop.js";
 import type { ChatAbortOps } from "../chat-abort.js";
 import type { ChatAbortRequester } from "./chat-abort-authorization.js";
-import type { abortControlledSubagents } from "./chat-abort-descendants.js";
 import type { ChatAbortOrigin, ChatAbortSessionSnapshot } from "./chat-aborted-partial.js";
 import type { GatewayRequestContext } from "./types.js";
 

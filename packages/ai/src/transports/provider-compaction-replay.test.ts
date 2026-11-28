@@ -100,7 +100,6 @@ describe("compaction replay owner rewrites", () => {
     });
     // 123 provider output tokens + 4 plaintext chars + three metadata allowances.
     expect(pressure?.prefixTokens).toBe(130);
-    expect(pressure?.measuredTokens).toBeUndefined();
   });
 
   it("invalidates a checkpoint when replacing content in its covered prefix", () => {
@@ -431,7 +430,8 @@ describe("canonical compaction replay pressure", () => {
       { content: later.content, usage: { cost: later.usage.cost } },
     ]);
     expect(plan?.messages[0]).not.toHaveProperty("usage.contextUsage");
-    expect(plan?.messages[1]).not.toHaveProperty("usage.contextUsage");
+    // Later usage measures the replayed window and anchors pressure without a wire binding.
+    expect(plan?.messages[1]).toMatchObject({ usage: { contextUsage: { totalTokens: 2_001 } } });
     expect(owner.usage.contextUsage.totalTokens).toBe(90_001);
     expect(later.usage.contextUsage.totalTokens).toBe(2_001);
   });

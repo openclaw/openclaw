@@ -165,10 +165,11 @@ describe("tool media and operation receipts", () => {
         const chain = projectHistory(messages, { messages });
         const frame = framesOf(chain).at(-1)!;
         expect(frame.outcome.kind).toBe("completed");
-        expect(frame.parts.map((part) => part.kind)).toEqual(["work-group", "group"]);
+        // The unlabeled publication receipt stays visible; both inspections stay in one rollup.
+        expect(frame.parts.map((part) => part.kind)).toEqual(["work-group", "group", "group"]);
         expect(JSON.stringify(messagesIn([frame.parts[0]!]))).toContain("before-image");
         expect(JSON.stringify(messagesIn([frame.parts[0]!]))).toContain("after-image");
-        expect(JSON.stringify(messagesIn([frame.parts[1]!]))).toContain("delivered-image");
+        expect(JSON.stringify(messagesIn([frame.parts[2]!]))).toContain("delivered-image");
         const rows = projectTranscriptIndex(chain, new Map(), {
           assistantName: "Agent",
           currentAgentId: "main",
@@ -178,7 +179,7 @@ describe("tool media and operation receipts", () => {
             row.item.kind === "agent-run-frame" &&
             row.item.runId === "media-run",
         );
-        expect(rows).toHaveLength(earlierTurns ? 2 : 1);
+        expect(rows).toHaveLength(earlierTurns ? 3 : 1);
       }
     },
   );
