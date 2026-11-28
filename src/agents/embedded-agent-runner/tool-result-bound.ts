@@ -10,6 +10,7 @@ import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
   resolveToolResultBudget,
+  type ToolResultBudget,
 } from "../tool-result-limits.js";
 import { log } from "./logger.js";
 import {
@@ -18,6 +19,7 @@ import {
 } from "./tool-result-char-estimator.js";
 import { estimateToolResultTextChars, isToolResultTextBlock } from "./tool-result-text-budget.js";
 import {
+  formatOmittedCharsNotice,
   getToolResultSpillDetails,
   truncateToolResultMessage,
   type ToolResultTruncationOptions,
@@ -50,25 +52,54 @@ const frameOf = (block: unknown) => {
     : undefined;
 };
 
-/** Replaces each text block that is exactly one untrusted-content envelope by its body. */
-function unwrapEnvelopes(content: unknown[]) {
-  let frameChars = 0;
-  let frameContext = 0;
-  const unwrapped = content.map((block) => {
+/**
+ * Replaces each text block that is exactly one untrusted-content envelope by its body, while
+ * its frame still fits beside the other blocks, earlier frames and the omission notice. A block
+ * whose frame does not fit (hostile metadata, an image taking the share, many envelopes) fails
+ * closed: it is left out whole, and one trusted notice with the true count is added after the
+ * cut, outside any untrusted region.
+ */
+function unwrapEnvelopes(content: unknown[], budget: ToolResultBudget, nonText: number) {
+  // The notice for every text char omitted is the largest this result can need.
+  const allText = content.reduce<number>(
+    (sum, block) => sum + (isToolResultTextBlock(block) ? block.text.length : 0),
+    0,
+  );
+  const noticeBound = { type: "text", text: formatOmittedCharsNotice(allText) };
+  let frameChars = estimateToolResultTextChars(noticeBound.text);
+  let frameContext = contextChars([noticeBound]);
+  let omittedChars = 0;
+  let found = false;
+  const unwrapped = content.flatMap((block) => {
     // A block that mirrors its text in `content` would keep the unwrapped copy there.
     if (!isToolResultTextBlock(block) || typeof Reflect.get(block, "content") === "string") {
-      return block;
+      return [block];
     }
     const parts = splitExternalContentEnvelope(block.text);
     if (!parts) {
-      return block;
+      return [block];
     }
     const frame = `${parts.open}${parts.close}`;
-    frameChars += estimateToolResultTextChars(frame);
-    frameContext += contextChars([{ type: "text", text: frame }]);
-    return { ...block, text: parts.body, [FRAME]: { open: parts.open, close: parts.close } };
+    const chars = estimateToolResultTextChars(frame);
+    const context = contextChars([{ type: "text", text: frame }]);
+    found = true;
+    if (
+      frameChars + chars >= budget.maxChars ||
+      nonText + frameContext + context >= budget.maxContextChars
+    ) {
+      omittedChars += block.text.length;
+      return [];
+    }
+    frameChars += chars;
+    frameContext += context;
+    return [{ ...block, text: parts.body, [FRAME]: { open: parts.open, close: parts.close } }];
   });
-  return { unwrapped, frameChars, frameContext };
+  const notice =
+    omittedChars > 0 ? [{ type: "text", text: formatOmittedCharsNotice(omittedChars) }] : [];
+  // Without an envelope there is nothing to reserve.
+  return found
+    ? { unwrapped, frameChars, frameContext, notice }
+    : { unwrapped: content, frameChars: 0, frameContext: 0, notice };
 }
 
 /** Puts each surviving body (or the notice that replaced it) back inside its whole frame. */
@@ -111,26 +142,25 @@ export async function boundToolResult<T extends { content: unknown[]; details?: 
   ) {
     return result;
   }
-  const { unwrapped, frameChars, frameContext } = unwrapEnvelopes(result.content);
   const nonText = contextChars(result.content.filter((block) => !isToolResultTextBlock(block)));
-  // Frames that do not fit beside the other blocks (hostile metadata, or an image that takes
-  // the share) are cut as plain text instead.
-  const framed =
-    frameChars > 0 &&
-    frameChars < budget.maxChars &&
-    nonText + frameContext < budget.maxContextChars;
+  const { unwrapped, frameChars, frameContext, notice } = unwrapEnvelopes(
+    result.content,
+    budget,
+    nonText,
+  );
+  const framed = frameChars > 0;
   const source = framed ? withContent(result, unwrapped) : result;
-  const maxChars = framed ? budget.maxChars - frameChars : budget.maxChars;
-  const reserved = nonText + (framed ? frameContext : 0);
+  const maxChars = Math.max(0, budget.maxChars - frameChars);
+  const reserved = nonText + frameContext;
   // One text block keeps head and tail at every budget (a whole-prefix cut loses the end, and
   // an end marker with it); several blocks keep the truncator's short-record rules.
   const minKeepChars =
-    result.content.filter((block) => isToolResultTextBlock(block)).length === 1 ? 0 : undefined;
+    source.content.filter((block) => isToolResultTextBlock(block)).length === 1 ? 0 : undefined;
   const cut = (suffix?: ToolResultTruncationOptions["suffix"]) => {
     const loose = truncateToolResultMessage(source, maxChars, { suffix, minKeepChars });
     // Images that cannot fit at all stay with the context guard, which drops them.
     const inner =
-      contextChars(loose.content) + (framed ? frameContext : 0) <= budget.maxContextChars ||
+      contextChars(loose.content) + frameContext <= budget.maxContextChars ||
       reserved >= budget.maxContextChars
         ? loose
         : truncateToolResultMessage(source, Math.min(maxChars, budget.maxContextChars - reserved), {
@@ -138,10 +168,11 @@ export async function boundToolResult<T extends { content: unknown[]; details?: 
             minKeepChars,
             minimumRawWeight: TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
           });
-    if (inner === source) {
+    if (inner === source && notice.length === 0) {
       return result;
     }
-    return framed ? withContent(inner, rewrapEnvelopes(inner.content)) : inner;
+    // The omission notice is ours: it goes after the cut, outside every frame.
+    return framed ? withContent(inner, [...rewrapEnvelopes(inner.content), ...notice]) : inner;
   };
   const sizeOnly = cut();
   if (sizeOnly === result) {

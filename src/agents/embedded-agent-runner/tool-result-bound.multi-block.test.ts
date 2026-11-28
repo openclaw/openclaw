@@ -68,3 +68,45 @@ describe("multi-block results keep their untrusted-content blocks closed", () =>
     },
   );
 });
+
+// Fail closed: when not every frame fits, an envelope is left out whole with a trusted notice;
+// untrusted text never reaches the model outside a frame.
+describe("envelopes whose frames do not fit", () => {
+  it.each([4_000, 8_000])("14 wrapped pages at a %i-token window", async (contextWindowTokens) => {
+    const pages = Array.from({ length: 14 }, (_, i) =>
+      wrapExternalContent(`UNTRUSTED-${i} ${"u".repeat(8_000)}`, { source: "api" }),
+    );
+    const bounded = await boundToolResult(
+      { content: pages.map((text) => ({ type: "text", text })), details: {} },
+      contextWindowTokens,
+      false,
+    );
+    const texts = bounded.content.map((block) => (block as { text?: string }).text ?? "");
+    const shownIds = new Set<string>();
+    for (const text of texts) {
+      // Remove every whole frame region; nothing untrusted may remain outside one.
+      const outside = text.replace(
+        /<<<EXTERNAL_UNTRUSTED_CONTENT id="([a-f0-9]{16})">>>[\s\S]*?<<<END_EXTERNAL_UNTRUSTED_CONTENT id="\1">>>/gu,
+        (region, id: string) => {
+          shownIds.add(id);
+          return "";
+        },
+      );
+      expect(outside).not.toMatch(/UNTRUSTED-|uuuu|EXTERNAL_UNTRUSTED_CONTENT/u);
+    }
+    // Frames are kept in order while they fit, so the pages left out whole are the last ones;
+    // the trusted notice is the last block, outside every frame, and counts exactly those.
+    const notice = /^\[\.\.\. (\d+) chars omitted\]$/u.exec(texts.at(-1) ?? "");
+    expect(notice).not.toBeNull();
+    const count = Number(notice![1]);
+    const tails = pages.map((_, i) =>
+      pages.slice(i).reduce((sum, wrapped) => sum + wrapped.length, 0),
+    );
+    expect(tails).toContain(count);
+    // No page shown in a frame is counted as left out.
+    const leftOut = pages.slice(tails.indexOf(count));
+    for (const wrapped of leftOut) {
+      expect(shownIds.has(/id="([a-f0-9]{16})"/u.exec(wrapped)![1]!)).toBe(false);
+    }
+  });
+});
