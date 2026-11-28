@@ -1,6 +1,14 @@
 import Foundation
 import OpenClawKit
 
+extension GatewayConnectionProblem {
+    /// The host did not answer: a network failure the app retries on its own. Surfaces that follow a
+    /// live connection, such as the chat's status strip, say "Can’t reach …" for it.
+    var isUnreachable: Bool {
+        self.owner == .network && self.retryable && !self.pauseReconnect && !self.needsPairingApproval
+    }
+}
+
 enum GatewayDisplayState: Equatable {
     case connected
     case connecting
