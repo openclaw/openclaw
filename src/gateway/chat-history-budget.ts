@@ -131,6 +131,11 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
   const metadataSeq = typeof metadata.seq === "number" ? metadata.seq : undefined;
   const metadataIdempotencyKey =
     typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey : undefined;
+  const transport = asOptionalRecord(metadata.transport);
+  const channelMessage =
+    typeof transport?.channel === "string" && typeof transport.messageId === "string"
+      ? { channel: transport.channel, messageId: transport.messageId }
+      : undefined;
   const turnBoundary = metadata.turnBoundary === true;
   const transcriptPosition = readTranscriptDisplayPosition(metadata.transcriptPosition);
   const transport = asOptionalRecord(metadata.transport);
@@ -146,6 +151,7 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
       ...(typeof metadata.runId === "string" ? { runId: metadata.runId } : {}),
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
       ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
+      ...(channelMessage ? { transport: channelMessage } : {}),
       ...(turnBoundary ? { turnBoundary: true } : {}),
       ...(transcriptPosition ? { transcriptPosition } : {}),
       ...(transport ? { transport } : {}),
