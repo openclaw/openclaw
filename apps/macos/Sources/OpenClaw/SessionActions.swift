@@ -42,13 +42,14 @@ enum SessionActions {
         }
 
         guard AppActivation.shared.requestExternalNavigation() else { return }
-        let proc = Process()
-        proc.launchPath = "/usr/bin/env"
-        proc.arguments = ["code", url.path]
-        if (try? proc.run()) != nil {
+        guard let applicationURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.microsoft.VSCode")
+        else {
+            AppActivation.shared.revealFiles([url])
             return
         }
-
-        AppActivation.shared.revealFiles([url])
+        AppActivation.shared.open([url], withApplicationAt: applicationURL) { _, error in
+            guard error != nil else { return }
+            Task { @MainActor in AppActivation.shared.revealFiles([url]) }
+        }
     }
 }
