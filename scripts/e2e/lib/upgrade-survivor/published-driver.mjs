@@ -246,7 +246,8 @@ async function relabelCandidate(from, to) {
   return relabeled;
 }
 
-async function recoverLegacyCrashWithCandidate(candidatePackage, crashedHolder, expectedCommit) {
+async function recoverLegacyCrashWithCandidate(candidatePackage, crashedGateway, expectedCommit) {
+  const { holder: crashedHolder, lockPath } = crashedGateway;
   const recoveryPrefix = path.join(runtime, "candidate-recovery");
   const recoveryEnv = {
     ...env,
@@ -277,8 +278,10 @@ async function recoverLegacyCrashWithCandidate(candidatePackage, crashedHolder, 
   const inspection = output("candidate-recover-inspect");
   assert.equal(inspection.present, true, "candidate recovery did not inspect the retained lock");
   assert(
-    inspection.holders.some((holder) => holder.includes(`Legacy holder ${crashedHolder.pid}`)),
-    "candidate recovery inspected a different holder",
+    inspection.holders.some((holder) =>
+      holder.includes(`${lockPath}: holder ${crashedHolder.pid} `),
+    ),
+    "candidate recovery inspected a different lock path or holder",
   );
   assert.equal(typeof inspection.confirmation, "string", "candidate recovery omitted confirmation");
   await run(
@@ -647,7 +650,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
         "legacy crash recovery path did not observe the expected ownership refusal",
       );
       await run("recorded-run-before-recovery", "openclaw", ["update", "status", "--json"]);
-      await recoverLegacyCrashWithCandidate(candidatePackage, crashedGateway.holder, build.commit);
+      await recoverLegacyCrashWithCandidate(candidatePackage, crashedGateway, build.commit);
       update = await updateTo("update-retry", candidatePackage);
       if (update.exitCode !== 0) {
         updateFailure = Object.assign(new Error("Published updater retry failed"), {
