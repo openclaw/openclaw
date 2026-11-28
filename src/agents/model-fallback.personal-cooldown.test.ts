@@ -8,9 +8,11 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { FailoverError } from "./failover-error.js";
+import { AgentHarnessPreflightError } from "./harness/errors.js";
 import { isFallbackSummaryError } from "./model-fallback-attempt.js";
 import {
   markProbeAttempt,
+  releaseProbeAttempt,
   resolveCooldownDecision,
   resolveProbeThrottleKey,
 } from "./model-fallback-cooldown.js";
@@ -91,6 +93,45 @@ describe("personal account fallback cooldown summaries", () => {
 });
 
 describe("fallback probe and deferred suspension guards", () => {
+  const withCooldownedProbe = async (
+    label: string,
+    run: ReturnType<typeof vi.fn>,
+    verify: (invoke: () => ReturnType<typeof runWithModelFallback>) => Promise<void>,
+  ) => {
+    await withOpenClawTestState({ label }, async (state) => {
+      const profileId = `openai:${label}`;
+      await state.writeAuthProfiles({
+        version: 1,
+        profiles: {
+          [profileId]: { type: "api_key", provider: "openai", key: "synthetic-openai-key" },
+        },
+        usageStats: {
+          [profileId]: {
+            cooldownUntil: Date.now() + 120_000,
+            cooldownReason: "rate_limit",
+            cooldownModel: "gpt-4.1-mini",
+          },
+        },
+      });
+      await verify(() =>
+        runWithModelFallback({
+          cfg: {
+            plugins: { enabled: false },
+            auth: { order: { openai: [profileId] } },
+            agents: { defaults: { model: { primary: "openai/gpt-4.1-mini", fallbacks: [] } } },
+          },
+          agentDir: state.agentDir(),
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          fallbacksOverride: [],
+          manifestPlugins: [],
+          skipAuthProfileRuntime: false,
+          run,
+        }),
+      );
+    });
+  };
+
   const deferred = {
     cfg: {},
     sessionId: "test-session",
@@ -158,6 +199,73 @@ describe("fallback probe and deferred suspension guards", () => {
     expect(decision()).toEqual({ type: "attempt", reason: "rate_limit", markProbe: true });
     markProbeAttempt(now - 10000, throttleKey);
     expect(decision()).toEqual({ type: "suspend_session", reason: "rate_limit" });
+  });
+  it("only releases the cooldown probe reservation it owns", () => {
+    const now = 1700000000000;
+    const throttleKey = resolveProbeThrottleKey("openai", `probe-${crypto.randomUUID()}`);
+    const decision = (at: number) =>
+      resolveCooldownDecision({
+        candidate: { provider: "openai", model: "gpt-4.1-mini" },
+        isPrimary: true,
+        requestedModel: true,
+        hasFallbackCandidates: false,
+        now: at,
+        probeThrottleKey: throttleKey,
+        authRuntime: {
+          getSoonestCooldownExpiry: () => null,
+          resolveProfilesUnavailableReason: () => "rate_limit",
+        },
+        authStore: { version: 1, profiles: {}, usageStats: {} },
+        profileIds: ["openai-profile-1"],
+      });
+    const first = markProbeAttempt(now, throttleKey);
+    const current = markProbeAttempt(now + 1, throttleKey);
+
+    releaseProbeAttempt(first);
+    expect(decision(now + 30_000)).toEqual({ type: "suspend_session", reason: "rate_limit" });
+
+    releaseProbeAttempt(current);
+    expect(decision(now + 30_000)).toEqual({
+      type: "attempt",
+      reason: "rate_limit",
+      markProbe: true,
+    });
+  });
+  it("releases a probe reservation returned by harness preflight", async () => {
+    const preflightError = new AgentHarnessPreflightError("local harness preflight failed");
+    const run = vi.fn(async () => "primary recovered").mockRejectedValueOnce(preflightError);
+    await withCooldownedProbe("fallback-preflight-probe-failure", run, async (invoke) => {
+      await expect(invoke()).rejects.toBe(preflightError);
+      await expect(invoke()).resolves.toMatchObject({
+        outcome: "completed",
+        result: "primary recovered",
+      });
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+  });
+  it("reserves a probe before another turn can pass the cooldown decision", async () => {
+    const run = vi.fn(async () => "primary probe completed");
+    await withCooldownedProbe("fallback-concurrent-probe-reservation", run, async (invoke) => {
+      const outcomes = await Promise.allSettled([invoke(), invoke()]);
+      expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+      expect(run).toHaveBeenCalledOnce();
+    });
+  });
+  it("keeps a cooldowned primary throttled after a provider failure", async () => {
+    const run = vi.fn(async () => {
+      throw new FailoverError("synthetic provider rate limit", {
+        reason: "rate_limit",
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        status: 429,
+      });
+    });
+    await withCooldownedProbe("fallback-provider-probe-failure", run, async (invoke) => {
+      await expect(invoke()).rejects.toThrow("synthetic provider rate limit");
+      expect(run).toHaveBeenCalledOnce();
+      await expect(invoke()).rejects.toThrow(/cooldown/);
+      expect(run).toHaveBeenCalledOnce();
+    });
   });
   it.each(["caller abort", "terminal classified result"])(
     "settles deferred suspension for %s",

@@ -1,26 +1,56 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
+import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { WebSocket, WebSocketServer } from "ws";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
+import { disposeAllSessionMcpRuntimes } from "../../agents/agent-bundle-mcp-manager-api.js";
+import { providerResponse } from "../../agents/embedded-agent-runner.wire.test-support.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../../agents/prepared-model-runtime.test-support.js";
+import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../../infra/node-commands.js";
+import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import * as rootLogger from "../../logger.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { captureEnv } from "../../test-utils/env.js";
+import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "../../worker/transcript-message.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
+import { resetGatewayTestState } from "../gateway.test-support.js";
+import { createNodeRegistryRuntime, updateNodeRunnerInventory } from "../node-registry-private.js";
+import { NodeRegistry } from "../node-registry.js";
+import { makeClient } from "../node-registry.test-helpers.js";
 import { sessionByKeyReadHandlers } from "../server-methods/sessions-read-by-key.js";
 import { requestContext } from "../server-methods/sessions-read-cache.test-support.js";
+import { gatewayTestTextTransport } from "../server/connection-transport.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
+import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
+import { createNodeWorkerLaunchAdapter } from "./node-launch-adapter.js";
+import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
+import { workspaceTransfer as createNodeWorkspaceTransfer } from "./node-worker-tunnel.test-support.js";
 import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { journalOwner } from "./placement-suite.test-support.js";
+import {
+  createProbeProofConfig,
+  probeProofAgentDir,
+  PROBE_PROOF_MODEL,
+  writeProbeProofCooldown,
+} from "./repro-cooldown-probe-support.js";
 import {
   WorkerRunnerCapacityError,
   WorkerRunnerUnavailableError,
@@ -40,6 +70,77 @@ import {
 import * as fx from "./worker-turn-launcher.test-support.js";
 import { prepareLocalWorkspaceReconciliation } from "./workspace-local-reconciliation.js";
 import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
+
+async function startLoopbackProbeNode(nodeId: string) {
+  const connId = `probe-connection-${randomUUID()}`;
+  const { nodeRegistry, nodeWorkerSupervisorTransport } = createNodeRegistryRuntime(
+    () => new NodeRegistry(),
+  );
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected loopback node listener");
+  }
+  const accepted = once(server, "connection");
+  const client = new WebSocket(`ws://127.0.0.1:${address.port}`);
+  await once(client, "open");
+  const [socket] = await accepted;
+  const nodeClient = makeClient(connId, nodeId, [], {
+    socket: gatewayTestTextTransport(socket),
+    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+    version: "probe-proof",
+    platform: process.platform,
+    commands: [NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND],
+  });
+  Object.assign(nodeClient.connect.device!, {
+    publicKey: "probe-proof",
+    signature: "probe-proof",
+    nonce: "probe-proof",
+  });
+  nodeRegistry.register(nodeClient, {
+    pairingIdentity: "probe-proof",
+    pairingGeneration: "probe-proof",
+  });
+  const inventory = updateNodeRunnerInventory({
+    registry: nodeRegistry,
+    nodeId,
+    connId,
+    declaration: {
+      protocolFeatures: [NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE],
+      workerHost: {
+        enabled: true,
+        capacity: { total: 1, available: 1 },
+        environmentSession: 1,
+        capturedExecPolicy: true,
+        promptContext: 1,
+      },
+    },
+  });
+  if (!inventory) {
+    throw new Error("loopback probe node did not publish worker inventory");
+  }
+  if (!(await nodeWorkerSupervisorTransport.getCurrentNode(nodeId))) {
+    throw new Error("loopback probe node did not register with the worker transport");
+  }
+  return {
+    nodeRegistry,
+    nodeWorkerSupervisorTransport,
+    disconnect: () => {
+      nodeRegistry.unregister(connId);
+      client.terminate();
+      socket.terminate();
+    },
+    close: async () => {
+      nodeRegistry.unregister(connId);
+      client.terminate();
+      socket.terminate();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    },
+  };
+}
 
 afterAll(closeStateDatabaseForTest);
 
@@ -515,9 +616,10 @@ describe("worker turn launcher failure recovery", () => {
 
   it.each([
     [false, new WorkerRunnerUnavailableError(), "The device runner is offline"],
+    [true, new WorkerRunnerUnavailableError(), "The device runner is offline"],
     [true, new WorkerRunnerCapacityError(), "device worker capacity remained full"],
   ] as const)(
-    "keeps placement active after a runner rejection (dispatched: %s)",
+    "preserves placement state after a runner rejection (dispatched: %s)",
     async (dispatched, error, expectedMessage) => {
       await fx.seedActivePlacement();
       const startReconcile = vi.spyOn(fx.placements, "startReconcile");
@@ -535,10 +637,19 @@ describe("worker turn launcher failure recovery", () => {
       const runLocal = vi.fn(localResult);
 
       await expect(executeTurn(provider, "run-failed", runLocal)).rejects.toThrow(expectedMessage);
+      if (error instanceof WorkerRunnerUnavailableError) {
+        expect(error.providerDispatchStarted).toBe(dispatched ? undefined : false);
+      }
       expect(runLocal).not.toHaveBeenCalled();
-      expectPlacement({ state: "active", turnClaim: null });
+      expectPlacement({
+        state: dispatched && error instanceof WorkerRunnerUnavailableError ? "failed" : "active",
+        turnClaim: null,
+      });
       expect(acknowledgeCredentialDelivery).toHaveBeenCalledTimes(dispatched ? 1 : 0);
-      expectUncalled(stopTunnel, destroy, startReconcile);
+      const failedAfterHandoff = dispatched && error instanceof WorkerRunnerUnavailableError;
+      expect(destroy).toHaveBeenCalledTimes(failedAfterHandoff ? 1 : 0);
+      expect(startReconcile).toHaveBeenCalledTimes(failedAfterHandoff ? 1 : 0);
+      expect(stopTunnel).toHaveBeenCalledTimes(failedAfterHandoff ? 1 : 0);
     },
   );
 
@@ -779,4 +890,311 @@ describe("worker turn launcher failure recovery", () => {
     expect(launchTurn).not.toHaveBeenCalled();
     expectPlacement({ state: "active", turnClaim: null });
   });
+
+  it("proves cooldown behavior through Gateway RPC and worker/provider boundaries", async () => {
+    let serverMode: "success" | "rate-limit" = "success";
+    let successRequests = 0;
+    let rateLimitRequests = 0;
+    const workspaceDir = path.join(fx.root, "workspace");
+    const server = await reserveTestPortListener({
+      offsets: [0],
+      createListener: () =>
+        createServer((request, reply) => {
+          request.resume();
+          if (serverMode === "rate-limit") {
+            rateLimitRequests += 1;
+            reply.writeHead(429, { "content-type": "application/json", "retry-after": "0" });
+            reply.end(
+              JSON.stringify({
+                error: {
+                  message: "synthetic loopback rate limit",
+                  type: "rate_limit_error",
+                  code: "rate_limit_exceeded",
+                },
+              }),
+            );
+            return;
+          }
+          successRequests += 1;
+          const response = providerResponse({
+            api: "openai-completions",
+            model: "gpt-probe-fixture",
+            id: "loopback-probe-response",
+            messageId: "loopback-probe-message",
+            text: "loopback provider started",
+            calls: [],
+          }).response;
+          reply.writeHead(200, { "content-type": "text/event-stream" });
+          void response.text().then((body) => reply.end(body));
+        }),
+    });
+    const model = PROBE_PROOF_MODEL;
+    const endpoint = `http://127.0.0.1:${server.claim.port}/v1`;
+    const agentDirFor = (agentId: string) => probeProofAgentDir(fx.root, agentId);
+    const configFor = (agentId: string, agentDir: string, profileId: string) =>
+      createProbeProofConfig({
+        agentId,
+        agentDir,
+        profileId,
+        workspaceDir,
+        sessionStorePath: fx.sessionTarget.storePath,
+        endpoint,
+      });
+    let loopbackNode: Awaited<ReturnType<typeof startLoopbackProbeNode>> | undefined;
+    let nodeTunnelManager: ReturnType<typeof createNodeWorkerTunnelManager> | undefined;
+    let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
+    let uninstallPlacement: (() => void) | undefined;
+    let restoreGatewayEnv: (() => void) | undefined;
+    try {
+      await fx.seedActivePlacement();
+      const nodeId = `probe-node-${randomUUID()}`;
+      loopbackNode = await startLoopbackProbeNode(nodeId);
+      const nodeEnvironment = {
+        ...fx.attachedEnvironment(),
+        nodeDeviceId: nodeId,
+        sshEndpoint: null,
+      };
+      assert(nodeEnvironment.bootstrapReceipt);
+      let launchClock = 0;
+      const launchAdapter = createNodeWorkerLaunchAdapter({
+        getTransport: () => loopbackNode?.nodeWorkerSupervisorTransport,
+        now: () => launchClock,
+        sleep: async (ms) => {
+          launchClock += ms;
+        },
+      });
+      nodeTunnelManager = createNodeWorkerTunnelManager({
+        gatewayDeviceId: "probe-proof-gateway",
+        getEnvironment: (environmentId) =>
+          environmentId === nodeEnvironment.environmentId ? nodeEnvironment : undefined,
+        listEnvironments: () => [nodeEnvironment],
+        getTransport: () => loopbackNode?.nodeWorkerSupervisorTransport,
+        launchNodeWorker: launchAdapter.launch,
+        validateWorkerTurn: (claim) => fx.placements.validateTurnClaim(claim),
+        workspaceTransfer: createNodeWorkspaceTransfer(),
+      });
+      const reconcileActivePlacement = vi.fn(async () => {});
+      let nodeDisconnected = false;
+      const worker = createLauncher({
+        reconcileActivePlacement,
+        environments: environmentForTunnel({
+          get: vi.fn(() => nodeEnvironment),
+          startTunnel: async ({ environmentId, ownerEpoch }) => {
+            const tunnel = await nodeTunnelManager!.start({
+              executionMode: "worker-turn",
+              environmentId,
+              ownerEpoch,
+              deviceId: nodeId,
+              sessionId: fx.SESSION_ID,
+              expectedBuild: nodeEnvironment.bootstrapReceipt!,
+            });
+            if (!nodeDisconnected) {
+              expect(
+                await loopbackNode!.nodeWorkerSupervisorTransport.getCurrentNode(nodeId),
+              ).toBeDefined();
+            }
+            return {
+              ...tunnel,
+              // Keep this proof focused on launch admission; workspace merge behavior has its
+              // own production-boundary coverage and does not need a worker RPC here.
+              reconcileWorkspace: fx.reconcileUnchangedLocalWorkspace,
+              quiesceWorkspace: async () => ({
+                assertActive: async () => {},
+                resume: async () => {},
+              }),
+              launchTurn: async (request) => {
+                if (!nodeDisconnected) {
+                  // Lose the paired, live Gateway WebSocket immediately before launch dispatch.
+                  loopbackNode!.disconnect();
+                  expect(
+                    await loopbackNode!.nodeWorkerSupervisorTransport.getCurrentNode(nodeId),
+                  ).toBeUndefined();
+                  nodeDisconnected = true;
+                }
+                return await tunnel.launchTurn(request);
+              },
+            };
+          },
+        }),
+      });
+
+      const gatewayEnv = captureEnv([
+        "OPENCLAW_STATE_DIR",
+        "OPENCLAW_CONFIG_PATH",
+        "OPENCLAW_AGENT_DIR",
+        "OPENCLAW_GATEWAY_TOKEN",
+        "OPENCLAW_TEST_MINIMAL_GATEWAY",
+        "OPENCLAW_SKIP_CHANNELS",
+        "OPENCLAW_SKIP_GMAIL_WATCHER",
+        "OPENCLAW_SKIP_CRON",
+        "OPENCLAW_SKIP_CANVAS_HOST",
+        "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+        "OPENCLAW_SKIP_PROVIDERS",
+        "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+      ]);
+      restoreGatewayEnv = () => gatewayEnv.restore();
+      const stateDir = path.dirname(path.dirname(fx.database.path));
+      const gatewayConfigPath = path.join(stateDir, "openclaw-gateway-proof.json");
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      process.env.OPENCLAW_CONFIG_PATH = gatewayConfigPath;
+      delete process.env.OPENCLAW_AGENT_DIR;
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.OPENCLAW_TEST_MINIMAL_GATEWAY;
+      process.env.OPENCLAW_SKIP_CHANNELS = "1";
+      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
+      process.env.OPENCLAW_SKIP_CRON = "1";
+      process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
+      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
+      process.env.OPENCLAW_SKIP_PROVIDERS = "1";
+      process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+      resetGatewayTestState();
+
+      const preAgentDir = agentDirFor("main");
+      const profileId = "openai:probe-proof";
+      const preConfig = configFor("main", preAgentDir, profileId);
+      const postAgentId = "postdispatch";
+      const postAgentDir = agentDirFor(postAgentId);
+      const gatewayConfig: OpenClawConfig = {
+        ...preConfig,
+        session: { store: fx.sessionTarget.storePath },
+        agents: {
+          ...preConfig.agents,
+          ownership: "explicit",
+          entries: {
+            ...preConfig.agents?.entries,
+            [postAgentId]: { agentDir: postAgentDir, workspace: workspaceDir },
+          },
+        },
+      };
+      await writeProbeProofCooldown({ root: fx.root, agentId: "main", profileId });
+      await writeProbeProofCooldown({ root: fx.root, agentId: postAgentId, profileId });
+
+      const token = `probe-gateway-${randomUUID()}`;
+      gateway = await startGatewayWithClient({
+        cfg: gatewayConfig,
+        configPath: gatewayConfigPath,
+        token,
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+      });
+
+      let workerFailure: unknown;
+      let mainPlacementCalls = 0;
+      let postPlacementCalls = 0;
+      const expectRetry = process.env.OPENCLAW_EXPECT_PROBE_RETRY !== "false";
+      uninstallPlacement = installSessionPlacementAdmissionProvider({
+        assertCompactionSuccessorAllowed: () => {},
+        resolveRuntimeOverride: async () => "openclaw",
+        executeLocalTurn: async <T>(_claim, runLocal) => runLocal(),
+        executeTurn: async (claim, _params, runLocal) => {
+          if (claim.agentId === "main" && mainPlacementCalls++ === 0) {
+            const runId = `gateway-pre-dispatch-${randomUUID()}`;
+            try {
+              await worker.executeTurn(
+                runIdentity(runId),
+                { ...fx.turn(runId), timeoutMs: 30_000 },
+                localResult,
+              );
+            } catch (error) {
+              workerFailure = error;
+              throw error;
+            }
+            throw new Error("expected the worker launch to fail before handoff");
+          }
+
+          if (claim.agentId === postAgentId && postPlacementCalls++ === 0) {
+            const requestsBefore = rateLimitRequests + successRequests;
+            try {
+              await runLocal();
+            } catch {
+              // The loopback 429 reached the provider; preserve the post-dispatch throttle.
+            }
+            await writeProbeProofCooldown({ root: fx.root, agentId: postAgentId, profileId });
+            expect(rateLimitRequests + successRequests).toBeGreaterThan(requestsBefore);
+            throw new SessionTranscriptWriterClaimReboundError();
+          }
+
+          return await runLocal();
+        },
+      });
+
+      const gatewayTurn = async (agentId: string, sessionKey: string) => {
+        const idempotencyKey = randomUUID();
+        const accepted = await gateway!.client.request<{ runId?: string; status?: string }>(
+          "agent",
+          {
+            agentId,
+            sessionKey,
+            message: "Reply with the loopback result.",
+            deliver: false,
+            idempotencyKey,
+          },
+        );
+        expect(accepted.status).toBe("accepted");
+        return await gateway!.client.request<{ status?: string; error?: unknown }>(
+          "agent.wait",
+          { runId: accepted.runId ?? idempotencyKey, timeoutMs: 30_000 },
+          { timeoutMs: 35_000 },
+        );
+      };
+
+      const mainSession = "agent:main:probe-proof-gateway";
+      const failedGatewayTurn = await gatewayTurn("main", mainSession);
+      expect(failedGatewayTurn.status).toBe("error");
+      expect(workerFailure).toBeInstanceOf(WorkerRunnerUnavailableError);
+      expect(reconcileActivePlacement).not.toHaveBeenCalled();
+      const dispatchStarted = (workerFailure as Error & { providerDispatchStarted?: boolean })
+        .providerDispatchStarted;
+      expect(dispatchStarted).toBe(expectRetry ? false : undefined);
+      if (expectRetry) {
+        const recovered = await gatewayTurn("main", mainSession);
+        expect(recovered.status).toBe("ok");
+        expect(mainPlacementCalls).toBe(2);
+        expect(successRequests).toBe(1);
+      } else {
+        const throttled = await gatewayTurn("main", mainSession);
+        expect(throttled.status).toBe("error");
+        expect(mainPlacementCalls).toBe(1);
+        expect(successRequests).toBe(0);
+      }
+      expect(nodeDisconnected).toBe(true);
+      console.info(
+        `[gateway-proof] rpc=agent/agent.wait pre-dispatch=WorkerRunnerUnavailableError transport=node-registry-websocket disconnected-before-handoff=true recovery=${expectRetry ? "ok" : "throttled"} provider_requests=${successRequests}`,
+      );
+
+      serverMode = "rate-limit";
+      const postSession = `agent:${postAgentId}:probe-proof-gateway`;
+      const requestsBeforePostDispatch = rateLimitRequests + successRequests;
+      const postFailure = await gatewayTurn(postAgentId, postSession);
+      expect(postFailure.status).toBe("error");
+      expect(rateLimitRequests).toBeGreaterThan(0);
+      expect(postPlacementCalls).toBe(1);
+      const postFailureRequestCount =
+        rateLimitRequests + successRequests - requestsBeforePostDispatch;
+      const postRetry = await gatewayTurn(postAgentId, postSession);
+      expect(postRetry.status).toBe("error");
+      expect(postPlacementCalls).toBe(1);
+      expect(rateLimitRequests + successRequests).toBe(
+        requestsBeforePostDispatch + postFailureRequestCount,
+      );
+      console.info(
+        `[gateway-proof] post-dispatch=loopback-429 then transcript-coordination retry=throttled provider_requests=${postFailureRequestCount} no-extra-request=true`,
+      );
+    } finally {
+      if (gateway) {
+        await disconnectGatewayClient(gateway.client);
+        await gateway.server.close({ reason: "cooldown probe Gateway proof complete" });
+      }
+      uninstallPlacement?.();
+      restoreGatewayEnv?.();
+      if (nodeTunnelManager) {
+        await nodeTunnelManager.stop(fx.ENVIRONMENT_ID, fx.OWNER_EPOCH, "provider-destroyed");
+      }
+      await loopbackNode?.close();
+      server.listener.closeAllConnections();
+      await server.releaseListener();
+      await server.claim.release();
+      await disposeAllSessionMcpRuntimes();
+      await resetPreparedModelRuntimeSnapshotsForTest();
+    }
+  }, 120_000);
 });
