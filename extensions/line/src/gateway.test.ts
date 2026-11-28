@@ -8,9 +8,10 @@ import { lineGatewayAdapter } from "./gateway.js";
 import { setLineRuntime } from "./runtime.js";
 import type { LineProbeResult } from "./types.js";
 
-const { probeLineBotMock, monitorLineProviderMock } = vi.hoisted(() => ({
+const { probeLineBotMock, monitorLineProviderMock, rememberLineBotUserIdMock } = vi.hoisted(() => ({
   probeLineBotMock: vi.fn(),
   monitorLineProviderMock: vi.fn(async () => ({ stop: async () => {} })),
+  rememberLineBotUserIdMock: vi.fn(),
 }));
 
 vi.mock("./probe.js", async (importOriginal) => ({
@@ -20,6 +21,10 @@ vi.mock("./probe.js", async (importOriginal) => ({
 vi.mock("./monitor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./monitor.js")>()),
   monitorLineProvider: monitorLineProviderMock,
+}));
+vi.mock("./outbound-message-log.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./outbound-message-log.js")>()),
+  rememberLineBotUserId: rememberLineBotUserIdMock,
 }));
 
 async function startWithProbe(probe: LineProbeResult, account = lineAccount()) {
@@ -36,12 +41,14 @@ describe("lineGatewayAdapter.startAccount", () => {
   beforeEach(() => {
     probeLineBotMock.mockReset();
     monitorLineProviderMock.mockClear();
+    rememberLineBotUserIdMock.mockClear();
     setLineRuntime(createPluginRuntimeMock());
   });
 
   afterAll(() => {
     vi.doUnmock("./probe.js");
     vi.doUnmock("./monitor.js");
+    vi.doUnmock("./outbound-message-log.js");
     vi.resetModules();
   });
 
@@ -78,4 +85,16 @@ describe("lineGatewayAdapter.startAccount", () => {
     expect(warn.mock.calls[0]?.[0]).not.toContain("/hooks/line-primary");
     expect(warn.mock.calls[0]?.[0]).toContain("channels.line.webhookPath");
   });
+
+  // Sent ids persist under the bot's own user id; an unknown bot stays memory-only.
+  it.each([
+    [{ ok: true, bot: { userId: "U-bot" } }, "U-bot"],
+    [{ ok: false, error: "timeout" }, undefined],
+  ] satisfies [LineProbeResult, string | undefined][])(
+    "records the probed bot user id for %j",
+    async (probe, botUserId) => {
+      await startWithProbe(probe);
+      expect(rememberLineBotUserIdMock.mock.calls).toEqual([["default", botUserId]]);
+    },
+  );
 });
