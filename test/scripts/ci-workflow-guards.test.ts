@@ -6738,18 +6738,21 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
   });
 
   it.each([
-    [{}, true],
-    [{ runAttempt: 2 }, true],
-    [{ eventName: "workflow_dispatch" }, false],
-    [{ eventName: "workflow_dispatch", ref: "refs/heads/feature" }, false],
-    [{ repository: "example/fork" }, false],
-    [{ ref: "refs/heads/feature" }, false],
-    [{ runnerBackend: "" }, false],
-    [{ runnerBackend: "blacksmith" }, false],
-    [{ runnerBackend: "hybrid" }, false],
-    [{ runnerBackend: "runson" }, false],
-    [{ runnerBackend: "github" }, false],
-  ] as const)("routes Android CodeQL to Boat only on scheduled main: %j", (context, boat) => {
+    [{}, "boat-xlarge"],
+    [{ runAttempt: 2 }, "boat-xlarge"],
+    [{ eventName: "workflow_dispatch" }, "ubuntu-24.04"],
+    [{ eventName: "workflow_dispatch", runAttempt: 2 }, "ubuntu-24.04"],
+    [{ eventName: "workflow_dispatch", ref: "refs/heads/feature" }, "ubuntu-24.04"],
+    [{ eventName: "workflow_dispatch", repository: "example/fork" }, "ubuntu-24.04"],
+    [{ eventName: "workflow_dispatch", runnerBackend: "github" }, "ubuntu-24.04"],
+    [{ repository: "example/fork" }, "blacksmith-8vcpu-ubuntu-2404"],
+    [{ ref: "refs/heads/feature" }, "blacksmith-8vcpu-ubuntu-2404"],
+    [{ runnerBackend: "" }, "blacksmith-8vcpu-ubuntu-2404"],
+    [{ runnerBackend: "blacksmith" }, "blacksmith-8vcpu-ubuntu-2404"],
+    [{ runnerBackend: "hybrid" }, "blacksmith-8vcpu-ubuntu-2404"],
+    [{ runnerBackend: "runson" }, "blacksmith-8vcpu-ubuntu-2404"],
+    [{ runnerBackend: "github" }, "blacksmith-8vcpu-ubuntu-2404"],
+  ] as const)("routes Android CodeQL by schedule and manual execution: %j", (context, runner) => {
     const job = readWorkflow(".github/workflows/codeql-android-critical-security.yml").jobs.android;
     expect(
       evaluateWorkflowRunner(job["runs-on"], {
@@ -6759,7 +6762,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         runnerBackend: "boat",
         ...context,
       }),
-    ).toBe(boat ? "boat-xlarge" : "blacksmith-8vcpu-ubuntu-2404");
+    ).toBe(runner);
   });
 
   it("prepares Android CodeQL on runners without an installed SDK or Gradle outputs", () => {

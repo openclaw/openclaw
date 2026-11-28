@@ -627,8 +627,9 @@ route. Rerunning all jobs creates a new GitHub-hosted plan.
 
 Android Critical Security uses `boat-xlarge` for scheduled runs on canonical
 `openclaw/openclaw` main when `OPENCLAW_CI_RUNNER_BACKEND=boat`, including retries.
-Manual dispatches, other refs, and other backend modes retain
-`blacksmith-8vcpu-ubuntu-2404`. The CodeQL configuration, security permissions,
+Manual dispatches use GitHub-hosted `ubuntu-24.04`, including retries and branch
+runs. Other scheduled refs and backend modes retain `blacksmith-8vcpu-ubuntu-2404`.
+The CodeQL configuration, security permissions,
 build commands, and 45-minute deadline stay unchanged.
 
 ### RunsOn qualification
