@@ -52,6 +52,7 @@ async function pullOllamaModelCore(params: {
   modelName: string;
   onStatus?: (status: string, percent: number | null) => void;
   signal?: AbortSignal;
+  fetchWithGuard?: typeof fetchWithSsrFGuard;
 }): Promise<OllamaPullResult> {
   const baseUrl = resolveOllamaApiBase(params.baseUrl);
   const modelName = normalizeOllamaModelName(params.modelName) ?? params.modelName.trim();
@@ -62,7 +63,7 @@ async function pullOllamaModelCore(params: {
   );
   try {
     params.signal?.throwIfAborted();
-    const { response, release } = await fetchWithSsrFGuard({
+    const { response, release } = await (params.fetchWithGuard ?? fetchWithSsrFGuard)({
       url: `${baseUrl}/api/pull`,
       init: {
         method: "POST",
@@ -144,11 +145,13 @@ export async function pullOllamaModel(
   modelName: string,
   prompter: WizardPrompter,
   signal?: AbortSignal,
+  fetchWithGuard?: typeof fetchWithSsrFGuard,
 ): Promise<boolean> {
   const spinner = prompter.progress(`Downloading ${modelName}...`);
   const result = await pullOllamaModelCore({
     baseUrl,
     modelName,
+    fetchWithGuard,
     ...(signal ? { signal } : {}),
     onStatus: (status, percent) => {
       const displayStatus = formatOllamaPullStatus(status);
