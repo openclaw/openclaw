@@ -82,6 +82,8 @@ export type WorkspaceFilesystemReadCommand = {
   input: {
     filePath: string;
     workspaceDir: string;
+    /** Replace supported inline avatar payloads only for model-facing reads. */
+    projectForPrompt?: boolean;
     /** Identity-scoped files must not alias another profile through parent symlinks. */
     rejectAliases?: boolean;
   };

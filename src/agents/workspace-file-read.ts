@@ -16,6 +16,7 @@ import { exactWorkspaceEntryExists } from "../memory/root-memory-files.js";
 import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
 import {
+  DEFAULT_IDENTITY_FILENAME,
   DEFAULT_MEMORY_FILENAME,
   DEFAULT_USER_FILENAME,
   WORKSPACE_BOOTSTRAP_FILENAMES,
@@ -23,8 +24,9 @@ import {
   type WorkspaceBootstrapFileName,
 } from "./workspace-bootstrap-policy.js";
 import {
-  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+  projectWorkspaceBootstrapFileForPrompt,
   readWorkspaceBootstrapFile,
+  workspaceBootstrapFileReadLimit,
 } from "./workspace-bootstrap-read.js";
 import type {
   WorkspaceFileSourceIdentity,
@@ -89,6 +91,12 @@ export function workspaceFilesShareSourceIdentity(left: object, right: object): 
 export async function readWorkspaceFileWithGuards(
   params: WorkspaceFilesystemReadCommand["input"],
 ): Promise<WorkspaceGuardedReadResult> {
+  const name = path.basename(params.filePath);
+  const maxBytes = workspaceBootstrapFileReadLimit(name);
+  const project = (content: string) =>
+    params.projectForPrompt && name === DEFAULT_IDENTITY_FILENAME
+      ? projectWorkspaceBootstrapFileForPrompt(content, name)
+      : content;
   const access = getAgentWorkspaceAccess(params.workspaceDir);
   if (access) {
     if (!access.bridge.readFileWithSource) {
@@ -104,19 +112,19 @@ export async function readWorkspaceFileWithGuards(
       const { data, canonicalPath, workspaceRelativePath } = await access.bridge.readFileWithSource(
         {
           filePath,
-          maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+          maxBytes,
         },
       );
       assertCurrent();
       if (params.rejectAliases && workspaceRelativePath !== filePath.replaceAll(path.sep, "/")) {
         return { ok: false, reason: "validation" };
       }
-      if (data.length > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+      if (data.length > maxBytes) {
         throw new RangeError(`Workspace bootstrap file exceeds its read bound: ${filePath}`);
       }
       return {
         ok: true,
-        content: data.toString("utf-8"),
+        content: project(data.toString("utf-8")),
         sourceIdentity: [canonicalPath, undefined, workspaceRelativePath],
       };
     } catch (error) {
@@ -145,6 +153,7 @@ async function runWorkspaceFilesystemRead(
         filePath: input.filePath,
         workspaceDir: input.workspaceDir,
         rejectAliases: input.rejectAliases,
+        projectForPrompt: input.projectForPrompt,
       },
     });
     if (result.ok) {
@@ -197,8 +206,17 @@ export async function readLocalWorkspaceFileWithGuards(
 
       const sourceIdentity = [opened.path, opened.exactIdentity] as const;
       try {
-        const content = await readWorkspaceBootstrapFile(opened.fd);
-        return { ok: true, content, sourceIdentity };
+        const name = path.basename(params.filePath);
+        const maxBytes = workspaceBootstrapFileReadLimit(name);
+        const project = (content: string) =>
+          params.projectForPrompt && name === DEFAULT_IDENTITY_FILENAME
+            ? projectWorkspaceBootstrapFileForPrompt(content, name)
+            : content;
+        if (opened.stat.size > maxBytes) {
+          throw new RangeError(`File exceeds ${maxBytes} bytes`);
+        }
+        const content = await readWorkspaceBootstrapFile(opened.fd, name);
+        return { ok: true, content: project(content), sourceIdentity };
       } finally {
         syncFs.closeSync(opened.fd);
       }
@@ -255,6 +273,7 @@ export async function loadWorkspaceBootstrapFiles(
       const loaded = await readWorkspaceFileWithGuards({
         filePath: entry.filePath,
         workspaceDir: resolvedDir,
+        projectForPrompt: true,
       });
       return { entry, loaded };
     }),

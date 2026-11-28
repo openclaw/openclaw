@@ -15,8 +15,8 @@ import {
   GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES,
 } from "./workspace-bootstrap-policy.js";
 import {
-  MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
   readWorkspaceBootstrapFile,
+  workspaceBootstrapFileReadLimit,
 } from "./workspace-bootstrap-read.js";
 import { readLocalWorkspaceFileWithGuards } from "./workspace-file-read.js";
 import type {
@@ -241,11 +241,11 @@ export async function executeWorkspaceFilesystemOperation(
             }
             let content: string;
             try {
-              content = await readWorkspaceBootstrapFile(opened.fd);
+              content = await readWorkspaceBootstrapFile(opened.fd, name);
             } catch (error) {
               if (error instanceof RangeError) {
                 log.warn(
-                  `Ignoring oversized sandbox seed file ${path.join(operation.seed, name)}: file exceeds the ${MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES}-byte limit`,
+                  `Ignoring oversized sandbox seed file ${path.join(operation.seed, name)}: file exceeds the ${workspaceBootstrapFileReadLimit(name)}-byte limit`,
                 );
                 continue;
               }
