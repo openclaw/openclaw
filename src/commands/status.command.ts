@@ -82,6 +82,7 @@ export async function statusCommand(
     gatewayProbe,
     gatewayReachable,
     configDiagnostics,
+    configMigration,
     secretDiagnostics: commandSecretDiagnostics,
     env,
   } = scan;
@@ -91,6 +92,15 @@ export async function statusCommand(
       await import("./status.command.text-runtime.js");
     runtime.log(theme.warn("Config diagnostics:"));
     for (const entry of formatStatusConfigDiagnosticEntries(configDiagnostics)) {
+      runtime.log(entry);
+    }
+    runtime.log("");
+  }
+  if (configMigration) {
+    const { formatStatusConfigMigrationEntries, theme } =
+      await import("./status.command.text-runtime.js");
+    runtime.log(theme.warn("Config migration pending:"));
+    for (const entry of formatStatusConfigMigrationEntries(configMigration)) {
       runtime.log(entry);
     }
     runtime.log("");

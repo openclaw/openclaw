@@ -483,6 +483,24 @@ describe("status commands", () => {
     },
   );
 
+  it("shows a pending older-release config migration in text status", async () => {
+    const configMigration = {
+      version: "2026.11.2",
+      changes: ["Moved skills.workshop to plugins.entries.skill-workshop.config."],
+    };
+    setScan({ configMigration });
+    mocks.callGateway.mockResolvedValueOnce(healthyGateway());
+    const text = stripAnsi(await runStatusOutput());
+    expect(text).toContain("Config migration pending:");
+    expect(text).toContain(
+      "- Config written by OpenClaw 2026.11.2 uses settings this release retired",
+    );
+    expect(text).toContain("- Moved skills.workshop to plugins.entries.skill-workshop.config.");
+    expect(text).toContain("- Fix: openclaw --profile isolated doctor --fix");
+    setScan({ configMigration: undefined });
+    expect(await runStatusOutput()).not.toContain("Config migration pending:");
+  });
+
   it("prints verbose session cache details and compatibility warnings", async () => {
     const recent = currentScan.summary.sessions.recent.map((row) => ({
       ...row,
