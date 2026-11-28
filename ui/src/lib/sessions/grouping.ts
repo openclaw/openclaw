@@ -401,7 +401,7 @@ function orderedGroupIds(
   const known = mode === "category" ? normalizeUniqueTrimmedStringList(knownCategories) : [];
   const ids = [...byId.keys()]
     .filter((id) => id !== UNGROUPED_ID && !known.includes(id))
-    .sort((a, b) => a.localeCompare(b));
+    .toSorted((a, b) => a.localeCompare(b));
   if (mode === "category" || byId.has(UNGROUPED_ID)) {
     ids.push(UNGROUPED_ID);
   }
