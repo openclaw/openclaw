@@ -45,11 +45,35 @@ function readLiteralValidationConstraints(
   );
 }
 
+/** TypeBox emits a union of literals as anyOf; pool its members like one literal schema. */
+function collapseLiteralUnion(schema: Record<string, unknown>): Record<string, unknown> {
+  const { anyOf, ...annotations } = schema;
+  if (
+    !Array.isArray(anyOf) ||
+    Object.keys(annotations).some((key) => !SCHEMA_ANNOTATION_KEYS.has(key))
+  ) {
+    return schema;
+  }
+  let pooled: Record<string, unknown> | undefined;
+  for (const variant of anyOf) {
+    if (!isRecord(variant) || readLiteralSchemaValues(variant) === undefined) {
+      return schema;
+    }
+    pooled = pooled ? mergeLiteralSchemas(pooled, variant) : variant;
+    if (!pooled) {
+      return schema;
+    }
+  }
+  return pooled ? { ...pooled, ...annotations } : schema;
+}
+
 /** Pools property literals only when every non-annotation constraint agrees. */
 export function mergeLiteralSchemas(
-  existing: Record<string, unknown>,
-  incoming: Record<string, unknown>,
+  existingSchema: Record<string, unknown>,
+  incomingSchema: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
+  const existing = collapseLiteralUnion(existingSchema);
+  const incoming = collapseLiteralUnion(incomingSchema);
   const existingValues = readLiteralSchemaValues(existing);
   const incomingValues = readLiteralSchemaValues(incoming);
   if (existingValues === undefined || incomingValues === undefined) {

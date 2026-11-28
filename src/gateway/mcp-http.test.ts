@@ -575,6 +575,16 @@ describe("buildMcpToolSchema", () => {
             "list",
           ),
           action({ type: "string", const: "fork", description: "Fork a thread" }, "fork"),
+          // TypeBox emits Type.Union([Type.Literal(...), ...]) as anyOf (deep_research).
+          action(
+            {
+              anyOf: [
+                { type: "string", const: "pin" },
+                { type: "string", const: "unpin" },
+              ],
+            },
+            "pin",
+          ),
           action({ type: "string", const: "rename" }, "rename"),
           action({ type: "string", enum: ["archive", "unarchive"] }, "archive"),
         ],
@@ -585,7 +595,7 @@ describe("buildMcpToolSchema", () => {
         {
           action: {
             type: "string",
-            enum: ["list", "fork", "rename", "archive", "unarchive"],
+            enum: ["list", "fork", "pin", "unpin", "rename", "archive", "unarchive"],
             description: "List threads",
           },
           constrained: { type: "string", const: "list", pattern: "^list$" },
