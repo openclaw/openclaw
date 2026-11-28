@@ -385,6 +385,8 @@ function recordDiagnosticEvent(
       return;
     case "session.state":
     case "session.stuck":
+    case "session.stalled":
+    case "session.long_running":
     case "session.turn.created":
       recordSessionDiagnosticEvent(store, evt);
       return;
@@ -485,8 +487,6 @@ function recordDiagnosticEvent(
         {},
         numericValue(evt.queueLength),
       );
-      break;
-    case "diagnostic.heartbeat":
       break;
     case "telemetry.exporter":
       store.counter("openclaw_telemetry_exporter_total", "Telemetry exporter lifecycle events.", {
