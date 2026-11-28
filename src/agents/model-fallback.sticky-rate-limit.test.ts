@@ -4,6 +4,8 @@ import {
   createProviderRateLimitRequest,
   withProviderRateLimitRetryDeadline,
 } from "../llm/provider-rate-limit.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { prepareModelFallbackRateLimit } from "./model-fallback-rate-limit.js";
@@ -259,5 +261,27 @@ describe("shared model saturation guards", () => {
     ).resolves.toBeUndefined();
     await vi.advanceTimersByTimeAsync(3 * 86_400_000 + 60_001);
     await expect(createProviderRateLimitRequest(model, { apiKey }).wait()).resolves.toBeUndefined();
+  });
+  it("lets a provider that manages its own availability answer before a timed 429 resets", async () => {
+    const model = { id: "managed-limit", provider, baseUrl };
+    const managed = createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "managed-gateway", providers: [provider], managesOwnAvailability: true }],
+    });
+    await withPluginMetadataSnapshotScope(
+      managed,
+      async () => {
+        createProviderRateLimitRequest(model, { apiKey }).observe?.(
+          buildEmbeddedRunnerAssistant({
+            stopReason: "error",
+            errorMessage: "429 Too Many Requests",
+            errorBody: JSON.stringify({ headers: { "retry-after": "3120" } }),
+          }),
+        );
+        await expect(
+          createProviderRateLimitRequest(model, { apiKey }).wait(),
+        ).resolves.toBeUndefined();
+      },
+      { trustConfigIdentity: true },
+    );
   });
 });
