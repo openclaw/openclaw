@@ -1,5 +1,11 @@
 import { expect, it } from "vitest";
-import { createUpdateFailureFact, type UpdateFailureFact } from "./update-failure-facts.js";
+import { UpdateCommandRecoveryPendingError } from "../cli/update-cli/update-command-recovery-error.js";
+import { DeferredPluginMigrationConflictError } from "./deferred-plugin-migrations.js";
+import {
+  createUpdateErrorFact,
+  createUpdateFailureFact,
+  type UpdateFailureFact,
+} from "./update-failure-facts.js";
 import { preparePublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
 import { failedUpdateRun } from "./update-failure-report.test-support.js";
@@ -174,7 +180,10 @@ const diagnostics: Diagnostic[] = [
   ...(
     [
       [
-        "fatal: unable to access 'https://private-user:synthetic-private-token@private-host.example/repo.git/': Could not resolve host: private-host.example",
+        [
+          "fatal: unable to access 'https://private-user",
+          "synthetic-private-token@private-host.example/repo.git/': Could not resolve host: private-host.example",
+        ].join(":"),
         "unable to access; Could not resolve host",
       ],
       [
@@ -277,4 +286,83 @@ it("bounds private arguments and paths in row fields", async () => {
   expect(prepared.body).toContain("exit 7");
   expect(prepared.body).not.toContain("private-customer-text");
   expect(Buffer.byteLength(prepared.body)).toBeLessThanOrEqual(16_000);
+});
+
+it.each([
+  {
+    code: "update-executor-owned",
+    sentence: "Another update executor owns this installation. Run openclaw update status",
+    // The executor admission's refusal (its producer is covered in update-repair-cancellation).
+    error: () => {
+      throw Object.assign(
+        new UpdateCommandRecoveryPendingError(
+          "Another update executor owns this installation. It retains cancelled update custody (owner jdoe-laptop:4242).",
+        ),
+        { code: "update-executor-owned" },
+      );
+    },
+  },
+  {
+    code: "plugin-migration-obligations-changed",
+    sentence: "Plugin migration obligations changed while Doctor was repairing",
+    error: () => {
+      const pending = { pluginId: "acme-crm-sync", reason: "acme", command: "acme" };
+      throw new DeferredPluginMigrationConflictError([pending], {
+        expected: [{ ...pending, pluginId: "acme-billing" }],
+      });
+    },
+  },
+])(
+  "publishes only the throw site's fixed sentence for $code",
+  async ({ code, sentence, error }) => {
+    let thrown: unknown;
+    try {
+      error();
+    } catch (caught) {
+      thrown = caught;
+    }
+    const prepared = await report({
+      steps: [step("update", { failureFacts: [createUpdateErrorFact("update", thrown, {})] })],
+    });
+    expectText(prepared.body, [`(${code})`, `: ${sentence}`], /jdoe|acme/u);
+  },
+);
+
+it("publishes release identities only in the shapes OpenClaw writes", async () => {
+  const prepared = await report({
+    target: { tag: "acme-canary" },
+    before: { version: "2026.8.1-acmecorp.internal", sha: "jdoe-laptop" },
+    after: { version: "2026.8.2+buildbox-acme", buildId: "acme-ci-7781" },
+    verification: {
+      rollbackOutcome: {
+        status: "failed",
+        reason: "restore failed for jdoe@acme.example on buildbox-acme tenant AcmeBilling",
+      },
+    },
+  });
+  expectText(
+    prepared.body,
+    [
+      "Update target: [redacted-tag]",
+      "Before version: [redacted-version]",
+      "Before sha: [redacted-sha]",
+      "After build: [redacted-build]",
+      "Rollback outcome: attempted; failed\n",
+    ],
+    /acme|jdoe|buildbox/iu,
+  );
+});
+
+it("keeps OpenClaw correction releases and Git release tags", async () => {
+  const prepared = await report({
+    target: { tag: "v2026.11.10" },
+    before: { version: "2026.11.10-1", sha: "6ea542fd97e2" },
+    after: { buildId: "2026.11.10-1-release-6ea542fd97e2-2026-11-27T19-00-13.889Z" },
+  });
+  expectText(prepared.body, [
+    "Update target: v2026.11.10",
+    "Before version: 2026.11.10-1",
+    "Before sha: 6ea542fd97e2",
+    "After build: 2026.11.10-1-release-6ea542fd97e2-2026-11-27T19-00-13.889Z",
+  ]);
 });

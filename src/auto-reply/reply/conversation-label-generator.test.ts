@@ -134,6 +134,39 @@ describe("generateConversationLabel", () => {
     }
   });
 
+  it("makes no utility attempt or warning when the role refuses every utility model", async () => {
+    const warningLog = createWarnLogCapture("conversation-label");
+    const logs = createDiagnosticLogRecordCapture();
+    const cfg = {
+      agents: {
+        entries: { main: {} },
+        defaults: modelConfig("openai/gpt-main", "openai/gpt-mini", []).agents.defaults,
+      },
+    };
+    const operatorAuthority = createTestOperatorAuthority({
+      profileId: "label-guest",
+      scopes: ["operator.write"],
+      modelPolicy: prepareOperatorModelPolicy({
+        cfg,
+        policy: { sourceAgent: "main", allow: ["openai/gpt-main"] },
+        manifestPlugins: [],
+      }),
+    });
+    try {
+      await expect(generate({ cfg, agentId: "main", operatorAuthority })).resolves.toBe(
+        "Topic label",
+      );
+      await logs.flush();
+      expect(
+        logs.records.filter((record) => record.message.includes("Conversation label generation")),
+      ).toEqual([]);
+      expectCompletion({ model: "gpt-main", operatorAuthority });
+    } finally {
+      logs.cleanup();
+      warningLog.cleanup();
+    }
+  });
+
   it.each<{ primary: string; sessionRuntime?: string }>([
     { primary: "claude-sonnet" },
     { primary: "claude-opus", sessionRuntime: "openclaw" },
@@ -215,6 +248,30 @@ describe("generateConversationLabel", () => {
       expect(runIsolatedCompletion).toHaveBeenCalledOnce();
     },
   );
+
+  it("stops the utility chain when its owner retires during an attempt", async () => {
+    const retired = new Error("The title owner retired.");
+    let current = true;
+    // Isolated completion re-checks its caller after resolving the model.
+    runIsolatedCompletion.mockImplementation(async (request: { assertCurrent?: () => void }) => {
+      request.assertCurrent?.();
+      current = false;
+      request.assertCurrent?.();
+      return { text: "Stale title" };
+    });
+    const label = generate({
+      cfg: modelConfig("openai/gpt-main", "openai/gpt-mini", ["openai/utility-backup"]),
+      agentId: "main",
+      abortSignal: new AbortController().signal,
+      assertCurrent() {
+        if (!current) {
+          throw retired;
+        }
+      },
+    });
+    await expect(label).rejects.toBe(retired);
+    expect(attemptedModels()).toEqual(["gpt-mini"]);
+  });
 
   it("bounds without splitting surrogate pairs", async () => {
     runIsolatedCompletion.mockResolvedValue({ text: `${"a".repeat(11)}😀tail` });

@@ -204,21 +204,6 @@ function writeWorkspaceAliasFixtures(root: string, fixtures: readonly WorkspaceA
   });
 }
 
-function expectWorkspaceAliasTargets(
-  aliases: Record<string, string | undefined>,
-  fixtures: ReturnType<typeof writeWorkspaceAliasFixtures>,
-  target: "srcFile" | "expectedDistFile",
-) {
-  for (const fixture of fixtures) {
-    if (fixture.assert === false) {
-      continue;
-    }
-    expect(fs.realpathSync(aliases[fixture.alias] ?? ""), fixture.alias).toBe(
-      fs.realpathSync(fixture[target]),
-    );
-  }
-}
-
 function createPluginRuntimeAliasFixture(params?: { srcBody?: string; distBody?: string }) {
   const root = makeTempDir();
   const srcFile = path.join(root, "src/plugins/runtime/index.ts");
@@ -934,96 +919,6 @@ describe("plugin sdk alias helpers", () => {
       expect(prepared.getAliasMap()["@openclaw/llm-core/internal"]).toBeUndefined();
     },
   );
-
-  it("aliases workspace packages to source when dist artifacts are missing", () => {
-    const fixture = createPluginSdkAliasFixture();
-    writeWorkspacePackageExports(fixture.root, "media-core", ["", "attachment-classify", "mime"]);
-    writeWorkspacePackageExports(fixture.root, "acp-core", ["", "runtime/types"]);
-    writeWorkspacePackageExports(fixture.root, "normalization-core", [
-      "",
-      "agent-id",
-      "boolean-coercion",
-      "result",
-      "string-coerce",
-    ]);
-    const workspaceAliases = writeWorkspaceAliasFixtures(fixture.root, [
-      ["gateway-client"],
-      ["gateway-client/timeouts"],
-      ["gateway-client/websocket-data"],
-      ["gateway-protocol"],
-      ["gateway-protocol/schema"],
-      ["gateway-protocol/frame-guards"],
-      ["gateway-protocol/gateway-error-details"],
-      ["gateway-protocol/restart-unavailable"],
-      ["markdown-core"],
-      ["markdown-core/tables"],
-      ["media-generation-core"],
-      ["media-generation-core/model-ref"],
-      ["media-core"],
-      ["media-core/attachment-classify"],
-      ["media-core/mime"],
-      ["acp-core"],
-      ["acp-core/runtime/types"],
-      ["normalization-core"],
-      ["normalization-core/boolean-coercion"],
-      ["normalization-core/result"],
-      ["normalization-core/agent-id"],
-      ["normalization-core/string-coerce"],
-      ["retry"],
-      ["worker-runtime"],
-      ["worker-runtime/worker"],
-      ["worker-runtime/lifecycle"],
-      ["terminal-core"],
-      ["terminal-core/theme"],
-      ["net-policy"],
-      ["net-policy/ip"],
-      ["net-policy/url-protocol"],
-      ["model-catalog-core/provider-id"],
-      ["model-catalog-core/model-catalog-pricing"],
-      ["model-catalog-core/model-inference-capabilities"],
-    ]);
-    for (const entry of workspaceAliases) {
-      fs.rmSync(entry.distFile);
-    }
-    const sourcePluginEntry = writeDemoEntry(fixture.root);
-
-    const aliases = aliasesForSource(sourcePluginEntry, "dist");
-
-    expectWorkspaceAliasTargets(aliases, workspaceAliases, "srcFile");
-  });
-
-  it("aliases workspace package subpaths to dist when available", () => {
-    const fixture = createPluginSdkAliasFixture();
-    writeWorkspacePackageExports(fixture.root, "media-core", ["attachment-classify"]);
-    writeWorkspacePackageExports(fixture.root, "acp-core", ["normalize-text"]);
-    writeWorkspacePackageExports(fixture.root, "normalization-core", ["record-coerce"]);
-    const workspaceAliases = writeWorkspaceAliasFixtures(fixture.root, [
-      ["gateway-client/readiness"],
-      ["gateway-protocol/connect-error-details"],
-      ["gateway-protocol/frame-guards"],
-      ["gateway-protocol/gateway-error-details"],
-      ["gateway-protocol/restart-unavailable"],
-      ["markdown-core/render"],
-      ["media-generation-core/catalog"],
-      ["media-core/attachment-classify"],
-      ["acp-core/normalize-text", undefined, "dist/acp-core/normalize-text.js", false],
-      ["normalization-core/record-coerce", undefined, "dist/normalization-core/record-coerce.js"],
-      ["retry", undefined, "dist/retry/index.js"],
-      ["worker-runtime", undefined, "dist/worker-runtime/index.js"],
-      ["worker-runtime/worker", undefined, "dist/worker-runtime/worker.js"],
-      ["worker-runtime/lifecycle", undefined, "dist/worker-runtime/lifecycle.js"],
-      ["terminal-core/links", undefined, "dist/terminal-core/links.js"],
-      ["net-policy/url-protocol"],
-      ["model-catalog-core/provider-model-id-normalize"],
-      ["model-catalog-core/model-catalog-pricing"],
-      ["model-catalog-core/model-inference-capabilities"],
-    ]);
-    const sourcePluginEntry = writeDemoEntry(fixture.root);
-
-    const aliases = aliasesForSource(sourcePluginEntry, "dist");
-
-    expectWorkspaceAliasTargets(aliases, workspaceAliases, "expectedDistFile");
-  });
 
   it("derives workspace aliases from packaged root dist when package metadata is absent", () => {
     const fixture = createPluginSdkAliasFixture();

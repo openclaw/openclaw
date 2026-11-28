@@ -12,19 +12,19 @@ import {
 import { resolveRuntimeServiceCommit, resolveRuntimeServiceVersion } from "../version.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import type { RestartSentinelPayload } from "./restart-sentinel-codec.js";
 import type {
   ManagedHandoffSentinelIdentity,
   ManagedHandoffSentinelOutcome,
   ManagedHandoffSentinelOutcomeResult,
   RestartSentinel,
-  RestartSentinelPayload,
   RestartSentinelRowState,
 } from "./restart-sentinel-store.js";
 import type { RestartSentinelWorkerOperations } from "./restart-sentinel.worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 import { resolveUpdateInstallRoot, updateInstallRootsMatch } from "./update-install-root.js";
 
-export type { RestartSentinelPayload } from "./restart-sentinel-store.js";
+export type { RestartSentinelPayload } from "./restart-sentinel-codec.js";
 
 export type VerifiedGitUpdateReceipt = {
   root: string;

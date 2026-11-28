@@ -143,7 +143,7 @@ process.exit(result.status ?? 1);
     );
   });
 
-  it("removes failed staging and Git registration while preserving the stderr tail", async () => {
+  it("preserves the bounded build failure diagnostics", async () => {
     const target = await repository(true);
     const staging = path.join(root, "staging");
     const result = await prepareGit({ ...target, staging, node, timeoutMs: 30_000 });
@@ -154,14 +154,12 @@ process.exit(result.status ?? 1);
     expect(result.reason).toBe("build-failed");
     expect(result.stderrTail).toContain("fixture build failed");
     expect(result.stderrTail.length).toBeLessThanOrEqual(8192);
-    await expect(fs.access(staging)).rejects.toMatchObject({ code: "ENOENT" });
-    expect((await exec("git", ["-C", target.checkout, "worktree", "list"])).stdout).not.toContain(
-      staging,
-    );
   });
 
   it("stores and reports the actual build error after ANSI-colored warnings", async () => {
     const { checkout } = await repository(true, ">=1", true);
+    const beforeWorktrees = (await exec("git", ["-C", checkout, "worktree", "list", "--porcelain"]))
+      .stdout;
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
     vi.stubEnv("GIT_COMMIT", "");
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
@@ -187,6 +185,10 @@ process.exit(result.status ?? 1);
       expect(detail?.length).toBeLessThanOrEqual(1024);
       expect(error).toHaveBeenCalledWith(expect.stringContaining("fixture build failed"));
       expect(process.exitCode).toBe(1);
+      expect(await fs.readdir(path.join(resolvePrefix(), "releases"))).toEqual([]);
+      expect((await exec("git", ["-C", checkout, "worktree", "list", "--porcelain"])).stdout).toBe(
+        beforeWorktrees,
+      );
     } finally {
       process.exitCode = undefined;
       await closeOpenClawStateDatabaseAsync();
@@ -409,7 +411,6 @@ if (args[0] === 'pack') {
         await expect(fs.stat(path.join(root, "dependencies-installed"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        await expect(fs.stat(staging)).rejects.toMatchObject({ code: "ENOENT" });
         return;
       }
       expect(result.ok).toBe(true);
@@ -459,6 +460,16 @@ describe("package release conversion", () => {
       expect(outcome.status).toBe(releaseAware ? "pending" : "failed");
       if (releaseAware) {
         expect(await readTrial()).toMatchObject({ phase: "pending", runId: run.runId });
+        if (outcome.status !== "pending") {
+          throw new Error("Expected a published release");
+        }
+        const worktrees = (
+          await exec("git", ["-C", target.checkout, "worktree", "list", "--porcelain", "-z"])
+        ).stdout
+          .split("\0")
+          .filter((field) => field.startsWith("worktree "))
+          .map((field) => path.resolve(field.slice("worktree ".length)));
+        expect(worktrees).toContain(await fs.realpath(outcome.releaseRoot));
       } else {
         expect(outcome).toMatchObject({
           reason: "release-updates-unsupported",

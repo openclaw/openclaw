@@ -47,9 +47,10 @@ import type { PromptCacheRequestObservation } from "../prompt-cache-request-obse
 import { resolveCacheRetention } from "../prompt-cache-retention.js";
 import {
   type ProviderPromptState,
+  readSettledTurnRequest,
   wrapStreamFnWithProviderPromptState,
 } from "../provider-prompt-state.js";
-import { applySessionForkRequest } from "../session-fork-request.js";
+import { applySessionForkRequest, applySettledTurnRequest } from "../session-fork-request.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   resolveEmbeddedAgentApiKey,
@@ -561,6 +562,8 @@ export async function prepareEmbeddedAttemptTransport(input: {
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
   const sessionFork = attempt.sessionForkRequest;
+  const settledRequest =
+    attempt.operation === "settled-tool-finalization" ? readSettledTurnRequest(attempt) : undefined;
   session.agent.streamFn = wrapStreamFnWithProviderPromptState({
     streamFn: session.agent.streamFn,
     ...input.providerPromptState,
@@ -573,7 +576,12 @@ export async function prepareEmbeddedAttemptTransport(input: {
               allowedTools: attempt.toolExecutionAllow ?? [],
             }),
         }
-      : {}),
+      : settledRequest
+        ? {
+            finalizePayload: (payload: Record<string, unknown>) =>
+              applySettledTurnRequest(payload, settledRequest, attempt.model.api),
+          }
+        : {}),
   });
   session.agent.streamFn = wrapStreamFnWithProviderReviewContinuation({
     streamFn: session.agent.streamFn,

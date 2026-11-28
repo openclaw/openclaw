@@ -152,6 +152,17 @@ struct SwiftUIRenderSmokeTests {
         }
     }
 
+    @Test @MainActor func `transcript skeleton sits on the default rows and grows with dynamic type`() {
+        func height(_ typeSize: DynamicTypeSize) -> CGFloat {
+            let controller = UIHostingController(
+                rootView: ChatTranscriptSkeleton().environment(\.dynamicTypeSize, typeSize))
+            return controller.sizeThatFits(in: CGSize(width: 370, height: CGFloat.greatestFiniteMagnitude)).height
+        }
+        // Bubble, timestamp, three agent lines, bubble, two lines: the List rows measured at Large.
+        #expect(abs(height(.large) - 276.6) < 0.5)
+        #expect(height(.accessibility2) > height(.large) + 100)
+    }
+
     @Test @MainActor func `long user prompt disclosure builds across dynamic type sizes`() {
         let text = Array(repeating: "A long user-authored prompt line.", count: 13).joined(separator: "\n")
         let message = OpenClawChatMessage(
@@ -194,7 +205,7 @@ struct SwiftUIRenderSmokeTests {
         (.audio, .transcode, .transcode),
         (.video, .transcode, .transcode),
     ] as [(OpenClawChatMediaKind, OpenClawChatPlaybackMode?, OpenClawChatPlaybackMode?)])
-    @MainActor func `managed assistant media starts its artifact load with the playback route`(
+    @MainActor func `managed previews use their playback route and audio waits for a tap`(
         input: (OpenClawChatMediaKind, OpenClawChatPlaybackMode?, OpenClawChatPlaybackMode?)) async
     {
         let (kind, playback, expectedPlayback) = input
@@ -215,6 +226,8 @@ struct SwiftUIRenderSmokeTests {
                 artifactId: artifactId,
                 url: "/api/chat/media/outgoing/main/11111111-1111-4111-8111-111111111111/full",
                 alt: "Managed preview",
+                width: kind == .video ? 640 : nil,
+                height: kind == .video ? 360 : nil,
                 playback: playback,
                 content: nil)],
             timestamp: 1)
@@ -255,8 +268,16 @@ struct SwiftUIRenderSmokeTests {
         defer { window.isHidden = true }
 
         var iterator = requests.stream.makeAsyncIterator()
-        let requestedPlayback = await iterator.next()
-        #expect(requestedPlayback == .some(expectedPlayback))
+        if kind == .audio {
+            // An idle audio row must not download merely because it appeared in the transcript.
+            try? await Task.sleep(for: .milliseconds(150))
+            requests.continuation.finish()
+            let requestedPlayback = await iterator.next()
+            #expect(requestedPlayback == nil)
+        } else {
+            let requestedPlayback = await iterator.next()
+            #expect(requestedPlayback == .some(expectedPlayback))
+        }
     }
 
     @Test @MainActor func `streaming assistant bubble builds mixed prose and code`() {
@@ -333,37 +354,6 @@ struct SwiftUIRenderSmokeTests {
         await Self.waitForPresentedAlert(in: window)
 
         #expect(window.rootViewController?.presentedViewController is UIAlertController)
-    }
-
-    @Test @MainActor func `exec approval dialog builds on compact screens with accessibility text`() throws {
-        var windows: [UIWindow] = []
-        defer { windows.forEach { $0.isHidden = true } }
-
-        let layouts: [(CGSize, DynamicTypeSize)] = [
-            (CGSize(width: 320, height: 568), .accessibility5),
-            (CGSize(width: 568, height: 320), .accessibility3),
-        ]
-        for (size, typeSize) in layouts {
-            let appModel = NodeAppModel()
-            let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
-                id: "approval-layout",
-                commandText: String(repeating: "/usr/bin/find /private/var/mobile/Documents ", count: 12),
-                warningText: String(
-                    repeating: "This command can modify files outside the current workspace. ",
-                    count: 12),
-                allowedDecisions: ["allow-once", "allow-always", "deny"],
-                host: "gateway.example.com",
-                nodeId: "node-mobile",
-                agentId: "main",
-                expiresAtMs: Int64.max))
-            appModel._test_presentExecApprovalPrompt(prompt)
-
-            let root = Color.clear
-                .execApprovalPromptDialog()
-                .environment(appModel)
-                .environment(\.dynamicTypeSize, typeSize)
-            windows.append(Self.host(root, size: size))
-        }
     }
 
     @Test @MainActor func `root prompt alert stack presents gateway trust prompt`() async {

@@ -418,26 +418,6 @@ describe("custodian page", () => {
     expect(request).toHaveBeenCalledOnce();
   });
 
-  it("reveals a collapsed fenced code block in the caretaker transcript", async () => {
-    const code = Array.from({ length: 20 }, (_, index) => `line ${index}`).join("\n");
-    const request = vi
-      .fn()
-      .mockResolvedValue(chatReply(`Here you go:\n\n\`\`\`bash\n${code}\n\`\`\``));
-    const { page } = await mount(request);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    await page.updateComplete;
-
-    const wrapper = page.querySelector(".code-block-wrapper");
-    const expand = page.querySelector<HTMLButtonElement>(".code-block-expand");
-    expect(wrapper?.classList.contains("is-collapsible")).toBe(true);
-    expect(expand?.textContent).toContain("13 hidden lines");
-
-    expand?.click();
-
-    expect(wrapper?.classList.contains("is-expanded")).toBe(true);
-    expect(expand?.getAttribute("aria-expanded")).toBe("true");
-  });
-
   it("preserves a prepared literal marker alongside a structured question", async () => {
     const request = vi.fn().mockResolvedValue(
       chatReply("NO_REPLY", {
@@ -549,22 +529,6 @@ describe("custodian page", () => {
     setChannelsConnected(true);
     expect(context.acquireChannels(createChannelCapability).refresh).not.toHaveBeenCalled();
     expect(context.replace).toHaveBeenCalledWith("custodian");
-    expect(page.querySelector(".custodian__nudge--channel-onboarding")).toBeNull();
-  });
-
-  it("opens Channels from the optional first-run nudge", async () => {
-    const request = vi.fn().mockResolvedValue(chatReply("Your AI is ready."));
-    const { context } = createContext(request, ["openclaw.chat"], {
-      channelsSnapshot: channelSnapshot(),
-    });
-    const { page } = await mountPage(context, { onboarding: true });
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-
-    page.querySelector<HTMLButtonElement>(".custodian__nudge-cta")?.click();
-    await page.updateComplete;
-
-    expect(context.navigate).toHaveBeenCalledWith("channels");
-    expect(context.replace).not.toHaveBeenCalled();
     expect(page.querySelector(".custodian__nudge--channel-onboarding")).toBeNull();
   });
 

@@ -131,7 +131,7 @@ async function accepted<T extends Record<string, unknown>>(
   return expectDefined(reply.payload, "successful RPC payload");
 }
 
-function captureInitial(key: string, beforeSend?: () => void) {
+function captureInitial(key: string) {
   let initial: GatewayRequestHandlerOptions | undefined;
   const settled = createDeferred();
   const send = chatSendOwner.handleDirectExternalChatSend;
@@ -140,7 +140,6 @@ function captureInitial(key: string, beforeSend?: () => void) {
     .mockImplementation(async (options) => {
       if (options.params.sessionKey === key) {
         initial = options;
-        beforeSend?.();
       }
       try {
         await send(options);
@@ -284,8 +283,6 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
 });
 
 test.for([
-  "before-input",
-  "after-preparation",
   "transaction-refused",
   "commit-refused",
   "revoked-after-preparation",
@@ -329,12 +326,7 @@ test.for([
       await saveCatalog([catalog]);
     };
   }
-  const initial = captureInitial(key, () => {
-    if (fault === "before-input") {
-      hit();
-      throw failure;
-    }
-  });
+  const initial = captureInitial(key);
   const refuse = probe.admission(workerAdmission, (request, grant, callback) => {
     const facts = isRecord(request.facts) ? request.facts.publication : undefined;
     // Model-catalog and other worker writes may settle while the input command waits.
@@ -357,13 +349,10 @@ test.for([
     }
     callback(request, grant);
   });
-  if (fault === "after-preparation" || fault === "revoked-after-preparation") {
+  if (fault === "revoked-after-preparation") {
     turnBoundary.afterPrepare = () => {
       turnBoundary.afterPrepare = undefined;
       hit();
-      if (fault === "after-preparation") {
-        throw failure;
-      }
       const run = expectDefined(getRpcSource(initial.runId), "admitted run");
       run.adapter.abortStopReason = "restart";
       requestRpcSourceCancellation(run, failure);

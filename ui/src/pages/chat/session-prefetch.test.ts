@@ -51,6 +51,30 @@ describe("session navigation intent prefetch", () => {
   });
   afterEach(async () => fixture.dispose());
 
+  it("preserves prepared quiet activity in the prefetched snapshot", async () => {
+    const sessionKey = "agent:main:quiet-activity";
+    const result = {
+      role: "toolResult",
+      toolCallId: "wait",
+      toolName: "sessions_yield",
+      content: [{ type: "text", text: "Waiting finished" }],
+      __openclaw: { id: "wait-result", seq: 3 },
+    };
+    const request = async () => ({
+      ...historyResult(sessionKey),
+      messages: [result],
+      activity: [{ messageId: "wait-result", items: [] }],
+    });
+    updatePrefetch(prefetchState(request, [row(sessionKey, NOW - 1)]));
+    fixture.intend(sessionKey);
+    await advancePrefetch();
+
+    expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })?.messages).toEqual([
+      { ...result, activity: [] },
+    ]);
+    expect(result).not.toHaveProperty("activity");
+  });
+
   it("does not repopulate a removed session from an in-flight prefetch before the next list revision", async () => {
     const key = "agent:main:deleted";
     const response = createDeferred<ReturnType<typeof historyResult>>();

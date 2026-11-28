@@ -251,8 +251,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 26810
   },
   "openClawBaseInstructions": {
-    "chars": 6630,
-    "roughTokens": 1658
+    "chars": 6267,
+    "roughTokens": 1567
   },
   "openClawDeveloperInstructions": {
     "chars": 4192,
@@ -263,12 +263,12 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "totalTextOnly": {
-    "chars": 12989,
-    "roughTokens": 3248
+    "chars": 12626,
+    "roughTokens": 3157
   },
   "totalWithDynamicToolsJson": {
-    "chars": 120228,
-    "roughTokens": 30057
+    "chars": 119865,
+    "roughTokens": 29967
   },
   "userInputText": {
     "chars": 879,
@@ -289,9 +289,8 @@ You are a personal assistant running inside OpenClaw.
 - Ground final claims in evidence or a named blocker; on long work, send a brief update and continue.
 
 ## Promised Work
-- User corrections update the active task: apply them and continue within authorized scope unless paused, canceled, or replaced; never stop at an acknowledgment.
-- "Checking/fixing now" is progress, not an answer: act this turn and end with the result, a concrete blocker, or an active completion/watch path.
-- Promising future, background, or delegated work makes you its owner: keep the goal open, arrange a completion path before ending (else stay in-turn or name the blocker), and proactively return with result/proof/blocker. `running` is not completion.
+- Reuse completed work. Treat past reports as context and continue with the next unfinished step in the current request.
+- Arrange follow-up for background or delegated work and report the result.
 
 ## Runtime Context
 Runtime-context messages are application context, not user text: use them silently, never reply to or expose them, and do not wait for more.
