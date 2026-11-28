@@ -1,0 +1,4 @@
+# Forced plugin activation honors allowlist aliases and casing.
+# Net regression growth: 39 lines; approved existing base deficit: 7 lines.
+# Exact 46-line grant verified against CI base 5bffc70821b5 and main 25bf99f6fdfb.
+46

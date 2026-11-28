@@ -32,7 +32,13 @@ export function withBundledPluginEnablementCompat(params: {
   const nextEntries: Record<string, PluginEntryConfig> = { ...existingEntries };
   const nextAllow = bypassAllowlist && Array.isArray(allow) ? new Set(allow) : undefined;
 
-  for (const pluginId of params.pluginIds) {
+  const existingEntryIds = new Set(
+    Object.keys(existingEntries).map((entryId) => normalizePluginId(entryId)),
+  );
+
+  for (const requestedId of params.pluginIds) {
+    // Allowlists and entries may name a plugin by alias or in another case.
+    const pluginId = normalizePluginId(requestedId) || requestedId;
     if (allowSet && !allowSet.has(pluginId)) {
       continue;
     }
@@ -42,7 +48,7 @@ export function withBundledPluginEnablementCompat(params: {
     if (nextAllow && nextAllow.size !== beforeAllowSize) {
       changed = true;
     }
-    if (!selectPlugins || existingEntries[pluginId] !== undefined) {
+    if (!selectPlugins || existingEntryIds.has(pluginId)) {
       continue;
     }
     nextEntries[pluginId] = { enabled: true };
