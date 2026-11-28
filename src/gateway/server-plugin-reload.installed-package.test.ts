@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createAgentToolResultMiddlewareRunner } from "../agents/harness/tool-result-middleware.js";
 import { retainRuntimePluginWork } from "../agents/runtime-plugin-work.js";
@@ -9,6 +10,7 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectWithPlugins } from "../config/validation.js";
+import { NativeWorker } from "../infra/worker-native-handle.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { formatBundledPluginDevReloadWarning } from "../plugins/bundled-plugin-dev-reload.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
@@ -75,14 +77,16 @@ afterEach(async () => {
 
 async function verifyInstalledPackageRetention(
   settings: "empty" | "defaulted",
-  cleanupRetry?:
+  scenario?:
     | "gateway-stop"
     | "pending-disposal"
     | "candidate-disposal"
     | "recovery-disposal"
     | "mixed-recovery"
-    | "active-call",
+    | "active-call"
+    | "worker-exit",
 ) {
+  const cleanupRetry = scenario === "worker-exit" ? undefined : scenario;
   const bootstrap = await import("./server-plugin-bootstrap.js");
   const root = makeTrackedTempDir("openclaw-gateway-plugin-ledger-reload", tempDirs);
   const stateDir = path.join(root, "state");
@@ -399,6 +403,8 @@ async function verifyInstalledPackageRetention(
     if (usesMiddleware) {
       expect((await applyMiddleware()).content).toEqual([{ type: "text", text: "raw" }]);
     }
+    using posts =
+      scenario === "worker-exit" ? vi.spyOn(NativeWorker.prototype, "postMessage") : undefined;
     const releaseSiblingWork = siblingInstance.retainWork();
     let firstReceipt: Awaited<ReturnType<typeof reload>>;
     try {
@@ -418,6 +424,30 @@ async function verifyInstalledPackageRetention(
         runtime.pluginRuntime.registry.agentToolResultMiddlewares.map((entry) => entry.pluginId),
       ).toEqual(["installed-probe"]);
       expect((await applyMiddleware()).content).toEqual([{ type: "text", text: "A" }]);
+    }
+    if (posts) {
+      const capture = posts.mock.calls.findIndex(
+        ([message]) =>
+          isRecord(message) &&
+          isRecord(message.input) &&
+          message.input.operation === "capture" &&
+          message.input.rootDir === packageDir,
+      );
+      const worker = posts.mock.contexts[capture];
+      assert.ok(
+        worker instanceof NativeWorker,
+        "expected a preparation worker for the installed plugin",
+      );
+      const previous = await probe("installed-probe");
+      await worker.terminate();
+      const replacement = await reload(validated.config, ["installed-probe"]);
+      expect(replacement.runtime.restartRequired ?? false).toBe(false);
+      expect(replacement.runtime.warnings).toContainEqual(
+        expect.stringContaining("rollback cannot restore this plugin's previous code"),
+      );
+      expect((await probe("installed-probe")).instance).not.toBe(previous.instance);
+      expect(await probe("sibling")).toEqual(sibling);
+      return;
     }
     expect(firstReceipt.runtime.pluginIds).toEqual(["installed-probe"]);
     expect(firstReceipt.runtime.warnings ?? []).not.toEqual(
@@ -978,3 +1008,6 @@ it("recovers a healthy changed plugin from captured code while excluding a previ
 
 it("retries after an admitted call outlasts the replacement deadline without restarting its sibling", () =>
   verifyInstalledPackageRetention("empty", "active-call"));
+
+it("reloads an installed plugin after its preparation worker exits", () =>
+  verifyInstalledPackageRetention("defaulted", "worker-exit"));

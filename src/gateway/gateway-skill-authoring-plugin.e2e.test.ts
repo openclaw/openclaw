@@ -13,6 +13,7 @@ import {
 } from "../../test/helpers/openai-responses-sse.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { shareCoreWithWorkshopPluginForTest } from "../skills/test-support/workshop-plugin.test-support.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
@@ -185,8 +186,8 @@ const WORKSHOP_DESCRIPTION = "WORKSHOP_SKILL_DESCRIPTION use when proving core W
  * it: `sameTurn` compares the request right after the write's tool output with the one before;
  * `nextTurn` compares the next turn's first request with the write turn's last one.
  */
-function skillRefreshShape(
-  description: string,
+function expectSkillRefresh(
+  name: string,
   ...raw: [
     ProviderPrefixSnapshot,
     ProviderPrefixSnapshot,
@@ -202,28 +203,23 @@ function skillRefreshShape(
   assertStableProviderPrefix(before, sameTurn, { label: "same turn after skill write" });
   // Refreshes append instructions without rewriting the admitted system or history.
   assertStableProviderPrefix(turnEnd, nextTurn, { label: "next turn after skill write" });
+  const catalogEntries = (item: string) =>
+    extractFirstTextBlock(JSON.parse(item))
+      ?.match(/<available_skills>\n([\s\S]*?)\n<\/available_skills>/u)?.[1]
+      ?.split("\n")
+      .filter((line) => line.startsWith("- "));
+  const previous = [turnEnd.system, ...turnEnd.history].map(catalogEntries).findLast(Boolean) ?? [];
   const updates = nextTurn.history
     .slice(turnEnd.history.length)
-    .filter((item) => item.includes("System prompt update.") && item.includes(description));
+    .filter((item) => item.includes("System prompt update."))
+    .map(catalogEntries)
+    .filter(Boolean);
   expect(updates).toHaveLength(1);
-  const update = updates[0]!;
-  const catalog = (item: string) =>
-    item.match(/<available_skills>([\s\S]*?)<\/available_skills>/)?.[1];
-  // The catalog lists one `- "name": description` line per skill.
-  const entries = (item: string) =>
-    (catalog(item) ?? "").split(/\\n|\n/).filter((line) => line.trimStart().startsWith("- "));
-  const previous = [turnEnd.system, ...turnEnd.history].findLast((item) => catalog(item));
-  const previousEntries = previous ? entries(previous) : [];
-  const nextEntries = entries(update);
-  const added = nextEntries.filter((entry) => entry.includes(description));
-  expect(added).toHaveLength(1);
-  return {
-    onlyEntryAdded:
-      nextEntries.length === previousEntries.length + 1 &&
-      JSON.stringify(nextEntries.filter((entry) => entry !== added[0])) ===
-        JSON.stringify(previousEntries),
-    entry: added[0]!,
-  };
+  const entries = updates[0]!;
+  const added = `- ${JSON.stringify(name)}`;
+  expect(previous).not.toContain(added);
+  expect(entries.filter((entry) => entry === added)).toEqual([added]);
+  expect(entries.filter((entry) => entry !== added)).toEqual(previous);
 }
 
 it(
@@ -434,7 +430,6 @@ it(
 
         await runTurn("Save the proof skill, then try the escapes.");
         expect(requests).toHaveLength(4);
-        expect(requests[0]?.raw).not.toContain(SKILL_DESCRIPTION);
         const outputs = toolOutputs(requests[3]?.input ?? []).map((item) => JSON.stringify(item));
         expect(outputs[0]).toContain(`SKILL_WRITTEN ${SKILL_NAME}`);
         expect(outputs[1]).toContain("SKILL_REFUSED path_escape");
@@ -456,7 +451,6 @@ it(
 
         await runTurn("TURN_TWO: which skills do you have?");
         expect(requests).toHaveLength(5);
-        expect(requests[4]?.raw).toContain(SKILL_DESCRIPTION);
 
         // Prompt caching: a plugin commit follows core Workshop's skill refresh contract.
         await runTurn("TURN_WORKSHOP: save a Workshop skill.");
@@ -464,38 +458,11 @@ it(
         expect(requests).toHaveLength(8);
         const prefix = (index: number) =>
           snapshotProviderPrefix("openai-responses", JSON.parse(requests[index]?.raw ?? "{}"));
-        const pluginShape = skillRefreshShape(
-          SKILL_DESCRIPTION,
-          prefix(0),
-          prefix(1),
-          prefix(3),
-          prefix(4),
-        );
-        const workshopShape = skillRefreshShape(
-          WORKSHOP_DESCRIPTION,
-          prefix(5),
-          prefix(6),
-          prefix(6),
-          prefix(7),
-        );
+        expectSkillRefresh(SKILL_NAME, prefix(0), prefix(1), prefix(3), prefix(4));
+        expectSkillRefresh(WORKSHOP_SKILL, prefix(5), prefix(6), prefix(6), prefix(7));
         expect(JSON.stringify(toolOutputs(requests[6]?.input ?? []).at(-1))).toContain(
           `Created \\"${WORKSHOP_SKILL}\\"`,
         );
-        for (const shape of [pluginShape, workshopShape]) {
-          expect(shape.onlyEntryAdded).toBe(true);
-        }
-        expect(pluginShape.entry).toContain(SKILL_DESCRIPTION);
-        expect(workshopShape.entry).toContain(WORKSHOP_DESCRIPTION);
-        // Same section, same entry shape: only the skill's own facts differ.
-        const entryShape = (entry: string, name: string, description: string, dir: string) =>
-          entry
-            .replaceAll(description, "<description>")
-            .replaceAll(dir, "<dir>")
-            .replaceAll(name, "<name>");
-        expect(entryShape(pluginShape.entry, SKILL_NAME, SKILL_DESCRIPTION, "proof-skills")).toBe(
-          entryShape(workshopShape.entry, WORKSHOP_SKILL, WORKSHOP_DESCRIPTION, "workshop-skills"),
-        );
-
         // Disable the plugin while its background write awaits. Disposal revokes the plugin
         // generation, so the late write commits nothing and no skill_changed fires.
         await runTurn("TURN_THREE: save another skill.");

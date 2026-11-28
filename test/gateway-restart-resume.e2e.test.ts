@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { readFile, stat } from "node:fs/promises";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -38,9 +38,24 @@ import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js"
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "./helpers/promise.js";
 import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
-const RESUME =
-  "The Gateway restarted while you were working. Resume your work: check the current state of anything that was in progress (files, processes, subagents, external actions) before repeating it, then continue.";
+const RESUME = "The Gateway restarted while you were working.";
+const SHELL_CHECKPOINT = "no saved terminal result";
+const shellCases = [
+  { cycle: 30, effect: "committed", expected: "Verified the file; no repeat." },
+  { cycle: 31, effect: "absent", expected: "The expected file is absent; no repeat." },
+  {
+    cycle: 32,
+    effect: "unknown",
+    expected: "The job outcome is unknown. Independent work checked.",
+  },
+  { cycle: 33, effect: "saved", expected: "Reused the saved shell result." },
+] as const;
+const shellEffectFile = (cycle: number) => `shell-effect-${cycle}.txt`;
 const UNKNOWN_SHELL = "Its effect is unknown. I paused this turn without retrying the command.";
+const RECONCILED_SHELL =
+  "Checked the process list. The command outcome is still unknown; I did not retry it.";
+const INDEPENDENT_FILE = "independent.txt";
+const INDEPENDENT_CONTENT = "INDEPENDENT_WORK_AVAILABLE";
 const CASES = ["stream", "tool", "parent", "background", "idle", "compact"] as const;
 type Case = (typeof CASES)[number];
 const agent = (name: Case) => (name === "stream" || name === "tool" ? "other" : "main");
@@ -89,7 +104,7 @@ function hasNewResumeInput(body: Record<string, unknown>): boolean {
     );
 }
 
-async function providerFixture(signal: AbortSignal) {
+async function providerFixture(signal: AbortSignal, childTimer = false) {
   const failed = createDeferred<never>();
   void failed.promise.catch(() => {});
   const ready = new Map<string, ReturnType<typeof createDeferred<void>>>();
@@ -111,6 +126,7 @@ async function providerFixture(signal: AbortSignal) {
   let ordinal = 0;
   let restarting = false;
   let origin = "";
+  let shellWorkspace: string | undefined;
   const gate = (name: string) => {
     let deferred = ready.get(name);
     if (!deferred) {
@@ -195,6 +211,23 @@ async function providerFixture(signal: AbortSignal) {
           });
           if (name === "child") {
             gate(`child:${cycle}`).resolve();
+            if (childTimer && !issued.has(`child-timer:${cycle}`)) {
+              issued.add(`child-timer:${cycle}`);
+              const script = `fetch(${JSON.stringify(`${origin}/timer`)},{method:'POST',body:'{}'}).then(()=>setInterval(()=>{},1000))`;
+              const args = {
+                command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`,
+                yieldMs: 120_000,
+                timeoutSeconds: 600,
+              };
+              const wireName = tools.includes("exec") ? "exec" : "dispatch_action";
+              writeRestartToolCall(
+                response,
+                "child",
+                wireName,
+                wireName === "exec" ? args : { id: "exec", args },
+                requestOrdinal,
+              );
+            }
             // The parent resumes; its child settles quietly instead of being adopted.
             return;
           }
@@ -216,6 +249,56 @@ async function providerFixture(signal: AbortSignal) {
               requestOrdinal,
             );
           };
+          const shellCase = shellCases.find((test) => test.cycle === cycle && name === "tool");
+          if (shellCase && shellWorkspace) {
+            const { effect, expected } = shellCase;
+            const file = path.join(shellWorkspace, shellEffectFile(cycle));
+            if (current.includes(queued(cycle, 1))) {
+              text(`HANDLED_${queued(cycle, 1)}`);
+            } else if (hasNewResumeInput(body)) {
+              if (effect === "saved") {
+                expect(toolOutput.output).toContain("SAVED_SHELL_RESULT");
+                expect(current).not.toContain(SHELL_CHECKPOINT);
+                text(expected);
+                return;
+              }
+              expect(current).toContain(SHELL_CHECKPOINT);
+              expect(input).toContain(
+                effect === "unknown" ? `/tool/${cycle}/tool` : shellEffectFile(cycle),
+              );
+              tool("read", {
+                path: effect === "unknown" ? path.join(shellWorkspace, INDEPENDENT_FILE) : file,
+              });
+            } else if (restarting && typeof toolOutput.output === "string") {
+              const result = toolOutput.output;
+              expect(result).toContain(
+                effect === "unknown"
+                  ? INDEPENDENT_CONTENT
+                  : effect === "committed"
+                    ? "COMMITTED_SHELL_EFFECT"
+                    : `File not found: ${file}`,
+              );
+              text(expected);
+            } else if (!restarting && effect === "saved" && toolOutput.output !== undefined) {
+              expect(toolOutput.output).toContain("SAVED_SHELL_RESULT");
+              gate(`shell-saved:${cycle}`).resolve();
+            } else if (current.includes(marker(cycle, "tool"))) {
+              const callback = `${origin}/tool/${cycle}/tool`;
+              const write = `require("node:fs").appendFileSync(${JSON.stringify(file)}, ${JSON.stringify("COMMITTED_SHELL_EFFECT\n")})`;
+              const script =
+                effect === "saved"
+                  ? 'console.log("SAVED_SHELL_RESULT")'
+                  : `${effect === "committed" ? `${write};` : ""}fetch(${JSON.stringify(callback)},{method:"POST",body:"{}"}).then(()=>{${effect === "absent" ? `setTimeout(()=>${write},600000)` : "setInterval(()=>{},1000)"}})`;
+              tool("exec", {
+                command: `${JSON.stringify(process.execPath)} -e ${JSON.stringify(script)}`,
+                yieldMs: 120_000,
+                timeoutSeconds: 600,
+              });
+            } else {
+              throw new Error(`Unexpected shell checkpoint model input: ${current}`);
+            }
+            return;
+          }
           if (restarting) {
             if (hasNewResumeInput(body)) {
               if (name === "stream") {
@@ -227,6 +310,13 @@ async function providerFixture(signal: AbortSignal) {
                 }
               } else {
                 gate(`resume:${cycle}:${name}`).resolve();
+                if (name === "tool") {
+                  expect(current).toContain(SHELL_CHECKPOINT);
+                  expect(input.includes(`/tool/${cycle}/tool`)).toBe(true);
+                  issued.add(`shell-check:${cycle}`);
+                  tool("process", { action: "list" });
+                  return;
+                }
                 if (name === "compact") {
                   issued.add(`gateway:${cycle}:${name}`);
                   tool("sessions_list", { limit: 20, search: `restart-resume-${cycle}-${name}` });
@@ -234,6 +324,9 @@ async function providerFixture(signal: AbortSignal) {
                 }
               }
               text(`RESUMED_${cycle}_${name}`);
+            } else if (name === "tool" && issued.delete(`shell-check:${cycle}`)) {
+              expect(toolOutput.output).toMatch(/No running or recent sessions/);
+              text(RECONCILED_SHELL);
             } else if (issued.delete(`gateway:${cycle}:${name}`)) {
               const result = asRecord(JSON.parse(String(toolOutput.output)));
               expect(result.error).toBeUndefined();
@@ -325,6 +418,9 @@ async function providerFixture(signal: AbortSignal) {
     baseUrl: `${origin}/v1`,
     finalizerUrl: `${origin}/finalize`,
     timerUrl: `${origin}/timer`,
+    useShellWorkspace: (workspace: string) => {
+      shellWorkspace = workspace;
+    },
     finalizerAdmission: () => finalizerAdmission,
     releaseFinalizer: () => {
       finalizer?.writeHead(204).end();
@@ -362,6 +458,114 @@ async function providerFixture(signal: AbortSignal) {
       ),
   };
 }
+
+it.skipIf(process.platform === "win32").for(["SIGKILL", "SIGTERM"] as const)(
+  "settles a timer child and tells its yielded parent after %s",
+  { timeout: 180_000 },
+  async (killSignal, { signal, onTestFailed }) => {
+    const provider = await providerFixture(signal, true);
+    const instance = await createOpenClawTestInstance({
+      name: "gateway-child-crash",
+      signal,
+      gracefulShutdownTimeoutMs: 60_000,
+      config: restartResumeConfig(buildMockOpenAiResponsesProvider(provider.baseUrl)),
+      env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
+    });
+    onTestFailed(() => {
+      process.stderr.write(instance.logs());
+    });
+    const sessionKey = key(0, "parent");
+    let client: GatewayClient | undefined;
+    const storedChild = () => {
+      const db = new DatabaseSync(resolveOpenClawStateSqlitePath(instance.env), { readOnly: true });
+      try {
+        const row = db
+          .prepare("SELECT run_id, payload_json FROM subagent_runs WHERE requester_session_key = ?")
+          .get(sessionKey);
+        assert(row && typeof row.payload_json === "string", "Spawn must persist the child");
+        const payload = asRecord(JSON.parse(row.payload_json));
+        return { runId: row.run_id, ...asRecord(payload.parentCompletion ?? payload) };
+      } finally {
+        db.close();
+      }
+    };
+    await runQaGatewayFixture(
+      async () => {
+        await instance.startGateway();
+        client = await connectRestartClient(instance, {}, signal);
+        await client.request("sessions.create", {
+          key: sessionKey,
+          agentId: "main",
+          permissionMode: "full",
+        });
+        await client.request("chat.send", {
+          sessionKey,
+          message: marker(0, "parent"),
+          idempotencyKey: randomUUID(),
+        });
+        await provider.wait("/timer");
+        await provider.wait("ready:0:parent");
+        const parent = readRestartSession(instance.state.agentDir(), sessionKey);
+        assert(parent?.lifecycleRunId, "Parent must retain its yielded lifecycle");
+        expect(
+          await client.request("agent.wait", { runId: parent.lifecycleRunId, timeoutMs: 30_000 }),
+        ).toMatchObject({ status: "ok", yielded: true });
+        const original = storedChild();
+        expect(original).toMatchObject({
+          execution: { status: "running" },
+          delivery: { status: "pending" },
+        });
+        const child = instance.child;
+        assert(child?.pid, "Owned Gateway process unavailable");
+        const pid = child.pid;
+        const closed = once(child, "close");
+        expect(child.kill(killSignal)).toBe(true);
+        await closed;
+        await client.stopAndWait();
+        client = undefined;
+        await instance.stopGateway();
+        expect(storedChild()).toMatchObject({
+          runId: original.runId,
+          execution: { status: killSignal === "SIGKILL" ? "running" : "terminal" },
+        });
+        provider.restart();
+        await instance.startGateway();
+        expect(instance.child?.pid).not.toBe(pid);
+        client = await connectRestartClient(instance, {}, signal);
+        await vi.waitFor(
+          async () => {
+            const history = await client!.request<{
+              messages: unknown[];
+              sessionInfo: { hasActiveRun: boolean };
+            }>("chat.history", { sessionKey });
+            expect(storedChild()).toMatchObject({
+              runId: original.runId,
+              execution: { status: "terminal", outcome: { status: "error" } },
+              delivery: { status: "delivered" },
+            });
+            expect(JSON.stringify(history.messages)).toContain("HANDLED_NEW_INPUT");
+            expect(history.sessionInfo.hasActiveRun).toBe(false);
+          },
+          { timeout: 15_000 },
+        );
+        const notices = provider.calls.filter(
+          (call) =>
+            call.name === "parent" &&
+            call.current.includes(
+              killSignal === "SIGKILL"
+                ? "Its run did not survive the restart"
+                : "status: error: Gateway stopped",
+            ),
+        );
+        expect(notices).toHaveLength(1);
+        expect(provider.calls.filter((call) => call.name === "child")).toHaveLength(1);
+      },
+      () => client?.stopAndWait(),
+      () => instance.cleanup(),
+      provider.close,
+    );
+  },
+);
 
 it.skipIf(process.platform === "win32")(
   "resumes the interrupted predecessor after SIGKILL and incomplete shutdown marking",
@@ -1039,11 +1243,12 @@ it.skipIf(process.platform === "win32").for([
             { timeout: 15_000 },
           );
         }
-        await client.request(
+        const followup = queued(3, 1);
+        const { runId: followupRunId } = await client.request<{ runId: string }>(
           "chat.send",
           {
             sessionKey,
-            message: queued(3, 1),
+            message: followup,
             idempotencyKey: followupKey,
             ...(predecessorEnded ? {} : { queueMode: "followup" }),
           },
@@ -1073,7 +1278,6 @@ it.skipIf(process.platform === "win32").for([
             )
             .all(`${followupKey}%`);
         };
-        const callsBeforeRestart = provider.calls.length;
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
         // An interrupted turn resumes; its held resume request is released when it arrives.
@@ -1083,13 +1287,32 @@ it.skipIf(process.platform === "win32").for([
           .catch(() => {});
         await vi.waitFor(
           async () => {
-            expect(
-              provider.calls
-                .slice(callsBeforeRestart)
-                .some((call) => call.input.includes(queued(3, 1))),
-              JSON.stringify(cancelled()),
-            ).toBe(true);
-            expect((await history()).sessionInfo.hasActiveRun).toBe(false);
+            const { messages, sessionInfo } = await history();
+            const resumedFollowup = provider.calls.some(
+              (call) => call.resumeInput && call.current.includes(followupRunId),
+            );
+            // The follow-up can finish before shutdown, drain from the queue, or resume as
+            // its own interrupted run. Seeing it in provider history is not a visible answer.
+            let inputs = 0;
+            let replies = 0;
+            for (const message of messages.filter(isRecord)) {
+              const content = JSON.stringify(message.content ?? "");
+              if (message.role === "user" && content.includes(followup)) {
+                inputs++;
+              } else if (
+                inputs > 0 &&
+                message.role === "assistant" &&
+                (content.includes(`HANDLED_${followup}`) ||
+                  (resumedFollowup && content.includes("RESUMED_3_stream")))
+              ) {
+                replies++;
+              }
+            }
+            expect({ inputs, replies, active: sessionInfo.hasActiveRun }).toEqual({
+              inputs: 1,
+              replies: 1,
+              active: false,
+            });
           },
           { timeout: 30_000 },
         );
@@ -1105,54 +1328,79 @@ it.skipIf(process.platform === "win32").for([
 // A shell interrupted before its result is saved must not replay its input or tool.
 // A separate queued message keeps its own admission after the Gateway restarts.
 it.skipIf(process.platform === "win32")(
-  "pauses a turn stopped mid-shell and drains its queued input without replay",
+  "resumes from a shell checkpoint without rerunning the interrupted command",
   { timeout: 180_000 },
   async ({ signal, onTestFailed }) => {
     const provider = await providerFixture(signal);
-    const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    const config = restartResumeConfig(buildMockOpenAiResponsesProvider(provider.baseUrl));
+    config.tools?.allow?.push("read");
     const instance = await createOpenClawTestInstance({
-      name: "gateway-mid-tool-restart",
+      name: "gateway-shell-checkpoint",
       signal,
       gracefulShutdownTimeoutMs: 60_000,
-      config: restartResumeConfig(model),
+      config,
       env: { ...restartEnv, OPENCLAW_NO_RESPAWN: "1" },
     });
     onTestFailed(() => {
-      process.stderr.write(`${instance.logs()}\n`);
+      process.stderr.write(instance.logs());
     });
-    const sessionKey = key(3, "tool");
-    const independent = queued(3, 1);
-    const inputKey = randomUUID();
+    const workspace = instance.state.workspaceDir;
+    provider.useShellWorkspace(workspace);
+    const queuedCycle = 30;
+    const independent = queued(queuedCycle, 1);
     let client: GatewayClient | undefined;
-    const history = () =>
+    const history = (cycle: number) =>
       client!.request<{
         messages: unknown[];
         pendingInputs?: { items: Array<{ state: string; message: unknown }> };
+        sessionId: string;
         sessionInfo: { hasActiveRun: boolean };
-      }>("chat.history", { sessionKey, limit: 100 });
+      }>("chat.history", { sessionKey: key(cycle, "tool"), limit: 100 });
     await runQaGatewayFixture(
       async () => {
+        await writeFile(path.join(workspace, INDEPENDENT_FILE), INDEPENDENT_CONTENT);
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
+        const sessionIds = new Map<number, string>();
+        for (const { cycle, effect } of shellCases) {
+          await client.request(
+            effect === "committed" ? "agent" : "chat.send",
+            {
+              sessionKey: key(cycle, "tool"),
+              message: marker(cycle, "tool"),
+              idempotencyKey: randomUUID(),
+              ...(effect === "committed" ? { createSessionIfMissing: true, deliver: false } : {}),
+            },
+            { expectFinal: false },
+          );
+          await provider.wait(effect === "saved" ? `shell-saved:${cycle}` : `/tool/${cycle}/tool`);
+          const { sessionId } = await history(cycle);
+          expect(sessionId).toBeTruthy();
+          sessionIds.set(cycle, sessionId);
+        }
+        const committed = path.join(workspace, shellEffectFile(30));
+        const absent = path.join(workspace, shellEffectFile(31));
+        expect(await readFile(committed, "utf8")).toBe("COMMITTED_SHELL_EFFECT\n");
+        await expect(stat(absent)).rejects.toMatchObject({ code: "ENOENT" });
         await client.request(
           "chat.send",
-          { sessionKey, message: marker(3, "tool"), idempotencyKey: inputKey },
-          { expectFinal: false },
-        );
-        await provider.wait("/tool/3/tool");
-        await client.request(
-          "chat.send",
-          { sessionKey, message: independent, queueMode: "followup", idempotencyKey: randomUUID() },
+          {
+            sessionKey: key(queuedCycle, "tool"),
+            message: independent,
+            queueMode: "followup",
+            idempotencyKey: randomUUID(),
+          },
           { expectFinal: false },
         );
         await vi.waitFor(
-          async () =>
+          async () => {
             expect(
-              (await history()).pendingInputs?.items.some(
-                (input) =>
-                  input.state === "queued" && JSON.stringify(input.message).includes(independent),
+              (await history(queuedCycle)).pendingInputs?.items.some(
+                ({ state, message }) =>
+                  state === "queued" && JSON.stringify(message).includes(independent),
               ),
-            ).toBe(true),
+            ).toBe(true);
+          },
           { timeout: 5_000 },
         );
         const child = instance.child;
@@ -1166,52 +1414,62 @@ it.skipIf(process.platform === "win32")(
         await instance.stopGateway();
         await instance.startGateway();
         client = await connectRestartClient(instance, {}, signal);
-        await vi.waitFor(
-          async () => {
-            const { messages, sessionInfo } = await history();
-            expect(JSON.stringify(messages)).toContain(UNKNOWN_SHELL);
-            expect(JSON.stringify(messages)).toContain(`HANDLED_${independent}`);
-            expect(sessionInfo.hasActiveRun).toBe(false);
-          },
-          { timeout: 30_000 },
-        );
-        const { messages } = await history();
-        const userEntries = messages.filter(
-          (message) =>
-            isRecord(message) &&
-            message.role === "user" &&
-            JSON.stringify(message).includes(marker(3, "tool")),
-        );
-        expect(userEntries).toHaveLength(1);
-        expect(
-          messages.filter(
-            (message) =>
-              isRecord(message) &&
-              message.role === "assistant" &&
-              JSON.stringify(message.content).includes(UNKNOWN_SHELL),
+        await Promise.race([
+          provider.failed,
+          vi.waitFor(
+            async () => {
+              for (const { cycle, expected } of shellCases) {
+                const { messages, sessionId, sessionInfo } = await history(cycle);
+                expect(JSON.stringify(messages)).not.toContain(UNKNOWN_SHELL);
+                expect(
+                  messages.filter(
+                    (message) =>
+                      isRecord(message) &&
+                      message.role === "assistant" &&
+                      JSON.stringify(message.content).includes(expected),
+                  ),
+                ).toHaveLength(1);
+                expect(sessionId).toBe(sessionIds.get(cycle));
+                expect(sessionInfo.hasActiveRun).toBe(false);
+                expect(
+                  messages.filter(
+                    (message) =>
+                      isRecord(message) &&
+                      message.role === "user" &&
+                      JSON.stringify(message).includes(marker(cycle, "tool")),
+                  ),
+                ).toHaveLength(1);
+                if (cycle === queuedCycle) {
+                  const replies = messages.filter(
+                    (message) =>
+                      isRecord(message) &&
+                      message.role === "assistant" &&
+                      JSON.stringify(message.content).includes(`HANDLED_${independent}`),
+                  );
+                  expect(replies.length).toBe(1);
+                }
+              }
+            },
+            { timeout: 30_000 },
           ),
-        ).toHaveLength(1);
-        const toolCalls = provider.calls.filter((call) => call.cycle === 3 && call.name === "tool");
-        expect(toolCalls.filter((call) => call.resumeInput)).toHaveLength(0);
-        expect(toolCalls.filter((call) => call.current.includes(independent))).toHaveLength(1);
-        expect(JSON.stringify(messages)).not.toContain("HANDLED_NEW_INPUT");
-        expect(provider.callbacks("/tool/3/tool")).toBe(1);
-        await client.stopAndWait();
-        client = undefined;
-        await instance.stopGateway();
-        await closeOpenClawAgentDatabasesAsync();
-        await closeOpenClawStateDatabaseAsync();
-        using database = new DatabaseSync(
-          resolveOpenClawAgentSqlitePath({ agentId: "other", env: instance.env }),
-          { readOnly: true },
+        ]);
+        for (const { cycle, effect } of shellCases) {
+          const calls = provider.calls.filter(
+            (call) => call.cycle === cycle && call.name === "tool",
+          );
+          expect(calls.filter((call) => call.resumeInput)).toHaveLength(1);
+          expect(provider.callbacks(`/tool/${cycle}/tool`)).toBe(effect === "saved" ? 0 : 1);
+        }
+        const queuedCalls = provider.calls.filter(
+          (call) => call.cycle === queuedCycle && call.name === "tool",
         );
-        expect(
-          database
-            .prepare(
-              "SELECT state, end_cause FROM session_pending_inputs WHERE idempotency_key LIKE ?",
-            )
-            .all(`${inputKey}%`),
-        ).toEqual([]);
+        const followups = queuedCalls.filter((call) => call.current.includes(independent));
+        expect(followups.length).toBe(1);
+        expect(followups[0]?.ordinal).toBeGreaterThan(
+          queuedCalls.find((call) => call.resumeInput)!.ordinal,
+        );
+        expect(await readFile(committed, "utf8")).toBe("COMMITTED_SHELL_EFFECT\n");
+        await expect(stat(absent)).rejects.toMatchObject({ code: "ENOENT" });
       },
       () => client?.stopAndWait(),
       () => instance.cleanup(),
@@ -1315,6 +1573,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
       client!.request<{
         messages: unknown[];
         pendingInputs?: { items: Array<{ state: string; message: unknown }> };
+        sessionId: string;
         sessionInfo: { hasActiveRun: boolean };
       }>("chat.history", { sessionKey, limit: 100 });
     const waitHistory = (
@@ -1452,6 +1711,12 @@ it.skipIf(process.platform === "win32").for([true, false])(
           });
           await send(key(cycle, "stream"), queued(cycle, 2), "followup");
           await waitQueued(key(cycle, "stream"), [LITERAL_QUEUED_COMMAND, queued(cycle, 2)]);
+          const shellSessionId = cases.includes("tool")
+            ? (await history(key(cycle, "tool"))).sessionId
+            : undefined;
+          if (cases.includes("tool")) {
+            expect(shellSessionId).toBeTruthy();
+          }
           const child = instance.child;
           assert(child?.pid, "Owned Gateway process unavailable");
           const closed = once(child, "close");
@@ -1652,7 +1917,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
               )
               .map((name) => ({
                 name,
-                text: name === "tool" ? UNKNOWN_SHELL : `RESUMED_${cycle}_${name}`,
+                text: name === "tool" ? RECONCILED_SHELL : `RESUMED_${cycle}_${name}`,
               })),
             // The stopped background command is reported as its own input, not as a resume.
             ...(cases.includes("background")
@@ -1675,9 +1940,9 @@ it.skipIf(process.platform === "win32").for([true, false])(
             const expected = expectedReplies[index];
             const diagnostic =
               completion.status === "rejected"
-                ? `${mode} cycle=${cycle} ${expected?.text}: ${String(completion.reason)}\n${JSON.stringify(provider.calls.filter((call) => call.cycle === cycle && call.name === expected?.name))}\n${instance.logs().slice(-40_000)}`
+                ? `${mode} cycle=${cycle}: ${expected?.name} did not produce its expected final reply`
                 : expected?.text;
-            expect.soft(completion, diagnostic).toMatchObject({ status: "fulfilled" });
+            expect.soft(completion.status, diagnostic).toBe("fulfilled");
           }
           const streamInputs = provider.calls
             .filter((call) => call.cycle === cycle && call.name === "stream")
@@ -1712,26 +1977,31 @@ it.skipIf(process.platform === "win32").for([true, false])(
               expect(completions).toHaveLength(1);
               expect(completions[0]?.current).toContain(`restart_child_${cycle}`);
             }
-            expect(
-              resumes,
-              `${name}: ${JSON.stringify(calls.map((call) => call.current.slice(-4_000)))}`,
-            ).toHaveLength(
-              name === "idle" || name === "background" || name === "parent" || name === "tool"
-                ? 0
-                : 1,
+            expect(resumes.length, `${mode} cycle=${cycle} ${name} resume count`).toBe(
+              name === "idle" || name === "background" || name === "parent" ? 0 : 1,
             );
             const result = await history(key(cycle, name));
             expectCleanHistory(result.messages);
             if (name === "tool") {
               expect(provider.callbacks(`/tool/${cycle}/tool`)).toBe(1);
+              expect(result.sessionId).toBe(shellSessionId);
+              expect(
+                result.messages.filter(
+                  (message) =>
+                    isRecord(message) &&
+                    message.role === "user" &&
+                    JSON.stringify(message.content).includes(marker(cycle, name)),
+                ),
+              ).toHaveLength(1);
               expect(
                 result.messages.filter(
                   (message) =>
                     isRecord(message) &&
                     message.role === "assistant" &&
-                    JSON.stringify(message.content).includes(UNKNOWN_SHELL),
+                    JSON.stringify(message.content).includes(RECONCILED_SHELL),
                 ),
               ).toHaveLength(1);
+              expect(JSON.stringify(result.messages).includes(UNKNOWN_SHELL)).toBe(false);
             }
             expect(
               result.pendingInputs?.items.some((item) => item.state === "interrupted"),

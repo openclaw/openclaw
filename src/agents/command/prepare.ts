@@ -444,9 +444,12 @@ export async function prepareAgentCommandExecution(
         sessionKey: sessionKey ?? undefined,
         sessionEntry: sessionEntryRaw ?? undefined,
       });
+      // A one-shot run has no later turn to finish the bootstrap ritual, so it seeds nothing;
+      // the first run that can continue the conversation seeds the workspace.
       await ensureAgentWorkspace({
         dir: agentWorkspaceDir,
-        ensureBootstrapFiles: !agentCfg?.skipBootstrap && !opts.deferWorkspaceBootstrap,
+        ensureBootstrapFiles:
+          !agentCfg?.skipBootstrap && !opts.deferWorkspaceBootstrap && !opts.oneShotCliRun,
         skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
         provisioning: workspaceProvisioning,
         guard: { assertHost: assertAcpPreparationCurrent },

@@ -255,6 +255,7 @@ export function* assembleOpenClawCodingTools(
       ? yield {
           coreTools: {
             abortSignal: options?.abortSignal,
+            spillOwner: options?.spillOwner,
             prepareHostFileMutation: options?.prepareHostFileMutation,
             attachmentReadRoot,
             codingRoot,
@@ -271,6 +272,7 @@ export function* assembleOpenClawCodingTools(
             execDefaults: {
               ...options?.exec,
               ...effectiveExecPolicy,
+              spillOwner: options?.spillOwner,
               config: options?.exec?.config ?? options?.config,
               preparedRunEnvironment: options?.exec?.preparedRunEnvironment,
               reviewer: options?.exec?.reviewer ?? execConfig.reviewer,

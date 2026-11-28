@@ -49,6 +49,9 @@ type AdmissionOwner = {
   invalidateSubmittedText: () => void;
   blocked: () => boolean;
   sentToProvider: () => boolean;
+  /** The dispatching harness's declaration; after a `captures` dispatch a late capture throws. */
+  promptProjection?: "captures" | "external";
+  declarePromptProjection: (kind: "captures" | "external" | undefined) => void;
   refresh: (
     admission: UserTurnTranscriptAdmissionReceipt,
     message: PersistedUserTurnMessage,
@@ -60,7 +63,10 @@ const admissionOwners = new WeakMap<UserTurnTranscriptRecorder, AdmissionOwner>(
 
 export function registerUserTurnTranscriptAdmissionOwner(
   recorder: UserTurnTranscriptRecorder,
-  owner: Omit<AdmissionOwner, "captureSubmittedText" | "invalidateSubmittedText">,
+  owner: Omit<
+    AdmissionOwner,
+    "captureSubmittedText" | "invalidateSubmittedText" | "declarePromptProjection"
+  >,
 ): AdmissionOwner {
   const registered = Object.assign(owner, {
     captureSubmittedText(message: PersistedUserTurnMessage | undefined) {
@@ -77,6 +83,12 @@ export function registerUserTurnTranscriptAdmissionOwner(
     },
     invalidateSubmittedText() {
       delete owner.submittedText;
+    },
+    // Bound per harness attempt; the first provider dispatch keeps its value.
+    declarePromptProjection(kind: "captures" | "external" | undefined) {
+      if (!owner.sentToProvider()) {
+        owner.promptProjection = kind;
+      }
     },
   });
   admissionOwners.set(recorder, registered);

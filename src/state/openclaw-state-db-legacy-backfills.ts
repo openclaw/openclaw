@@ -11,40 +11,39 @@ import {
   iterateSqliteQuerySync,
 } from "../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
+import { createSqliteTableContractReader } from "../infra/sqlite-schema-contract.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { compactLegacyDeliveryQueueFailures } from "./openclaw-state-db-delivery-queue-backfill.js";
+import {
+  compactLegacyDeliveryQueueFailures,
+  hasLegacyDeliveryQueueFailureCompactionWork,
+} from "./openclaw-state-db-delivery-queue-backfill.js";
 import * as operatorApprovalMigration from "./openclaw-state-db-operator-approval-migration.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 
-export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
-  if (!tableExists(db, "operator_approvals")) {
-    return;
-  }
-  runSqliteImmediateTransactionSync(db, () => {
-    ensureColumn(db, "operator_approvals", "resolution_ref TEXT");
-    const rows = db
-      .prepare("SELECT approval_id, kind, resolution_ref FROM operator_approvals")
-      .all();
-    const update = db.prepare(
-      "UPDATE operator_approvals SET resolution_ref = ? WHERE approval_id = ?",
-    );
-    for (const row of rows) {
-      if (
-        typeof row.approval_id !== "string" ||
-        !operatorApprovalMigration.isCanonicalOperatorApprovalKind(row.kind)
-      ) {
-        throw new Error("operator approval row cannot be assigned a transport reference");
-      }
-      const resolutionRef = buildApprovalResolutionRef({
-        approvalId: row.approval_id,
-        approvalKind: row.kind,
-      });
-      if (row.resolution_ref !== resolutionRef) {
-        update.run(resolutionRef, row.approval_id);
-      }
+const OPERATOR_APPROVAL_RESOLUTION_REF_INDEX = "idx_operator_approvals_resolution_ref";
+
+/** The transport reference each approval row must carry; invalid rows refuse the repair. */
+function* operatorApprovalResolutionRefs(db: DatabaseSync) {
+  const rows = db.prepare("SELECT approval_id, kind, resolution_ref FROM operator_approvals").all();
+  for (const row of rows) {
+    if (
+      typeof row.approval_id !== "string" ||
+      !operatorApprovalMigration.isCanonicalOperatorApprovalKind(row.kind)
+    ) {
+      throw new Error("operator approval row cannot be assigned a transport reference");
     }
-    const namespaceConflict = db
+    const resolutionRef = buildApprovalResolutionRef({
+      approvalId: row.approval_id,
+      approvalKind: row.kind,
+    });
+    yield { approvalId: row.approval_id, resolutionRef, current: row.resolution_ref };
+  }
+}
+
+function hasOperatorApprovalResolutionRefConflict(db: DatabaseSync): boolean {
+  return (
+    db
       .prepare(
         `SELECT canonical.approval_id
          FROM operator_approvals AS canonical
@@ -53,15 +52,60 @@ export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
          WHERE canonical.approval_id <> referenced.approval_id
          LIMIT 1`,
       )
-      .get();
-    if (namespaceConflict) {
+      .get() !== undefined
+  );
+}
+
+export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
+  if (!tableExists(db, "operator_approvals")) {
+    return;
+  }
+  runSqliteImmediateTransactionSync(db, () => {
+    ensureColumn(db, "operator_approvals", "resolution_ref TEXT");
+    const update = db.prepare(
+      "UPDATE operator_approvals SET resolution_ref = ? WHERE approval_id = ?",
+    );
+    for (const row of operatorApprovalResolutionRefs(db)) {
+      if (row.current !== row.resolutionRef) {
+        update.run(row.resolutionRef, row.approvalId);
+      }
+    }
+    if (hasOperatorApprovalResolutionRefConflict(db)) {
       throw new Error("operator approval ids conflict with durable transport references");
     }
     db.exec(`
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_operator_approvals_resolution_ref
+      CREATE UNIQUE INDEX IF NOT EXISTS ${OPERATOR_APPROVAL_RESOLUTION_REF_INDEX}
         ON operator_approvals(resolution_ref);
     `);
   });
+}
+
+/**
+ * Read-only: whether {@link ensureOperatorApprovalResolutionRefs} would add the column,
+ * rewrite a reference, create its index, or refuse (an invalid row or a conflict).
+ */
+export function hasOperatorApprovalResolutionRefWork(db: DatabaseSync): boolean {
+  if (!tableExists(db, "operator_approvals")) {
+    return false;
+  }
+  if (!tableHasColumn(db, "operator_approvals", "resolution_ref")) {
+    return true;
+  }
+  try {
+    for (const row of operatorApprovalResolutionRefs(db)) {
+      if (row.current !== row.resolutionRef) {
+        return true;
+      }
+    }
+  } catch {
+    return true;
+  }
+  return (
+    hasOperatorApprovalResolutionRefConflict(db) ||
+    !createSqliteTableContractReader(db)("operator_approvals")?.indexes.some(
+      (index) => index.name === OPERATOR_APPROVAL_RESOLUTION_REF_INDEX,
+    )
+  );
 }
 
 type LegacyRetainedResultRow = {
@@ -78,71 +122,91 @@ function nullableTextValue(record: Record<string, unknown> | null, key: string) 
   return typeof value === "string" || value === null ? value : undefined;
 }
 
+/** The payload each shipped retained-result row is rewritten to, in row order. */
+function* legacySubagentRetainedResultRewrites(db: DatabaseSync) {
+  const hasLegacyPendingPayload = tableHasColumn(
+    db,
+    "subagent_runs",
+    "pending_final_delivery_payload_json",
+  );
+  const rows = db
+    .prepare(
+      hasLegacyPendingPayload
+        ? "SELECT run_id, payload_json, pending_final_delivery_payload_json FROM subagent_runs"
+        : "SELECT run_id, payload_json FROM subagent_runs",
+    )
+    .all() as LegacyRetainedResultRow[];
+  for (const row of rows) {
+    const stored = safeParseJsonRecord(row.payload_json) ?? null;
+    const parent = stored ? asNullableRecord(stored.parentCompletion) : null;
+    const payload = parent?.completionTarget === "parent" ? parent : stored;
+    const completion = payload ? asNullableRecord(payload.completion) : null;
+    if (!payload || !completion) {
+      continue;
+    }
+    const delivery = asNullableRecord(payload.delivery);
+    const deliveryPayload = delivery ? asNullableRecord(delivery.payload) : null;
+    const pendingPayload = row.pending_final_delivery_payload_json
+      ? (safeParseJsonRecord(row.pending_final_delivery_payload_json) ?? null)
+      : null;
+    const hasLegacyResult = Boolean(
+      (deliveryPayload &&
+        (Object.hasOwn(deliveryPayload, "frozenResultText") ||
+          Object.hasOwn(deliveryPayload, "fallbackFrozenResultText"))) ||
+      (pendingPayload &&
+        (Object.hasOwn(pendingPayload, "frozenResultText") ||
+          Object.hasOwn(pendingPayload, "fallbackFrozenResultText"))),
+    );
+    if (!hasLegacyResult) {
+      continue;
+    }
+    const legacyPrimary =
+      nullableTextValue(deliveryPayload, "frozenResultText") ??
+      nullableTextValue(pendingPayload, "frozenResultText");
+    const legacyFallback =
+      nullableTextValue(deliveryPayload, "fallbackFrozenResultText") ??
+      nullableTextValue(pendingPayload, "fallbackFrozenResultText");
+    if (nullableTextValue(completion, "resultText") == null && legacyPrimary !== undefined) {
+      completion.resultText = legacyPrimary;
+    }
+    if (
+      nullableTextValue(completion, "fallbackResultText") == null &&
+      legacyFallback !== undefined
+    ) {
+      completion.fallbackResultText = legacyFallback;
+    }
+    delete deliveryPayload?.frozenResultText;
+    delete deliveryPayload?.fallbackFrozenResultText;
+    yield { runId: row.run_id, payloadJson: JSON.stringify(stored), current: row.payload_json };
+  }
+}
+
+/** Read-only: whether {@link repairLegacySubagentRetainedResults} would change a payload. */
+export function hasLegacySubagentRetainedResultWork(db: DatabaseSync): boolean {
+  if (!tableExists(db, "subagent_runs")) {
+    return false;
+  }
+  for (const rewrite of legacySubagentRetainedResultRewrites(db)) {
+    if (rewrite.payloadJson !== rewrite.current) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Promote shipped retained results before runtime hydrates canonical subagent state. */
 export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
   if (!tableExists(db, "subagent_runs")) {
     return;
   }
   const repair = () => {
-    const hasLegacyPendingPayload = tableHasColumn(
-      db,
-      "subagent_runs",
-      "pending_final_delivery_payload_json",
-    );
-    const rows = db
-      .prepare(
-        hasLegacyPendingPayload
-          ? "SELECT run_id, payload_json, pending_final_delivery_payload_json FROM subagent_runs"
-          : "SELECT run_id, payload_json FROM subagent_runs",
-      )
-      .all() as LegacyRetainedResultRow[];
     const updateRun = db.prepare(
       `UPDATE subagent_runs
           SET payload_json = ?
         WHERE run_id = ?`,
     );
-    for (const row of rows) {
-      const stored = safeParseJsonRecord(row.payload_json) ?? null;
-      const parent = stored ? asNullableRecord(stored.parentCompletion) : null;
-      const payload = parent?.completionTarget === "parent" ? parent : stored;
-      const completion = payload ? asNullableRecord(payload.completion) : null;
-      if (!payload || !completion) {
-        continue;
-      }
-      const delivery = asNullableRecord(payload.delivery);
-      const deliveryPayload = delivery ? asNullableRecord(delivery.payload) : null;
-      const pendingPayload = row.pending_final_delivery_payload_json
-        ? (safeParseJsonRecord(row.pending_final_delivery_payload_json) ?? null)
-        : null;
-      const hasLegacyResult = Boolean(
-        (deliveryPayload &&
-          (Object.hasOwn(deliveryPayload, "frozenResultText") ||
-            Object.hasOwn(deliveryPayload, "fallbackFrozenResultText"))) ||
-        (pendingPayload &&
-          (Object.hasOwn(pendingPayload, "frozenResultText") ||
-            Object.hasOwn(pendingPayload, "fallbackFrozenResultText"))),
-      );
-      if (!hasLegacyResult) {
-        continue;
-      }
-      const legacyPrimary =
-        nullableTextValue(deliveryPayload, "frozenResultText") ??
-        nullableTextValue(pendingPayload, "frozenResultText");
-      const legacyFallback =
-        nullableTextValue(deliveryPayload, "fallbackFrozenResultText") ??
-        nullableTextValue(pendingPayload, "fallbackFrozenResultText");
-      if (nullableTextValue(completion, "resultText") == null && legacyPrimary !== undefined) {
-        completion.resultText = legacyPrimary;
-      }
-      if (
-        nullableTextValue(completion, "fallbackResultText") == null &&
-        legacyFallback !== undefined
-      ) {
-        completion.fallbackResultText = legacyFallback;
-      }
-      delete deliveryPayload?.frozenResultText;
-      delete deliveryPayload?.fallbackFrozenResultText;
-      updateRun.run(JSON.stringify(stored), row.run_id);
+    for (const rewrite of legacySubagentRetainedResultRewrites(db)) {
+      updateRun.run(rewrite.payloadJson, rewrite.runId);
     }
   };
   if (db.isTransaction) {
@@ -150,6 +214,23 @@ export function repairLegacySubagentRetainedResults(db: DatabaseSync): void {
     return;
   }
   runSqliteImmediateTransactionSync(db, repair);
+}
+
+// Rows whose root terminal fields the repair below moves; matching rows always change.
+const LEGACY_SUBAGENT_EXECUTION_PAYLOAD_WHERE = `
+    WHERE json_valid(payload_json)
+      AND (json_type(payload_json, '$.startedAt') IS NOT NULL
+        OR json_type(payload_json, '$.endedAt') IS NOT NULL
+        OR json_type(payload_json, '$.outcome') IS NOT NULL)`;
+
+/** Read-only: whether {@link repairLegacySubagentExecutionPayloads} has a row to rewrite. */
+export function hasLegacySubagentExecutionPayloadWork(db: DatabaseSync): boolean {
+  return (
+    tableExists(db, "subagent_runs") &&
+    db
+      .prepare(`SELECT 1 FROM subagent_runs ${LEGACY_SUBAGENT_EXECUTION_PAYLOAD_WHERE} LIMIT 1`)
+      .get() !== undefined
+  );
 }
 
 /** Canonicalize shipped subagent rows whose pause/kill owner only wrote root terminal fields. */
@@ -184,11 +265,29 @@ export function repairLegacySubagentExecutionPayloads(db: DatabaseSync): void {
       END,
       '$.startedAt', '$.endedAt', '$.outcome'
     )
-    WHERE json_valid(payload_json)
-      AND (json_type(payload_json, '$.startedAt') IS NOT NULL
-        OR json_type(payload_json, '$.endedAt') IS NOT NULL
-        OR json_type(payload_json, '$.outcome') IS NOT NULL);
+    ${LEGACY_SUBAGENT_EXECUTION_PAYLOAD_WHERE};
   `);
+}
+
+const ACP_REPLAY_ACCOUNTING_COMPLETION_KEY = "state.repair.acpReplayUtf8Accounting";
+
+/**
+ * Read-only: whether a repair-scope {@link backfillAcpReplayEstimatedBytes} would recount.
+ * Its recorded completion skips the recount; without that row it recounts and records it.
+ */
+export function hasAcpReplayEstimatedBytesWork(db: DatabaseSync): boolean {
+  if (
+    !tableExists(db, "acp_replay_events") ||
+    !tableHasColumn(db, "acp_replay_events", "estimated_bytes")
+  ) {
+    return false;
+  }
+  return (
+    !tableExists(db, "config_machine_state") ||
+    db
+      .prepare("SELECT 1 FROM config_machine_state WHERE state_key = ?")
+      .get(ACP_REPLAY_ACCOUNTING_COMPLETION_KEY) === undefined
+  );
 }
 
 export function backfillAcpReplayEstimatedBytes(db: DatabaseSync, columnsAdded = false): void {
@@ -198,7 +297,7 @@ export function backfillAcpReplayEstimatedBytes(db: DatabaseSync, columnsAdded =
   ) {
     return;
   }
-  const completionKey = "state.repair.acpReplayUtf8Accounting";
+  const completionKey = ACP_REPLAY_ACCOUNTING_COMPLETION_KEY;
   const completionDb = tableExists(db, "config_machine_state")
     ? getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "config_machine_state">>(db)
     : undefined;
@@ -320,17 +419,20 @@ function textField(record: Record<string, unknown> | null, key: string): string 
   return typeof value === "string" && value.trim() ? value : null;
 }
 
-export function backfillCronJobsFromJobJson(db: DatabaseSync): void {
-  if (
-    !tableExists(db, "cron_jobs") ||
-    !tableHasColumn(db, "cron_jobs", "job_json") ||
-    !tableHasColumn(db, "cron_jobs", "payload_kind")
-  ) {
-    return;
-  }
+type CronJobProjection = {
+  name: string;
+  enabled: 0 | 1;
+  agentId: string | null;
+  payloadKind: string;
+  runtimeUpdatedAtMs: number;
+};
+
+/** The query-bearing projection each legacy cron job row is rewritten to, in row order. */
+function* cronJobProjectionRewrites(db: DatabaseSync) {
   const rows = db
     .prepare(
-      `SELECT store_key, job_id, job_json, updated_at
+      `SELECT store_key, job_id, job_json, updated_at, name, enabled, agent_id, payload_kind,
+              runtime_updated_at_ms
          FROM cron_jobs
         WHERE payload_kind = 'message'
            OR name = ''`,
@@ -340,20 +442,12 @@ export function backfillCronJobsFromJobJson(db: DatabaseSync): void {
     job_id: string;
     job_json: string;
     updated_at: number | bigint;
+    name: unknown;
+    enabled: unknown;
+    agent_id: unknown;
+    payload_kind: unknown;
+    runtime_updated_at_ms: unknown;
   }>;
-  if (rows.length === 0) {
-    return;
-  }
-  const update = db.prepare(
-    `UPDATE cron_jobs
-        SET name = ?,
-            enabled = ?,
-            agent_id = ?,
-            payload_kind = ?,
-            runtime_updated_at_ms = ?
-      WHERE store_key = ?
-        AND job_id = ?`,
-  );
   for (const row of rows) {
     const job = safeParseJsonRecord(row.job_json) ?? null;
     if (!job) {
@@ -372,35 +466,95 @@ export function backfillCronJobsFromJobJson(db: DatabaseSync): void {
     if (
       !schedule ||
       !payload ||
+      !payloadKind ||
       (!isAt && !isEvery && !isCron) ||
       (!isSystemEvent && !isAgentTurn)
     ) {
       continue;
     }
-    update.run(
-      textField(job, "name") ?? row.job_id,
-      job.enabled === false ? 0 : 1,
-      textField(job, "agentId"),
+    const projection: CronJobProjection = {
+      name: textField(job, "name") ?? row.job_id,
+      enabled: job.enabled === false ? 0 : 1,
+      agentId: textField(job, "agentId"),
       payloadKind,
-      asFiniteNumber(job.updatedAtMs) ?? (sqliteNumber(row.updated_at) || 0),
-      row.store_key,
-      row.job_id,
+      runtimeUpdatedAtMs: asFiniteNumber(job.updatedAtMs) ?? (sqliteNumber(row.updated_at) || 0),
+    };
+    const unchanged =
+      row.name === projection.name &&
+      Number(row.enabled) === projection.enabled &&
+      row.agent_id === projection.agentId &&
+      row.payload_kind === projection.payloadKind &&
+      Number(row.runtime_updated_at_ms) === projection.runtimeUpdatedAtMs;
+    yield { storeKey: row.store_key, jobId: row.job_id, projection, unchanged };
+  }
+}
+
+function canBackfillCronJobs(db: DatabaseSync): boolean {
+  return (
+    tableExists(db, "cron_jobs") &&
+    tableHasColumn(db, "cron_jobs", "job_json") &&
+    tableHasColumn(db, "cron_jobs", "payload_kind")
+  );
+}
+
+/** Read-only: whether {@link backfillCronJobsFromJobJson} would change a projection. */
+export function hasCronJobProjectionWork(db: DatabaseSync): boolean {
+  if (!canBackfillCronJobs(db)) {
+    return false;
+  }
+  for (const rewrite of cronJobProjectionRewrites(db)) {
+    if (!rewrite.unchanged) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function backfillCronJobsFromJobJson(db: DatabaseSync): void {
+  if (!canBackfillCronJobs(db)) {
+    return;
+  }
+  const update = db.prepare(
+    `UPDATE cron_jobs
+        SET name = ?,
+            enabled = ?,
+            agent_id = ?,
+            payload_kind = ?,
+            runtime_updated_at_ms = ?
+      WHERE store_key = ?
+        AND job_id = ?`,
+  );
+  for (const { storeKey, jobId, projection } of cronJobProjectionRewrites(db)) {
+    update.run(
+      projection.name,
+      projection.enabled,
+      projection.agentId,
+      projection.payloadKind,
+      projection.runtimeUpdatedAtMs,
+      storeKey,
+      jobId,
     );
   }
 }
 
-export function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
-  if (
-    !tableExists(db, "delivery_queue_entries") ||
-    !tableHasColumn(db, "delivery_queue_entries", "entry_json") ||
-    !tableHasColumn(db, "delivery_queue_entries", "retry_count")
-  ) {
-    return;
-  }
-  compactLegacyDeliveryQueueFailures(db);
+const DELIVERY_PROJECTION_COLUMNS = [
+  ["entry_kind", "entryKind"],
+  ["session_key", "sessionKey"],
+  ["channel", "channel"],
+  ["target", "target"],
+  ["account_id", "accountId"],
+  ["last_attempt_at", "lastAttemptAt"],
+  ["last_error", "lastError"],
+  ["recovery_state", "recoveryState"],
+  ["platform_send_started_at", "platformSendStartedAt"],
+] as const;
+
+/** The denormalized metadata each pending legacy delivery row is rewritten to, in row order. */
+function* deliveryQueueProjectionRewrites(db: DatabaseSync) {
   const rows = db
     .prepare(
-      `SELECT queue_name, id, entry_json
+      `SELECT queue_name, id, entry_json, retry_count,
+              ${DELIVERY_PROJECTION_COLUMNS.map(([column]) => column).join(", ")}
          FROM delivery_queue_entries
         WHERE status = 'pending'
           AND (retry_count = 0
@@ -414,10 +568,83 @@ export function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): voi
             OR target IS NULL
             OR account_id IS NULL)`,
     )
-    .all() as Array<{ queue_name: string; id: string; entry_json: string }>;
-  if (rows.length === 0) {
+    .all() as Array<
+    Record<string, unknown> & { queue_name: string; id: string; entry_json: string }
+  >;
+  for (const row of rows) {
+    const entry = safeParseJsonRecord(row.entry_json) ?? null;
+    if (!entry) {
+      continue;
+    }
+    // Queue metadata is denormalized for recovery queries but entry_json remains source of truth.
+    const session = asNullableRecord(entry.session);
+    const route = asNullableRecord(entry.route);
+    const deliveryContext = asNullableRecord(entry.deliveryContext);
+    const projection = {
+      entryKind: textField(entry, "kind"),
+      sessionKey: textField(entry, "sessionKey") ?? textField(session, "key"),
+      channel:
+        textField(entry, "channel") ??
+        textField(route, "channel") ??
+        textField(deliveryContext, "channel"),
+      target: textField(entry, "to") ?? textField(route, "to") ?? textField(deliveryContext, "to"),
+      accountId:
+        textField(entry, "accountId") ??
+        textField(route, "accountId") ??
+        textField(deliveryContext, "accountId"),
+      retryCount: asSafeIntegerInRange(entry.retryCount, { min: 0 }) ?? 0,
+      lastAttemptAt: asSafeIntegerInRange(entry.lastAttemptAt, { min: 0 }) ?? null,
+      lastError: textField(entry, "lastError"),
+      recoveryState: textField(entry, "recoveryState"),
+      platformSendStartedAt: asSafeIntegerInRange(entry.platformSendStartedAt, { min: 0 }) ?? null,
+    };
+    // A null projection keeps the stored value (COALESCE); retry_count is always replaced.
+    const unchanged =
+      Number(row.retry_count) === projection.retryCount &&
+      DELIVERY_PROJECTION_COLUMNS.every(([column, key]) => {
+        const value = projection[key];
+        return (
+          value === null ||
+          (typeof row[column] === "bigint" ? Number(row[column]) : row[column]) === value
+        );
+      });
+    yield { queueName: row.queue_name, id: row.id, projection, unchanged };
+  }
+}
+
+function canBackfillDeliveryQueue(db: DatabaseSync): boolean {
+  return (
+    tableExists(db, "delivery_queue_entries") &&
+    tableHasColumn(db, "delivery_queue_entries", "entry_json") &&
+    tableHasColumn(db, "delivery_queue_entries", "retry_count")
+  );
+}
+
+/**
+ * Read-only: whether {@link backfillDeliveryQueueEntriesFromEntryJson} would change a row,
+ * through its failure compaction, receipt pruning at `now`, or the pending projection.
+ */
+export function hasDeliveryQueueBackfillWork(db: DatabaseSync, now = Date.now()): boolean {
+  if (!canBackfillDeliveryQueue(db)) {
+    return false;
+  }
+  // Compaction rewrites rows the projection then reads, so a pending compaction decides first.
+  if (hasLegacyDeliveryQueueFailureCompactionWork(db, now)) {
+    return true;
+  }
+  for (const rewrite of deliveryQueueProjectionRewrites(db)) {
+    if (!rewrite.unchanged) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): void {
+  if (!canBackfillDeliveryQueue(db)) {
     return;
   }
+  compactLegacyDeliveryQueueFailures(db);
   const update = db.prepare(
     `UPDATE delivery_queue_entries
         SET entry_kind = COALESCE(?, entry_kind),
@@ -433,32 +660,20 @@ export function backfillDeliveryQueueEntriesFromEntryJson(db: DatabaseSync): voi
       WHERE queue_name = ?
         AND id = ?`,
   );
-  for (const row of rows) {
-    const entry = safeParseJsonRecord(row.entry_json) ?? null;
-    if (!entry) {
-      continue;
-    }
-    // Queue metadata is denormalized for recovery queries but entry_json remains source of truth.
-    const session = asNullableRecord(entry.session);
-    const route = asNullableRecord(entry.route);
-    const deliveryContext = asNullableRecord(entry.deliveryContext);
+  for (const { queueName, id, projection } of deliveryQueueProjectionRewrites(db)) {
     update.run(
-      textField(entry, "kind"),
-      textField(entry, "sessionKey") ?? textField(session, "key"),
-      textField(entry, "channel") ??
-        textField(route, "channel") ??
-        textField(deliveryContext, "channel"),
-      textField(entry, "to") ?? textField(route, "to") ?? textField(deliveryContext, "to"),
-      textField(entry, "accountId") ??
-        textField(route, "accountId") ??
-        textField(deliveryContext, "accountId"),
-      asSafeIntegerInRange(entry.retryCount, { min: 0 }) ?? 0,
-      asSafeIntegerInRange(entry.lastAttemptAt, { min: 0 }) ?? null,
-      textField(entry, "lastError"),
-      textField(entry, "recoveryState"),
-      asSafeIntegerInRange(entry.platformSendStartedAt, { min: 0 }) ?? null,
-      row.queue_name,
-      row.id,
+      projection.entryKind,
+      projection.sessionKey,
+      projection.channel,
+      projection.target,
+      projection.accountId,
+      projection.retryCount,
+      projection.lastAttemptAt,
+      projection.lastError,
+      projection.recoveryState,
+      projection.platformSendStartedAt,
+      queueName,
+      id,
     );
   }
 }

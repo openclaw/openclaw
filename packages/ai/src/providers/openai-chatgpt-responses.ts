@@ -24,7 +24,6 @@ import {
   type OpenAIResponsesReplayMode,
 } from "../transports/openai-responses-compaction-replay.js";
 import { createResponsesV2CompactionCollector } from "../transports/openai-responses-compaction-v2.js";
-import { recordResponsesContextUsage } from "../transports/openai-responses-context-usage.js";
 import { responsesPromptObserver } from "../transports/openai-responses-contracts.js";
 import { ResponsesStreamFailure } from "../transports/openai-responses-debug.js";
 import { createResponsesPromptEgressObserver } from "../transports/openai-responses-prompt-observer-internal.js";
@@ -314,16 +313,6 @@ export const streamOpenAICodexResponses: StreamFunction<
             },
           });
           compactRequest.resolve({ ...compacted, modelUsage: output.usage });
-        }
-        if (!v2Compaction && terminal && attempt.kind === "initial") {
-          recordResponsesContextUsage(
-            output,
-            model,
-            options,
-            attempt.request,
-            terminal.output,
-            "provider",
-          );
         }
         stream.push({
           type: "done",

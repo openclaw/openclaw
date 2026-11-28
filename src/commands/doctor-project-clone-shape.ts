@@ -9,8 +9,10 @@ import {
 } from "../projects/project-checkout.js";
 import { ProjectCloneError, unshallowProjectCheckout } from "../projects/project-clone-runtime.js";
 import { listProjectRegistry } from "../projects/project-registry.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { OpenClawStateAsyncLeaseContext } from "../state/openclaw-state-lease.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { decideDoctorPendingFromLiveStores } from "./doctor-live-store-pending.js";
 import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 
 const CHECK_ID = "core/doctor/project-clone-shape";
@@ -25,7 +27,10 @@ async function listClonedProjects(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
   return (await listProjectRegistry(cfg, { env })).filter((project) => project.source === "cloned");
 }
 
-/** Read-only: whether repair would fetch history for a shallow cloned project. */
+/**
+ * Read-only: whether repair would fetch history for a shallow cloned project. The project
+ * registry lives in the state database, so it decides only while a connection holds it.
+ */
 export async function checkProjectCloneShapePending(
   cfg: OpenClawConfig,
   options: CloneShapeOptions = {},
@@ -33,12 +38,15 @@ export async function checkProjectCloneShapePending(
   if (!options.repair) {
     return "none";
   }
-  for (const project of await listClonedProjects(cfg, options.env ?? process.env)) {
-    if (await isShallowProjectCheckout(project.repoRoot)) {
-      return "work";
+  const env = options.env ?? process.env;
+  return decideDoctorPendingFromLiveStores([resolveOpenClawStateSqlitePath(env)], async () => {
+    for (const project of await listClonedProjects(cfg, env)) {
+      if (await isShallowProjectCheckout(project.repoRoot)) {
+        return "work";
+      }
     }
-  }
-  return "none";
+    return "none";
+  });
 }
 
 export async function collectProjectCloneShapeHealthFindings(

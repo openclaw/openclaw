@@ -1,6 +1,6 @@
 // CLI respawn skip policy for help, interactive TTY commands, and foreground Gateway runs.
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
-import { getCommandPathWithRootOptions, getCommandPositionalsWithRootOptions } from "./argv.js";
+import { getCommandPathWithRootOptions } from "./argv.js";
 import { isForegroundGatewayRunArgv } from "./gateway-run-argv.js";
 
 const INTERACTIVE_TTY_COMMANDS = new Set(["tui", "terminal", "chat"]);
@@ -30,36 +30,7 @@ export function isTerminalInteractiveRespawnArgv(argv: string[]): boolean {
   return invocation.primary === null || INTERACTIVE_TTY_COMMANDS.has(invocation.primary);
 }
 
-export function shouldSkipRespawnForArgv(
-  argv: string[],
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  const invocation = resolveCliArgvInvocation(argv);
-  const isGatewayStatus =
-    invocation.commandPath.length === 2 &&
-    invocation.commandPath[0] === "gateway" &&
-    invocation.commandPath[1] === "status";
-  const [primary, domain] = invocation.commandPath;
-  const isModelRun =
-    (primary === "infer" || primary === "capability") &&
-    domain === "model" &&
-    getCommandPositionalsWithRootOptions(argv, {
-      commandPath: [primary, domain],
-      valueFlags: ["--agent"],
-      maxPositionals: 1,
-      mode: "command-path",
-    })?.[0] === "run";
-  return (
-    shouldSkipStartupEnvironmentRespawnForArgv(argv, platform) ||
-    (invocation.primary !== null && INTERACTIVE_TTY_COMMANDS.has(invocation.primary)) ||
-    // Both commands can overlap a running Gateway or provider runtime. A parent
-    // kept only to suppress warnings consumes memory for the whole operation.
-    isGatewayStatus ||
-    isModelRun
-  );
-}
-
-/** Returns whether startup-environment respawn should be skipped without suppressing TUI respawn policy. */
+/** Returns whether startup-environment respawn should be skipped. */
 export function shouldSkipStartupEnvironmentRespawnForArgv(
   argv: string[],
   platform: NodeJS.Platform = process.platform,

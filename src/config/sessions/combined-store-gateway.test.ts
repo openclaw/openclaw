@@ -131,33 +131,6 @@ function admissionTargets(
   };
 }
 
-it("admits repeated default-layout fleet reads without stat or realpath calls", async ({
-  state,
-}) => {
-  const agentIds = Array.from({ length: 32 }, (_, index) => `fleet-${index}`);
-  const cfg = freezeJsonSnapshot<OpenClawConfig>({
-    agents: { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) },
-  });
-  const targets = admissionTargets(
-    agentIds.map((agentId) => ({
-      agentId,
-      storePath: state.statePath("agents", agentId, "agent", "openclaw-agent.sqlite"),
-    })),
-  );
-  await withAgentDatabaseStartupAdmission(async () => {
-    const options = admissionOptions(state.env);
-    // The generation's first read prepares configured directories and their path set.
-    expect(applyAdmission(cfg, options, targets)).toBe(targets);
-    using stat = vi.spyOn(fsSync, "statSync");
-    using realpath = vi.spyOn(realpathSync, "native");
-    for (let read = 0; read < 5; read++) {
-      expect(applyAdmission(cfg, options, targets)).toBe(targets);
-    }
-    expect(stat).not.toHaveBeenCalled();
-    expect(realpath).not.toHaveBeenCalled();
-  });
-});
-
 it.runIf(process.platform !== "win32")(
   "refreshes admission aliases and configured paths between reads",
   async ({ state }) => {

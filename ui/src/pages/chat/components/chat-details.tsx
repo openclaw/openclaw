@@ -605,6 +605,7 @@ export function ChatDetails(props: ChatDetailsViewProps) {
         <div
           ref={[(element) => (panel = element), elementRef(props.chat?.onScrollPortRef)]}
           class="chat-details"
+          tabindex={-1}
           data-desktop={desktop() ? "" : undefined}
           data-awaiting-content={desktop() && !sessionOpened() ? "" : undefined}
           inert={desktop() && !opened()}

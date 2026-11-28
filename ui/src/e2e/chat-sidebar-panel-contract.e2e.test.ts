@@ -497,6 +497,7 @@ suite.define(() => {
           body: { targetId: "blacksmith-tab", type: "png" },
           method: "POST",
           path: "/screenshot",
+          query: { operatorInput: false },
           tabScope: { sessionKey: "agent:main:main" },
         });
 

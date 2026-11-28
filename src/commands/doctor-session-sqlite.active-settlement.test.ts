@@ -1,9 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { importSqliteSessionRowsBatch } from "../config/sessions/session-accessor.sqlite-import.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-read.js";
+import { resolveSessionColdArchivePath } from "../config/sessions/session-cold-storage-codec.js";
+import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
+import { runSessionColdStorageMaintenance } from "../config/sessions/session-cold-storage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import {
@@ -19,6 +22,7 @@ import {
   createTranscriptEventReader,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -308,6 +312,112 @@ it("preserves missing-middle history without committing an invalid merge", async
     });
   });
 });
+
+it.each(["retained", "skipped", "rebound"] as const)(
+  "restores cold-archived history before reimporting a %s legacy original",
+  async (kind) => {
+    await withOpenClawTestState({ label: "import-cold-restore" }, async (state) => {
+      const {
+        options,
+        sessions: [session],
+      } = await seedImportedHistory(
+        state,
+        { main: kind === "retained" ? "equal" : "clean" },
+        false,
+      );
+      expect(session).toBeDefined();
+      // A later update cold-archives the already-imported June history (issue #204834).
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      database.db
+        .prepare(
+          "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
+        )
+        .run(session!.sessionId);
+      await expect(
+        runSessionColdStorageMaintenance({
+          config: {
+            agents: { entries: { main: {} } },
+            session: {
+              store: database.path,
+              maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
+            },
+          },
+        }),
+      ).resolves.toMatchObject({ archivedTranscripts: 1 });
+      const archive = readSessionColdTranscript(database.db, session!.sessionId);
+      expect(archive).toBeDefined();
+      if (kind === "skipped") {
+        // The archive payload is gone while its row remains; the missing legacy file
+        // means doctor would skip this already-imported session without reading it.
+        fs.unlinkSync(resolveSessionColdArchivePath(database.path, archive!.archive_name));
+      }
+      // The legacy index still points at the original transcript, retained or already gone.
+      fs.writeFileSync(
+        session!.storePath,
+        JSON.stringify({
+          [session!.sessionKey]: {
+            sessionId: session!.sessionId,
+            sessionFile: path.basename(session!.sourcePath),
+            updatedAt: 123456,
+          },
+        }),
+      );
+      const coldStorage = await import("../config/sessions/session-cold-storage.js");
+      // The clean seed already removed the legacy original; a custody rebound must
+      // still abort the batch instead of letting doctor skip the session.
+      const restoreSpy =
+        kind === "rebound"
+          ? vi.spyOn(coldStorage, "restoreSessionColdTranscript").mockRejectedValue(
+              new coldStorage.SessionColdTurnReboundError({
+                appendedMessages: [],
+                rejectedReason: "session-rebound",
+                sessionEntry: undefined,
+                sessionFile: "",
+              }),
+            )
+          : undefined;
+      let report: Awaited<ReturnType<typeof runDoctorSessionSqlite>> | undefined;
+      let importError: unknown;
+      try {
+        report = await withDoctorSqliteMaintenanceLock({
+          env: state.env,
+          operation: "reimport cold June history",
+          run: async () => await runDoctorSessionSqlite({ ...options, mode: "import" }),
+        });
+      } catch (error) {
+        importError = error;
+      } finally {
+        restoreSpy?.mockRestore();
+      }
+      if (kind === "rebound") {
+        expect(importError).toBeInstanceOf(coldStorage.SessionColdTurnReboundError);
+        const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+        expect(readSessionColdTranscript(reopened.db, session!.sessionId)).toBeDefined();
+        expect(loadExactSessionEntry(session!)?.entry.sessionId).toBe(session!.sessionId);
+        return;
+      }
+      expect(importError).toBeUndefined();
+      const issues = report!.targets.flatMap((target) => target.issues);
+      for (const code of [
+        "sqlite_import_failed",
+        "legacy_import_deferred",
+        "sqlite_transcript_count_mismatch",
+      ]) {
+        expect(issues).not.toContainEqual(expect.objectContaining({ code }));
+      }
+      // Doctor may close cached handles; reopen before inspecting the restored state.
+      const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      if (kind === "retained") {
+        expect(readSessionColdTranscript(reopened.db, session!.sessionId)).toBeUndefined();
+        expect(loadTranscriptEventsSync(session!)).toEqual(session!.canonical);
+      } else {
+        expect(readSessionColdTranscript(reopened.db, session!.sessionId)).toBeDefined();
+        expect(report!.targets.some((target) => target.validatedEntries > 0)).toBe(true);
+      }
+      expect(loadExactSessionEntry(session!)?.entry.sessionId).toBe(session!.sessionId);
+    });
+  },
+);
 
 it("preserves an invalid main transcript without assigning its failure to a clean agent", async () => {
   await withOpenClawTestState({ label: "active-june-agent-scope" }, async (state) => {

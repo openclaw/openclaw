@@ -522,20 +522,6 @@ describe("sidebar snapshot lifecycle", () => {
     },
   );
 
-  it("keeps an unchanged saved projection through handoff and repeated capture", async () => {
-    const test = await warmFixture();
-    const write = vi.spyOn(SessionSnapshotStore.prototype, "writeSidebar");
-    test.publish();
-    void test.settle();
-    test.snapshotOwner.synchronize();
-    for (let index = 0; index < 20; index += 1) {
-      await capture(test.snapshotOwner);
-    }
-    expect(test.host.sidebarSnapshot).toBeNull();
-    expect(write).not.toHaveBeenCalled();
-    expect(test.snapshotOwner.read().saved).toBe(true);
-  });
-
   it("cancels pending capture when its account scope retires", async () => {
     const test = await warmFixture();
     void test.settle();

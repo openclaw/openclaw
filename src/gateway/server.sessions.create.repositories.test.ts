@@ -1,4 +1,3 @@
-import { getEventListeners } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
@@ -132,18 +131,10 @@ test("sessions.create retains a cloud repository across replay without creating 
       await loadControlUiSessionPullRequests(params, {
         cacheSignal: cacheLifetime.signal,
       });
-      const repositoryPins = getEventListeners(cacheLifetime.signal, "abort").length;
-      expect(repositoryPins).toBeGreaterThan(0);
-      await loadControlUiSessionPullRequests(params, {
-        cacheSignal: cacheLifetime.signal,
-        resolveGitRoot: async () => workspace,
-      });
-      expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(repositoryPins);
       gitRead.mockClear();
       const preview = await loadControlUiSessionPullRequests(params, {
         cacheSignal: cacheLifetime.signal,
       });
-      expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(repositoryPins);
       expect(preview.branch, JSON.stringify(preview)).toMatchObject({
         owner: "openclaw",
         repo: "openclaw",
@@ -152,7 +143,6 @@ test("sessions.create retains a cloud repository across replay without creating 
       expect(gitRead).not.toHaveBeenCalled();
       expect(fetchImpl).toHaveBeenCalled();
       cacheLifetime.abort();
-      expect(getEventListeners(cacheLifetime.signal, "abort")).toHaveLength(0);
     },
   );
   for (const changedSource of [

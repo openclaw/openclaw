@@ -51,6 +51,7 @@ export function projectSessionPatchRowFields(
     "icon",
     "color",
     "category",
+    "snoozedUntil",
     "boardPresentation",
     "boardFace",
   ] as const) {

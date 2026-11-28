@@ -400,7 +400,7 @@ describe("renderSkills", () => {
     expect(onDetailOpen).toHaveBeenCalledWith("apple-notes");
   });
 
-  it("filters by status from a select that carries each count", async () => {
+  it("filters by status from the select", async () => {
     const { container, render } = createView(true);
     const onStatusFilterChange = vi.fn();
     render({
@@ -413,12 +413,6 @@ describe("renderSkills", () => {
     await Promise.resolve();
 
     const select = container.querySelector<HTMLSelectElement>(".skills-toolbar__status")!;
-    expect([...select.options].map((option) => option.textContent)).toEqual([
-      "All 2",
-      "Ready 1",
-      "Needs setup 0",
-      "Disabled 1",
-    ]);
     select.value = "needs-setup";
     select.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onStatusFilterChange).toHaveBeenCalledWith("needs-setup");

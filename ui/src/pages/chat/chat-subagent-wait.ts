@@ -60,9 +60,11 @@ const HANDOFF_STATUS_ORDER: readonly ChatHandoffSession["status"][] = [
   "done",
 ];
 
-/** Yielded on sessions_yield and awaiting a continuation; a newer run in it is running. */
+/** Yielded on sessions_yield with no live work of its own or under it. */
 function isYieldedChild(row: GatewaySessionRow) {
-  return row.subagentRunState === "paused" && row.status !== "queued" && !isUnfinishedSubagent(row);
+  return (
+    row.subagentRunState === "paused" && !isSessionRunStateActive(row) && !row.hasActiveSubagentRun
+  );
 }
 
 /** A yielded child whose own background exec still runs is working, not paused. */
@@ -88,10 +90,7 @@ function listHandoffSessions(
       const started = row.startedAt ?? row.createdAt ?? 0;
       return (
         (window.to === undefined || started <= window.to) &&
-        (row.status === "queued" ||
-          isUnfinishedSubagent(row) ||
-          isYieldedChild(row) ||
-          (row.endedAt ?? 0) >= window.from)
+        (row.status === "queued" || isUnfinishedSubagent(row) || (row.endedAt ?? 0) >= window.from)
       );
     })
     .toSorted(byLaunch)
@@ -100,14 +99,13 @@ function listHandoffSessions(
       const session: ChatHandoffSession = {
         key: row.key,
         label: resolveSessionDisplayName(row.key, row),
-        status:
-          row.status === "queued" || isUnfinishedSubagent(row)
+        status: isYieldedChild(row)
+          ? isPausedChild(row)
+            ? "paused"
+            : "background"
+          : row.status === "queued" || isUnfinishedSubagent(row)
             ? "running"
-            : isYieldedChild(row)
-              ? isPausedChild(row)
-                ? "paused"
-                : "background"
-              : (endedWithoutFinishing(row) ?? "done"),
+            : (endedWithoutFinishing(row) ?? "done"),
       };
       if (attention.kind === "agent") {
         session.status = "attention";
@@ -242,13 +240,14 @@ function directChildren(
 
 type SubagentSession = SubagentRoster & { selectedSession: GatewaySessionRow | undefined };
 
+// Yielded children keep the wait without counting as running.
 function unfinishedChildren(input: SubagentSession) {
   const session = input.selectedSession;
   if (!session || session.archived || session.hasActiveSubagentRun !== true) {
     return [];
   }
   return directChildren(session, input).filter(
-    (row) => row.status === "queued" || isUnfinishedSubagent(row),
+    (row) => (row.status === "queued" || isUnfinishedSubagent(row)) && !isYieldedChild(row),
   );
 }
 

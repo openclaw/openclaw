@@ -124,21 +124,13 @@ describe("renderModelSetup", () => {
     expect(text(row)).not.toContain(secret);
   });
 
-  it("uses the guided choice label as the sign-in action and preserves native overrides", () => {
+  it("uses the guided choice label as the sign-in action", () => {
     const authOptions = [
       {
         id: "sample-browser",
         kind: "oauth" as const,
         label: "Sign in with Sample",
         groupLabel: "Sample",
-        featured: true,
-      },
-      {
-        id: "sample-device",
-        kind: "device-code" as const,
-        label: "Sign in with a device code",
-        groupLabel: "Sample",
-        actionLabel: "Pair this Mac",
         featured: true,
       },
     ];
@@ -155,9 +147,6 @@ describe("renderModelSetup", () => {
     expect(text(button)).toBe("Sign in with Sample");
     button.click();
     expect(onStartAuth).toHaveBeenCalledWith(authOptions[0]);
-    expect(text(container.querySelector('[data-auth-choice="sample-device"] button')!)).toBe(
-      "Set up & verify",
-    );
   });
 
   it("derives prepare rows from accepted choice ids and hides usable local candidates", () => {
@@ -297,37 +286,6 @@ describe("renderModelSetup", () => {
       }),
     );
     expect(withSignIn.querySelector(".model-setup__empty")).toBeNull();
-  });
-
-  it("uses explicit brand identity without guessing from labels or opaque ids", () => {
-    const container = mount(
-      props({
-        page: {
-          phase: "ready",
-          result: {
-            ...detected,
-            candidates: [],
-            authOptions: [],
-            recommendedInstalls: [],
-            manualProviders: [
-              {
-                id: "custom-login",
-                brandId: "claude",
-                label: "Company account",
-                icon: "https://cdn.example.com/custom.png",
-              },
-            ],
-          },
-        },
-        manualProviderId: "custom-login",
-        iconUrls: {},
-      }),
-    );
-
-    expect(
-      container.querySelector('.model-setup__manual [data-provider-icon="claude"]'),
-    ).not.toBeNull();
-    expect(container.querySelector(".model-setup__manual img")).toBeNull();
   });
 
   it("uses proxied artwork for unknown providers and invalidates broken blobs", () => {

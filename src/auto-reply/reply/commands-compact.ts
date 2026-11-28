@@ -30,17 +30,23 @@ function formatCompactionReason(reason?: string): string | undefined {
     return undefined;
   }
   const classification = classifyCompactionReason(reason);
-  if (classification === "no_compactable_entries") {
-    return "nothing compactable in this session yet";
+  const label =
+    classification === "no_compactable_entries"
+      ? "nothing compactable in this session yet"
+      : classification === "already_compacted"
+        ? "session is already compacted"
+        : classification === "below_threshold"
+          ? normalizeLowercaseStringOrEmpty(reason).includes("already under target")
+            ? "context is already under the compaction target"
+            : "context is below the compaction threshold"
+          : undefined;
+  if (!label) {
+    return text;
   }
-  if (classification === "already_compacted") {
-    return "session is already compacted";
-  }
-  return classification === "below_threshold"
-    ? normalizeLowercaseStringOrEmpty(reason).includes("already under target")
-      ? "context is already under the compaction target"
-      : "context is below the compaction threshold"
-    : text;
+  // Engines may explain a known outcome after a colon, e.g. "nothing to compact: <why>".
+  const separator = text.indexOf(":");
+  const detail = separator === -1 ? undefined : normalizeOptionalString(text.slice(separator + 1));
+  return detail ? `${label} (${detail})` : label;
 }
 
 function compactionUnavailable(reason: string, interruptionNotice = ""): CommandHandlerResult {
@@ -347,6 +353,7 @@ export async function handleCompactCommand(
               expectedSession.authProfileOverride,
             authProfileIdSource: resolveCollapsedSessionAuthPinSource(expectedSession),
             contextTokenBudget,
+            currentTokenCount: runtime.resolveFreshSessionTotalTokens(prepared.entry),
             agentHarnessId: compactionCliTarget.agentHarnessId,
             cliSessionId: compactionCliTarget.cliSessionId,
             cliSessionBinding: compactionCliTarget.cliSessionBinding,
@@ -430,7 +437,8 @@ export async function handleCompactCommand(
           totalTokens !== undefined && totalTokens > 0 ? totalTokens : null,
           contextTokenBudget ?? null,
         );
-        const reason = formatCompactionReason(result.reason);
+        const reason =
+          formatCompactionReason(result.reason) ?? (didCompact ? undefined : "no reason reported");
         const line = `${compactLabel}${reason ? `: ${reason}` : ""} • ${contextSummary}`;
         const details = parseCompactionDetails(result.result?.details);
         const degradedNotice =

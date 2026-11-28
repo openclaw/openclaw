@@ -6,6 +6,10 @@ import {
   readBackgroundResultPlacement,
 } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
+import {
+  extractToolCallsFromAssistant,
+  extractToolResultId,
+} from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { stripCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import { derivePromptTokens, normalizeUsage } from "../../agents/usage.js";
 import { projectModelContextMessages } from "../../shared/model-context-message.js";
@@ -396,7 +400,68 @@ export function buildForkedChildTranscriptEvents(params: {
   const lastPathEntry = params.source.branchEntries.at(-1);
   const lastPathEntryId =
     isRecord(lastPathEntry) && typeof lastPathEntry.id === "string" ? lastPathEntry.id : null;
-  let parentId = lastPathEntryId;
+  const pendingResults: TranscriptEvent[] = [];
+  let forkLeafId = params.source.leafId;
+  const completed = new Set<string>();
+  const visiblePath = selectSessionTranscriptTreePathNodes(
+    scanSessionTranscriptTree(params.source.branchEntries),
+    params.source.leafId,
+  );
+  // A fork can cut through its own spawn call. Missing at this boundary is not an abort.
+  for (const { entry } of visiblePath.toReversed()) {
+    if (!isIndexedSessionEntry(entry)) {
+      continue;
+    }
+    if (entry.type === "reset" || entry.type === "compaction" || entry.type === "branch_summary") {
+      break;
+    }
+    if (entry.type !== "message") {
+      continue;
+    }
+    const message = entry.message;
+    if (message.role === "toolResult") {
+      const id = extractToolResultId(message);
+      if (id) {
+        completed.add(id);
+      }
+      continue;
+    }
+    if (
+      message.role === "assistant" &&
+      message.stopReason !== "error" &&
+      message.stopReason !== "aborted"
+    ) {
+      for (const call of extractToolCallsFromAssistant(message)) {
+        if (completed.has(call.id)) {
+          continue;
+        }
+        const id = generateEntryId(pathEntryIds);
+        const timestamp = Date.now();
+        pendingResults.push({
+          type: "message",
+          id,
+          parentId: forkLeafId,
+          timestamp: new Date(timestamp).toISOString(),
+          message: {
+            role: "toolResult",
+            toolCallId: call.id,
+            toolName: call.name ?? "unknown",
+            content: [
+              {
+                type: "text",
+                text: "The parent session's result for this tool call was not available when this conversation was forked.",
+              },
+            ],
+            isError: false,
+            timestamp,
+          },
+        });
+        forkLeafId = id;
+      }
+    }
+    break;
+  }
+  let parentId = pendingResults.length ? forkLeafId : lastPathEntryId;
   const labelEntries = params.source.labelsToWrite.map(({ targetId, label, timestamp }) => {
     const entry = {
       type: "label",
@@ -415,7 +480,7 @@ export function buildForkedChildTranscriptEvents(params: {
         id: generateEntryId(pathEntryIds),
         parentId,
         timestamp: new Date().toISOString(),
-        targetId: params.source.leafId,
+        targetId: forkLeafId,
         appendParentId: params.source.appendParentId,
         ...(params.source.appendMode ? { appendMode: params.source.appendMode } : {}),
       }
@@ -424,6 +489,7 @@ export function buildForkedChildTranscriptEvents(params: {
     // The parent transcript keeps counting the copied branch.
     { ...header, ...(lastPathEntryId ? { inheritedThrough: [lastPathEntryId] } : {}) },
     ...params.source.branchEntries,
+    ...pendingResults,
     ...labelEntries,
     ...(leafEntry ? [leafEntry] : []),
   ];

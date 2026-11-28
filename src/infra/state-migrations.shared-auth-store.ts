@@ -67,6 +67,7 @@ const MIGRATION_KIND = "shared-auth-store-state-db";
 const AUTH_JSON_MIGRATION_KIND = "auth-profile-json-to-sqlite-v2";
 const SOURCE_STORE_KEY = "primary";
 const TARGET_STORE_KEY = "shared";
+const SOURCE_AUTH_TABLES = ["auth_profile_store", "auth_profile_state"] as const;
 
 type SourceAuthDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -115,7 +116,10 @@ async function readSourceSnapshot(params: {
       },
       {
         operationLabel: "state-migration.shared-auth-source-read",
-        repairAdmission: { integrityCheck: params.integrityCheck ?? "quick", integrityTables: [] },
+        repairAdmission: {
+          integrityCheck: params.integrityCheck ?? "quick",
+          integrityTables: SOURCE_AUTH_TABLES,
+        },
       },
     );
     closeAuthProfileReadPool({ kind: "database", databasePath: params.sourcePath });
@@ -460,7 +464,7 @@ async function cleanupSourceRows(params: {
         operationLabel: "state-migration.shared-auth-cleanup",
         repairAdmission: {
           integrityCheck: params.integrityCheck ?? "quick",
-          integrityTables: ["auth_profile_store", "auth_profile_state"],
+          integrityTables: SOURCE_AUTH_TABLES,
         },
       },
     );
@@ -684,12 +688,14 @@ export async function migrateSharedAuthStore(params: {
       resolveSqliteInspectionSignal()?.throwIfAborted();
       const rows = copyRowsToState(snapshot);
       const ownershipFlipped = advanceMigration({ ...snapshot, stage: "ownership-flipped" });
-      const sourceCleaned = await cleanupSourceRows({
-        env,
-        sourcePath: params.detected.sourcePath,
-        ownerId: params.detected.ownerId,
-        integrityCheck: params.integrityCheck,
-      });
+      const sourceCleaned =
+        (source.rows.store !== null || source.rows.state !== null) &&
+        (await cleanupSourceRows({
+          env,
+          sourcePath: params.detected.sourcePath,
+          ownerId: params.detected.ownerId,
+          integrityCheck: params.integrityCheck,
+        }));
       const relocatedRows = rows.store !== null || rows.state !== null || sourceCleaned;
       advanceMigration({ ...snapshot, stage: "completed" });
       return {

@@ -696,12 +696,14 @@ it("refreshes a child without revisiting parents whose child facts stayed the sa
     expect(describe(unrelated).materialized).toBe(other);
     expect(projection.materializedCount - count).toBe(1);
 
+    const beforeTimestamp = projection.materializedCount;
     write(child, { ...entry, updatedAt: 2 });
     await projection.ensureMaterialized();
     const updatedParent = describe(firstParent).materialized;
     const updatedLinks = updatedParent.source.childLinks!;
     expect(updatedLinks[0]?.entry.updatedAt).toBe(2);
     expect(updatedLinks[1]).toBe(first.source.childLinks?.[1]);
+    expect(projection.materializedCount - beforeTimestamp).toBe(1);
 
     const updatedChild = describe(child).materialized;
     write(child, { ...entry, updatedAt: 2 });
@@ -709,6 +711,7 @@ it("refreshes a child without revisiting parents whose child facts stayed the sa
     expect(describe(child).materialized).toBe(updatedChild);
     expect(describe(firstParent).materialized).toBe(updatedParent);
 
+    const beforeMove = projection.materializedCount;
     write(child, { ...entry, parentSessionKey: secondParent, spawnedBy: secondParent });
     await projection.ensureMaterialized();
     expect(projection.present(describe(child)).parentSessionKey).toBe(secondParent);
@@ -718,6 +721,7 @@ it("refreshes a child without revisiting parents whose child facts stayed the sa
     expect(describe(secondParent).materialized.source.childLinks?.map((link) => link.key)).toEqual([
       child,
     ]);
+    expect(projection.materializedCount - beforeMove).toBe(1);
     expect(describe(unrelated).materialized).toBe(other);
   });
 });

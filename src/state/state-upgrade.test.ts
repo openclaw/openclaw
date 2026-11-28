@@ -5,14 +5,25 @@ import { DatabaseSync } from "node:sqlite";
 import { runInNewContext } from "node:vm";
 import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcripts.js";
+import * as cronAdoption from "../commands/doctor/cron/inference-binding-migration.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadCronJobsStore, saveCronJobsStore } from "../cron/store.js";
 import { bindFreshClientCredentialStore } from "../infra/client-credential-migration.js";
 import { openClientCredentialCustody } from "../infra/client-credential-store.js";
-import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { acquireGatewayLock, type GatewayLockHandle } from "../infra/gateway-lock.js";
+import {
+  OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+  OUTBOUND_DELIVERY_QUEUE_NAME,
+} from "../infra/outbound/delivery-queue-namespaces.js";
+import { createUnmodifiedPreparedOutboundBatch } from "../infra/outbound/prepared-batch.js";
 import { quoteSqliteIdentifier } from "../infra/sqlite-schema-sql.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { throwIfDoctorStateMigrationRefused } from "../infra/state-migrations.messages.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { LEGACY_ROLLBACK_SOURCE } from "../update/legacy-rollback-source.js";
 import { createTrialPending, resolvePrefix, writeTrial } from "../update/store.js";
 import { resolveRuntimeServiceBuildId, VERSION } from "../version.js";
@@ -28,10 +39,15 @@ import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.j
 import { openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { getOpenClawStatePredecessorSchema } from "./openclaw-state-schema-runtime.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+import { upgradeStateOnGatewayStart } from "./state-upgrade-startup.js";
 import { upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs: string[] = [];
+const locks: Array<GatewayLockHandle | null> = [];
 afterEach(async () => {
+  for (const lock of locks.splice(0)) {
+    await lock?.release();
+  }
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
@@ -39,6 +55,71 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+it("adopts a legacy automation account during boot without Doctor", async () => {
+  await withOpenClawTestState(
+    { label: "boot-cron-adoption", env: { OPENAI_API_KEY: undefined } },
+    async (state) => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
+          defaults: { model: "openai/gpt-5.5" },
+        },
+        plugins: { allow: ["openai"], slots: { memory: "none" } },
+      };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      await persistAuthProfileBatch({
+        profiles: [
+          {
+            profileId: "openai:default",
+            credential: { type: "api_key", provider: "openai", key: "synthetic-boot-key" },
+          },
+        ],
+      });
+      const storePath = state.statePath("cron", "jobs.json");
+      await saveCronJobsStore(storePath, {
+        version: 1,
+        jobs: [
+          {
+            id: "legacy-job",
+            agentId: "main",
+            name: "Legacy automation",
+            enabled: true,
+            createdAtMs: 1,
+            updatedAtMs: 1,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload: { kind: "agentTurn", message: "Synthetic work" },
+            delivery: { mode: "none" },
+            state: { lastRunAtMs: 123, lastRunStatus: "ok" },
+          },
+        ],
+      });
+      const before = (await loadCronJobsStore(storePath)).jobs[0];
+      const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Offline proof"));
+      const adoption = vi.spyOn(cronAdoption, "maybeRepairCronInferenceBindings");
+      await upgradeStateOnGatewayStart(state.env, () => true);
+      expect((await loadCronJobsStore(storePath)).jobs[0]).toEqual({
+        ...before,
+        inferenceBinding: {
+          version: 1,
+          provider: "openai",
+          profileId: "openai:default",
+          authorizationId: expect.any(String),
+          authRequirement: "api-key",
+          source: "auto",
+        },
+      });
+      const adopted = (await loadCronJobsStore(storePath)).jobs;
+      await upgradeStateOnGatewayStart(state.env, () => true);
+      expect(adoption).toHaveBeenCalledOnce();
+      expect(fetch).not.toHaveBeenCalled();
+      expect((await loadCronJobsStore(storePath)).jobs).toEqual(adopted);
+    },
+  );
 });
 
 describe("startup retained deletion", () => {
@@ -181,10 +262,13 @@ describe("startup retained deletion", () => {
       };
       const activeSnapshot = snapshotActive();
       const log = { info: vi.fn(), warn: vi.fn() };
-      const upgrade = upgradeStateDirectory({
+      const lock = await acquireGatewayLock({
         env,
-        log,
+        role: "sqlite-maintenance",
+        allowInTests: true,
       });
+      locks.push(lock);
+      const upgrade = lock!.run(() => upgradeStateDirectory({ env, log }));
       if (cleanupCompleted) {
         await expect(upgrade).resolves.toEqual({
           status: upgradeShared ? "upgraded" : "current",
@@ -250,11 +334,59 @@ describe("canonical in-place migration", () => {
         runSqliteImmediateTransactionSync(state, () =>
           bindFreshClientCredentialStore(state, { env, path: statePath }),
         );
+        if (!trial) {
+          const delivery = {
+            id: "retained-delivery",
+            enqueuedAt: 1,
+            retryCount: 0,
+            attemptCount: 0,
+            channel: "matrix",
+            to: "!room:example",
+            preparedBatch: createUnmodifiedPreparedOutboundBatch([{ text: "Retained delivery" }]),
+          };
+          state
+            .prepare(
+              "INSERT INTO delivery_queue_entries (queue_name, id, status, channel, target, entry_json, enqueued_at, updated_at) VALUES (?, ?, 'pending', ?, ?, ?, 1, 1)",
+            )
+            .run(
+              OUTBOUND_DELIVERY_MIGRATION_QUEUE_NAME,
+              delivery.id,
+              delivery.channel,
+              delivery.to,
+              JSON.stringify(delivery),
+            );
+        }
         using agent = new DatabaseSync(agentPath);
         agent.exec(getOpenClawAgentMigrationSchema(43));
         agent.exec(`PRAGMA user_version = 43;
           INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
             VALUES ('primary', 'agent', 43, 'main', 1, 1);`);
+      }
+      const dashboardKey = "agent:main:dashboard:retained";
+      if (!trial) {
+        using agent = new DatabaseSync(agentPath);
+        agent
+          .prepare(
+            "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, 1)",
+          )
+          .run(
+            dashboardKey,
+            "orchid",
+            JSON.stringify({
+              sessionId: "orchid",
+              updatedAt: 1,
+              createdVia: "operator",
+              parentSessionKey: "agent:main:main",
+            }),
+          );
+        const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(sessionsDir, "sessions.json"),
+          JSON.stringify({
+            "agent:main:archive": { sessionId: "archive", label: "Retained archive", updatedAt: 1 },
+          }),
+        );
       }
       const stateIdentity = fs.statSync(statePath);
       const agentIdentity = fs.statSync(agentPath);
@@ -339,6 +471,30 @@ describe("canonical in-place migration", () => {
           `UPDATE config_machine_state SET value_json = '"allowlist"' WHERE state_key = 'plugins.bundledDiscovery'`,
         );
         using agent = new DatabaseSync(agentPath);
+        if (!trial) {
+          expect(
+            state
+              .prepare(
+                "SELECT queue_name, status, json_extract(entry_json, '$.preparedBatch.entries[0].payload.text') AS text FROM delivery_queue_entries WHERE id = ?",
+              )
+              .all("retained-delivery"),
+          ).toEqual([
+            {
+              queue_name: OUTBOUND_DELIVERY_QUEUE_NAME,
+              status: "pending",
+              text: "Retained delivery",
+            },
+          ]);
+          const entry = agent.prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?");
+          expect(JSON.parse(String(entry.get(dashboardKey)?.entry_json))).toHaveProperty(
+            "chatType",
+            "direct",
+          );
+          expect(JSON.parse(String(entry.get("agent:main:archive")?.entry_json))).toHaveProperty(
+            "label",
+            "Retained archive",
+          );
+        }
         expect(agent.prepare("PRAGMA user_version").get()).toEqual({
           user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
         });
@@ -429,10 +585,11 @@ describe("upgradeStateDirectory version zero", () => {
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json"),
     };
-    const result = await upgradeStateDirectory({
-      env,
-      log: { info: () => {}, warn: () => {} },
-    });
+    const lock = await acquireGatewayLock({ env, role: "sqlite-maintenance", allowInTests: true });
+    locks.push(lock);
+    const result = await lock!.run(() =>
+      upgradeStateDirectory({ env, log: { info() {}, warn() {} } }),
+    );
     expect(result).toEqual({ status: "current" });
   });
 });

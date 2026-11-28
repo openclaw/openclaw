@@ -240,8 +240,15 @@ Plain text, assistant output, and mentions removed by approval do not grant acce
 Other participants cannot invite new members. Draft and incognito restrictions
 remain in force, and mentions never change the session's visibility.
 
-Remove a person from session members to revoke invitation access. An old message
-retry cannot restore it, even after a restart. A new selected mention from the
+Remove a person from session members to revoke invitation access. Work that person
+started in the session stops at once: a running reply keeps its partial text, and its
+child agents and commands end. Lowering their access (for example from send to read)
+stops it the same way, and lowering a person's role with `users.setRole` stops their
+work in every session. The session shows "Stopped 1 run started by Carol: their access
+to this session changed." Their
+next message is checked against the new access. Configuration reloads and role
+definition edits apply to the next message only. An old message retry cannot restore
+access, even after a restart. A new selected mention from the
 creator or an administrator can invite them again. Access is committed with the message. If the later Inbox notification fails,
 the sender receives a notice that the message was posted but notifications failed.
 Membership does not grant broader operator scopes. See

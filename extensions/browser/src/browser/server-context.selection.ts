@@ -15,6 +15,7 @@ import {
   OPEN_TAB_DISCOVERY_POLL_MS,
   OPEN_TAB_DISCOVERY_WINDOW_MS,
 } from "./server-context.constants.js";
+import { getProfileLifecycle } from "./server-context.lifecycle.js";
 import type {
   BrowserTab,
   BrowserOperationOptions,
@@ -180,7 +181,10 @@ export function createProfileSelectionOps({
       throw new BrowserTabNotFoundError({ input: targetId ?? stickyTargetId });
     }
     // Operator-only pages never become the implicit tab for agent calls without a targetId.
-    if (!isOperatorOnlyBrowserPageUrl(chosen.url)) {
+    if (
+      !isOperatorOnlyBrowserPageUrl(chosen.url) &&
+      !(options?.preserveWarmup && getProfileLifecycle(runtime).addressWarmupOnly)
+    ) {
       runtime.lastTargetId = chosen.targetId;
     }
     return chosen;

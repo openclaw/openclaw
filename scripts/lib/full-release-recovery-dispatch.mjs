@@ -520,13 +520,21 @@ export async function reconcileReceiptRecovery(path, client) {
       "recovery attempt changed during observation",
     );
   }
+  // The original command can advance after our phase read. A matching run always
+  // goes through the same authentication, even if this observer read "prepared".
+  const prepared = phase === "prepared" && !run;
+  const pendingAction = prepared ? "recovery-prepared" : "recovery-unconfirmed";
   return {
     requestAuthenticated,
     action: authenticated
       ? "recovery-authenticated"
       : requestAuthenticated
         ? "recovery-observed"
-        : "recovery-unconfirmed",
+        : pendingAction,
+    ...(prepared && {
+      guidance:
+        "No dispatch attempt was recorded when reconciliation started. Wait for the original command to exit, then reconcile again. If the request is still prepared with no matching run, resolve the original error before starting a fresh recovery with a new --request-file.",
+    }),
     authenticated,
     phase,
     requestId: request.requestId,

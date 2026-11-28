@@ -4,7 +4,6 @@ import type { DB } from "../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../state/openclaw-state-feature-schema.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { buildRestartSentinelRow } from "./restart-sentinel-store.js";
 import { restartSentinelReadOperations } from "./restart-sentinel.read.worker.js";
 
 it.each([
@@ -23,7 +22,15 @@ it.each([
       db,
       getNodeSqliteKysely<Pick<DB, "gateway_restart_sentinel">>(db)
         .insertInto("gateway_restart_sentinel")
-        .values({ ...buildRestartSentinelRow(payload, revision, key), version }),
+        .values({
+          sentinel_key: key,
+          version,
+          kind: payload.kind,
+          status: payload.status,
+          ts: payload.ts,
+          payload_json: JSON.stringify(payload),
+          updated_at_ms: revision,
+        }),
     );
   try {
     db.exec(getOpenClawStateFeatureSchemaSql("gateway_restart_sentinel"));

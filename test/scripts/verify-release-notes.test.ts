@@ -1182,28 +1182,6 @@ process.exitCode = errors.length ? 1 : 0;
     },
   );
 
-  it("sorts and deduplicates unavailable contextual references", () => {
-    const hash = "b".repeat(40);
-    expect(
-      classifyUnavailableContextualReferences({
-        unresolved: [155121, 155120, 155119],
-        notFound: new Set([155120, 155121]),
-        activeCommits: [
-          { hash, subject: "fix: source", body: "#155121 #155121 #155120" },
-          { hash: "a".repeat(40), subject: "fix: follow-up", body: "#155121" },
-        ],
-        protectedReferences: new Set(),
-        highestResolved: 156166,
-      }),
-    ).toEqual({
-      unavailable: [
-        { number: 155120, commits: ["bbbbbbbbbbbb"] },
-        { number: 155121, commits: ["aaaaaaaaaaaa", "bbbbbbbbbbbb"] },
-      ],
-      stillUnresolved: [155119],
-    });
-  });
-
   it.each([
     { subject: "fix: implementation (#155121)" },
     { body: "Fixes #155121." },

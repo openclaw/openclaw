@@ -34,6 +34,8 @@ export type PluginHookBeforeModelRequestEvent = {
   provider: string;
   model: string;
   messages: readonly unknown[];
+  /** Host-labelled conversation data, with UTF-16 offsets into each text carrier. */
+  contextSpans?: readonly { containerText: string; start: number; end: number }[];
 };
 
 /**

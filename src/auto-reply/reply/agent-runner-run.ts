@@ -247,7 +247,6 @@ export async function runReplyAgent(
     const queuedRunFollowupTurn = createFollowupRunner({
       resolveGatewayContext,
       opts,
-      typing,
       typingMode,
       sessionEntry: activeSessionEntry,
       sessionStore: activeSessionStore,

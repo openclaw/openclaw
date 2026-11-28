@@ -1,3 +1,4 @@
+import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 import UIKit
@@ -232,6 +233,7 @@ struct GatewayProblemDetailsSheet: View {
                     }
                 }
             }
+            .openClawSheetHeaderEdge()
             .navigationTitle("Connection problem")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

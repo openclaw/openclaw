@@ -24,6 +24,7 @@ import ai.openclaw.app.chat.SessionRewindResult
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GATEWAY_CONNECT_TIMEOUT_MS
 import ai.openclaw.app.gateway.GatewayConnectOptions
 import ai.openclaw.app.gateway.GatewayDiscovery
@@ -45,6 +46,7 @@ import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayTlsProbeRunner
 import ai.openclaw.app.gateway.GatewayTlsTrustDecision
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.gateway.NativeControlUiCredential
 import ai.openclaw.app.gateway.NetworkMonitor
 import ai.openclaw.app.gateway.NodeEventSendOutcome
@@ -1058,13 +1060,13 @@ class NodeRuntime internal constructor(
       mobileUiHandler = mobileUiHandler,
       talkHandler =
         object : TalkHandler {
-          override suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStart()
+          override suspend fun handlePttStart(paramsJson: String?): InvokeResult = handleTalkPttStart()
 
-          override suspend fun handlePttStop(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStop { talkMode.endPushToTalk() }
+          override suspend fun handlePttStop(paramsJson: String?): InvokeResult = handleTalkPttStop { talkMode.endPushToTalk() }
 
-          override suspend fun handlePttCancel(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttStop { talkMode.cancelPushToTalk() }
+          override suspend fun handlePttCancel(paramsJson: String?): InvokeResult = handleTalkPttStop { talkMode.cancelPushToTalk() }
 
-          override suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult = handleTalkPttOnce()
+          override suspend fun handlePttOnce(paramsJson: String?): InvokeResult = handleTalkPttOnce()
         },
       isForeground = { _isForeground.value },
       cameraEnabled = { cameraEnabled.value },
@@ -2432,7 +2434,7 @@ class NodeRuntime internal constructor(
   }
 
   private fun gatewayConnectionProblem(
-    error: GatewaySession.ErrorShape,
+    error: ErrorShape,
     pauseReconnect: Boolean,
     endpoint: GatewayEndpoint? = connectedEndpoint,
   ): GatewayConnectionProblem {
@@ -2937,7 +2939,6 @@ class NodeRuntime internal constructor(
     _talkSetupReadiness.value =
       GatewayTalkSetupReadiness(
         realtimeTalk = GatewayTalkSetupState.Ready(GatewayTalkProvider("openai", "OpenAI")),
-        dictation = GatewayTalkSetupState.Ready(GatewayTalkProvider("openai", "OpenAI")),
       )
     _cronStatus.value =
       GatewayCronStatus(
@@ -3676,10 +3677,10 @@ class NodeRuntime internal constructor(
 
   fun setTalkMicrophoneMuted(value: Boolean): Unit = talkMode.setMicrophoneMuted(value)
 
-  private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
+  private suspend fun handleTalkPttStart(): InvokeResult =
     runTalkPttCommand {
       talkMode.finishingPushToTalkCaptureId?.let {
-        return@runTalkPttCommand GatewaySession.InvokeResult.error(
+        return@runTalkPttCommand InvokeResult.error(
           code = "PTT_BUSY",
           message = "PTT_BUSY: previous push-to-talk turn is still finishing",
         )
@@ -3688,7 +3689,7 @@ class NodeRuntime internal constructor(
       val commandEpoch = talkPttCommandEpoch.get()
       if (!_isForeground.value) {
         val payload = talkMode.beginPushToTalk(allowNewCapture = false)
-        return@runTalkPttCommand GatewaySession.InvokeResult.ok(payload.toJson())
+        return@runTalkPttCommand InvokeResult.ok(payload.toJson())
       }
       val payload =
         withPreparedTalkPttCommand(lifecycleEpoch, commandEpoch) { ownershipEpoch ->
@@ -3702,13 +3703,13 @@ class NodeRuntime internal constructor(
           recordTalkPttOwnership(captureId = started.captureId, ownershipEpoch = ownershipEpoch)
           started
         }
-      GatewaySession.InvokeResult.ok(payload.toJson())
+      InvokeResult.ok(payload.toJson())
     }
 
-  private suspend fun handleTalkPttOnce(): GatewaySession.InvokeResult =
+  private suspend fun handleTalkPttOnce(): InvokeResult =
     runTalkPttCommand {
       currentTalkPttOnceBusy()?.let { busy ->
-        return@runTalkPttCommand GatewaySession.InvokeResult.ok(busy.payload.toJson())
+        return@runTalkPttCommand InvokeResult.ok(busy.payload.toJson())
       }
       val lifecycleEpoch = voiceLifecycleEpoch.get()
       val commandEpoch = talkPttCommandEpoch.get()
@@ -3743,7 +3744,7 @@ class NodeRuntime internal constructor(
             finishTalkCaptureIfIdleAfterPreparation(start.captureId)
           }
         }
-      GatewaySession.InvokeResult.ok(payload.toJson())
+      InvokeResult.ok(payload.toJson())
     }
 
   private fun currentTalkPttOnceBusy(): TalkPttOnceStart.Busy? {
@@ -3788,14 +3789,14 @@ class NodeRuntime internal constructor(
       }
     }
 
-  private suspend fun runTalkPttCommand(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult =
+  private suspend fun runTalkPttCommand(block: suspend () -> InvokeResult): InvokeResult =
     try {
       block()
     } catch (err: CancellationException) {
       throw err
     } catch (err: Throwable) {
       val (code, message) = invokeErrorFromThrowable(err)
-      GatewaySession.InvokeResult.error(code = code, message = message)
+      InvokeResult.error(code = code, message = message)
     }
 
   private suspend fun prepareTalkCapture(
@@ -3873,7 +3874,7 @@ class NodeRuntime internal constructor(
     }
   }
 
-  private suspend fun handleTalkPttStop(stopCapture: suspend () -> TalkPttStopPayload): GatewaySession.InvokeResult =
+  private suspend fun handleTalkPttStop(stopCapture: suspend () -> TalkPttStopPayload): InvokeResult =
     runTalkPttCommand {
       // Preparation can suspend on gateway config. Invalidate it before waiting,
       // while later starts queue behind this stop with the new command epoch.
@@ -3884,7 +3885,7 @@ class NodeRuntime internal constructor(
             stopCapture().also { finishTalkCaptureIfIdleLocked(it.captureId) }
           }
         }
-      GatewaySession.InvokeResult.ok(payload.toJson())
+      InvokeResult.ok(payload.toJson())
     }
 
   private fun finishTalkCaptureIfIdleLocked(captureId: String) {
@@ -8118,7 +8119,7 @@ class NodeRuntime internal constructor(
     )
   }
 
-  private fun isGatewayExecApprovalAlreadyResolved(error: GatewaySession.ErrorShape): Boolean = error.code == "INVALID_REQUEST" && error.details?.reason == "APPROVAL_ALREADY_RESOLVED"
+  private fun isGatewayExecApprovalAlreadyResolved(error: ErrorShape): Boolean = error.code == "INVALID_REQUEST" && error.details?.reason == "APPROVAL_ALREADY_RESOLVED"
 
   private fun handleLegacyExecApprovalAlreadyResolved(
     gatewayScope: GatewayDataScope,
@@ -8983,7 +8984,7 @@ private fun GatewayNodeCapabilityApproval.withSafeRequestId(): GatewayNodeCapabi
     else -> this
   }
 
-internal fun nodeConnectFailureNeedsApprovalRefresh(error: GatewaySession.ErrorShape): Boolean = error.details?.code == "PAIRING_REQUIRED"
+internal fun nodeConnectFailureNeedsApprovalRefresh(error: ErrorShape): Boolean = error.details?.code == "PAIRING_REQUIRED"
 
 internal fun currentNodeCapabilityApproval(
   nodes: List<GatewayNodeSummary>,

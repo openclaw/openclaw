@@ -358,7 +358,8 @@ internal class WearRealtimeTalkController(
       }
 
     when (obj["type"].asStringOrNull()) {
-      "ready", "inputAudio" -> {
+      // Input audio acknowledgments do not change conversation progress.
+      "ready" -> {
         updateActiveStateIfCurrent(owner, currentSessionId, ActiveTalkState.Listening)
       }
 
@@ -809,6 +810,7 @@ internal class WearRealtimeTalkController(
   }
 
   private fun setSnapshot(snapshot: WearRealtimeTalkSnapshot) {
+    if (_snapshot.value == snapshot) return
     _snapshot.value = snapshot
     onSnapshot(snapshot)
   }

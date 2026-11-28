@@ -1006,26 +1006,6 @@
         justify-content: flex-start;
       }
 
-      /* Chat Details automatically reserves 300px plus its 13px inset in a
-         frame at least 1200px wide. Match that first painted destination. */
-      @container (min-width: 1200px) {
-        html[data-openclaw-boot-chat] #openclaw-boot-shell .loading-skeleton,
-        .connect-splash[data-chat] .loading-skeleton,
-        .content--workbench .lazy-view-state--route .loading-skeleton {
-          padding-inline-end: 331px;
-        }
-
-        html[data-openclaw-boot-chat] #openclaw-boot-shell .loading-skeleton__header,
-        .connect-splash[data-chat] .loading-skeleton__header,
-        .content--workbench .lazy-view-state--route .loading-skeleton__header {
-          margin-inline-end: -331px;
-        }
-
-        .connect-splash[data-chat] .connect-splash__status {
-          inset-inline-end: 331px;
-        }
-      }
-
       @media (max-width: 900px),
         (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
         .connect-splash__layout {

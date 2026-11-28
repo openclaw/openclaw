@@ -1,5 +1,6 @@
 // @vitest-environment node
 import "../../test/host.setup.ts";
+import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { expect, it } from "vitest";
 import { getWorkboardDependencyState } from "./card-state.ts";
@@ -117,6 +118,40 @@ it("requires a canonical reload after disconnect before writes", () => {
   expect(state).toMatchObject({ loaded: false, mutationReadiness: "canonical_reload_required" });
   expect(state.cards).toHaveLength(1);
 });
+
+it.each(["success", "conflict"])(
+  "keeps a newer card when an inline %s arrives late",
+  async (outcome) => {
+    const pending = createDeferred<unknown>();
+    const { ctx, state } = setup(() => pending.promise);
+    const card = createWorkboardCard();
+    const peer = createWorkboardCard({ id: "peer" });
+    state.cards = [card, peer];
+    const saving = updateWorkboardCardProperties({
+      ...ctx,
+      card,
+      patch: { priority: "high" },
+      previewInline: true,
+    });
+    expect(state.cards).toEqual([card, peer]);
+    const newer = { ...card, labels: ["reviewed"], updatedAt: 3 };
+    state.cards = [newer, peer];
+    const receipt = { ...card, priority: "high", updatedAt: 2 };
+    if (outcome === "success") {
+      pending.resolve({ card: receipt });
+    } else {
+      pending.reject(
+        new GatewayProtocolRequestError({
+          code: "workboard_conflict",
+          message: "Card changed",
+          details: { type: "workboard_card_conflict", card: receipt },
+        }),
+      );
+    }
+    expect(await saving).toBe(outcome === "success");
+    expect(state.cards).toEqual([newer, peer]);
+  },
+);
 
 it("reserves every reordered card until the ordered move settles", async () => {
   const moving = createWorkboardCard({ id: "moving", position: 2000 });

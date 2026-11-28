@@ -12,6 +12,14 @@ export async function prepareUpdateRunAdmissionRead(command: UpdateRunAdmissionR
         facts: readUpdateRecoveryAdmissionFacts(db),
       }));
   }
+  if (command.type === "updateRuns.pluginCohortRecovery") {
+    const { readPluginCohortRecoveryInDatabase } = await import("./update-run-recovery-store.js");
+    return (db: EngineConnection) =>
+      runSqliteReadSnapshotSync(db, () => ({
+        type: command.type,
+        pair: readPluginCohortRecoveryInDatabase(db, command.runId),
+      }));
+  }
   const { readUpdateRunReconciliationCandidate, readUpdateRunReconciliationCandidates } =
     await import("./update-run-reconciliation.read.js");
   if (command.type === "updateRuns.reconciliationCandidates") {

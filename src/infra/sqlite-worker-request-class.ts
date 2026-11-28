@@ -207,6 +207,7 @@ const coreCommands = new Set([
   "hasPending",
   "index.facts",
   "index.upgradeProviderKey",
+  "index.writeEmbeddingRefusal",
   "index.writeMetadata",
   "involvement",
   "list",

@@ -119,6 +119,7 @@ async function plan(
       codeModeControlsEnabledForRun: surface.codeModeControlsEnabled,
       codeModeSkills: [],
       computerContextEpoch: { value: 0 },
+      spillOwner: { agentId: "main", sessionKey: attempt.sessionKey },
       skillInstructionDeliveryCache: new Map<string, Promise<boolean>>(),
       cronCreatorToolAllowlist: [],
       cronCreatorToolAllowlistCaptureRef: {},

@@ -165,6 +165,10 @@ export function ShellSettingsSidebar(props: {
       ...props.sidebarProps,
       basePath: context.basePath,
       agents: context.agents.state.agentsList?.agents ?? [],
+      agentRosterRead:
+        !context.agents.state.agentsList && context.agents.state.agentsLoading
+          ? context.agents.listRead
+          : null,
       agentIdentity: context.agentIdentity,
       settingsAgentSelection: context.settingsAgentSelection,
       activePathname: host.routeState.location?.pathname ?? "",
