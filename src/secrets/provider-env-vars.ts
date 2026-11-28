@@ -52,15 +52,24 @@ export type ProviderEnvVarLookupParams = {
 };
 
 /** Manifest-provided evidence that a provider auth credential exists outside config. */
-export type ProviderAuthEvidence = {
-  type: "local-file-with-env";
-  fileEnvVar?: string;
-  fallbackPaths?: readonly string[];
-  requiresAnyEnv?: readonly string[];
-  requiresAllEnv?: readonly string[];
-  credentialMarker: string;
-  source?: string;
-};
+export type ProviderAuthEvidence =
+  | {
+      type: "local-file-with-env";
+      fileEnvVar?: string;
+      fallbackPaths?: readonly string[];
+      requiresAnyEnv?: readonly string[];
+      requiresAllEnv?: readonly string[];
+      credentialMarker: string;
+      source?: string;
+    }
+  | {
+      type: "gce-metadata-with-env";
+      blockedByEnv?: readonly string[];
+      requiresAnyEnv?: readonly string[];
+      requiresAllEnv?: readonly string[];
+      credentialMarker: string;
+      source?: string;
+    };
 
 /** Provider auth lookup maps resolved from plugin metadata and core fallback rules. */
 export type ProviderAuthLookupMaps = {
