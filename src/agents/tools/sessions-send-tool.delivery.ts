@@ -8,7 +8,7 @@ import { readAgentSelfHeldRefusal } from "../../gateway/agent-turn/agent-admissi
 import { runWithInProcessGatewaySessionMutation } from "../../gateway/server-plugin-in-process-dispatch.js";
 import type { GatewaySessionStoreTarget } from "../../gateway/session-utils-store.types.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
-import { enqueueSystemEventEntry } from "../../infra/system-events.js";
+import { enqueueSystemEventEntry, SystemEventQueueFullError } from "../../infra/system-events.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import {
   buildAgentMainSessionKey,
@@ -104,17 +104,32 @@ export async function notifySessionsSendSession(params: {
         },
         params.targetAgentId,
       ),
+      { throwOnFull: true },
     );
   };
-  const event = selection.operatorAuthority
-    ? await runWithInProcessGatewaySessionMutation(
-        { sessionKey: params.sessionKey, agentId: params.targetAgentId },
-        (assertCurrent) => {
-          assertCurrent();
-          return enqueue();
-        },
-      )
-    : enqueue();
+  let event: ReturnType<typeof enqueue>;
+  try {
+    event = selection.operatorAuthority
+      ? await runWithInProcessGatewaySessionMutation(
+          { sessionKey: params.sessionKey, agentId: params.targetAgentId },
+          (assertCurrent) => {
+            assertCurrent();
+            return enqueue();
+          },
+        )
+      : enqueue();
+  } catch (error) {
+    // A passive refusal claims nothing; only the capacity explanation is worth surfacing.
+    if (!(error instanceof SystemEventQueueFullError)) {
+      throw error;
+    }
+    return jsonResult({
+      runId: params.runId,
+      status: "error",
+      sessionKey: params.displayKey,
+      error: `Notification was not queued: ${error.message}`,
+    });
+  }
   if (!event?.id) {
     return jsonResult({
       runId: params.runId,

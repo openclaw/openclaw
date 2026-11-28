@@ -217,8 +217,16 @@ export function isSystemEventContextChanged(
 export function enqueueSystemEventEntry(
   text: string,
   options: SystemEventOptions,
+  entryOptions?: {
+    /** Report a full passive pool to the caller instead of returning null. */
+    throwOnFull?: boolean;
+  },
 ): SystemEvent | null {
-  const event = enqueueOwnedSystemEventEntry(text, options);
+  const event = enqueueOwnedSystemEventEntry(
+    text,
+    options,
+    entryOptions?.throwOnFull ? { throwOnFull: true } : undefined,
+  );
   return event ? cloneSystemEvent(event) : null;
 }
 
