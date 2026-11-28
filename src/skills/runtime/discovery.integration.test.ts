@@ -21,6 +21,7 @@ import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { prepareWorkspaceSkillStatus } from "../discovery/status.js";
 import { resolveSkillDiscoveryLimits } from "../loading/skill-root-discovery.js";
 import type { WorkspaceSkillSourceRequest } from "../loading/workspace-skill-sources.types.js";
+import { syncWorkspaceSkills } from "../loading/workspace-skill-sync.runtime.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { completePassiveScan } from "./discovery.test-support.js";
 import * as remoteRefresh from "./refresh-remote.js";
@@ -71,17 +72,24 @@ const descriptions = async (input = request(), watch = true) =>
 const write = (description: string, dir = workspace, relative = "skills/guide") =>
   writeSkill({ dir: path.join(dir, relative), name: path.basename(relative), description });
 async function waitForLiveWatch(directory: string, workspaceDir = workspace) {
-  const version = getSkillsResourceVersion(workspaceDir);
+  const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
   const marker = path.join(directory, ".watch-ready");
   // Native registration can miss startup writes. Establish the live stream before
   // the single edit under test; missed events are covered by safety reconciliation.
+  // A marker changes no synced skill bytes, so wait for this workspace's passive scan.
+  const scanned = () =>
+    tasks.mock.calls.some(([input]) => {
+      const serialized = JSON.stringify(input);
+      return (
+        serialized.includes('"kind":"scan"') && serialized.includes(JSON.stringify(workspaceDir))
+      );
+    });
   const pulse = setInterval(() => writeFileSync(marker, "ready"), 100);
   try {
-    await expect
-      .poll(() => getSkillsResourceVersion(workspaceDir), { timeout: 10_000 })
-      .toBeGreaterThan(version);
+    await expect.poll(scanned, { timeout: 10_000 }).toBe(true);
   } finally {
     clearInterval(pulse);
+    tasks.mockRestore();
     await fs.rm(marker, { force: true });
   }
 }
@@ -604,6 +612,37 @@ it("refreshes supporting resources without publishing an unchanged catalog", asy
   await descriptions();
   expect(getSkillsSnapshotVersion(workspace)).toBe(version);
   expect(getSkillsResourceVersion(workspace)).toBeGreaterThan(resources);
+});
+
+it("recopies sandbox skill files after a safety pass only when their bytes changed", async () => {
+  const target = temporary.make("skills-sandbox-");
+  const skill = path.join(workspace, "skills", "guide");
+  const synced = path.join(target, "skills", "guide");
+  await write("Guide");
+  await fs.writeFile(path.join(skill, "helper.txt"), "before");
+  // Without native events, only the 30-minute safety pass can observe these edits.
+  vi.spyOn(directoryWatch, "watchDirectory").mockReturnValue({ close() {}, on() {} });
+  const sync = () =>
+    syncWorkspaceSkills({
+      sourceWorkspaceDir: workspace,
+      targetWorkspaceDir: target,
+      config: { plugins: { enabled: false } },
+      bundledSkillsDir: path.join(workspace, ".bundled"),
+      managedSkillsDir: path.join(workspace, ".managed"),
+    });
+  await sync();
+  // Reconciliation removes files the source lacks, so the marker survives only a reuse.
+  const marker = path.join(synced, "marker.txt");
+  await fs.writeFile(marker, "kept");
+
+  await completePassiveScan();
+  await sync();
+  expect(await fs.readFile(marker, "utf8")).toBe("kept");
+
+  await fs.writeFile(path.join(skill, "helper.txt"), "after!");
+  await completePassiveScan();
+  await sync();
+  expect(await fs.readFile(path.join(synced, "helper.txt"), "utf8")).toBe("after!");
 });
 
 it("invalidates an evicted workspace before accepting its next snapshot", async () => {

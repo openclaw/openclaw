@@ -56,36 +56,37 @@ export async function acknowledgeRestartResumeMarker(
   );
 }
 
-export async function recordInterruptedShellNotice(params: {
+type InterruptedShellTarget = {
   target: Target;
   entry: InternalSessionEntry;
   marker: Marker;
   assertCurrent: () => void;
-  text: string;
-  deliver?: (
-    route: NonNullable<PendingSessionShellCalls["notice"]>,
-    idempotencyKey: string,
-    check: () => void,
-  ) => Promise<void>;
-}): Promise<boolean> {
-  const { target, entry, marker, assertCurrent } = params;
+};
+
+/** The writer checks accepted terminal results before the Gateway continues the turn. */
+export async function reconcileInterruptedShellCalls({
+  target,
+  entry,
+  marker,
+  assertCurrent,
+}: InterruptedShellTarget) {
   const selected = selectPendingRestartShellCalls(entry, marker);
   if (!selected) {
-    return false;
+    return undefined;
   }
-  const runId = selected.runId;
-  const expected = { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision };
-  const options = {
-    skipMaintenance: true,
-    preserveActivity: true,
-    requireWriteSuccess: true,
-    assertCommitAllowed: assertCurrent,
-  };
-  // The writer compares pending calls with accepted terminal results in one transaction.
   const checked = await applySessionEntryOperation(
     target,
-    { kind: "shell-call", runId, expected },
-    options,
+    {
+      kind: "shell-call",
+      runId: selected.runId,
+      expected: { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision },
+    },
+    {
+      skipMaintenance: true,
+      preserveActivity: true,
+      requireWriteSuccess: true,
+      assertCommitAllowed: assertCurrent,
+    },
   );
   if (
     !checked ||
@@ -95,10 +96,38 @@ export async function recordInterruptedShellNotice(params: {
   ) {
     throw new Error("Session changed while checking interrupted shell results");
   }
-  const pending = checked.pendingShellCalls;
-  if (!pending?.calls.length) {
+  return checked;
+}
+
+export function resolveInterruptedShellNoticeRoute(
+  pending: PendingSessionShellCalls,
+  marker: Marker,
+) {
+  const route = pending.notice;
+  return route &&
+    (!marker.operatorSource || isDeepStrictEqual(route.operatorSource, marker.operatorSource))
+    ? route
+    : undefined;
+}
+
+export async function recordInterruptedShellNotice(
+  params: InterruptedShellTarget & {
+    text: string;
+    deliver?: (
+      route: NonNullable<PendingSessionShellCalls["notice"]>,
+      idempotencyKey: string,
+      check: () => void,
+    ) => Promise<void>;
+  },
+): Promise<boolean> {
+  const { target, entry, marker, assertCurrent } = params;
+  const checked = await reconcileInterruptedShellCalls(params);
+  if (!checked?.pendingShellCalls?.calls.length) {
     return false;
   }
+  const pending = checked.pendingShellCalls;
+  const { runId } = pending;
+  const expected = { sessionId: entry.sessionId, lifecycleRevision: entry.lifecycleRevision };
   const scope = sha256Base64Url(
     JSON.stringify([target.agentId, target.sessionKey, entry.sessionId, runId]),
   );
@@ -131,11 +160,8 @@ export async function recordInterruptedShellNotice(params: {
     if (!saved.ok) {
       throw new Error(saved.reason);
     }
-    const route = pending.notice;
-    if (
-      route &&
-      (!marker.operatorSource || isDeepStrictEqual(route.operatorSource, marker.operatorSource))
-    ) {
+    const route = resolveInterruptedShellNoticeRoute(pending, marker);
+    if (route) {
       await params.deliver?.(route, idempotencyKey, check);
     }
     check();
@@ -143,7 +169,12 @@ export async function recordInterruptedShellNotice(params: {
     const acknowledged = await applySessionEntryOperation(
       target,
       { kind: "shell-call", runId, expected, acknowledged: { marker, pending } },
-      options,
+      {
+        skipMaintenance: true,
+        preserveActivity: true,
+        requireWriteSuccess: true,
+        assertCommitAllowed: assertCurrent,
+      },
     );
     if (
       !acknowledged ||

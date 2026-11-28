@@ -3,6 +3,13 @@ import OpenClawChatUI
 import OpenClawProtocol
 
 enum ScreenshotFixtureMode {
+    /// A process-local fixture store, never backed by an installed user's chat databases.
+    static let queueMenuOutbox: OpenClawChatSQLiteTranscriptCache? = {
+        guard ProcessInfo.processInfo.arguments.contains("--openclaw-queue-menu-fixture") else { return nil }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        return try? OpenClawClientDatabases(directoryURL: directory).store(gatewayID: Self.gatewayID)
+    }()
+
     static var progressBarEnabled: Bool {
         ProcessInfo.processInfo.arguments.contains("--openclaw-progress-bar-fixture")
     }

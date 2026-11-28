@@ -2939,7 +2939,6 @@ class NodeRuntime internal constructor(
     _talkSetupReadiness.value =
       GatewayTalkSetupReadiness(
         realtimeTalk = GatewayTalkSetupState.Ready(GatewayTalkProvider("openai", "OpenAI")),
-        dictation = GatewayTalkSetupState.Ready(GatewayTalkProvider("openai", "OpenAI")),
       )
     _cronStatus.value =
       GatewayCronStatus(

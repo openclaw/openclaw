@@ -1,12 +1,17 @@
 import path from "node:path";
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { chatRef } from "../../sessions/chat-ref.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { installRouteReplyFixture } from "./route-reply.fixture.test-support.js";
 import { routePreparedReply, routeReply } from "./route-reply.js";
+import { createSessionEventReplyDelivery } from "./session-event-delivery.js";
 
 const destination = {
   cfg: {},
@@ -92,6 +97,65 @@ describe("prepared reply routing", () => {
     });
     expect(result).toMatchObject({ ok: true, delivered: true, messageId: "text-sent" });
     expect(visible).toEqual([{ text: "Reasoning for the report. transformed" }]);
+  });
+
+  it("sends a restart continuation as a reply to its original message in the saved thread", async () => {
+    const route = {
+      channel: destination.channel,
+      to: destination.to,
+      accountId: "fixture",
+      threadId: "thread",
+    };
+    const scope = { agentId: "main", sessionKey: "agent:main:restart-reply" };
+    const sendText = vi.fn<NonNullable<ChannelOutboundAdapter["sendText"]>>(async () => ({
+      channel: "matrix",
+      messageId: "sent",
+    }));
+    fixtures.register(
+      { deliveryMode: "direct", sendText },
+      {
+        threading: {
+          resolveReplyTransport: ({ replyToIsExplicit, replyToId }) => ({
+            replyToId: replyToIsExplicit ? replyToId : null,
+          }),
+        },
+      },
+    );
+    setRuntimeConfigSnapshot({});
+    try {
+      const delivery = createSessionEventReplyDelivery({
+        ...scope,
+        options: {
+          ...scope,
+          source: "restart",
+          deliveryContext: route,
+          restartReplyToId: "original-message",
+        },
+        signal: new AbortController().signal,
+        target: () => undefined,
+        route: () => route,
+        prepareCurrent: async () => {},
+        assertCurrent: () => {},
+        assertEffectCurrent: () => {},
+        sourceReplyDelivered: () => false,
+      });
+      await delivery.deliver(
+        { text: "Checked the result", replyToId: "not-the-original" },
+        "final",
+      );
+      expect(delivery.delivered).toBe(true);
+      expect(sendText).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          to: route.to,
+          accountId: route.accountId,
+          threadId: route.threadId,
+          text: "Checked the result",
+          replyToId: "original-message",
+        }),
+      );
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
   });
 
   it.each([

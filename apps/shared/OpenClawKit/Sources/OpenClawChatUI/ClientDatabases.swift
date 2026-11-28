@@ -63,6 +63,59 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
         importLegacyDatabases(registeredGatewayIDs: exactRegisteredGatewayIDs)
     }
 
+    public struct GatewayCacheUsage: Sendable {
+        public let bytes: Int64
+        public let conversations: Int
+        public let hasCachedData: Bool
+    }
+
+    public func gatewayCacheUsage() async throws -> GatewayCacheUsage {
+        try await self.cacheQueue.read { db in
+            try self.gatewayCacheUsage(in: db)
+        }
+    }
+
+    public func clearGatewayCache() async throws -> GatewayCacheUsage {
+        try await self.cacheQueue.writeWithoutTransaction { db in
+            try db.inTransaction {
+                // The two child tables cascade from these roster/transcript owners.
+                try db.execute(sql: """
+                DELETE FROM cached_sessions;
+                DELETE FROM cached_session_rosters;
+                DELETE FROM cached_transcripts;
+                """)
+                return .commit
+            }
+            // Deletion committed even if a full disk prevents compaction.
+            do {
+                try db.execute(sql: "VACUUM")
+            } catch {
+                databaseLogger.warning("could not compact the cleared gateway cache")
+            }
+            _ = try db.checkpoint(.truncate)
+            return try self.gatewayCacheUsage(in: db)
+        }
+    }
+
+    private func gatewayCacheUsage(in db: Database) throws -> GatewayCacheUsage {
+        let conversations = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM cached_transcripts") ?? 0
+        let hasSessionList = try Bool.fetchOne(db, sql: """
+        SELECT EXISTS (SELECT 1 FROM cached_sessions)
+            OR EXISTS (SELECT 1 FROM cached_agent_sessions)
+        """) ?? false
+        let filename = Self.gatewayCacheFilename
+        let bytes = try [filename, filename + "-wal", filename + "-shm"].reduce(into: Int64(0)) { total, name in
+            let url = self.directoryURL.appendingPathComponent(name, isDirectory: false)
+            guard FileManager.default.fileExists(atPath: url.path) else { return }
+            let values = try url.resourceValues(forKeys: [.fileAllocatedSizeKey, .fileSizeKey])
+            total += Int64(values.fileAllocatedSize ?? values.fileSize ?? 0)
+        }
+        return GatewayCacheUsage(
+            bytes: bytes,
+            conversations: conversations,
+            hasCachedData: hasSessionList || conversations > 0)
+    }
+
     public func store(gatewayID: String) -> OpenClawChatSQLiteTranscriptCache {
         OpenClawChatSQLiteTranscriptCache(databases: self, gatewayID: gatewayID)
     }

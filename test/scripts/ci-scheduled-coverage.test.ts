@@ -8,6 +8,7 @@ import {
   listScheduledTestFiles,
   listUnscheduledTestFiles,
 } from "../../scripts/lib/ci-scheduled-coverage.mts";
+import { spawnNodeEvalSync } from "../../src/test-utils/node-process.js";
 import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 
 function listTrackedTests(): string[] {
@@ -21,6 +22,18 @@ function isExcepted(file: string): boolean {
 }
 
 describe("scheduled test coverage", () => {
+  it("preserves the tracked test inventory with literal Git pathspecs", () => {
+    const result = spawnNodeEvalSync(
+      'import { scheduledTrackedTestFiles } from "./scripts/lib/ci-node-test-inventory.mts"; console.log(JSON.stringify(scheduledTrackedTestFiles()));',
+      {
+        env: { ...process.env, GIT_LITERAL_PATHSPECS: "1" },
+        maxBuffer: 16 * 1024 * 1024,
+      },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual(listTrackedTests());
+  });
+
   it("accounts for every tracked test without leaking covered or excepted files into the daily lane", () => {
     const tracked = listTrackedTests();
     expect(tracked.length).toBeGreaterThan(0);
