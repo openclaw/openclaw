@@ -116,9 +116,6 @@ struct ChatEffortSpeedPicker: View {
             }
         } label: {
             Text("Speed").font(OpenClawChatTypography.settingsBody).foregroundStyle(.primary)
-        } currentValueLabel: {
-            // The menu rows carry the bolts; the closed row keeps only the name.
-            Text(verbatim: ChatEffortBar.speedLabel(self.viewModel.composerSpeedSelection))
         }
         .disabled(self.viewModel.composerPhoneEffortLockReason != nil)
         .accessibilityIdentifier("chat-effort-bar-speed")
