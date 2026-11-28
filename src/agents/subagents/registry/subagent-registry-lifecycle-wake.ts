@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { revokeGoalContinuationReturn } from "../../../auto-reply/reply/goal-continuation-return.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
+import { isOperatorAuthorityUnavailable } from "../../../infra/operator-authority-error.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { isGatewayRestartDrainError } from "../../../process/gateway-work-admission.js";
 import { getCurrentSessionControllerOwner } from "../../../sessions/session-controller.context.js";
@@ -15,16 +16,13 @@ import { waitForAgentDatabasePreparation } from "../../../state/agent-database-p
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
+import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import { SubagentAnnouncePreparationConflictError } from "../announce/subagent-announce-result.js";
-import {
-  SubagentCompletionSourceChangedError,
-  SubagentRequesterWakeProgressChangedError,
-} from "../completion/subagent-completion-admission.store.js";
+import { SubagentCompletionSourceChangedError } from "../completion/subagent-completion-admission.store.js";
 import { revokeRequesterCronAuthorityBatch } from "../requester-cron-authority.js";
 import { revokeRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
 import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
-import { isCompletedRequesterDeliveryBlocked } from "./subagent-delivery-state.js";
 import { retireSubagentGatewayBinding } from "./subagent-registry-execution-cleanup.js";
 import type {
   RequesterSettleWakeEvaluation,
@@ -41,7 +39,6 @@ import {
 import {
   assertRequesterSettleWakeBatchCurrent,
   mutateRequesterSettleWakeBatch,
-  settleRequesterSettleWakeBatch,
   createRequesterWakeSettlement,
   hasPendingRequesterSettlement,
   isRetainedRequesterSettleWakeMember,
@@ -53,13 +50,14 @@ import {
   captureRequesterSettleRunIdentity,
   isSubagentObligationRetired,
 } from "./subagent-requester-settle-identity.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
 import {
   currentSubagentRunOrObserved,
   getSubagentRunRuntimeKey,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
-import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
+import { hasSubagentRunEnded, isRequesterSettleMemberReady } from "./subagent-run-liveness.js";
 
 const pendingRequesterTransitions = new WeakMap<
   object,
@@ -131,7 +129,7 @@ export async function retireSubagentObligationsInContext(
         !isSameSubagentRunOwner(current, entry) ||
         !wake ||
         current.execution.status !== "terminal" ||
-        current.pauseReason === "sessions_yield"
+        isSubagentPausedByYield(current)
       ) {
         return { value: undefined };
       }
@@ -215,7 +213,7 @@ function isRetiredByLiveRequesterTurn(entry: SubagentRunRecord): boolean {
 
 function awaitsStoppedPauseRetirement(entry: SubagentRunRecord): boolean {
   return (
-    entry.pauseReason !== "sessions_yield" &&
+    !isSubagentPausedByYield(entry) &&
     entry.requesterSettleWake?.pauseNotice !== undefined &&
     isSubagentObligationRetired(entry)
   );
@@ -225,7 +223,7 @@ function awaitsStoppedPauseRetirement(entry: SubagentRunRecord): boolean {
 function requesterSettleWakeScope(entry: SubagentRunRecord): string {
   const wake = entry.requesterSettleWake;
   const owner = `${entry.requesterStorePath ?? ""}\0${entry.requesterAgentId ?? ""}\0${entry.requesterSessionKey}`;
-  if (entry.pauseReason === "sessions_yield" && wake?.pauseNotice) {
+  if (isSubagentPausedByYield(entry) && wake?.pauseNotice) {
     return `${owner}\0pause\0${entry.runId}\0${wake.rearmGeneration ?? ""}`;
   }
   return `${owner}\0${wake?.batchRunIds?.toSorted().join(",") ?? ""}\0${wake?.rearmGeneration ?? ""}`;
@@ -273,21 +271,19 @@ export function scheduleRequesterSettleWake(
   const pendingWait = context.waitingRequesterSettleWakes.get(scope);
   if (pendingWait) {
     if (
-      !isSameSubagentRunOwner(params.runs.get(pendingWait.entry.runId), pendingWait.entry) ||
-      !resume ||
-      pendingSettlement?.scope === scope ||
-      pendingTransition?.scope === scope
+      resume &&
+      isSameSubagentRunOwner(params.runs.get(pendingWait.entry.runId), pendingWait.entry) &&
+      pendingSettlement?.scope !== scope &&
+      pendingTransition?.scope !== scope
     ) {
-      clearRequesterSettleWait(context, scope);
-    } else {
       return;
     }
+    clearRequesterSettleWait(context, scope);
   }
   const requesterSessionKey = entry.requesterSessionKey?.trim();
   if (
     entry.collect ||
     !requesterSessionKey ||
-    (isCompletedRequesterDeliveryBlocked(entry) && admittedWake?.requesterYieldBatch !== true) ||
     entry.execution.status === "running" ||
     !hasSubagentRunEnded(entry) ||
     awaitsStoppedPauseRetirement(entry) ||
@@ -337,20 +333,30 @@ export function scheduleRequesterSettleWake(
       return false;
     }
   };
-  const admittedBatch = (
-    entry.pauseReason === "sessions_yield" && admittedWake?.pauseNotice
-      ? [runId]
-      : (admittedWake?.batchRunIds ?? [runId])
-  ).flatMap((id) => {
-    const member = params.runs.get(id);
-    return member ? [member] : [];
-  });
+  const resumeCurrentWake = () => {
+    if (isSourceCurrent()) {
+      scheduleRequesterSettleWake(context, entry.runId, entry, stateContext);
+    }
+  };
+  const pauseNotice = isSubagentPausedByYield(entry) && admittedWake?.pauseNotice;
+  // Failure settlement owns offered results, never a still-working member's future completion.
+  const offeredBatch = (pauseNotice ? [runId] : (admittedWake?.batchRunIds ?? [runId])).flatMap(
+    (id) => {
+      const member = params.runs.get(id);
+      return member?.requesterSettleWake &&
+        member.requesterSettleWake.rearmGeneration === admittedWake?.rearmGeneration &&
+        (pauseNotice || isRequesterSettleMemberReady(member))
+        ? [member]
+        : [];
+    },
+  );
+  const admittedBatch = subagentRuns.selectCompletionAuthorityBatch(offeredBatch, entry);
   let settleObserved = pendingSettlement?.scope === scope ? pendingSettlement.settle : undefined;
   let publishDispatch = pendingTransition?.scope === scope ? pendingTransition.commit : undefined;
   const completeBatch = async (
     batch: readonly SubagentRunRecord[],
     rearmGeneration: number | undefined,
-    outcome?: Parameters<typeof settleRequesterSettleWakeBatch>[3],
+    outcome?: SubagentAnnounceDeliveryResult,
     onCommitted?: () => void | Promise<void>,
   ) => {
     // A retirement may have replaced the pause notice this evaluation was delivering.
@@ -377,20 +383,12 @@ export function scheduleRequesterSettleWake(
         entry,
         async (releasePreparation) => {
           // Admission can wait; reread the row before a blocked receipt is executed again.
-          if (
-            !isSourceCurrent() ||
-            awaitsStoppedPauseRetirement(entry) ||
-            (isCompletedRequesterDeliveryBlocked(entry) &&
-              entry.requesterSettleWake?.requesterYieldBatch !== true)
-          ) {
+          if (awaitsStoppedPauseRetirement(entry)) {
             return;
           }
           try {
-            if (settleObserved) {
-              await settleObserved();
-              return;
-            }
-            if (!admittedWake) {
+            if (settleObserved || !admittedWake) {
+              await settleObserved?.();
               return;
             }
             if (publishDispatch) {
@@ -406,12 +404,21 @@ export function scheduleRequesterSettleWake(
                   settledEntry: entry,
                   isSourceCurrent,
                   onAccepted: releasePreparation,
-                  onDescendantsPending: (deadline) => {
-                    if (isSourceCurrent()) {
-                      descendantWait = { entry, deadline };
-                    }
+                  recordRequesterDelivery: async (batch, fact, onPublished) => {
+                    await mutateRequesterSettleWakeBatch(
+                      context,
+                      batch,
+                      admittedWake.rearmGeneration,
+                      { kind: "requesterDelivery", fact },
+                      stateContext,
+                      {},
+                      onPublished,
+                    );
                   },
-                  transitionBatch: async (batch, state, onPublished) => {
+                  onDescendantsPending: (deadline) => {
+                    descendantWait = { entry, deadline };
+                  },
+                  transitionBatch: async (batch, state, onPublished, requesterDelivery) => {
                     // New transitions need the whole batch; retained receipts may reconcile survivors.
                     if (!isSourceCurrent()) {
                       return;
@@ -459,7 +466,7 @@ export function scheduleRequesterSettleWake(
                             context,
                             members,
                             state.rearmGeneration,
-                            { kind: "transition", state },
+                            { kind: "transition", state, requesterDelivery },
                             stateContext,
                             receipt,
                             onPublished,
@@ -517,8 +524,8 @@ export function scheduleRequesterSettleWake(
             if (isGatewayRestartDrainError(error)) {
               return;
             }
-            if (error instanceof SubagentRequesterWakeProgressChangedError) {
-              // Another attempt already owns this wake's newer progress.
+            if (error instanceof SubagentCompletionSourceChangedError) {
+              // A rejected owner must yield, not settle the current owner's owed results.
               for (const member of admittedBatch) {
                 const key = getSubagentRunRuntimeKey(member);
                 if (pendingRequesterSettlements.get(key)?.settle === settleObserved) {
@@ -535,12 +542,15 @@ export function scheduleRequesterSettleWake(
               });
               return;
             }
+            // A policy outage refuses this attempt without revoking its source: the finished
+            // result stays owed and the next lifecycle event retries it.
             const retryPreparation =
               !settleObserved &&
               ((error instanceof AgentDatabaseAdmissionError &&
                 error.refusal.code === "agent-database-inspection-pending") ||
                 error instanceof SubagentAnnouncePreparationConflictError ||
-                (error instanceof WorkerTaskError && error.code === "overloaded"));
+                (error instanceof WorkerTaskError && error.code === "overloaded") ||
+                isOperatorAuthorityUnavailable(error));
             const safeError = buildSafeLifecycleErrorMeta(error);
             if (retryPreparation) {
               // No delivery was admitted. Retain the exact cohort and its counters;
@@ -555,19 +565,16 @@ export function scheduleRequesterSettleWake(
                     ? error.capacityAvailable
                     : undefined;
               if (ready) {
-                const continueWake = () => {
-                  if (isSourceCurrent()) {
-                    scheduleRequesterSettleWake(context, entry.runId, entry, stateContext);
-                  }
-                };
                 // The preparation owner owns this wait; do not keep a Gateway root open.
                 // Failure re-enters too: a final admission refusal records the terminal outcome.
-                void ready.then(continueWake, continueWake).catch((resumeError: unknown) => {
-                  params.warn("requester settle wake readiness continuation failed", {
-                    error: buildSafeLifecycleErrorMeta(resumeError),
-                    runId,
+                void ready
+                  .then(resumeCurrentWake, resumeCurrentWake)
+                  .catch((resumeError: unknown) => {
+                    params.warn("requester settle wake readiness continuation failed", {
+                      error: buildSafeLifecycleErrorMeta(resumeError),
+                      runId,
+                    });
                   });
-                });
               } else {
                 params.warn(
                   "requester settle wake preparation deferred until its next lifecycle event",
@@ -586,37 +593,6 @@ export function scheduleRequesterSettleWake(
             });
             if (!isSourceCurrent()) {
               return;
-            }
-            if (error instanceof SubagentCompletionSourceChangedError && !settleObserved) {
-              const noticeScope = admittedWake?.batchRunIds ? scope : `${scope}\0${runId}`;
-              try {
-                const { appendAssistantMessageToSessionTranscript } =
-                  await import("../../../config/sessions/transcript.js");
-                const notice = await appendAssistantMessageToSessionTranscript({
-                  agentId: entry.requesterAgentId,
-                  sessionKey: requesterSessionKey,
-                  storePath: entry.requesterStorePath,
-                  expectedSessionId: entry.completionRequesterSessionId,
-                  expectedLifecycleRevision: entry.completionRequesterLifecycleRevision,
-                  idempotencyKey: JSON.stringify(["subagent-settle-rejected", noticeScope]),
-                  text: "Subagent result could not be delivered because its completion owner changed. Inspect the subagent result before continuing.",
-                  assertCurrent: () => {
-                    if (!isSourceCurrent() || requesterSettleWakeScope(entry) !== scope) {
-                      throw new Error("Requester wake changed before rejection notice", {
-                        cause: error,
-                      });
-                    }
-                  },
-                });
-                if (!notice.ok) {
-                  throw new Error(notice.reason, { cause: error });
-                }
-              } catch (noticeError) {
-                params.warn("failed to record requester settle wake rejection notice", {
-                  error: buildSafeLifecycleErrorMeta(noticeError),
-                  runId,
-                });
-              }
             }
             // Delivery may have succeeded before its bookkeeping failed. Preserve that result.
             await (
@@ -664,9 +640,7 @@ export function scheduleRequesterSettleWake(
                   return;
                 }
                 clearRequesterSettleWait(context, scope);
-                if (isSourceCurrent()) {
-                  scheduleRequesterSettleWake(context, entry.runId, entry, stateContext);
-                }
+                resumeCurrentWake();
               },
               Math.max(0, waiting.deadline - Date.now()),
             );

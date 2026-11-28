@@ -30,6 +30,12 @@ describe("JSONL edits", () => {
     expect(r.raw).toBe('\nbroken __OPENCLAW_REDACTED__\n{"event":"replaced"}\n{"event":"end"}\n');
   });
 
+  it("keeps LF record offsets when a record contains standalone CR whitespace", () => {
+    const raw = '{"a":\r1}\n{"b":2}\n';
+    const result = edit(raw, "oc://x.jsonl/L2/b", { kind: "number", value: 3 });
+    expect(result.raw).toBe('{"a":\r1}\n{"b":3}\n');
+  });
+
   it("reports unresolved for unknown line addresses", () => {
     expect(() => edit(log, "oc://session-events/L99/x", { kind: "number", value: 1 })).toThrow(
       expect.objectContaining({ reason: "unresolved" }),

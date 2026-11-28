@@ -1,6 +1,5 @@
-import childProcess from "node:child_process";
+import * as childProcess from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -9,6 +8,15 @@ import {
   runWorkflowShellScript,
   testNodeExecPath,
 } from "./ci-workflow.test-support.js";
+
+// Keep the native call in a configurable Vitest namespace.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:child_process") & { default: typeof import("node:child_process") }
+  >();
+  const overrides = { spawnSync: actual.spawnSync };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 
@@ -33,7 +41,6 @@ describe("workflow fixture child deadline", () => {
 
   it("supplies a finite positive deadline when the caller omits one", () => {
     const spawn = vi.spyOn(childProcess, "spawnSync");
-    syncBuiltinESMExports();
     try {
       expect(runWorkflowShellScript(":", {}).status).toBe(0);
       const timeout = spawn.mock.calls[0]?.[2]?.timeout;
@@ -41,7 +48,6 @@ describe("workflow fixture child deadline", () => {
       expect(timeout).toBeGreaterThan(0);
     } finally {
       spawn.mockRestore();
-      syncBuiltinESMExports();
     }
   });
 
@@ -80,7 +86,6 @@ describe("workflow fixture file-backed module stdin", () => {
         }
         return nativeSpawn(...args);
       });
-    syncBuiltinESMExports();
     try {
       const result = runWorkflowShellScript(
         `set -euo pipefail
@@ -105,7 +110,6 @@ FIXTURE_MODULE
       );
     } finally {
       spawn.mockRestore();
-      syncBuiltinESMExports();
     }
   });
 });

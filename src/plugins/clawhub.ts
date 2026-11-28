@@ -3,6 +3,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
   DEFAULT_MAX_ARCHIVE_BYTES_ZIP,
   DEFAULT_MAX_ENTRIES,
@@ -62,6 +63,7 @@ import {
   logClawHubPackageSummary,
   type PluginInstallLogger,
 } from "./clawhub-presentation.js";
+import { prepareClawHubInstalledRetention } from "./clawhub-retained-install.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import type { PluginInstallArtifactCallbacks } from "./install-types.js";
@@ -114,18 +116,6 @@ const CLAWHUB_ARCHIVE_LIMITS = {
   maxExtractedBytes: DEFAULT_MAX_EXTRACTED_BYTES,
   maxEntryBytes: DEFAULT_MAX_ENTRY_BYTES,
 };
-
-function resolveClawHubClawPackArtifactSha256(
-  clawpack: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null | undefined,
-): string | null {
-  const isNpmPackArtifact =
-    clawpack && "kind" in clawpack && normalizeOptionalString(clawpack.kind) === "npm-pack";
-  const isLegacyClawPack = clawpack && "available" in clawpack && clawpack.available;
-  if ((!isNpmPackArtifact && !isLegacyClawPack) || typeof clawpack.sha256 !== "string") {
-    return null;
-  }
-  return normalizeClawHubSha256Hex(clawpack.sha256);
-}
 
 function resolveClawHubNpmPackArtifact(
   version: Pick<ClawHubArtifactResolverVersion, "artifact" | "clawpack">,
@@ -464,7 +454,7 @@ async function resolveCompatiblePackageVersion(params: {
     params.detail.package?.name ?? "unknown",
     resolvedVersion,
   );
-  if (!verificationState.ok && !resolveClawHubClawPackArtifactSha256(clawpack)) {
+  if (!verificationState.ok && !normalizeClawHubClawPackInstallFields(clawpack).clawpackSha256) {
     return verificationState;
   }
   return {
@@ -493,6 +483,7 @@ export async function installPluginFromClawHub(
       confirmOnUpdate?: boolean;
       confirmInstall?: (warning?: string) => boolean | Promise<boolean>;
       requireClawHubTrust?: boolean;
+      retainInstalled?: { record: PluginInstallRecord; installPath: string };
     },
 ): Promise<
   | ({
@@ -500,6 +491,7 @@ export async function installPluginFromClawHub(
     } & Extract<InstallPluginResult, { ok: true }> & {
         clawhub: ClawHubPluginInstallRecordFields;
         packageName: string;
+        unchanged?: true;
         warning?: string;
       })
   | ClawHubInstallFailure
@@ -650,7 +642,9 @@ export async function installPluginFromClawHub(
     return resolved;
   }
   const { detail, versionState, expectedPluginId, clawhubFamily } = resolved;
-  const expectedClawPackSha256 = resolveClawHubClawPackArtifactSha256(versionState.clawpack);
+  const expectedClawPackSha256 = normalizeClawHubClawPackInstallFields(
+    versionState.clawpack,
+  ).clawpackSha256;
   const canonicalPackageName = detail.package?.name ?? parsed.name;
   const officialClawHubPackage = detail.package
     ? isDefaultOfficialClawHubPackage({ baseUrl: params.baseUrl, pkg: detail.package })
@@ -814,49 +808,53 @@ export async function installPluginFromClawHub(
       };
     }
     const clawhubRegistry = resolveClawHubBaseUrl(params.baseUrl);
-    const clawhubAuthority = isDefaultClawHubBaseUrl(params.baseUrl) ? "openclaw" : "third-party";
-    const installResult = await installPluginFromArchive<ClawHubInstallFailure>(
-      copyPluginInstallTransactionRequest(params, {
-        archivePath: archive.archivePath,
-        verification,
-        onInstallPolicyWarning: params.onInstallPolicyWarning,
-        trustedSourceLinkedOfficialInstall: officialClawHubPackage,
-        config: params.config,
-        logger: params.logger,
-        mode: params.mode,
-        extensionsDir: params.extensionsDir,
-        timeoutMs: params.timeoutMs,
-        workTimeoutMs: params.workTimeoutMs,
-        dryRun: params.dryRun,
-        expectedPluginId,
-        beforePersistentApply: params.beforePersistentApply,
-        onPluginArtifactInspect: params.onPluginArtifactInspect,
-        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit
-          ? (artifact) =>
-              params.onBeforePluginArtifactCommit!({
-                ...artifact,
-                sourceRecord: {
-                  source: "clawhub",
-                  spec: params.spec,
-                  clawhubUrl: clawhubRegistry,
-                  clawhubPackage: canonicalPackageName,
-                  clawhubChannel: detail.package!.channel,
-                  integrity: archive.integrity,
-                },
-              })
-          : undefined,
-        installPolicyRequest: {
-          kind: "plugin-archive",
-          requestedSpecifier: params.spec,
-          source: {
-            kind: "clawhub",
-            authority: officialClawHubPackage ? "official" : clawhubAuthority,
-            mutable: false,
-            network: true,
-          },
-        },
-      }),
-    );
+    const { retainedResult, installPolicyRequest } = await prepareClawHubInstalledRetention({
+      install: { ...params, expectedPluginId },
+      officialClawHubPackage,
+      clawhubAuthority: isDefaultClawHubBaseUrl(params.baseUrl) ? "openclaw" : "third-party",
+      canonicalPackageName,
+      version: versionState.version,
+      artifactKind: expectedClawPackSha256 ? "npm-pack" : "legacy-zip",
+      hasAttestedDigest: Boolean(
+        expectedClawPackSha256 || versionState.verification?.kind === "archive-integrity",
+      ),
+      integrity: archive.integrity,
+    });
+    const installResult =
+      retainedResult ??
+      (await installPluginFromArchive<ClawHubInstallFailure>(
+        copyPluginInstallTransactionRequest(params, {
+          archivePath: archive.archivePath,
+          verification,
+          onInstallPolicyWarning: params.onInstallPolicyWarning,
+          trustedSourceLinkedOfficialInstall: officialClawHubPackage,
+          config: params.config,
+          logger: params.logger,
+          mode: params.mode,
+          extensionsDir: params.extensionsDir,
+          timeoutMs: params.timeoutMs,
+          workTimeoutMs: params.workTimeoutMs,
+          dryRun: params.dryRun,
+          expectedPluginId,
+          beforePersistentApply: params.beforePersistentApply,
+          onPluginArtifactInspect: params.onPluginArtifactInspect,
+          onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit
+            ? (artifact) =>
+                params.onBeforePluginArtifactCommit!({
+                  ...artifact,
+                  sourceRecord: {
+                    source: "clawhub",
+                    spec: params.spec,
+                    clawhubUrl: clawhubRegistry,
+                    clawhubPackage: canonicalPackageName,
+                    clawhubChannel: detail.package!.channel,
+                    integrity: archive.integrity,
+                  },
+                })
+            : undefined,
+          installPolicyRequest,
+        }),
+      ));
     if (!installResult.ok) {
       return installResult;
     }
@@ -879,6 +877,7 @@ export async function installPluginFromClawHub(
     const expectedTarballName = normalizeOptionalString(versionState.clawpack?.npmTarballName);
     return {
       ...installResult,
+      ...(retainedResult ? { unchanged: true as const } : {}),
       ...(trustResult?.warning ? { warning: trustResult.warning } : {}),
       packageName: canonicalPackageName,
       clawhub: {

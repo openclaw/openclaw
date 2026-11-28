@@ -1,3 +1,4 @@
+import type { ExpressionBuilder } from "kysely";
 import { readConfigMachineStateRowInDatabase } from "../state/config-machine-state-row.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
@@ -121,13 +122,34 @@ function readGatewayLastShutdownInDatabase(db: EngineConnection) {
     db,
     getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db)
       .selectFrom("gateway_boot_lifecycle")
-      .select(["reason", "completed_at_ms as completedAtMs"])
+      .select(["pid", "reason", "completed_at_ms as completedAtMs"])
       .where("outcome", "in", ["clean_stop", "planned_restart", "forced_stop"])
       .where("completed_at_ms", "is not", null)
       .orderBy("completed_at_ms", "desc")
       .limit(1),
   );
   return row?.completedAtMs == null ? undefined : { ...row, completedAtMs: row.completedAtMs };
+}
+
+/** Startup failures that ended only because maintenance was required; Doctor clears them. */
+export function isRepairableMaintenanceStartupFailure(
+  eb: ExpressionBuilder<GatewayBootLifecycleDatabase, "gateway_boot_lifecycle">,
+) {
+  return eb.and([
+    eb("outcome", "=", "startup_failed"),
+    eb("startup_reason", "in", maintenanceStartupReasons),
+  ]);
+}
+
+function countRepairableMaintenanceStartupFailuresInDatabase(db: EngineConnection): number {
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    getNodeSqliteKysely<GatewayBootLifecycleDatabase>(db)
+      .selectFrom("gateway_boot_lifecycle")
+      .select((eb) => eb.fn.countAll<number>().as("count"))
+      .where(isRepairableMaintenanceStartupFailure),
+  );
+  return row?.count ?? 0;
 }
 
 export const gatewayBootReadOperations = {
@@ -138,6 +160,10 @@ export const gatewayBootReadOperations = {
   "gatewayBoot.lastShutdown": (_input: undefined, db) => ({
     type: "gatewayBoot.lastShutdown" as const,
     shutdown: readGatewayLastShutdownInDatabase(db),
+  }),
+  "gatewayBoot.repairableMaintenanceFailures": (_input: undefined, db) => ({
+    type: "gatewayBoot.repairableMaintenanceFailures" as const,
+    count: countRepairableMaintenanceStartupFailuresInDatabase(db),
   }),
   "gatewayBoot.breaker": (nowMs: number, db) => ({
     type: "gatewayBoot.breaker" as const,

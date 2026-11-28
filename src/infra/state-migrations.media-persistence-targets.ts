@@ -271,7 +271,7 @@ export function discoverAgentDatabaseMigrationTargets(params: {
           failure(pathname, `Could not inspect held database family ${pathname}: ${String(error)}`);
         }
       }
-      discard(candidate, `Removed missing agent database registry entry ${pathname}.`);
+      // A partial upgrade shadow may deliberately omit a registered database.
       if (candidate.source === "registry") {
         warnings.push(`Skipped missing registered agent database ${pathname}.`);
       }

@@ -12,6 +12,7 @@ import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/se
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { drainPendingSessionDelivery } from "../infra/session-delivery-queue-recovery.js";
 import * as queue from "../infra/session-delivery-queue-storage.js";
+import { chatRef } from "../sessions/chat-ref.js";
 import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
@@ -213,7 +214,7 @@ describe("original requester media handoff", () => {
         expect(await queue.loadPendingSessionDeliveries(queueContext)).toEqual([]);
         if (change === "current") {
           // Outbound custody carries the requester so a replay cannot outlive it.
-          expect(send.mock.calls[0]?.[3]).toEqual(fixture.binding);
+          expect(send.mock.calls[0]?.[3]).toEqual(chatRef(fixture.binding));
         }
       }
       const deliveryCount = change === "current" ? 1 : 0;

@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { chatSessionListResponse, installMockGateway } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Activity excludes subagent sessions" });
+const suite = createControlUiE2eSuite({ name: "Activity session feed membership" });
 
 suite.define(() => {
   it("requests the filtered feed on entry, search, and refresh while preserving normal conversations", async () => {
@@ -24,13 +24,28 @@ suite.define(() => {
           spawnedBy: parent.key,
           updatedAt: Date.now(),
         };
+        const publication = {
+          key: "agent:main:dashboard:publication-task",
+          kind: "direct" as const,
+          label: "GitHub publication",
+          classification: "github-publication" as const,
+          parentSessionKey: parent.key,
+          updatedAt: Date.now(),
+        };
         const gateway = await installMockGateway(page, {
           sessionKey: parent.key,
           methodResponses: {
             "sessions.list": {
               cases: [
-                { match: { excludeSubagents: true }, response: chatSessionListResponse([parent]) },
-                { response: chatSessionListResponse([child, parent]) },
+                {
+                  match: { excludeSubagents: true, excludeSystem: true },
+                  response: chatSessionListResponse([parent]),
+                },
+                {
+                  match: { excludeSubagents: true },
+                  response: chatSessionListResponse([publication, parent]),
+                },
+                { response: chatSessionListResponse([publication, child, parent]) },
               ],
             },
           },
@@ -38,7 +53,9 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}activity`);
         const rows = page.locator("[data-activity-session]");
         await page.locator(`[data-activity-session="${parent.key}"]`).waitFor();
-        await page.screenshot({ path: path.join(suite.artifactDir, "activity-sessions.png") });
+        await page
+          .locator("main.content")
+          .screenshot({ path: path.join(suite.artifactDir, "activity-sessions.png") });
         await expect.poll(() => rows.count()).toBe(1);
         expect(await rows.textContent()).toContain(parent.label);
 
@@ -66,7 +83,9 @@ suite.define(() => {
         await expect.poll(() => rows.count()).toBe(1);
         expect(await rows.textContent()).toContain(parent.label);
         expect(
-          (await activityRequests()).every((params) => params?.excludeSubagents === true),
+          (await activityRequests()).every(
+            (params) => params?.excludeSubagents === true && params?.excludeSystem === true,
+          ),
         ).toBe(true);
       },
     );

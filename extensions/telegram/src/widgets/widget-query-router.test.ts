@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramCallbackMessageRuntime } from "../bot-handlers.callback-router-controls.js";
 
 const lookupTelegramSentWidget = vi.hoisted(() => vi.fn());
@@ -22,6 +22,7 @@ vi.mock("../bot-processing-outcome.js", async (importOriginal) => ({
 const { readTelegramWidgetQuery } = await import("./widget-bot-api.js");
 const { createTelegramWidgetQueryRouter, createTelegramWidgetRequestGate } =
   await import("./widget-query-router.js");
+const { prepareTelegramWidgetQueryContextAsync } = await import("./widget-query-context.js");
 
 describe("Telegram widget request gate", () => {
   it("admits a request text once per window per widget", () => {
@@ -79,7 +80,11 @@ describe("readTelegramWidgetQuery", () => {
 });
 
 describe("widget query router", () => {
-  runtimeConfig.current = { channels: { telegram: { botToken: "123:abc", widgets: true } } };
+  beforeEach(() => {
+    lookupTelegramSentWidget.mockReset();
+    lookupTelegramSentWidget.mockResolvedValue({ name: "vote", title: "Vote", sourceHash: "h" });
+    runtimeConfig.current = { channels: { telegram: { botToken: "123:abc", widgets: true } } };
+  });
   const query = {
     id: "q1",
     from: { id: 7, is_bot: false, first_name: "A" },
@@ -95,7 +100,11 @@ describe("widget query router", () => {
       params: { accountId: "default", runtime: { error: vi.fn() } } as never,
       message: { processMessageWithReplyChain },
       authorization: {
-        resolveTelegramEventAuthorizationContext: async () => ({ storeAllowFrom: [] }),
+        resolveTelegramEventAuthorizationContext: async ({
+          threadSpec,
+        }: {
+          threadSpec: unknown;
+        }) => ({ storeAllowFrom: [], threadSpec }),
         authorizeTelegramEventSender: async () => authorized,
       } as never,
     });
@@ -131,6 +140,63 @@ describe("widget query router", () => {
       }
     }
   });
+  const tapUpdate = (messageId: number) => ({
+    update_id: messageId,
+    widget_query: { ...query, id: `q${messageId}`, message_id: messageId },
+  });
+  // Ingress and the bot middleware prepare the origin before sequentialization.
+  const routePrepared = async (
+    router: ReturnType<typeof createRouter>,
+    update: ReturnType<typeof tapUpdate>,
+  ) => {
+    await prepareTelegramWidgetQueryContextAsync({ update, accountId: "default" });
+    await router.route({ update, me: { id: 1 }, getFile: vi.fn() } as never, vi.fn());
+  };
+
+  it("routes widgets from two private topics back to their own threads", async () => {
+    const process = vi.fn();
+    const router = createRouter(process);
+    for (const [messageId, threadId] of [
+      [10, 42],
+      [11, 84],
+    ] as const) {
+      lookupTelegramSentWidget.mockResolvedValue({
+        name: "vote",
+        title: "Vote",
+        sourceHash: "h",
+        messageThreadId: threadId,
+      });
+      await routePrepared(router, tapUpdate(messageId));
+    }
+    for (const [index, threadId] of [
+      [1, 42],
+      [2, 84],
+    ] as const) {
+      expect(process).toHaveBeenNthCalledWith(
+        index,
+        expect.objectContaining({
+          msg: expect.objectContaining({
+            message_thread_id: threadId,
+            reply_to_message: expect.objectContaining({ message_thread_id: threadId }),
+          }),
+          options: expect.objectContaining({ threadSpec: { scope: "dm", id: threadId } }),
+        }),
+      );
+    }
+  });
+
+  it.each([undefined, { name: "vote", title: "Vote", sourceHash: "h", messageThreadId: 0 }])(
+    "routes a tap without a known topic to the private chat itself",
+    async (widget) => {
+      lookupTelegramSentWidget.mockResolvedValue(widget);
+      const process = vi.fn();
+      await routePrepared(createRouter(process), tapUpdate(20));
+      expect(process).toHaveBeenCalledOnce();
+      const call = process.mock.calls[0]![0];
+      expect(call.msg.message_thread_id).toBeUndefined();
+      expect(call.options.threadSpec).toEqual({ scope: "dm" });
+    },
+  );
 
   it("drops every tap while widgets are disabled for the account", async () => {
     runtimeConfig.current = { channels: { telegram: { botToken: "123:abc" } } };
@@ -144,7 +210,6 @@ describe("widget query router", () => {
 
   it("drops a tap from a sender outside the allowlist before any agent turn", async () => {
     const process = vi.fn();
-    lookupTelegramSentWidget.mockResolvedValueOnce(undefined);
     await createRouter(process, false).route(ctx, vi.fn());
     expect(process).not.toHaveBeenCalled();
   });
@@ -161,7 +226,6 @@ describe("widget query router", () => {
 
   it("records a retryable dispatch outcome for the ingress owner", async () => {
     recordResult.mockClear();
-    lookupTelegramSentWidget.mockResolvedValueOnce(undefined);
     const failure = { kind: "failed-retryable" as const, error: new Error("session busy") };
     await createRouter(async () => failure).route(ctx, vi.fn());
     expect(recordResult).toHaveBeenCalledWith(failure);

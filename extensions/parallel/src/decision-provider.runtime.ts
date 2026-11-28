@@ -4,13 +4,7 @@ import type {
   DecisionProviderContextV2,
   ProviderDecisionOutcomeV2,
 } from "openclaw/plugin-sdk/decisions";
-import {
-  fetchWithProviderHttpGuard,
-  readProviderJsonResponse,
-  resolveProviderHttpRequestConfig,
-  resolveProviderTransportSsrFPolicy,
-  sanitizeConfiguredModelProviderRequest,
-} from "openclaw/plugin-sdk/provider-http";
+import { evaluateDecisionHttp } from "openclaw/plugin-sdk/decisions-http-runtime";
 import { decodeParallelDecisionResult, encodeParallelDecisionRequest } from "./decision-codec.js";
 
 export async function evaluateParallelDecision(
@@ -40,104 +34,13 @@ export async function evaluateParallelDecision(
   ) {
     return { status: "unavailable", reason: "unsupported-input" };
   }
-  if (!context.auth.apiKey && !context.model.headers) {
-    return { status: "unavailable", reason: "credentials-unavailable" };
-  }
-  let release: (() => Promise<void>) | undefined;
-  let admissionError: { error: unknown } | undefined;
-  const assertActive = () => {
-    context.signal.throwIfAborted();
-    let admitted: boolean;
-    try {
-      admitted = context.isAdmissible();
-    } catch (error) {
-      admissionError = { error };
-      throw error;
-    }
-    if (!admitted || performance.now() >= context.deadlineMonotonicMs) {
-      throw new Error("Parallel decision is no longer admitted.");
-    }
-  };
-  try {
-    assertActive();
-    const configuredRequest = providerConfig?.request;
-    // Credential selection and replacement auth already belong to the host. Only
-    // carry network policy here; replaying auth would overwrite prepared headers.
-    const request = sanitizeConfiguredModelProviderRequest(
-      configuredRequest
-        ? {
-            proxy: configuredRequest.proxy,
-            tls: configuredRequest.tls,
-            allowPrivateNetwork: configuredRequest.allowPrivateNetwork,
-          }
-        : undefined,
-    );
-    const requestConfig = resolveProviderHttpRequestConfig({
-      provider: "parallel",
-      capability: "llm",
-      transport: "http",
-      defaultBaseUrl: "https://api.parallel.ai/v1",
-      baseUrl: context.model.baseUrl ?? providerConfig?.baseUrl,
-      defaultHeaders: {
-        "Content-Type": "application/json",
-        ...(context.auth.apiKey &&
-        (!configuredRequest?.auth || configuredRequest.auth.mode === "provider-default")
-          ? { "x-api-key": context.auth.apiKey }
-          : {}),
-      },
-      headers: context.model.headers,
-      request,
-    });
-    const url = requestConfig.baseUrl.replace(/\/+$/u, "") + "/decisions";
-    const guarded = await fetchWithProviderHttpGuard({
-      url,
-      init: { method: "POST", headers: requestConfig.headers, body },
-      signal: context.signal,
-      timeoutMs: context.deadlineMonotonicMs - performance.now(),
-      beforeRequest: assertActive,
-      policy: resolveProviderTransportSsrFPolicy({
-        baseUrl: requestConfig.baseUrl,
-        url,
-        allowPrivateNetwork: requestConfig.allowPrivateNetwork,
-        trustConfiguredBaseUrlOrigin: configuredRequest?.allowPrivateNetwork !== false,
-      }),
-      dispatcherPolicy: requestConfig.dispatcherPolicy,
-      auditContext: "parallel-decisions",
-    });
-    release = guarded.release;
-    const response = guarded.response;
-    if (!response.ok) {
-      return {
-        status: "unavailable",
-        reason:
-          response.status === 401 || response.status === 403
-            ? "authentication"
-            : response.status === 429
-              ? "rate-limited"
-              : [400, 413, 422].includes(response.status)
-                ? "unsupported-input"
-                : "transport",
-      };
-    }
-    let value: unknown;
-    try {
-      value = await readProviderJsonResponse(response, "Parallel decisions", {
-        maxBytes: 1_048_576,
-        timeoutMs: Math.max(1, context.deadlineMonotonicMs - performance.now()),
-      });
-    } catch {
-      context.signal.throwIfAborted();
-      return { status: "unavailable", reason: "invalid-response" };
-    }
-    assertActive();
-    return decodeParallelDecisionResult(batch, value, context.model.inference?.decision);
-  } catch {
-    context.signal.throwIfAborted();
-    if (admissionError) {
-      throw admissionError.error;
-    }
-    return { status: "unavailable", reason: "transport" };
-  } finally {
-    await release?.();
-  }
+  return evaluateDecisionHttp(context, {
+    provider: "parallel",
+    baseUrl: context.model.baseUrl ?? providerConfig?.baseUrl ?? "https://api.parallel.ai/v1",
+    endpointPath: "decisions",
+    body,
+    authHeaders: (apiKey) => ({ "x-api-key": apiKey }),
+    decode: (payload) =>
+      decodeParallelDecisionResult(batch, payload, context.model.inference?.decision),
+  });
 }

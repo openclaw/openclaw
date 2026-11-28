@@ -21,6 +21,7 @@ import {
 import type { SubagentRunReadIndex } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import { shouldKeepSubagentRunChildLink } from "./subagent-run-liveness.js";
 import { buildSubagentRunView } from "./subagent-run-view.js";
 import {
@@ -52,7 +53,7 @@ export function captureSubagentListReadContext(
     runs.map((entry) => [
       entry.childSessionKey,
       readIndex.countPendingDescendantRuns(entry.childSessionKey, {
-        excludeSuspendedDelivery: true,
+        excludeSettledDelivery: true,
       }),
     ]),
   );
@@ -65,10 +66,7 @@ export function captureSubagentListReadContext(
   const execution = new Map(
     [...view.active, ...view.recent].map((entry) => [
       entry.runId,
-      observeSubagentExecution(
-        entry,
-        entry.pauseReason === "sessions_yield" ? fullRuns.values() : [],
-      ),
+      observeSubagentExecution(entry, isSubagentPausedByYield(entry) ? fullRuns.values() : []),
     ]),
   );
   return {

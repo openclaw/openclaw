@@ -143,17 +143,6 @@ export function jsonExtractText(
     : eb.fn<string | null>("json_extract", [value, eb.val(jsonKeyPath(key))]);
 }
 
-export function jsonOrderedTextArray(
-  db: DatabaseSync | PostgresSqlConnection,
-  value: Expression<string | null>,
-  orderBy: Expression<unknown>,
-): AliasableExpression<string> {
-  // SQLite consumes caller-ordered rows; PostgreSQL requires ordering within the aggregate.
-  return isPostgresSqlConnection(db)
-    ? /* kysely-allow-raw: Engine-owned ordered JSON aggregation. */ sql<string>`coalesce(array_to_json(array_agg(${value} order by ${orderBy}))::text, '[]')`
-    : expressionBuilder().fn<string>("json_group_array", [value]);
-}
-
 export function jsonRemoveKey(
   db: DatabaseSync | PostgresSqlConnection,
   value: Expression<string | null>,
@@ -394,6 +383,45 @@ export function jsonFirstStringValue(
   return /* kysely-allow-raw: PostgreSQL otherwise returns the last duplicate; raw ordinal lookup retains SQLite's first. */ sql<
     string | null
   >`CASE WHEN ${jsonNativeFieldsValid(db, value)} THEN CASE WHEN json_typeof(${token}) = 'string' THEN ${token} #>> '{}' END END`;
+}
+
+/** Last-member string lookup matching JSON.parse; exceptional input remains caller-owned. */
+export function jsonLastStringValue(
+  db: DatabaseSync | PostgresSqlConnection,
+  value: Expression<string>,
+  keys: readonly string[],
+): RawBuilder<string | null> {
+  let selected: RawBuilder<unknown>;
+  if (isPostgresSqlConnection(db)) {
+    const token = sql`(${value}::jsonb #> ARRAY[${sql.join(keys.map((key) => sql.lit(key)))}]::text[])`;
+    selected = sql`CASE WHEN jsonb_typeof(${token}) = 'string' THEN ${token} #>> '{}' END`;
+  } else {
+    const dbQuery = getNodeSqliteKysely(db);
+    let object: Expression<unknown> = value;
+    for (const [index, key] of keys.entries()) {
+      const last = index === keys.length - 1;
+      // JSON1 enumerates duplicates; descending IDs select JSON.parse's final member.
+      const entries = dbQuery.fn<JsonFieldRow & { id: number }>("json_each", [object]).as("member");
+      object = dbQuery
+        .selectFrom(entries)
+        .select((eb) =>
+          eb
+            .case()
+            .when("member.type", "=", last ? "text" : "object")
+            .then(eb.ref("member.value"))
+            .else(last ? null : "{}")
+            .end()
+            .as("value"),
+        )
+        .where("member.key", "=", key)
+        .orderBy("member.id", "desc")
+        .limit(1);
+    }
+    selected = sql`${object}`;
+  }
+  return /* kysely-allow-raw: Fence native field access; callers hydrate exceptional input. */ sql<
+    string | null
+  >`CASE WHEN ${jsonNativeFieldsValid(db, value)} THEN ${selected} END`;
 }
 
 /** Enumerate every string-valued object member, including duplicate keys. */

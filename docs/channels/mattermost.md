@@ -391,7 +391,7 @@ Preview streaming is **on by default** in `partial` mode. Configure via `channel
   </Accordion>
   <Accordion title="Streaming behavior notes">
     - If the stream cannot be finalized in place (for example the post was deleted mid-stream), OpenClaw falls back to sending a fresh final post so the reply is never lost.
-    - The answer finalizes the preview in place only while the preview is still the newest post in its thread (or in the channel, for a preview outside a thread). If anything was posted after it, such as a `message` tool send, a person's reply, or another bot's post, OpenClaw sends the answer as a new post and deletes the preview: Mattermost keeps posts in creation order, and an edit neither moves a post nor notifies. System posts such as channel joins do not count. If the check fails, the preview is finalized in place.
+    - The answer finalizes the preview in place only while the preview is still the newest post in its thread (or in the channel, for a preview outside a thread). If anything was posted after it, such as a `message` tool send, a person's reply, or another bot's post, OpenClaw sends the answer as a new post and deletes the preview: Mattermost keeps posts in creation order, and an edit neither moves a post nor notifies. System posts such as channel joins do not count. The same check runs before answer text first replaces the preview's status: if a newer post is already below the preview, the preview keeps its status and the answer appears only in the new post. If a check fails, the preview is streamed into and finalized in place.
     - Clearing a plan removes an otherwise empty preview; a replacement plan gets a fresh preview even when its text is unchanged. At turn completion, failed deletions of old previews are attempted once more without deleting the finalized reply. If deletion still fails, the old preview may remain; verbose logs include the cleanup failure.
     - Thinking-only payloads are suppressed from channel posts, including text that arrives as a `> Thinking` blockquote. Set `/reasoning on` to see thinking in other surfaces; the Mattermost final post keeps the answer only.
     - See [Streaming](/concepts/streaming#preview-streaming-modes) for the channel-mapping matrix.
@@ -462,7 +462,7 @@ Presentation button fields:
   Display label (alias: `text`).
 </ParamField>
 <ParamField path="value" type="string">
-  Value sent back on click, used as the action ID (aliases: `callback_data`, `callbackData`). Required for a clickable button unless `url` is set.
+  Value sent back on click (aliases: `callback_data`, `callbackData`). Any text works, including spaces, punctuation and non-ASCII characters. Required for a clickable button unless `url` is set.
 </ParamField>
 <ParamField path="url" type="string">
   Link button; rendered as `label: url` text in the message body instead of an interactive button.
@@ -501,7 +501,7 @@ When a user clicks a button:
   <Accordion title="Implementation notes">
     - Button callbacks use HMAC-SHA256 verification (automatic, no config needed).
     - The whole attachment block is replaced on click, so all buttons are removed together - partial removal is not possible.
-    - Action IDs containing hyphens or underscores are sanitized automatically (Mattermost routing limitation).
+    - Mattermost only routes alphanumeric action IDs, so a button whose value is not alphanumeric gets a derived alphanumeric ID; the value itself reaches the agent unchanged.
     - Clicks whose `action_id` does not match an action on the original post are rejected with `403` ("Unknown action").
 
   </Accordion>
@@ -559,7 +559,7 @@ External scripts and webhooks can post buttons directly via the Mattermost REST 
 1. Attachments go in `props.attachments`, not top-level `attachments` (silently ignored).
 2. Every action needs `type: "button"` - without it, clicks are swallowed silently.
 3. Every action needs an `id` field - Mattermost ignores actions without IDs.
-4. Action `id` must be **alphanumeric only** (`[a-zA-Z0-9]`). Hyphens and underscores break Mattermost's server-side action routing (returns 404). Strip them before use.
+4. Action `id` must be **alphanumeric only** (`[a-zA-Z0-9]`). Any other character, including hyphens, underscores and non-ASCII text, breaks Mattermost's server-side action routing (returns 404). Keep the full value in `context` instead.
 5. `context.action_id` must match the button's `id`; the gateway rejects clicks whose `action_id` does not exist on the post.
 6. `context.action_id` is required - the interaction handler returns 400 without it.
 7. The callback source IP must be allowed (see `interactions.allowedSourceIps` above).
@@ -666,7 +666,7 @@ Account values override top-level fields; `channels.mattermost.defaultAccount` p
   <Accordion title="Buttons issues">
     - Buttons appear as white boxes or not at all: the button data is malformed. Each presentation button needs a `label` and a `value` (buttons missing either are dropped).
     - Buttons render but clicks do nothing: verify the gateway is reachable from the Mattermost server, the Mattermost server IP is included in `channels.mattermost.interactions.allowedSourceIps` (only loopback is accepted without it), and `ServiceSettings.AllowedUntrustedInternalConnections` includes the callback host for private targets.
-    - Buttons return 404 on click: the button `id` likely contains hyphens or underscores. Mattermost's action router breaks on non-alphanumeric IDs. Use `[a-zA-Z0-9]` only.
+    - Buttons return 404 ("Page not found") on click: the action `id` contains a character outside `[a-zA-Z0-9]`, so Mattermost's action router never reaches OpenClaw. Buttons sent through OpenClaw and `buildButtonAttachments` get valid IDs; raw JSON integrations must use `[a-zA-Z0-9]` only.
     - Gateway logs `rejected callback source`: the click came from an IP outside `interactions.allowedSourceIps`. Allowlist the Mattermost server or your ingress, and set `gateway.trustedProxies` behind a reverse proxy.
     - Gateway logs `invalid _token`: HMAC mismatch. Check that you sign all context fields (not a subset), use sorted keys, and use compact JSON (no spaces). See the HMAC section above.
     - Gateway logs `missing _token in context`: the `_token` field is not in the button's context. Include it when building the integration payload.

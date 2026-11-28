@@ -1,3 +1,0 @@
-43
-# Missing/invalid sort defaults and saved-choice remount/Reset indicator regressions.
-# Existing sidebar fixtures explicitly select their sort contract (+16 LF); no new cases.

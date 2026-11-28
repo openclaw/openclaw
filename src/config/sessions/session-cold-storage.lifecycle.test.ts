@@ -607,7 +607,7 @@ describe("cold current transcript lifecycle", () => {
         errorMessage: "Compaction conversation authority revoked",
       });
       const source: SessionSourceAssertion = current.source;
-      const before = fixture.snapshot();
+      let before = fixture.snapshot();
       const archiveBefore = await fs.readFile(fixture.archivePath);
       let changed = false;
       let inCommitGrant = false;
@@ -651,6 +651,7 @@ describe("cold current transcript lifecycle", () => {
             operation,
           ),
         onCommitRequest: (...args) => {
+          before = fixture.snapshot();
           inCommitGrant = true;
           try {
             params.onCommitRequest(...args);
@@ -739,21 +740,24 @@ describe("cold current transcript lifecycle", () => {
     },
   );
 
-  it("rolls back restoration when prepared authority is revoked at commit", async () => {
+  it("rolls back hot publication when prepared authority is revoked at commit", async () => {
     const fixture = await createColdCurrentSession();
-    const before = fixture.snapshot();
+    let before = fixture.snapshot();
     const authority = createCompactAuthority(fixture);
-    const commit = observeCommit(authority.revoke);
+    const commit = observeCommit(() => {
+      before = fixture.snapshot();
+      authority.revoke();
+    });
     await expect(authority.trim()).rejects.toThrow("Compaction source authority revoked");
     expect(commit.requested).toBe(true);
     expect(fixture.snapshot()).toEqual(before);
   });
 
   it.each(["foreign row", "alias path"])(
-    "rolls back restoration when a %s changes at the commit grant",
+    "rolls back hot publication when a %s changes at the commit grant",
     async (change) => {
       const fixture = await createColdCurrentSession();
-      const before = fixture.snapshot();
+      let before = fixture.snapshot();
       const archiveBefore = await fs.readFile(fixture.archivePath);
       const sourceScope = {
         ...fixture.scope,
@@ -771,6 +775,7 @@ describe("cold current transcript lifecycle", () => {
       interceptRestoration((params) => ({
         ...params,
         onCommitRequest: () => {
+          before = fixture.snapshot();
           if (change === "alias path") {
             unlinkSync(sourceScope.storePath);
             symlinkSync(seed!.snapshotPath, sourceScope.storePath);

@@ -13,7 +13,7 @@ import {
 } from "../../../sessions/session-state-events.test-support.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import type { LifecycleControllerFixtureOptions } from "./subagent-registry-lifecycle-controller.test-support.js";
-import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
+import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";

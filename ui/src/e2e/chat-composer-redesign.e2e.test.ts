@@ -61,7 +61,7 @@ suite.define(() => {
           await polledCount(page.locator(".agent-chat__composer-status-band")).toBe(0);
           if (message) {
             await polledText(setupBanner).toContain(message);
-            const setupAction = setupBanner.getByRole("button", { name: "Set up a model" });
+            const setupAction = setupBanner.getByRole("button", { name: "Open Models" });
             await polledVisible(setupAction).toBe(true);
             expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           } else {
@@ -80,9 +80,12 @@ suite.define(() => {
           await revealChatModelOption(page, "openai/gpt-5.5");
           await polledVisible(option).toBe(true);
           if (blocked) {
-            await polledAttribute(option, "data-chat-model-setup").toBe("true");
-            await option.click();
-            await page.waitForURL("**/settings/model-providers?connect=1");
+            expect(await option.isDisabled()).toBe(true);
+            await page.locator("[data-chat-model-search]").fill("");
+            await page
+              .locator('[data-chat-model-auth-state] [data-chat-model-setup="true"]')
+              .click();
+            await page.waitForURL("**/settings/model-providers?provider=openai&connect=1");
           } else {
             expect(await option.isDisabled()).toBe(true);
             expect(await page.locator(".chat-controls__model-menu").textContent()).not.toContain(
@@ -95,7 +98,7 @@ suite.define(() => {
     },
   );
 
-  it("does not repeat an auth failure below the composer when the run error is visible", async () => {
+  it("opens Models from an auth-refresh failure without repeating the composer warning", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const message =
         "Your refresh token has already been used to generate a new access token. Please try signing in again.";
@@ -128,7 +131,14 @@ suite.define(() => {
         sessionKey: "main",
         state: "error",
       });
-      await polledText(page.locator(".chat-error")).toContain(message);
+      const notice = page.locator(".chat-error--reply");
+      await polledText(notice.locator(".app-toast__message")).toBe(
+        `${message}\n\nProvider: openai\nHTTP status: 401\nReason: refresh_token_reused\nType: invalid_request_error`,
+      );
+      const openModels = notice.getByRole("button", { name: "Open Models", exact: true });
+      await polledVisible(openModels).toBe(true);
+      expect(await notice.getByRole("button", { name: "Refresh", exact: true }).count()).toBe(0);
+      expect(await notice.locator("details, [aria-expanded], .report-issue-link").count()).toBe(0);
       await polledCount(page.locator(".agent-chat__composer-status-band")).toBe(0);
       const textarea = page.locator(".agent-chat__input textarea");
       await expect.poll(() => textarea.isDisabled()).toBe(false);
@@ -136,10 +146,13 @@ suite.define(() => {
       await expect.poll(() => exactButton(page, "Send message").isDisabled()).toBe(true);
       expect(await textarea.inputValue()).toBe("Try the message again.");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await openModels.click();
+      await page.waitForURL("**/settings/model-providers");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });
 
-  it("keeps the loading model picker beside the microphone", async () => {
+  it("keeps the model picker beside the microphone while the catalog is pending", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         subscriptionInitialHistory: false,
@@ -151,7 +164,7 @@ suite.define(() => {
       const composer = page.locator(".agent-chat__input");
       const model = composer.locator('[data-chat-model-select="true"]');
       const voice = page.getByRole("button", { name: "Start voice input" });
-      await polledAttribute(model, "aria-busy").toBe("true");
+      await polledAttribute(model, "aria-busy").toBe("false");
       await polledVisible(voice).toBe(true);
 
       const measureGap = async () => {
@@ -163,7 +176,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps mobile picker panels above an attachment-expanded composer", async () => {
+  it("keeps mobile picker panels reachable with an attachment-expanded composer", async () => {
     await suite.withPage({ viewport: { width: 393, height: 852 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -195,12 +208,18 @@ suite.define(() => {
           layoutBox(page.locator(menu)),
           layoutBox(visibleTrigger),
         ]);
-        // Fixed pickers use the shared 16px mobile gutter.
-        expect(menuBox.x).toBeCloseTo(16, 0);
-        expect(right(menuBox)).toBeCloseTo(393 - 16, 0);
-        expect(menuBox.width).toBeCloseTo(393 - 2 * 16, 0);
         expect(menuBox.y).toBeGreaterThanOrEqual(0);
-        expect(bottom(menuBox)).toBeLessThanOrEqual(composerBox.y + 1);
+        expect(bottom(menuBox)).toBeLessThanOrEqual(853);
+        if (kind === "model") {
+          expect(menuBox.x).toBeGreaterThanOrEqual(0);
+          expect(right(menuBox)).toBeLessThanOrEqual(394);
+        } else {
+          // The effort menu remains anchored above the composer.
+          expect(menuBox.x).toBeCloseTo(16, 0);
+          expect(right(menuBox)).toBeCloseTo(393 - 16, 0);
+          expect(menuBox.width).toBeCloseTo(393 - 2 * 16, 0);
+          expect(bottom(menuBox)).toBeLessThanOrEqual(composerBox.y + 1);
+        }
         expect(bottom(triggerBox)).toBeLessThanOrEqual(853);
         expect(bottom(footerBox)).toBeLessThanOrEqual(853);
         await page.keyboard.press("Escape");
@@ -215,6 +234,34 @@ suite.define(() => {
       await polledFocus(focusedEffortControl.first()).toBe(true);
       await page.keyboard.press("Escape");
       await polledFocus(effort).toBe(true);
+
+      await page.setViewportSize({ width: 390, height: 900 });
+      await composer.locator('[data-chat-model-select="true"]').click();
+      const modelMenu = composer.locator(".chat-controls__model-menu");
+      const search = modelMenu.locator("[data-chat-model-search]");
+      const result = modelMenu.locator('[data-chat-model-option="openai/gpt-5.5"]').first();
+      // A mobile keyboard reduces and may pan the visual viewport without resizing layout.
+      for (const offsetTop of [0, 48, 520]) {
+        await page.evaluate((offset) => {
+          for (const [key, value] of Object.entries({ height: 380, offsetTop: offset })) {
+            Object.defineProperty(window.visualViewport!, key, { configurable: true, value });
+          }
+          window.visualViewport!.dispatchEvent(new Event("resize"));
+          window.visualViewport!.dispatchEvent(new Event("scroll"));
+        }, offsetTop);
+        await search.fill("gpt-5.5");
+        await waitForControlUiProofSurface(modelMenu, [search, result]);
+        await expect
+          .poll(async () => {
+            const boxes = await Promise.all([search.boundingBox(), result.boundingBox()]);
+            return boxes.every(
+              (box) => box && box.y >= offsetTop && bottom(box) <= offsetTop + 380,
+            );
+          })
+          .toBe(true);
+      }
+      await result.click();
+      await polledVisible(modelMenu).toBe(false);
     });
   });
 

@@ -81,8 +81,10 @@ export function startWorktreeMaintenance(params: {
   const inOwnerContext = AsyncLocalStorage.snapshot();
   let receipt: ManagedWorktreeGcReceipt | undefined;
   let archivePending = false;
+  let manifestSweepPending = true;
   let nextRemovalAt = 0;
   const scratchCursor: ScratchCleanupCursor = {};
+  const scratchDeferred = new Error("host IO pressure");
   const hasIoPressure = createHostIoPressureProbe();
   const isActive = () =>
     !scheduler.signal.aborted &&
@@ -101,7 +103,7 @@ export function startWorktreeMaintenance(params: {
         reject(toErrorObject(scheduler.signal.reason, "Worktree cleanup canceled"));
       scheduler.signal.addEventListener("abort", abort, { once: true });
       scheduler.schedule({
-        id: "maintenance:worktrees:resume",
+        id: `maintenance:worktrees:resume:${randomUUID()}`,
         delayMs,
         run: () => {
           scheduler.signal.removeEventListener("abort", abort);
@@ -256,6 +258,49 @@ export function startWorktreeMaintenance(params: {
               async () => {
                 await previousDrain;
                 assertCurrent();
+                let scratchPressure = false;
+                try {
+                  scratchPressure = await hasIoPressure();
+                  const assertScratchCurrent = () => {
+                    assertCurrent();
+                    if (scratchPressure) {
+                      throw scratchDeferred;
+                    }
+                  };
+                  assertScratchCurrent();
+                  const scratch = await prepareScratchMaintenanceTargets(config);
+                  try {
+                    current.scratch = await cleanScratch({
+                      targets: scratch.targets,
+                      now: scheduler.now(),
+                      assertCurrent: assertScratchCurrent,
+                      pause: async (milliseconds) => {
+                        await pause(milliseconds);
+                        scratchPressure = await hasIoPressure();
+                      },
+                      cursor: scratchCursor,
+                      signal: scheduler.signal,
+                      onProgress: (progress) => {
+                        current.scratch = progress;
+                      },
+                    });
+                  } finally {
+                    scratch.release();
+                  }
+                } catch (error) {
+                  assertCurrent();
+                  if (error === scratchDeferred) {
+                    current.scratchDeferred = "io-pressure";
+                  } else {
+                    params.onError(`Scratch cleanup failed: ${String(error)}`);
+                  }
+                }
+                // Scratch consumes fresh commit counters; preserve their backoff for GC admission.
+                if (scratchPressure) {
+                  nextRemovalAt = Math.max(nextRemovalAt, scheduler.now() + PRESSURE_BACKOFF_MS);
+                }
+                // Archives committed during scratch cleanup are included in the upcoming census.
+                archivePending = false;
                 const result = await managedWorktrees.gc({
                   ...createManagedWorktreeOwnerPolicy(config),
                   retryDeferred,
@@ -279,24 +324,19 @@ export function startWorktreeMaintenance(params: {
                   },
                 });
                 assertCurrent();
-                await sweepLocalWorkspaceManifests({ signal: scheduler.signal, assertCurrent });
-                assertCurrent();
-                const scratch = await prepareScratchMaintenanceTargets(config);
-                try {
-                  result.scratch = await cleanScratch({
-                    targets: scratch.targets,
-                    now: scheduler.now(),
-                    assertCurrent,
-                    pause,
-                    cursor: scratchCursor,
-                    onProgress: (progress) => {
-                      current.scratch = progress;
-                    },
-                  });
-                } finally {
-                  scratch.release();
+                // Archive wakes reclaim checkouts; the hourly job owns the global CAS scan.
+                if (manifestSweepPending) {
+                  manifestSweepPending = false;
+                  try {
+                    await sweepLocalWorkspaceManifests({ signal: scheduler.signal, assertCurrent });
+                  } catch (error) {
+                    manifestSweepPending = true;
+                    throw error;
+                  }
                 }
                 assertCurrent();
+                result.scratch = current.scratch;
+                result.scratchDeferred = current.scratchDeferred;
                 Object.assign(current, result);
                 params.onComplete(result);
                 current.state = "completed";
@@ -371,11 +411,14 @@ export function startWorktreeMaintenance(params: {
   });
   scheduler.schedule({
     id: "maintenance:worktrees",
-    delayMs: WORKTREE_GC_INTERVAL_MS,
+    // The startup owner already waits for post-ready admission; do not lose an
+    // entire interval after each restart before reclaiming expired scratch.
+    delayMs: 0,
     everyMs: WORKTREE_GC_INTERVAL_MS,
     phase: "maintenance",
     run: () => {
       if (!isGatewayWorkAdmissionClosed()) {
+        manifestSweepPending = true;
         owner.request();
       }
     },

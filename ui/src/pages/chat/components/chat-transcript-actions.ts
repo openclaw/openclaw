@@ -118,6 +118,7 @@ export function createTranscriptMessageOptions(
     | "mediaPolicyKey"
     | "showAssistantAvatar"
     | "bubbleMode"
+    | "interruptedRunIds"
   >,
 ): StreamGroupOptions {
   return {
@@ -137,6 +138,7 @@ export function createTranscriptMessageOptions(
     onFindWorkspaceFile: actions.onFindWorkspaceFile,
     onPermissionRetry: actions.onPermissionRetry,
     mediaOwner: props.mediaOwner,
+    toolMessageSource: props.toolMessageSource,
     mediaReadAllowed: props.mediaReadAllowed,
     resourceBasePath: props.resourceBasePath,
     connectionEpoch: props.connectionEpoch,

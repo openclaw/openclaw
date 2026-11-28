@@ -86,7 +86,7 @@ async function select(
   return resolveSessionAuthSelection({
     ...shared,
     provider: model.provider,
-    modelId: model.model,
+    modelId: model.model ?? modelId,
     isNewSession,
     requesterProfileId,
   });
@@ -155,6 +155,7 @@ describe("person-linked session auth", () => {
 
         const { result, sessionEntry } = await applyMixedDirectives({
           body: `${prefix}/model openai/${modelId}@${personalId}`,
+          cfg: { commands: { text: true }, agents: { defaults: { model: `openai/${modelId}` } } },
           ctx,
           agentDir: state.agentDir(),
           channel: "webchat",

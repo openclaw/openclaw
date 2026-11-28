@@ -13,8 +13,8 @@
     "gatewayMethodDispatch": ["authenticated-request"]
   },
   "toolMetadata": {
-    "github_read": { "profiles": ["coding"] },
-    "github_search": { "profiles": ["coding"] }
+    "github_read": { "profiles": ["coding"], "replaySafe": true },
+    "github_search": { "profiles": ["coding"], "replaySafe": true }
   },
   "configSchema": {
     "type": "object",

@@ -3,7 +3,8 @@ import { expect, it, vi, beforeEach } from "vitest";
 import { uploadFile } from "../tlon-api.js";
 import { uploadImageFromUrl } from "./upload.js";
 
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   MAX_IMAGE_BYTES: 6 * 1024 * 1024,
   readRemoteMediaBuffer: vi.fn(),
 }));
@@ -34,6 +35,7 @@ it.each([1024, MAX_IMAGE_BYTES * 2])("caps downloads at %s bytes", async (cap) =
   expect(mockReadRemoteMediaBuffer.mock.lastCall?.[0]).toMatchObject({
     url,
     maxBytes: Math.min(cap ?? MAX_IMAGE_BYTES, MAX_IMAGE_BYTES),
+    timeoutMs: 180_000,
     responseHeaderTimeoutMs: 120_000,
     readIdleTimeoutMs: 30_000,
   });

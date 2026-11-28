@@ -4,7 +4,7 @@
     "agent-orchestration"
   ],
   "name": "Advisor",
-  "description": "Experimental: reviews ongoing agent work on the session's own model and offers one short correction.",
+  "description": "Reviews ongoing agent work on the session's own model and offers one short correction.",
   "activation": {
     "onStartup": true
   },

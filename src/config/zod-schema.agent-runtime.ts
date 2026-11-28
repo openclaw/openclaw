@@ -317,8 +317,8 @@ const ToolExecBaseShape = {
   /** Emit a system event and heartbeat when a backgrounded exec exits. */
   notifyOnExit: z.boolean().optional(),
   /**
-   * Also emit success exit notifications when a backgrounded exec has no output.
-   * Default false to reduce context noise.
+   * Also wake the session when a backgrounded exec succeeds with no output.
+   * Default true, so every exit of a wake-armed command reports back.
    */
   notifyOnExitEmptySuccess: z.boolean().optional(),
   applyPatch: ToolExecApplyPatchSchema,
@@ -366,7 +366,7 @@ const ToolFsSchema = z
 
 const ToolLoopDetectionSchema = z
   .strictObject({
-    /** Enable tool-loop protection (default: false). */
+    /** Enable the tool repeat guard (default: true). */
     enabled: z.boolean().optional(),
   })
   .optional();
@@ -632,7 +632,7 @@ const GatewayToolPolicySchema = z.strictObject({
     .optional(),
 });
 
-export const ToolsSchema = z
+const ToolsObjectSchema = z
   .strictObject({
     ...CommonToolPolicyFields,
     gatewayPolicy: GatewayToolPolicySchema.optional(),
@@ -708,5 +708,8 @@ export const ToolsSchema = z
     createAllowAlsoAllowConflictValidator(
       "tools cannot set both allow and alsoAllow in the same scope (merge alsoAllow into allow, or remove allow and use profile + alsoAllow)",
     ),
-  )
-  .optional();
+  );
+
+// Keep the root config declaration pointing at this schema instead of inlining its entire shape.
+export type OptionalToolsSchema = z.ZodOptional<typeof ToolsObjectSchema>;
+export const ToolsSchema: OptionalToolsSchema = ToolsObjectSchema.optional();

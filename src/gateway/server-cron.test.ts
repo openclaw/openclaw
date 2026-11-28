@@ -8,7 +8,6 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { createRequireRecord } from "../../test/helpers/record.js";
 import { AgentDeletionCommitUncertainError } from "../agents/agent-deletion-errors.js";
 import {
-  abortAndDrainEmbeddedAgentRun,
   detachActiveEmbeddedRun,
   isEmbeddedAgentRunHandleActive,
   attachActiveEmbeddedRun,
@@ -106,9 +105,6 @@ const mocks = vi.hoisted(() => {
       hasHooks: (hookName: string) => hookName === "cron_changed",
       runCronChanged: changed,
     })),
-    abortRun: vi.fn<typeof import("../agents/embedded-agent.js").abortAndDrainEmbeddedAgentRun>(
-      async () => ({ aborted: true, drained: true, forceCleared: false }),
-    ),
     captureMcp:
       vi.fn<
         typeof import("../agents/agent-bundle-mcp-manager-api.js").captureSessionMcpRuntimeRetirement
@@ -185,11 +181,6 @@ vi.mock("../cron/isolated-agent.js", () => ({
 // mock-isolation: Each cron case owns its hooks instead of sharing the active plugin registry.
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: mocks.hooks,
-}));
-
-// mock-isolation: Cancellation cases control drain settlement without starting embedded agents.
-vi.mock("../agents/embedded-agent.js", () => ({
-  abortAndDrainEmbeddedAgentRun: mocks.abortRun,
 }));
 
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", async (importOriginal) => ({
@@ -1289,7 +1280,6 @@ describe("buildGatewayCronService", () => {
 
     async function cleanupTimedOutCronRun(state: CronServiceFixture) {
       const job = await addAgentTurnJob(state, "shared session turn", "work");
-      mocks.abortRun.mockImplementation(abortAndDrainEmbeddedAgentRun);
       await getCronDeps(state).cleanupTimedOutAgentRun?.({
         job,
         timeoutMs: 600_000,
@@ -1324,7 +1314,6 @@ describe("buildGatewayCronService", () => {
 
     afterEach(() => {
       embeddedRunsTesting.resetActiveEmbeddedRuns();
-      mocks.abortRun.mockReset();
     });
 
     it.each(["replacement-run", "cron-run"])(
@@ -1917,7 +1906,7 @@ describe("buildGatewayCronService", () => {
         const announceRequest = callRecord(mocks.announce);
         const announce = requireRecord(announceRequest.payload, "script failure announce");
         expect(announce.text).toContain(
-          'Automation "script failure detail" failed 1 times\nCause: automation script failed internally',
+          'Automation "script failure detail" failed\nCause: automation script failed internally',
         );
         expect(announce.text).not.toContain(rawError);
 

@@ -80,6 +80,7 @@ const enChatMessageMetadata = {
       forwardedAutomation: "Automation",
       forwardedFromAgent: "Forwarded from {agentId}",
       forwardedMessage: "Forwarded message",
+      suggestedBy: "Suggested by {name}",
       fullContentLoadExhausted: "Couldn’t load the full message. Try again.",
       voiceNote: "Voice note",
       voiceTranscript: "Voice transcript",
@@ -116,9 +117,6 @@ const enChatMessageMetadata = {
       claudeCliTaskNotification: {
         label: "System · background task",
       },
-      pluginSteering: {
-        label: "{plugin} guidance",
-      },
     },
   },
 } satisfies TranslationMap;
@@ -132,7 +130,6 @@ export const registerChatMessageMetadataEnglish = Object.assign(
       gatewayRestarted,
       cliHarnessContext,
       claudeCliTaskNotification,
-      pluginSteering,
       ...labels
     } = enChatMessageMetadata.chat.systemNotice;
     Object.assign(en.chat.systemNotice, labels);
@@ -141,7 +138,6 @@ export const registerChatMessageMetadataEnglish = Object.assign(
     Object.assign(en.chat.systemNotice.gatewayRestarted, gatewayRestarted);
     Object.assign(en.chat.systemNotice.cliHarnessContext, cliHarnessContext);
     Object.assign(en.chat.systemNotice.claudeCliTaskNotification, claudeCliTaskNotification);
-    Object.assign(en.chat.systemNotice.pluginSteering, pluginSteering);
   },
   { catalog: enChatMessageMetadata },
 );

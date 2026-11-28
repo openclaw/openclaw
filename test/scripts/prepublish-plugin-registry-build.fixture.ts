@@ -2,7 +2,12 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-export function writeCombinedBuildFixture(repoRoot: string, names: string[], version: string) {
+export function writeCombinedBuildFixture(
+  repoRoot: string,
+  names: string[],
+  version: string,
+  batch = false,
+) {
   for (const name of names) {
     const packageDir = path.join(repoRoot, "extensions", name.split("/")[1]!);
     writeFileSync(
@@ -23,10 +28,17 @@ export function writeCombinedBuildFixture(repoRoot: string, names: string[], ver
       JSON.stringify({ id: name.split("/")[1], configSchema: { type: "object", properties: {} } }),
     );
   }
-  for (const entry of ["tsx.mjs", "lib/plugin-npm-build-and-pack.mts"]) {
+  const entries = ["tsx.mjs", "lib/plugin-npm-build-and-pack.mts"];
+  if (batch) {
+    entries.push("lib/plugin-npm-build-and-pack-batch.mts");
+  }
+  for (const entry of entries) {
     writeFileSync(
       path.join(repoRoot, "scripts", entry),
-      `import ${JSON.stringify(pathToFileURL(path.resolve("scripts", entry)).href)};\n`,
+      `import ${JSON.stringify(pathToFileURL(path.resolve("scripts", entry)).href)};\n` +
+        (batch && entry === "tsx.mjs"
+          ? 'import { appendFileSync } from "node:fs"; appendFileSync(".build-processes", `${process.pid}\\n`);\n'
+          : ""),
     );
   }
 }

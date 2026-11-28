@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import { createServer, type Socket } from "node:net";
 import { devNull } from "node:os";
 import path from "node:path";
 import { setImmediate as checkpoint } from "node:timers/promises";
@@ -10,13 +12,18 @@ import {
   withinTest,
   withTestTimeout,
 } from "../../test/helpers/promise.js";
-import * as commandExec from "../process/exec.js";
+import { useWorkspaceFilesystemBlock } from "../../test/helpers/workspace-filesystem-block.js";
+import { resolveExecutablePath } from "../infra/executable-path.js";
+import { runCommandWithTimeout } from "../process/exec.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { registerWorkspaceBootstrapTests } from "./workspace-bootstrap.test-utils.js";
+import * as workspaceFilesystem from "./workspace-filesystem.js";
 import { LEGACY_WORKSPACE_ATTESTATION_HEADER } from "./workspace-legacy-state.js";
 import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
 import { registerWorkspacePreparationTests } from "./workspace-preparation.test-utils.js";
@@ -41,6 +48,7 @@ import {
   WORKSPACE_VANISHED_ERROR_CODE,
 } from "./workspace.js";
 
+const filesystemBlock = useWorkspaceFilesystemBlock();
 const HEARTBEAT = "HEARTBEAT.md";
 const SEEDED = { bootstrapSeededAt: "2026-07-15T10:00:00.000Z" };
 const COMPLETED = { ...SEEDED, setupCompletedAt: "2026-07-15T10:01:00.000Z" };
@@ -143,10 +151,7 @@ it.each([
 
 it("rejects invalid environment-only profile names", () => {
   expect(() =>
-    resolveDefaultAgentWorkspaceDir({
-      OPENCLAW_PROFILE: "../escape",
-      HOME: "/home/peter",
-    }),
+    resolveDefaultAgentWorkspaceDir({ OPENCLAW_PROFILE: "../escape", HOME: "/home/peter" }),
   ).toThrow('Invalid profile name: "../escape"');
 });
 
@@ -175,6 +180,13 @@ async function expectCompletedWithoutBootstrap(dir: string) {
   await expectPathMissing(path.join(dir, BOOTSTRAP));
   expect((await readWorkspaceState(dir)).setupCompletedAt).toMatch(TIMESTAMP);
 }
+
+it("keeps warm workspace setup off synchronous filesystem existence checks", async () => {
+  await ensureWorkspace();
+  const stat = vi.spyOn(fsSync, "statSync");
+  await expect(ensureWorkspace()).resolves.toMatchObject({ bootstrapPending: true });
+  expect(stat).not.toHaveBeenCalled();
+});
 
 it("refuses to re-seed a future-attested workspace after only generated remnants survive", async () => {
   await ensureWorkspace();
@@ -357,13 +369,15 @@ it("records stale bootstrap completion when BOOTSTRAP.md cleanup fails", async (
   await ensureWorkspace();
   await writeWorkspaceFile(IDENTITY, "# IDENTITY.md\n\n- **Name:** Example\n");
   const bootstrapPath = workspacePath(BOOTSTRAP);
-  const originalRm = fs.rm.bind(fs);
-  vi.spyOn(fs, "rm").mockImplementation(async (filePath, options) => {
-    if (filePath === bootstrapPath) {
-      throw Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
-    }
-    await originalRm(filePath, options);
-  });
+  const run = workspaceFilesystem.runWorkspaceFilesystemOperation;
+  vi.spyOn(workspaceFilesystem, "runWorkspaceFilesystemOperation").mockImplementation(
+    async (operation, guard) => {
+      if (operation.kind === "remove" && operation.name === BOOTSTRAP) {
+        throw Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
+      }
+      return run(operation, guard);
+    },
+  );
   await ensureWorkspace();
   await fs.access(bootstrapPath);
   expect((await readWorkspaceState(tempDir)).setupCompletedAt).toMatch(TIMESTAMP);
@@ -400,21 +414,19 @@ it.each([
   async (content, _kind, hash) => {
     await ensureWorkspace();
     await fs.rm(workspacePath(BOOTSTRAP));
-    const customInstructions = "custom instructions\n";
     if (content === "customized") {
-      await fs.writeFile(workspacePath(AGENTS), customInstructions);
+      await writeWorkspaceFile(AGENTS, "custom instructions\n");
     }
     const snapshot = await readWorkspaceStateSnapshot(tempDir);
     const generatedHashes = new Map(snapshot.attestation!.generatedHashes);
-    if (hash === undefined) {
-      generatedHashes.delete(AGENTS);
-    } else {
+    generatedHashes.delete(AGENTS);
+    if (hash) {
       generatedHashes.set(AGENTS, hash);
     }
     await attest(generatedHashes);
     if (content === "customized") {
       await expect(ensureWorkspace()).resolves.toMatchObject({ dir: tempDir });
-      await expect(fs.readFile(workspacePath(AGENTS), "utf8")).resolves.toBe(customInstructions);
+      expect(await readWorkspaceFile(AGENTS)).toBe("custom instructions\n");
     } else {
       await expectWorkspaceVanished(ensureWorkspace());
     }
@@ -423,17 +435,21 @@ it.each([
 
 it("creates only the directory for runtime-managed-implicit provisioning (#92015)", async () => {
   const targetDir = testState!.path("implicit-parent/implicit-acp-workspace");
-  const result = await ensureAgentWorkspace({
-    dir: targetDir,
-    ensureBootstrapFiles: true,
-    provisioning: "runtime-managed-implicit",
-  });
-  expect(result).toMatchObject({ dir: targetDir, bootstrapPending: false });
+  await expect(
+    ensureWorkspace(true, { dir: targetDir, provisioning: "runtime-managed-implicit" }),
+  ).resolves.toMatchObject({ dir: targetDir, bootstrapPending: false });
   await fs.access(targetDir);
   for (const name of [AGENTS, BOOTSTRAP, ".git"]) {
     await expectPathMissing(path.join(targetDir, name));
   }
   expect((await workspaceState.readWorkspaceStateSnapshot(targetDir)).setupExists).toBe(false);
+});
+
+it("preserves and refuses a regular file at the workspace root", async () => {
+  const dir = testState!.path("file-workspace");
+  await fs.writeFile(dir, "Authored content\n");
+  await expect(ensureAgentWorkspace({ dir })).rejects.toThrow();
+  expect(await fs.readFile(dir, "utf8")).toBe("Authored content\n");
 });
 
 it.each(["committed", "failed", "retired-before-commit", "retired-after-commit"] as const)(
@@ -510,36 +526,83 @@ function gitTestEnvironment(): NodeJS.ProcessEnv {
   };
 }
 
-it.for(["success", "failure", "retired"] as const)(
+it.for(["success", "failure", "retired", "retired-before-spawn"] as const)(
   "settles admitted Git work: %s",
   async (outcome, { signal }) => {
     const { state } = getWorkspaceTestFixture();
     const dir = state.path(`git-${outcome}`);
     const gate = workspaceGate("workspace owner retired during Git initialization");
     const baseEnv = gitTestEnvironment();
-    const realRun = commandExec.runCommandWithTimeout;
+    const realGit = resolveExecutablePath("git", { env: baseEnv });
+    expect(realGit).toBeDefined();
+    // Retained workers must not carry another test's executable environment.
+    await drainGlobalSingletonLifecycleState("restart", { retainSharedState: true });
     let attempts = 0;
-    let gitSettled = false;
-    vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
-      if (argv[0] !== "git") {
-        return await realRun(argv, options);
-      }
-      const settings = typeof options === "number" ? { timeoutMs: options } : options;
-      if (argv[1] !== "init") {
-        return await realRun(argv, { ...settings, baseEnv });
-      }
-      expect(settings.cwd).toBe(dir);
-      attempts++;
-      await gate.enter();
-      try {
-        if (outcome === "failure") {
-          throw new Error("Injected Git initialization failure");
-        }
-        return await realRun(argv, { ...settings, baseEnv });
-      } finally {
-        gitSettled = true;
-      }
+    let childPid: number | undefined;
+    let childCwd: string | undefined;
+    let connection: Socket | undefined;
+    const listener = await reserveTestPortListener({
+      offsets: [0],
+      signal,
+      createListener: () =>
+        createServer((socket) => {
+          connection = socket;
+          let message = "";
+          socket.setEncoding("utf8");
+          socket.on("data", (data) => {
+            message += data.toString();
+            if (!message.includes("\n")) {
+              return;
+            }
+            socket.removeAllListeners("data");
+            const started = JSON.parse(message) as { pid: number; cwd: string };
+            childPid = started.pid;
+            childCwd = started.cwd;
+            attempts++;
+            void gate.enter().then(() => socket.end());
+          });
+        }),
     });
+    const bin = state.path("git-bin");
+    await fs.mkdir(bin);
+    const script = path.join(bin, "git.cjs");
+    await fs.writeFile(
+      script,
+      `const { spawnSync } = require("node:child_process");
+const run = () => {
+  const result = spawnSync(${JSON.stringify(realGit)}, process.argv.slice(2), {
+    env: ${JSON.stringify(baseEnv)}, stdio: "inherit"
+  });
+  process.exit(result.status ?? 1);
+};
+if (process.argv[2] !== "init") run();
+const socket = require("node:net").connect(${listener.claim.port}, "127.0.0.1", () => {
+  socket.write(JSON.stringify({ pid: process.pid, cwd: process.cwd() }) + "\\n");
+});
+socket.on("end", () => ${outcome === "failure" ? "process.exit(1)" : "run()"});
+socket.resume();
+`,
+    );
+    const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    await fs.writeFile(
+      path.join(bin, process.platform === "win32" ? "git.cmd" : "git"),
+      process.platform === "win32"
+        ? `@"${process.execPath}" "${script}" %*\r\n`
+        : `#!/bin/sh\nexec ${quote(process.execPath)} ${quote(script)} "$@"\n`,
+      { mode: 0o755 },
+    );
+    vi.stubEnv("PATH", bin + path.delimiter + (baseEnv.PATH ?? ""));
+    if (outcome === "retired-before-spawn") {
+      const run = workspaceFilesystem.runWorkspaceFilesystemOperation;
+      vi.spyOn(workspaceFilesystem, "runWorkspaceFilesystemOperation").mockImplementation(
+        (operation, guard) => {
+          if (operation.kind === "git-init") {
+            void filesystemBlock.arm(dir, 1).then(() => gate.entered.resolve());
+          }
+          return run(operation, guard);
+        },
+      );
+    }
     const first = ensureWorkspace(true, { dir, guard: gate });
     void first.catch(() => undefined);
     let follower: ReturnType<typeof ensureAgentWorkspace> | undefined;
@@ -552,22 +615,33 @@ it.for(["success", "failure", "retired"] as const)(
         ),
         signal,
       );
+      if (outcome !== "retired-before-spawn") {
+        expect(childCwd).toBe(dir);
+        expect(() => process.kill(childPid!, 0)).not.toThrow();
+      }
       follower = ensureAgentWorkspace({
         dir,
-        guard: { beforeLegacyApply: () => expect(gitSettled).toBe(true) },
+        guard: {
+          beforeLegacyApply: () => {
+            if (childPid !== undefined) {
+              expect(() => process.kill(childPid!, 0)).toThrow();
+            }
+          },
+        },
       });
       void follower.catch(() => undefined);
-      gate.current = outcome !== "retired";
+      gate.current = outcome !== "retired" && outcome !== "retired-before-spawn";
       gate.release.resolve();
-      if (outcome === "retired") {
+      filesystemBlock.release();
+      if (!gate.current) {
         await expect(first).rejects.toBe(gate.retired);
       } else {
         await expect(first).resolves.toMatchObject({ bootstrapPending: true });
       }
       await expect(follower).resolves.toEqual({ dir, bootstrapPending: false });
-      expect(attempts).toBe(1);
-      if (outcome !== "failure") {
-        const result = await realRun(["git", "rev-parse", "--show-toplevel"], {
+      expect(attempts).toBe(outcome === "retired-before-spawn" ? 0 : 1);
+      if (outcome === "success" || outcome === "retired") {
+        const result = await runCommandWithTimeout([realGit!, "rev-parse", "--show-toplevel"], {
           cwd: dir,
           timeoutMs: 5_000,
           baseEnv,
@@ -580,7 +654,13 @@ it.for(["success", "failure", "retired"] as const)(
       }
     } finally {
       gate.release.resolve();
+      filesystemBlock.release();
+      connection?.end();
       await Promise.allSettled([first, follower]);
+      connection?.destroy();
+      await listener.releaseListener();
+      await listener.claim.release();
+      await drainGlobalSingletonLifecycleState("restart", { retainSharedState: true });
     }
   },
 );
@@ -592,18 +672,21 @@ describe.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
       await fs.chmod(tempDir, 0o700);
     });
 
-    it.each([0o300, 0o000])(
-      "retains optional bootstrap entries when root mode is %s",
-      async (mode) => {
-        const names = [AGENTS, MEMORY, USER] as const;
-        for (const name of names) {
+    it.each([
+      [0o300, [AGENTS, MEMORY, USER]],
+      [0o000, [AGENTS, MEMORY, USER]],
+      [0o300, [AGENTS]],
+    ] as const)(
+      "retains present optional bootstrap entries when root mode is %s: %j",
+      async (mode, present) => {
+        for (const name of present) {
           await fs.writeFile(path.join(tempDir, name), `content:${name}`);
         }
         await fs.chmod(tempDir, mode);
         await expect(fs.readdir(tempDir)).rejects.toMatchObject({ code: "EACCES" });
-        const files = await loadWorkspaceBootstrapFiles(tempDir, names);
+        const files = await loadWorkspaceBootstrapFiles(tempDir, [AGENTS, MEMORY, USER]);
         expect(files.toSorted((a, b) => a.name.localeCompare(b.name))).toMatchObject(
-          [...names].toSorted().map((name) => ({
+          [...present].toSorted().map((name) => ({
             name,
             missing: false,
             content: mode === 0o300 ? `content:${name}` : expect.stringContaining("[UNREADABLE:"),
@@ -611,14 +694,6 @@ describe.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
         );
       },
     );
-
-    it("omits absent optional bootstrap files when the root cannot be listed", async () => {
-      await fs.writeFile(path.join(tempDir, AGENTS), "instructions");
-      await fs.chmod(tempDir, 0o300);
-      await expect(fs.readdir(tempDir)).rejects.toMatchObject({ code: "EACCES" });
-      const files = await loadWorkspaceBootstrapFiles(tempDir, [AGENTS, MEMORY, USER]);
-      expect(files).toMatchObject([{ name: AGENTS, content: "instructions" }]);
-    });
 
     it.each(["skip-bootstrap", "onboarding", "surviving skills"] as const)(
       "rejects unlistable %s setup without changing content or state",

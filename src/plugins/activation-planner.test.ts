@@ -98,7 +98,7 @@ it("selects capabilities from explicit hints", () => {
     owner({
       id: "explicit-provider",
       origin: "workspace",
-      activation: { onCapabilities: ["provider"], onProviders: ["custom-provider"] },
+      activation: { onCapabilities: ["provider"] },
     }),
   ];
   expect(ids({ kind: "capability", capability: "provider" }, { manifestRecords })).toEqual([

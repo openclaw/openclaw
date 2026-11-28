@@ -1,26 +1,8 @@
-import { normalizeJsonSchemaForTypeBox } from "@openclaw/normalization-core/json-schema";
 import { afterEach, expect, it } from "vitest";
 import { applyJsonSchemaDefaults, findJsonSchemaShapeError } from "./json-schema-defaults.js";
 
 const shapeError = (schema: Parameters<typeof findJsonSchemaShapeError>[0], error?: string) =>
   expect(findJsonSchemaShapeError(schema)).toBe(error && `<schema>.${error}`);
-
-it("repairs colliding patterns without losing __proto__", () => {
-  const normalized = normalizeJsonSchemaForTypeBox({
-    type: "object",
-    patternProperties: Object.fromEntries([
-      ["^https:", { minLength: 1 }],
-      ["^https\\:", { maxLength: 10 }],
-      ["__proto__", { type: "string" }],
-    ]),
-  });
-  expect(normalized).toMatchObject({
-    patternProperties: Object.fromEntries([
-      ["^https:", { allOf: [{ minLength: 1 }, { maxLength: 10 }] }],
-      ["__proto__", { type: "string" }],
-    ]),
-  });
-});
 
 it("resolves local refs to array entries beyond config path index limits", () => {
   const prefixItems: (boolean | { type: string })[] = Array.from({ length: 100_002 }, () => true);

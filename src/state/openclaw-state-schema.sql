@@ -97,6 +97,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS skill_workshop_changes_cursor_id_idx
 CREATE INDEX IF NOT EXISTS idx_skill_workshop_changes_agent_time
   ON skill_workshop_changes(agent_id, created_at_ms);
 
+CREATE TABLE IF NOT EXISTS skill_workshop_activity (
+  agent_id TEXT NOT NULL,
+  skill_name TEXT NOT NULL,
+  changed_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (agent_id, skill_name)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS audit_events (
   sequence INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id TEXT NOT NULL UNIQUE,
@@ -410,6 +417,7 @@ CREATE TABLE IF NOT EXISTS operator_approvals (
   resolver_id TEXT,
   consumed_at_ms INTEGER,
   consumed_by TEXT,
+  requested_by_profile_id TEXT,
   CHECK (expires_at_ms >= created_at_ms),
   CHECK (updated_at_ms >= created_at_ms),
   CHECK (resolved_at_ms IS NULL OR resolved_at_ms >= created_at_ms),
@@ -2018,7 +2026,8 @@ CREATE TABLE IF NOT EXISTS worker_environments (
   last_error TEXT,
   shared_host INTEGER,
   resource_receipt_json TEXT,
-  retention_json TEXT
+  retention_json TEXT,
+  provision_source_json TEXT
 ) STRICT;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_environments_provider_lease
@@ -2213,6 +2222,7 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   state_changed_at_ms INTEGER NOT NULL,
   terminal_reason TEXT,
   terminal_at_ms INTEGER,
+  confirmed_loss_recovery_json TEXT,
   CHECK (
     (state IN ('local', 'requested')
       AND environment_id IS NULL AND active_owner_epoch IS NULL

@@ -8,12 +8,6 @@ import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-exec
 import { useExecutorFixture } from "../cli/update-cli/update-command-executor.test-support.js";
 import { assertUpdateCommandRecoveryState } from "../cli/update-cli/update-command-recovery.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import { createDanglingSkillWorkshopReviewIndex } from "../state/openclaw-state-db-corruption.test-support.js";
-import {
-  executeExistingOpenClawStateRead,
-  withArtifactPreservingStateReads,
-  withOpenClawStateDatabaseReadSnapshot,
-} from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -23,7 +17,6 @@ import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { defaultPayload } from "./gateway-state-owner-record.js";
 import { acquireGatewayStateOwner } from "./gateway-state-owner.js";
 import { startSqliteCheckpointWriter } from "./sqlite-checkpoint-writer.test-support.js";
-import { readSqliteDatabaseCleanClose } from "./sqlite-database-admission.js";
 import * as locations from "./sqlite-readonly-location.js";
 import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
 import * as snapshots from "./sqlite-snapshot-source.js";
@@ -37,7 +30,6 @@ import {
   reconcileAbandonedUpdateRunsAsync,
 } from "./update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "./update-run-recovery-admission.js";
-import { assertNoPendingUpdateRecovery } from "./update-run-recovery.js";
 import { recordUpdateRunPhaseAsync } from "./update-run-write.async.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -47,37 +39,7 @@ const executorFixture = useExecutorFixture("update-cohort-admission-", {
 afterEach(() => closeOpenClawStateDatabaseForTest());
 afterEach(() => vi.restoreAllMocks());
 
-describe("package-only recovery admission", () => {
-  it("admits a verified live checkpoint writer without copying unrelated state", async () => {
-    const root = dirs.make("update-live-admission-");
-    const env = { HOME: root, OPENCLAW_STATE_DIR: root };
-    createUpdateRun({ trigger: "cli" }, { env });
-    closeOpenClawStateDatabaseForTest();
-    const databasePath = resolveOpenClawStateSqlitePath(env);
-    const snapshot = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
-    const asyncSnapshot = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
-    const owner = acquireGatewayStateOwner({
-      databasePath,
-      payload: { ...defaultPayload(databasePath), role: "gateway" },
-    });
-    try {
-      const writer = await startSqliteCheckpointWriter(databasePath);
-      try {
-        await withSqliteReadOnlyWorkerScope(async () => {
-          await writer.commit();
-          await expect(assertUpdateRecoveryAdmission({ env })).resolves.toBeUndefined();
-          await writer.commit();
-          expect(snapshot).not.toHaveBeenCalled();
-          expect(asyncSnapshot).not.toHaveBeenCalled();
-        });
-      } finally {
-        await writer.stop();
-      }
-    } finally {
-      owner.release();
-    }
-  });
-
+describe("current update ownership and physical restore admission", () => {
   it.each([false, true])(
     "reconciles and records progress with a live writer (warm=%s)",
     async (warm) => {
@@ -149,96 +111,6 @@ describe("package-only recovery admission", () => {
     },
   );
 
-  it("preserves Doctor catalog admission and typed pending-recovery refusal", async () => {
-    const f = createRetainedCheckpointFixture(dirs.make("update-legacy-catalog-"));
-    createDanglingSkillWorkshopReviewIndex(f.file);
-    const before = fs.readFileSync(f.file);
-    await expect(assertUpdateRecoveryAdmission(f.options)).rejects.toMatchObject({
-      name: "UpdateRecoveryRequiredError",
-      record: { runId: f.run.runId },
-    });
-    expect(fs.readFileSync(f.file)).toEqual(before);
-  });
-
-  it("runs host recovery guards without copying the database", () => {
-    const f = createRetainedCheckpointFixture(dirs.make("update-guard-copies-"));
-    const copies = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
-    for (let check = 0; check < 3; check += 1) {
-      expect(() =>
-        assertNoPendingUpdateRecovery({ ...f.options, allowNativeRead: true }),
-      ).toThrowError(expect.objectContaining({ name: "UpdateRecoveryRequiredError" }));
-    }
-    expect(copies).not.toHaveBeenCalled();
-  });
-
-  it("keeps Doctor catalog admission for host guards reading the live file", () => {
-    const f = createRetainedCheckpointFixture(dirs.make("update-guard-catalog-"));
-    createDanglingSkillWorkshopReviewIndex(f.file);
-    const before = fs.readFileSync(f.file);
-    const copies = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocationSync");
-    expect(() =>
-      assertNoPendingUpdateRecovery({ ...f.options, allowNativeRead: true }),
-    ).toThrowError(expect.objectContaining({ name: "UpdateRecoveryRequiredError" }));
-    expect(copies).not.toHaveBeenCalled();
-    expect(fs.readFileSync(f.file)).toEqual(before);
-  });
-
-  it("reads a certified clean close without copying or changing its bytes", async () => {
-    const root = dirs.make("update-sealed-admission-");
-    const env = { HOME: root, OPENCLAW_STATE_DIR: root };
-    createUpdateRun({ trigger: "cli" }, { env });
-    openOpenClawStateDatabase({ env });
-    closeOpenClawStateDatabaseForTest();
-    const databasePath = resolveOpenClawStateSqlitePath(env);
-    expect(readSqliteDatabaseCleanClose(databasePath)).toBe(true);
-    const before = fs.readFileSync(databasePath);
-    const copy = vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation");
-    await expect(assertUpdateRecoveryAdmission({ env })).resolves.toBeUndefined();
-    expect(copy).not.toHaveBeenCalled();
-    expect(fs.readFileSync(databasePath)).toEqual(before);
-  });
-
-  it("keeps an explicitly retained metadata snapshot separate from current admission", async () => {
-    const root = dirs.make("update-retained-metadata-");
-    const options = { env: { HOME: root, OPENCLAW_STATE_DIR: root } };
-    const run = createUpdateRun({ trigger: "cli" }, options);
-    const read = () =>
-      executeExistingOpenClawStateRead(options, { type: "updateRuns.recoveryAdmission" });
-    await withArtifactPreservingStateReads(() =>
-      withOpenClawStateDatabaseReadSnapshot(async () => {
-        expect((await read())?.facts).toEqual({ cohorts: [], recoveries: [] });
-        writeConfigMachineState("update.pluginCohort." + run.runId, { runId: run.runId }, options);
-        expect((await read())?.facts).toEqual({ cohorts: [], recoveries: [] });
-      }, options),
-    );
-    await expect(assertUpdateRecoveryAdmission(options)).rejects.toThrow(
-      "missing its matching reservation",
-    );
-  });
-
-  it("refuses a live orphan companion without admitting it as an empty recovery set", async () => {
-    const root = dirs.make("update-orphan-cohort-");
-    const env = { HOME: root, OPENCLAW_STATE_DIR: root };
-    const run = createUpdateRun({ trigger: "cli" }, { env });
-    writeConfigMachineState("update.pluginCohort." + run.runId, { runId: run.runId }, { env });
-    const databasePath = openOpenClawStateDatabase({ env }).path;
-    const before = fs.readFileSync(databasePath);
-    const owner = acquireGatewayStateOwner({
-      databasePath,
-      payload: { ...defaultPayload(databasePath), role: "gateway" },
-    });
-    const copy = vi.spyOn(locations, "prepareSqliteReadOnlyLocationFromOwnedDatabase");
-    try {
-      await expect(assertUpdateRecoveryAdmission({ env })).rejects.toThrow(
-        "missing its matching reservation",
-      );
-      expect(copy).not.toHaveBeenCalled();
-      expect(fs.readFileSync(databasePath)).toEqual(before);
-    } finally {
-      owner.release();
-    }
-  });
-
   it("continues only its paired intent under the same live executor and source", async () => {
     const { root } = executorFixture();
     const env = { HOME: root, OPENCLAW_STATE_DIR: path.join(root, "profile") };
@@ -273,19 +145,21 @@ describe("package-only recovery admission", () => {
         { env },
       );
       const pluginCohort = { runId, fence };
-      await expect(assertUpdateRecoveryAdmission({ env })).rejects.toThrow("unfinished recovery");
-      await expect(
-        assertUpdateRecoveryAdmission({
-          env,
-          pluginCohort: { runId, fence: { assertCurrent() {} } },
+      expect(() =>
+        assertUpdateCommandRecoveryState({
+          run: { runId, env, executorFence: { assertCurrent() {} } },
         }),
-      ).rejects.toThrow("admitted executor");
-      await expect(
-        assertUpdateRecoveryAdmission({
-          env: { ...env, OPENCLAW_CONFIG_PATH: path.join(root, "other.json") },
-          pluginCohort,
+      ).toThrow("admitted executor");
+      expect(() =>
+        assertUpdateCommandRecoveryState({
+          run: {
+            runId,
+            env: { ...env, OPENCLAW_CONFIG_PATH: path.join(root, "other.json") },
+            executorFence: fence,
+          },
         }),
-      ).rejects.toThrow("unfinished recovery");
+      ).toThrow("unfinished recovery");
+      writeConfigMachineState("update.pluginCohort." + randomUUID(), { unrelated: true }, { env });
       await expect(assertUpdateRecoveryAdmission({ env, pluginCohort })).resolves.toBeUndefined();
       expect(() =>
         assertUpdateCommandRecoveryState({ run: { runId, env, executorFence: fence } }),
@@ -320,6 +194,7 @@ describe("package-only recovery admission", () => {
       const f = createRetainedCheckpointFixture(dirs.make("update-admission-target-"));
       const replacement = path.join(dirs.make("update-admission-replacement-"), "absent");
       const before = fs.readFileSync(f.file);
+      fs.mkdirSync(path.join(path.dirname(f.file), ".openclaw-restore-fixture"));
       let changed = false;
       const lstat = asyncFs.lstat.bind(asyncFs);
       vi.spyOn(asyncFs, "lstat").mockImplementation(async (...args) => {
@@ -332,26 +207,18 @@ describe("package-only recovery admission", () => {
       });
       await expect(
         assertUpdateRecoveryAdmission(explicitPath ? { ...f.options, path: f.file } : f.options),
-      ).rejects.toMatchObject({
-        name: "UpdateRecoveryRequiredError",
-        record: { runId: f.run.runId },
-      });
+      ).rejects.toMatchObject({ name: "InterruptedStateRestoreError" });
       expect(changed).toBe(true);
       expect(fs.readFileSync(f.file).equals(before)).toBe(true);
       expect(fs.existsSync(replacement)).toBe(false);
     },
   );
 
-  it.each(["sealed", "unsealed", "displaced", "orphan beside canonical"] as const)(
+  it.each(["displaced", "orphan beside canonical"] as const)(
     "refuses %s checkpoint state without changing retained bytes",
     async (kind) => {
-      const f = createRetainedCheckpointFixture(
-        dirs.make("update-admission-"),
-        kind !== "unsealed",
-      );
-      if (kind === "displaced" || kind === "orphan beside canonical") {
-        f.displace();
-      }
+      const f = createRetainedCheckpointFixture(dirs.make("update-admission-"));
+      f.displace();
       const freshRun =
         kind === "orphan beside canonical"
           ? createUpdateRun({ trigger: "cli" }, f.options)

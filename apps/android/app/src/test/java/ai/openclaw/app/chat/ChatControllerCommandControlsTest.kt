@@ -1,5 +1,6 @@
 package ai.openclaw.app.chat
 
+import ai.openclaw.app.gateway.ErrorShape
 import ai.openclaw.app.gateway.GatewayRequestNotEnqueued
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
@@ -321,7 +322,7 @@ class ChatControllerCommandControlsTest {
             createCalls += 1
             if (createCalls == 1) {
               throw GatewayRequestRejected(
-                GatewaySession.ErrorShape(
+                ErrorShape(
                   code = "INVALID_REQUEST",
                   message =
                     "invalid sessions.create params: at root: unexpected property 'succeedsParent'",
@@ -416,7 +417,6 @@ class ChatControllerCommandControlsTest {
           expectedSessionId = "session-main",
           clearLabel = true,
           clearCategory = true,
-          pinned = true,
           archived = false,
           unread = true,
         ),
@@ -429,7 +429,7 @@ class ChatControllerCommandControlsTest {
       assertTrue(patch.contains("\"expectedSessionId\":\"session-main\""))
       assertTrue(patch.contains("\"label\":null"))
       assertTrue(patch.contains("\"category\":null"))
-      assertTrue(patch.contains("\"pinned\":true"))
+      assertFalse(patch.contains("\"pinned\""))
       assertTrue(patch.contains("\"archived\":false"))
       assertTrue(patch.contains("\"unread\":true"))
 

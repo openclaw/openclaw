@@ -1,4 +1,45 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import {
+  gatewayOperatorAccessError,
+  type GatewayOperatorAccessCause,
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+
+export class GatewayOperatorAccessDeniedError extends Error {
+  constructor(readonly accessCause: GatewayOperatorAccessCause = "policy-check-failed") {
+    super(gatewayOperatorAccessError(accessCause).message);
+    this.name = "GatewayOperatorAccessDeniedError";
+  }
+}
+
+/** The admitting request ended before a retained plugin operation could finish. */
+export const GatewayRequestAuthorityExpiredError = resolveGlobalSingleton(
+  Symbol.for("openclaw.gatewayRequestAuthorityExpiredError"),
+  () =>
+    class extends Error {
+      constructor() {
+        super("Gateway request authority expired");
+      }
+    },
+);
+
+/** A failed policy evaluation refuses this operation without revoking its source. */
+export const GatewayOperatorAccessUnavailableError = resolveGlobalSingleton(
+  Symbol.for("openclaw.gatewayOperatorAccessUnavailableError"),
+  () =>
+    class extends Error {
+      constructor() {
+        super("Gateway access policy is unavailable; retry the operation.");
+        this.name = "GatewayOperatorAccessUnavailableError";
+      }
+    },
+);
+
+export function isOperatorAuthorityUnavailable(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some(
+    (candidate) => candidate instanceof GatewayOperatorAccessUnavailableError,
+  );
+}
 
 type OperatorAuthorityFailure = {
   operatorAuthorityReason:
@@ -22,11 +63,8 @@ export function createOperatorAuthorityInactiveError(
   check: OperatorAuthorityFailure["operatorAuthorityCheck"],
   capturedAt: number,
 ): Error {
-  const kind = reason.startsWith("closure-") ? "execution" : "source";
   return Object.defineProperty(
-    new Error(
-      `operator ${kind} authority is no longer active. Reconnect to the Gateway, then resend your message. If access is denied, ask an administrator to restore it.`,
-    ),
+    new Error("Operator execution ended. Reconnect to the Gateway, then resend your message."),
     failureMetadata,
     {
       value: Object.freeze({

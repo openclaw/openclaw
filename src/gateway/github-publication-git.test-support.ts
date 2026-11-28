@@ -230,7 +230,6 @@ export async function createRealPublicationWorkspace(params: {
         ...isolatedEnv,
       },
       timeoutMs: 10000,
-      maxOutputBytes: 256 * 1024,
     });
   const git = async (...args: string[]) => {
     const result = await local(["git", ...args]);

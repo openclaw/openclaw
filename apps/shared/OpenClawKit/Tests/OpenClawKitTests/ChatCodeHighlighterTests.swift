@@ -74,10 +74,14 @@ struct ChatCodeHighlighterTests {
         #expect(tokens.contains(where: { $0.0 == .keyword && $0.1 == "const" }))
     }
 
-    @Test func `unterminated string stops at end of line`() {
-        let tokens = self.kinds("let s = \"open\nlet y = 2", language: "swift")
+    @Test(arguments: ["\n", "\r\n", "\r"])
+    func `line comments and unterminated strings stop at the next line`(_ lineBreak: String) {
+        let code = ["// note", "let s = \"open", "let y = 2"].joined(separator: lineBreak)
+        let tokens = self.kinds(code, language: "swift")
+        #expect(tokens.contains(where: { $0.0 == .comment && $0.1 == "// note" }))
         #expect(tokens.contains(where: { $0.0 == .string && $0.1 == "\"open" }))
         #expect(tokens.count(where: { $0.0 == .keyword && $0.1 == "let" }) == 2)
+        #expect(tokens.map(\.1).joined().utf8.elementsEqual(code.utf8))
     }
 
     @Test func `identifiers with digits are not numbers`() {
@@ -111,10 +115,50 @@ struct ChatCodeHighlighterTests {
         #expect(String(first.characters) == code)
     }
 
-    @Test @MainActor func `oversized blocks bypass highlighting unchanged`() {
-        let code = String(repeating: "let value = 1\n", count: ChatCodeHighlighter.maxHighlightedLines)
-        let highlighted = ChatCodeHighlightCache.highlighted(code: code, languageId: "swift")
-        #expect(String(highlighted.characters) == code)
-        #expect(!ChatCodeHighlighter.isWithinHighlightLimits(code))
+    @Test(arguments: [("\u{E9}", "e\u{301}"), ("A\u{30A}", "\u{C5}")])
+    @MainActor func `cached highlights preserve the requested Unicode spelling`(_ first: String, _ second: String) {
+        for spelling in [first, second] {
+            let code = "let name = \"\(spelling)\""
+            let highlighted = ChatCodeHighlightCache.highlighted(code: code, languageId: "swift")
+            #expect(String(highlighted.characters).utf8.elementsEqual(code.utf8))
+        }
+    }
+
+    @Test(arguments: ["\n", "\r\n", "\r"])
+    @MainActor func `blocks over the line limit render as plain text`(_ lineBreak: String) {
+        let atLimit = String(repeating: lineBreak, count: ChatCodeHighlighter.maxHighlightedLines - 1) + "true"
+        let overLimit = atLimit + lineBreak
+        let highlighted = ChatCodeHighlightCache.highlighted(code: atLimit, languageId: "json")
+        let plain = ChatCodeHighlightCache.highlighted(code: overLimit, languageId: "json")
+        #expect(String(highlighted.characters).utf8.elementsEqual(atLimit.utf8))
+        #expect(highlighted != AttributedString(atLimit))
+        #expect(plain == AttributedString(overLimit))
+    }
+
+    @Test @MainActor func `cache pressure retains recently displayed highlights and evicts only one`() {
+        var storage = ChatCodeHighlightCache.Storage()
+        var builds = 0
+        func makeValue() -> AttributedString {
+            builds += 1
+            return AttributedString("highlighted")
+        }
+
+        for index in 0..<160 {
+            _ = storage.value(for: "swift\u{0}let value = \(index)", create: makeValue)
+        }
+        // The oldest insertion is still visible; another consumer adds a new block.
+        _ = storage.value(for: "swift\u{0}let value = 0", create: makeValue)
+        _ = storage.value(for: "swift\u{0}let value = 160", create: makeValue)
+        #expect(builds == 161)
+
+        _ = storage.value(for: "swift\u{0}let value = 0", create: makeValue)
+        for index in 2...160 {
+            _ = storage.value(for: "swift\u{0}let value = \(index)", create: makeValue)
+        }
+        #expect(builds == 161)
+
+        // The least recently used entry must be gone: retention remains bounded.
+        _ = storage.value(for: "swift\u{0}let value = 1", create: makeValue)
+        #expect(builds == 162)
     }
 }

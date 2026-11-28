@@ -4,7 +4,8 @@ import { en } from "./en.ts";
 const enDashboards = {
   dashboardsPage: {
     emptyTitle: "No dashboards yet",
-    emptyDescription: "Dashboards created in your sessions appear here.",
+    emptyDescription: "Ask your agent to make a dashboard in any conversation.",
+    newSession: "New session",
     loadError: "Couldn’t load dashboards. Try again. {error}",
     openFocusMode: "Open dashboard in focus mode",
     running: "Updating now",
@@ -36,6 +37,9 @@ const enDashboards = {
     sortTitle: "Title A–Z",
     noResultsTitle: "No dashboards match your search.",
     noResultsDescription: "Try another search or author.",
+    actions: "Dashboard actions",
+    pinToSidebar: "Pin to the sidebar",
+    unpinFromSidebar: "Unpin from the sidebar",
   },
 } satisfies TranslationMap;
 

@@ -219,7 +219,6 @@ export async function prepareCanonicalCodexFork(params: {
     config,
     relayId,
     generation,
-    preToolUseLoopDetection: appServer.loopDetectionPreToolUseRelay,
   });
   const events = resolveCodexNativeHookRelayEvents({ appServer });
   if (events.includes("pre_tool_use") && relay.shouldRelayEvent("pre_tool_use")) {
@@ -288,6 +287,7 @@ export async function prepareCanonicalCodexFork(params: {
     cwd,
     appServer,
     dynamicTools,
+    preserveNativeCollaboration: true,
     developerInstructions,
     config: threadConfig,
     nativeCodeModeEnabled: true,

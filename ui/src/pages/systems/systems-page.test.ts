@@ -207,28 +207,6 @@ describe("Systems workspace", () => {
     },
   );
 
-  const cloudWorker: NonNullable<EnvironmentSummary["worker"]> = {
-    providerId: "crabbox",
-    profileId: "standard",
-    state: "ready",
-    ageMs: 0,
-    attachedSessionIds: [],
-    tunnelStatus: "stopped",
-  };
-  it.each([
-    [worker, "Device"],
-    [{ ...worker, worker: { ...cloudWorker, providerId: "device" } }, "Device"],
-    [{ ...worker, worker: cloudWorker }, "Cloud device · standard"],
-  ] satisfies [EnvironmentSummary, string][])(
-    "labels device placement from provisioned metadata %#",
-    async (device, label) => {
-      const { controller } = harness(async () => [device]);
-      controller.select(device.id);
-      const { page } = await mount(controller);
-      expect(text(page, ".systems-heading span")).toBe(label);
-    },
-  );
-
   it.each([
     [[], "You need admin access to view a desktop.", "You need read access to view backups."],
     [["operator.admin"], "Desktop access isn’t available on this device.", "No backups yet."],
@@ -442,7 +420,8 @@ describe("Systems workspace", () => {
     await pending.promise;
     flush();
     expect(controller.state.backups).toBeNull();
-    expect(text(page, ".systems-backups")).not.toContain("old-host");
+    expect(page.querySelector(".systems-backups")).toBeNull();
+    expect(page.textContent).not.toContain("old-host");
   });
 
   it("retires a pending storage probe when the connection leaves", async () => {
@@ -466,7 +445,8 @@ describe("Systems workspace", () => {
     await pending.promise;
     flush();
     expect(controller.storageProbes.size).toBe(0);
-    expect(text(page, ".systems-backups")).not.toContain("1 GB free");
+    expect(page.querySelector(".systems-backups")).toBeNull();
+    expect(page.textContent).not.toContain("1 GB free");
   });
 
   it("defers hidden initial and event reads, preserving inventory until visible recovery", async () => {

@@ -578,7 +578,7 @@ describe("registered Discord metadata reads", () => {
     };
     await expectRejected(
       dispatch("permissions", { channelId: sibling }),
-      "no longer active",
+      "Plugin discord was reloaded during the read. Retry the action.",
       `/channels/${sibling}`,
     );
   });
@@ -594,7 +594,11 @@ describe("registered Discord metadata reads", () => {
       fixture.transport.onRequest = () => {
         fixture.record.enabled = false;
       };
-      await expectRejected(dispatch(), "no longer active", `${guildPath}/roles`);
+      await expectRejected(
+        dispatch(),
+        "Plugin discord was reloaded during the read. Retry the action.",
+        `${guildPath}/roles`,
+      );
     },
   );
 });

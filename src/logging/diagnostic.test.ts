@@ -8,13 +8,11 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import type { DiagnosticLivenessSample } from "./diagnostic-liveness.js";
-import { withDiagnosticPhase } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticEmbeddedRunEnded,
@@ -334,6 +332,33 @@ describe("stuck session diagnostics threshold", () => {
     },
   );
 
+  it("publishes a stalled session as an event only, without a log line", async () => {
+    startGatewayDiagnosticHeartbeat(
+      createTestGatewayScheduler("fake-timers"),
+      { diagnostics: { enabled: true } },
+      {
+        recoverStuckSession,
+        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 90_000 },
+      },
+    );
+    logSessionStateChange({ ...session, state: "processing" });
+    markDiagnosticEmbeddedRunStarted(session);
+    const debugSpy = vi.spyOn(diagnosticLogger, "debug").mockImplementation(() => undefined);
+    startModel();
+    await vi.advanceTimersByTimeAsync(60_000);
+    // The same log path still reports the long-running phase before the stall.
+    await vi.waitFor(() => expectLoggerMessageContaining(debugSpy, "long-running session"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(lastEvent("session.stalled")).toMatchObject({
+      reason: "active_work_without_progress",
+      activeWorkKind: "model_call",
+    });
+    expectStability({ type: "session.stalled" });
+    await vi.advanceTimersByTimeAsync(0);
+    expectLoggerMessageContaining(warnSpy, "stalled session", false);
+    expectLoggerMessageContaining(debugSpy, "stalled session", false);
+  });
+
   it.each(["blocked", "progressing", "ended"] as const)(
     "uses the owned-work clock for a %s tool while inbound keeps arriving",
     (phase) => {
@@ -601,37 +626,6 @@ describe("stuck session diagnostics threshold", () => {
       expect(events.some(({ type }) => type === "diagnostic.liveness.warning")).toBe(tick === 2);
       expect(recoverStuckSession).not.toHaveBeenCalled();
     }
-  });
-
-  it("adds phase and work labels to liveness warnings", async () => {
-    await withDiagnosticPhase("stale.phase", () => undefined);
-    vi.advanceTimersByTime(60_000);
-    await withDiagnosticPhase("recent.phase", () => undefined);
-    const { promise, resolve: completePhase } = createDeferredCore();
-    const phase = withDiagnosticPhase("startup.plugins.load", () => promise);
-
-    try {
-      startHeartbeat({
-        emitMemorySample: createEmitMemorySampleMock(),
-        sampleLiveness: () => livenessSample(),
-      });
-
-      logMessageQueued({ ...session, source: "telegram" });
-      vi.advanceTimersByTime(30_000);
-    } finally {
-      completePhase();
-      await phase;
-    }
-
-    expectLoggerMessageContaining(warnSpy, "phase=startup.plugins.load");
-    expectLoggerMessageContaining(warnSpy, "work=[queued=main(");
-    expectLoggerMessageContaining(warnSpy, "recentPhases=recent.phase:");
-    expectLoggerMessageContaining(warnSpy, "stale.phase", false);
-    expect(lastEvent("diagnostic.liveness.warning")).toMatchObject({
-      recentPhases: [expect.objectContaining({ name: "recent.phase" })],
-      phase: "startup.plugins.load",
-      queuedWorkLabels: expect.arrayContaining([expect.stringContaining("main(")]),
-    });
   });
 
   it.each(["before", "after"])(

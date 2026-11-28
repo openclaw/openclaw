@@ -294,7 +294,7 @@ export type ReplyPayloadMetadata = {
   commandReply?: true;
   /** Inline acknowledgements accompany a model turn and do not own another command input. */
   inlineCommandReply?: true;
-  /** A read-only status command exchange belongs in history, not model context. */
+  /** A status or fast approval exchange belongs in history, not model context. */
   contextFreeCommand?: true;
   /** Host-owned acknowledgement after this final payload is confirmed delivered. */
   onFinalDeliverySuccess?: () => void;
@@ -321,7 +321,7 @@ export type ReplyPayloadMetadata = {
   };
   /** The final-dispatch owner joins cleanup to the core dispatcher's settled receipt. */
   pendingFinalDeliveryCleanup?: { preserveActivity?: boolean };
-  /** replyToId existed before reply threading could inject an implicit target. */
+  /** Explicit quote identity; false retains a producer-selected implicit reply target. */
   replyToIdExplicit?: boolean;
   /** The host's single-use reply policy already consumed its target. */
   replyTargetSuppressed?: true;

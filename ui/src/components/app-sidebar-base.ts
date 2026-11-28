@@ -1,8 +1,13 @@
+import type { SessionCatalogProfileRelation } from "../../../packages/gateway-protocol/src/index.js";
 import { createChangeListeners } from "../../../src/shared/listeners.js";
-import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
+import {
+  DEFAULT_SIDEBAR_ENTRIES,
+  type NavigationRouteId,
+  type SidebarNavigationView,
+} from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
-import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
@@ -21,6 +26,7 @@ import type { GatewayStatusProps } from "./gateway-status.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
 import { selectSidebarContext, type ContextualSidebar } from "./sidebar-context-state.ts";
+import type { SidebarRouteView } from "./sidebar-menus-types.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 export type AppSidebarProps = {
@@ -30,6 +36,7 @@ export type AppSidebarProps = {
   activePluginTabId: string;
   enabledRouteIds: readonly NavigationRouteId[] | undefined;
   connected: boolean;
+  communityInviteAllowed: boolean;
   connectionStatus: GatewayStatus | null;
   gatewayStatus: GatewayStatusProps | null;
   connectionRecovery: boolean;
@@ -46,9 +53,12 @@ export type AppSidebarProps = {
   sidebarEntries: readonly string[];
   navigationVisible: boolean;
   connectionPending?: boolean;
-  navigationView: "pages" | "sessions" | "online";
+  navigationView: SidebarNavigationView;
   navigationCollapsed: boolean;
+  /** The saved collapse choice; a page without a sidebar reads as collapsed without it. */
+  navigationCollapsedByChoice?: boolean;
   sidebarAgentsMode: "chip" | "roster";
+  newSessionInRail: boolean;
   sidebarLiveActivity: boolean;
   pinnedAgentIds: readonly string[];
   themeMode: ThemeMode;
@@ -62,9 +72,7 @@ export type AppSidebarProps = {
   onOpenNewSession: ((agentId: string, target?: NewSessionTarget) => void) | undefined;
   onUpdateSidebarEntries: ((entries: string[]) => void) | undefined;
   onPairMobile: (() => void) | undefined;
-  onNavigate:
-    | ((routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void)
-    | undefined;
+  onNavigate: SidebarRouteView["onNavigate"];
 };
 
 export const appSidebarProperties = {
@@ -74,6 +82,7 @@ export const appSidebarProperties = {
   activePluginTabId: { default: "", attribute: false },
   enabledRouteIds: { default: undefined, attribute: false },
   connected: { default: false, attribute: false },
+  communityInviteAllowed: { default: false, attribute: false },
   connectionStatus: { default: null, attribute: false },
   gatewayStatus: { default: null, attribute: false },
   connectionRecovery: { default: false, attribute: false },
@@ -90,7 +99,9 @@ export const appSidebarProperties = {
   connectionPending: { default: false, attribute: false },
   navigationView: { default: "sessions", attribute: false },
   navigationCollapsed: { default: false, type: Boolean },
+  navigationCollapsedByChoice: { default: undefined, attribute: false },
   sidebarAgentsMode: { default: "chip", attribute: false },
+  newSessionInRail: { default: false, attribute: false },
   sidebarLiveActivity: { default: true, attribute: false },
   pinnedAgentIds: { default: [], attribute: false },
   themeMode: { default: "system", attribute: false },
@@ -121,6 +132,7 @@ export abstract class AppSidebarBase {
   declare activePluginTabId: AppSidebarProps["activePluginTabId"];
   declare enabledRouteIds: AppSidebarProps["enabledRouteIds"];
   declare connected: AppSidebarProps["connected"];
+  declare communityInviteAllowed: AppSidebarProps["communityInviteAllowed"];
   declare connectionStatus: AppSidebarProps["connectionStatus"];
   declare gatewayStatus: AppSidebarProps["gatewayStatus"];
   declare connectionRecovery: AppSidebarProps["connectionRecovery"];
@@ -137,7 +149,9 @@ export abstract class AppSidebarBase {
   declare connectionPending: AppSidebarProps["connectionPending"];
   declare navigationView: AppSidebarProps["navigationView"];
   declare navigationCollapsed: AppSidebarProps["navigationCollapsed"];
+  declare navigationCollapsedByChoice: AppSidebarProps["navigationCollapsedByChoice"];
   declare sidebarAgentsMode: AppSidebarProps["sidebarAgentsMode"];
+  declare newSessionInRail: AppSidebarProps["newSessionInRail"];
   declare sidebarLiveActivity: AppSidebarProps["sidebarLiveActivity"];
   declare pinnedAgentIds: AppSidebarProps["pinnedAgentIds"];
   declare themeMode: AppSidebarProps["themeMode"];
@@ -301,8 +315,12 @@ export abstract class AppSidebarBase {
     });
   }
 
-  prepareSessionNavigation(sessionKey: string, pathname: string): void {
-    prepareSessionNavigationHandoff(this.context.gateway, pathname, sessionKey);
+  prepareSessionNavigation(
+    sessionKey: string,
+    pathname: string,
+    profileRelation?: SessionCatalogProfileRelation,
+  ): void {
+    prepareSessionNavigationHandoff(this.context.gateway, pathname, sessionKey, profileRelation);
   }
 
   protected sessionMainKey(): string {
@@ -313,10 +331,11 @@ export abstract class AppSidebarBase {
   }
 
   readNewSessionAccess(): SessionMethodAccess {
-    return this.readSessionMutationAccess({
+    return readSessionMethodAccess(this.connected ? this.context.gateway.snapshot : null, {
       method: "sessions.create",
       params: {},
       sessionScope: true,
+      missingScopeReasonKey: "sessionsView.createPermissionDenied",
     });
   }
 

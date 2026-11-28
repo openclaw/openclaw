@@ -1,9 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import * as cjk from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
@@ -16,6 +17,8 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
+import { createContextEngine } from "../../harness/context-engine-lifecycle.test-support.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
@@ -25,10 +28,8 @@ import {
   streamMocks,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import {
-  estimateCompactionHistoryTokens,
-  type CompactionRequestBudget,
-} from "../../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/preparation.types.js";
+import { estimateCompactionHistoryTokens } from "../../sessions/context-token-pressure.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { SettingsManager } from "../../sessions/settings-manager.js";
 import {
@@ -89,6 +90,47 @@ afterEach(() => {
 });
 
 describe("runEmbeddedAttemptPromptPhase", () => {
+  it.each(["", "Required engine instructions. 中文。"])(
+    "reuses assembly pressure through foreground preparation (%s)",
+    async (systemPromptAddition) => {
+      const fixture = createFixture({ pendingImageCount: 0 });
+      const scan = vi.spyOn(cjk, "estimateStringTokenPressure");
+      onTestFinished(() => scan.mockRestore());
+      const systemPrompt = "Required instructions. 中文。".repeat(1000);
+      const warn = vi.fn();
+      const prepared = await prepareHarnessContextEnginePrompt({
+        sessionId: "pressure-carry",
+        modelId: "synthetic",
+        promptBudget: { contextTokens: 100_000, reserveTokens: 77, systemPrompt, prompt: "hello" },
+        messages: [],
+        contextEngine: createContextEngine({
+          info: { id: "legacy", name: "Synthetic assembly" },
+          assemble: async () => ({ messages: [], estimatedTokens: 0, systemPromptAddition }),
+        }),
+        repairToolUseResultPairing: false,
+        isOpenAIResponsesApi: false,
+        warn,
+      });
+      expect(warn).not.toHaveBeenCalled();
+      if (systemPromptAddition) {
+        expect(prepared.systemPrompt).toContain(systemPromptAddition);
+      }
+      fixture.input.preparedStreamRuntime.history = prepared;
+      fixture.input.prepared.sessionRuntime.state.systemPromptText = prepared.systemPrompt;
+      const context = mocks.preparePromptContext();
+      mocks.preparePromptContext.mockReturnValue({
+        ...context,
+        systemPromptForHook: prepared.systemPrompt,
+      });
+      await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+      expect(mocks.handlePromptError.mock.calls.map(([input]) => input.error)).toEqual([]);
+      expect(mocks.submitPrompt).toHaveBeenCalledOnce();
+      expect(scan.mock.calls.filter(([text]) => text === systemPrompt)).toHaveLength(1);
+      if (systemPromptAddition) {
+        expect(scan.mock.calls.filter(([text]) => text === prepared.systemPrompt)).toHaveLength(1);
+      }
+    },
+  );
   it.each([false, true])(
     "gates prepared prompt-path images before inference (block: %s)",
     async (block) => {
@@ -248,7 +290,7 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     >("./attempt-prompt-submit.js");
     mocks.submitPrompt.mockImplementation(submitEmbeddedAttemptPrompt);
     streamMocks.streamSimple.mockImplementation((requestModel: Model) =>
-      createAssistantResultStream(createAssistant(requestModel, "Done.", "stop", 800_000)),
+      createAssistantResultStream(createAssistant(requestModel, "Done.", "stop", 870_000)),
     );
 
     await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
@@ -701,7 +743,9 @@ describe("runEmbeddedAttemptPromptPhase", () => {
       expect(mocks.submitPrompt).not.toHaveBeenCalled();
       expect(mocks.handlePromptError).toHaveBeenCalledWith(
         expect.objectContaining({
-          error: expect.objectContaining({ message: "admitted run authority is no longer active" }),
+          error: expect.objectContaining({
+            message: "This agent run is no longer active. Start a new turn to retry.",
+          }),
         }),
       );
     } finally {

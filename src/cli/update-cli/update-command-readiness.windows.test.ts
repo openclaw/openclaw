@@ -8,7 +8,6 @@ import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
 import * as ledger from "../../infra/update-run-ledger.js";
 import { toPublicUpdateRun } from "../../infra/update-run-record.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
@@ -47,10 +46,9 @@ vi.mock("../../infra/ports-inspect.js", async (importOriginal) => {
 vi.mock("../../infra/package-json.js", () => ({ readPackageVersion: async () => "2026.9.5" }));
 vi.mock("../../infra/update-git-runtime.js", () => ({ readBuiltGatewayBuildId: async () => null }));
 vi.mock("../../infra/gateway-owner-lease.js", () => ({ readGatewayOwnerLease: () => undefined }));
+// mock-isolation: Readiness waits must not open a real state database for lease reads.
 vi.mock("../../infra/startup-migration-checkpoint.js", () => ({
   STARTUP_MIGRATION_LEASE_TTL_MS: 300_000,
-  STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS: 10_000,
-  hasActiveStartupMigrationLease: () => false,
 }));
 vi.mock("../../gateway/local-http-probe.js", () => ({
   createConfiguredGatewayLocalProbe: () => ({}),
@@ -165,16 +163,15 @@ async function awaitProbe<T>(entered: Promise<T>, verification: Promise<boolean>
 }
 
 it.each([
-  [false, 300_000, undefined, 5_400_000],
-  [true, 300_000, undefined, 5_400_000],
-  [false, 600_000, 7_200_000, 7_200_000],
-  [false, undefined, 1_000, 1_000],
+  [false, undefined, 5_400_000],
+  [true, undefined, 5_400_000],
+  [false, 1_000, 1_000],
 ] as const)(
-  "records the bounded observation budget (json=%s, startup=%s, timeout=%s)",
-  async (json, observedStartupMs, timeoutMs, budgetMs) => {
+  "records the bounded observation budget (json=%s, timeout=%s)",
+  async (json, timeoutMs, budgetMs) => {
     const f = fixture();
     const probe = holdRuntimeProbe();
-    const { pending } = f.observe(probe.release, { observedStartupMs, timeoutMs }, json);
+    const { pending } = f.observe(probe.release, { timeoutMs }, json);
     await awaitProbe(probe.entered, pending);
     expect(f.read()).toMatchObject({ phase: "validating", status: "running" });
     expect(f.wait()).toMatchObject({
@@ -183,9 +180,7 @@ it.each([
       detail: expect.stringContaining(`Budget ${budgetMs}ms`),
     });
     if (timeoutMs === undefined) {
-      expect(f.wait()?.detail).toMatch(
-        new RegExp(`${observedStartupMs}.*10|10.*${observedStartupMs}`),
-      );
+      expect(f.wait()?.detail).toContain("startup floor");
     }
 
     const elapsedMs = timeoutMs === 1_000 ? 1_000 : 30_000;
@@ -207,7 +202,6 @@ it.each([
     }
     expect(waiting.detail).toContain("continuing with readiness unverified");
     expect(f.read().status).toBe("running");
-    expect(renderUpdateRunReport(f.read()).markdown).toContain(waiting.detail);
     expect(toPublicUpdateRun(f.read()).steps).toContainEqual(waiting);
     expect(defaultRuntime[json ? "error" : "log"]).toHaveBeenCalledWith(
       expect.stringContaining(waiting.detail!),
@@ -240,7 +234,6 @@ it("keeps HTTP endpoint results visible while readiness remains pending", async 
   expect(waiting.status).toBe("in_progress");
   expect(waiting.detail).toContain("HTTP healthz=200; readyz=503");
   expect(waiting.detail).toContain("Remaining 5370000ms");
-  expect(renderUpdateRunReport(f.read()).markdown).toContain("HTTP healthz=200; readyz=503");
 });
 
 it.each(["cancellation", "execution ownership loss"])(

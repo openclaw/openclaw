@@ -4,10 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  captureAgentToolExecutionBudget,
-  captureAgentToolSourceExecutionGuard,
-} from "../agents/agent-tool-source-execution-guard.js";
+import { captureAgentToolExecutionBudget } from "../agents/agent-tool-source-execution-guard.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -218,28 +215,6 @@ it("refuses revoked repair authority before starting the runner", () =>
     expect(mocks.entry).not.toHaveBeenCalled();
   }));
 
-it("keeps full authority at tool effect guards when preparation uses live checks", () =>
-  withOpenClawTestState({ layout: "home" }, async (state) => {
-    let current = true;
-    mocks.run.mockImplementation(async () => {
-      captureAgentToolExecutionBudget()?.();
-      const beforeEffect = captureAgentToolSourceExecutionGuard();
-      expect(beforeEffect).not.toThrow();
-      // Revocation during a tool's own awaits must stop its final write or spawn.
-      current = false;
-      expect(beforeEffect).toThrow(/^Agent tool execution scope is no longer active$/u);
-      return { payloads: [{ text: "Stopped." }], meta: { durationMs: 1 } };
-    });
-    const result = await repairTurn(state, {
-      isCurrent: () => current,
-      isLive: () => true,
-    });
-    expect(result).toMatchObject({
-      status: "completed",
-      toolCalls: 1,
-      envelope: { final: "Stopped.", status: "ok" },
-    });
-  }));
 it("preserves a configuration failure instead of blaming model setup", () =>
   withOpenClawTestState({ layout: "home" }, async (state) => {
     await state.writeConfig({ plugins: { enabled: false } });

@@ -63,6 +63,7 @@ import {
   type LaneName,
   type TelegramSendPayloadOptions,
 } from "./lane-delivery-text-deliverer.js";
+import { isTelegramRateLimitError } from "./network-errors.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
   createTelegramPromptContextProjectionSequence,
@@ -169,6 +170,9 @@ export async function sendPayload(
 ): Promise<LivePreviewDeliveryResult> {
   if (options?.durable) {
     sourceTurn.finalDeliveryError = undefined;
+    if (sourceTurn.finalHandoff === "delivery-queue") {
+      sourceTurn.finalHandoff = undefined;
+    }
   }
   if (sourceTurn.isSuperseded()) {
     await options?.promptContextSequence?.fail();
@@ -250,7 +254,6 @@ export async function sendPayload(
       ctxPayload: turn.context.ctxPayload,
       plan,
       info: { kind: "final" },
-      retryAmbiguousFinalText: true,
       replyToMode: effectiveReplyToMode,
       // ReplyToId describes inbound ancestry. Reuse the preview's prepared target
       // so an untagged final cannot inherit a topic-creation service message.
@@ -278,6 +281,12 @@ export async function sendPayload(
     });
     if (durable.status === "failed") {
       sourceTurn.finalDeliveryError = durable.error;
+      // An unsent flood refusal that the delivery queue still holds is replayed by
+      // recovery once Telegram allows; asking the user to resend would precede it.
+      // Missing or released custody keeps the normal failure handling.
+      if (durable.retainedForRecovery === true && isTelegramRateLimitError(durable.error)) {
+        sourceTurn.finalHandoff = "delivery-queue";
+      }
       return await failPromptContextSequence(projectionSequence, durable.error);
     }
     if (durable.status === "handled_visible") {
@@ -562,11 +571,13 @@ export async function finalizePendingAnswerBlockDraft(turn: Turn): Promise<void>
   turn.activeAnswerBlockDelivery = undefined;
 }
 
-export async function deliverFallback(turn: Turn, replies: ReplyPayload[], silent: boolean) {
+export async function deliverFallback(turn: Turn, reply: ReplyPayload, silent: boolean) {
   try {
     const result = await deliverReplies({
-      replies,
+      replies: [reply],
       ...createDeliveryBaseOptions(turn),
+      // A restart status is not the final answer the next Gateway must still deliver.
+      ...(reply.isStatusNotice ? { transcriptMirror: undefined } : {}),
       silent,
       mediaLoader: loadWebMedia,
     });

@@ -22,7 +22,10 @@ import {
   resetDiagnosticRunActivityForTest,
 } from "../../../logging/diagnostic-run-activity.js";
 import { SESSION_WATCHDOG_WARNING_MS } from "../../../sessions/session-controller.watchdog-state.js";
-import type { SessionControllerWatchdogAttempt } from "../../../sessions/session-controller.watchdog.js";
+import {
+  createSessionControllerWatchdog,
+  type SessionControllerWatchdogAttempt,
+} from "../../../sessions/session-controller.watchdog.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import {
   clearToolActivityRun,
@@ -86,6 +89,39 @@ afterEach(() => {
 });
 
 describe("streamWithIdleTimeout", () => {
+  it("bounds recovery after a long request ends even if cleanup repeats", async () => {
+    const stop = vi.fn(() => "settled" as const);
+    const watchdog = createSessionControllerWatchdog({
+      startedAtMs: Date.now(),
+      isCurrent: () => true,
+      readPhase: () => "active",
+      requestStop: stop,
+      expireCleanup: stop,
+    });
+    const source = createAssistantMessageEventStream();
+    const stream = await streamWithIdleTimeout(() => source, 600_000, undefined, {
+      watchdogAttempt: watchdog.attachAttempt({ assertCurrent() {} }),
+    })({} as Parameters<StreamFn>[0], { messages: [] });
+    const iterator = stream[Symbol.asyncIterator]();
+    try {
+      await vi.advanceTimersByTimeAsync(510_000);
+      source.end(makeAgentAssistantMessage({ content: [], stopReason: "length" }));
+      await vi.advanceTimersByTimeAsync(0);
+      await watchdog.tick();
+      expect(stop).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(SESSION_WATCHDOG_WARNING_MS - 1);
+      await iterator.return?.();
+      await watchdog.tick();
+      expect(stop).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await watchdog.tick()).toMatchObject({ action: "stop", reason: "semantic_stall" });
+      expect(stop).toHaveBeenCalledOnce();
+    } finally {
+      await iterator.return?.();
+      watchdog.close();
+    }
+  });
+
   it("keeps watchdog allocations and abort subscriptions bounded across streamed deltas", async () => {
     const timers = vi.spyOn(globalThis, "setTimeout");
     const caller = new AbortController();

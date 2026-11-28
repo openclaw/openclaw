@@ -14,7 +14,7 @@ import {
   getUpdateDoctorConfigWriteAuthority,
   assertUpdateDoctorConfigInputHash,
   recordUpdateDoctorConfigWrite,
-} from "../infra/update-doctor-result.js";
+} from "../infra/update-doctor-config-capture.js";
 import { initializeNativeSessionCatalogPreferences } from "../plugins/native-session-catalog-config.js";
 import { assertAgentDeletionTargetsUnchanged } from "./agent-workspace-roster-transition.js";
 import { prepareConfigFileWrite } from "./backup-rotation.js";
@@ -580,7 +580,7 @@ export async function writeConfigFileFromContext(
       const offlineChangedPaths = new Set<string>();
       collectChangedPaths(
         priorSnapshotAuditRecord.fingerprintedAuthoredConfig,
-        fingerprintConfigSnapshotAuthoredConfig(snapshot.parsed, stateContext),
+        await fingerprintConfigSnapshotAuthoredConfig(snapshot.parsed, stateContext),
         "",
         offlineChangedPaths,
       );

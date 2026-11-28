@@ -1,3 +1,4 @@
+import { hash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -126,6 +127,80 @@ describe("Gateway index over Harness workspace files", () => {
     };
   }
 
+  it.each(["admission", "indexing"] as const)(
+    "publishes an atomic save during %s without reindexing it on the next CLI sync",
+    async (phase) => {
+      const { harness, files } = await registerHarness();
+      const name = "memory/notes.md";
+      const note = path.join(harness, name);
+      const pending = path.join(harness, "editor.tmp");
+      const content = "a heliotrope grows beside the observatory.";
+      await fs.writeFile(note, "old text.");
+      await fs.utimes(note, 1700000000, 1700000000);
+      await fs.writeFile(pending, content);
+      await fs.utimes(pending, 1750000000, 1750000000);
+      const { mtimeMs, size } = await fs.stat(pending);
+      const read = files.readForIndexing;
+      const reads = vi.spyOn(files, "readForIndexing");
+      if (phase === "admission") {
+        const inspect = files.inspectFile;
+        vi.spyOn(files, "inspectFile").mockImplementationOnce(async (...args) => {
+          const lstat = fs.lstat.bind(fs);
+          const observation = vi.spyOn(fs, "lstat").mockImplementationOnce(async () => {
+            const admitted = await lstat(note);
+            await fs.rename(pending, note);
+            return admitted;
+          });
+          try {
+            const entry = await inspect(...args);
+            expect(entry).toMatchObject({ mtimeMs, size });
+            return entry;
+          } finally {
+            observation.mockRestore();
+          }
+        });
+      } else {
+        reads.mockImplementationOnce(async (file) => {
+          await fs.rename(pending, note);
+          return read(file);
+        });
+      }
+
+      const cfg = createConfig({ provider: "gemini", cacheEnabled: false });
+      const manager = await fixture.getFreshManager(cfg, "cli");
+      await manager.sync({ reason: "cli" });
+      // Inspect the committed source before a later search or sync can repair it.
+      {
+        using db = new DatabaseSync(manager.status().dbPath!, { readOnly: true });
+        expect(
+          db
+            .prepare(
+              "SELECT s.hash, s.mtime, s.size, c.text, p.observed_at FROM memory_index_sources s JOIN memory_index_chunks c ON c.path = s.path AND c.source = s.source JOIN memory_index_chunk_provenance p ON p.chunk_id = c.id WHERE s.path = ? AND s.source = 'memory'",
+            )
+            .all(name),
+        ).toEqual([
+          {
+            hash: hash("sha256", content),
+            mtime: mtimeMs,
+            size,
+            text: content,
+            observed_at: Math.floor(mtimeMs),
+          },
+        ]);
+      }
+      expect(reads).toHaveBeenCalledTimes(1);
+      expect(fixture.provider.embeddedBatchTexts).toEqual([content]);
+      await manager.close();
+      const next = await fixture.getFreshManager(cfg, "cli", true);
+      await next.sync({ reason: "cli" });
+      expect(reads).toHaveBeenCalledTimes(1);
+      expect(fixture.provider.embeddedBatchTexts).toEqual([content]);
+      expect(await search(next, "heliotrope")).toContainEqual(
+        expect.objectContaining({ path: name }),
+      );
+    },
+  );
+
   it("still rejects maintenance absent from an opted-in Memory host", async () => {
     await registerHarness();
     expect(() => getMemoryWorkspaceMaintenance(fixture.paths.workspace)).toThrow(
@@ -177,6 +252,31 @@ describe("Gateway index over Harness workspace files", () => {
       }
     },
   );
+
+  it("finds a new Harness note on the next CLI search of a populated index", async () => {
+    const { harness } = await registerHarness();
+    const cfg = createConfig();
+    await write(harness, "memory/first.md", "The observatory keeps a sidereal clock.");
+    const initial = await fixture.getFreshManager(cfg, "cli", true);
+    try {
+      expect(await search(initial, "sidereal")).toContainEqual(
+        expect.objectContaining({ path: "memory/first.md" }),
+      );
+    } finally {
+      await initial.close();
+    }
+
+    // The one-shot reader has no watcher. Only the Harness sees the new file.
+    await write(harness, "memory/second.md", "The hydrophone is stored below deck.");
+    const next = await fixture.getFreshManager(cfg, "cli", true);
+    try {
+      expect(await search(next, "hydrophone")).toContainEqual(
+        expect.objectContaining({ path: "memory/second.md" }),
+      );
+    } finally {
+      await next.close();
+    }
+  });
 
   it("drains host edits arriving during indexing into the next watch generation", async () => {
     const { harness, files, changed } = await registerHarness();

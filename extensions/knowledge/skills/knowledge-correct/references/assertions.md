@@ -65,6 +65,11 @@ dates, entities and evidence; for relationships also endpoints and label.
   `continuity: [{id, relation: "reaffirms" | "updates" | "contradicts", basis,
   evidence}]`. This does not supersede the earlier claim.
 - Explicit correction: `knowledge_correct` via the `knowledge-correct` skill.
+- A standing statement (preference, decision, rule) that the same person or
+  authority later explicitly replaces: `knowledge_correct` the earlier claim
+  with the new one; the reason quotes the replacing statement. Different
+  holders, contrary evidence or your own inference never qualify; use
+  `continuity`.
 - Never resurrect a withdrawn or superseded assertion on reimport. Check
   `historical: true` connections before inferring absence.
 

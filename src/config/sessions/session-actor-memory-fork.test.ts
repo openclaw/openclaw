@@ -62,7 +62,7 @@ const transcript = [
   message("a2", "u2", 4, { role: "assistant", content: "Second answer", stopReason: "stop" }),
 ];
 
-async function fixture(entry: Partial<SessionEntry> = {}) {
+async function fixture(entry: Partial<SessionEntry> = {}, events: readonly unknown[] = transcript) {
   const owner = createMemorySessionActorOwner({ agentId: "main", path: storePath });
   owners.push(owner);
   const acquire = (sessionKey = parentKey) =>
@@ -76,7 +76,7 @@ async function fixture(entry: Partial<SessionEntry> = {}) {
       incognito: true,
       ...entry,
     },
-    transcriptEvents: transcript,
+    transcriptEvents: events,
   });
   const child = await acquire(childKey);
   const forkInput = {
@@ -88,6 +88,44 @@ async function fixture(entry: Partial<SessionEntry> = {}) {
     },
   };
   return { owner, acquire, parent, child, forkInput };
+}
+
+const degradedCompaction = {
+  type: "compaction",
+  id: "c1",
+  parentId: "a2",
+  timestamp: "2026-01-01T00:00:05.000Z",
+  summary: "Summary",
+  firstKeptEntryId: "a2",
+  tokensBefore: 1000,
+  details: { readFiles: [], modifiedFiles: [], qualityDegraded: true },
+};
+
+/** Fixture transcript extended past a lossy compaction (c1), then u3/a3. */
+const degradedTranscript: readonly unknown[] = [
+  ...transcript,
+  degradedCompaction,
+  message("u3", "c1", 6, { role: "user", content: "Third question" }),
+  message("a3", "u3", 7, { role: "assistant", content: "Third answer", stopReason: "stop" }),
+];
+
+/** As above, plus a side branch (u2b) off a1 for switch-away coverage. The leaf
+ * control pins the active leaf to a3: without it the last event (u2b) would be
+ * the leaf, and switching to u2b would be a refused no-op. */
+const degradedBranchTranscript: readonly unknown[] = [
+  ...degradedTranscript,
+  message("u2b", "a1", 8, { role: "user", content: "Side question" }),
+  {
+    type: "leaf",
+    id: "active-leaf-degraded",
+    parentId: "a3",
+    timestamp: "2026-01-01T00:00:09.000Z",
+    targetId: "a3",
+  },
+];
+
+async function readParentEntry(actor: SessionActor) {
+  return readMemory(storage(actor), "session.entry.read", {});
 }
 
 describe("memory actor fork and cut", () => {
@@ -177,6 +215,8 @@ describe("memory actor fork and cut", () => {
       expectedState,
       mode: "rewind" as const,
     };
+    const drained = await readMemory(storage(parent), "session.history.raw-delta", { limits: {} });
+    assert(drained.kind === "page", "Raw delta page failed");
     const rewind = await commitMemory(storage(parent), "session.messageCut", { intent });
     expect(rewind).toMatchObject({
       status: "created",
@@ -184,16 +224,37 @@ describe("memory actor fork and cut", () => {
       editorAttachments: [{ mimeType: "image/png", data: "c3ludGhldGlj" }],
     });
     assert(rewind.status === "created", "Rewind failed");
-    await expect(async () => readMemory(storage(parent), "session.entry.read", {})).rejects.toThrow(
-      /closed/,
-    );
+    // The cut keeps the transcript identity; the writer claim is what is retired.
+    expect(rewind.entry.sessionId).toBe("parent-session");
+    expect(rewind.entry.lifecycleRevision).not.toBe(expectedState.lifecycleRevision);
+    // The control rotates the generation, as SQLite does: a pre-cut cursor is refused.
+    expect(
+      await readMemory(storage(parent), "session.history.raw-delta", {
+        limits: { cursor: drained.cursor },
+      }),
+    ).toMatchObject({ kind: "reset", reason: "generation_mismatch" });
+    const stale = await mutateMemory(storage(parent), "session.event.append", {
+      scope: {
+        agentId: "main",
+        sessionKey: parentKey,
+        storePath,
+        sessionId: expectedState.sessionId,
+        expectedOwner: { lifecycleRevision: expectedState.lifecycleRevision },
+      },
+      eventJson: JSON.stringify({ type: "custom", id: "stale", customType: "x", parentId: "a2" }),
+    });
+    assert(stale.kind === "rolled-back", "Stale writer was admitted after the cut");
     const active = await acquire();
     const old = await readMemory(storage(active), "session.history.hydrate", {
       sessionId: "parent-session",
     });
     expect(old.kind).toBe("full");
     if (old.kind === "full") {
-      expect(old.snapshot.events).toEqual(transcript);
+      // The original window is retained: every seeded event plus the one control.
+      expect(old.snapshot.events).toMatchObject([
+        ...transcript,
+        { type: "leaf", parentId: "a2", targetId: "a1" },
+      ]);
     }
     const branch = await readMemory(storage(active), "session.parentFork.source", {});
     expect(branch?.branchEntries).toHaveLength(2);
@@ -216,6 +277,65 @@ describe("memory actor fork and cut", () => {
     expect(
       (await readMemory(storage(restored), "session.parentFork.source", {}))?.branchEntries,
     ).toHaveLength(4);
+  });
+
+  // Rewinding to before a lossy compaction must not keep warning that the restored
+  // history may be missing details: the degraded flag belongs to the selected path.
+  it("rewinds before a degraded compaction and clears the degraded flag", async () => {
+    const { parent, acquire } = await fixture({}, degradedTranscript);
+    expect((await readParentEntry(parent))?.compactionQualityDegraded).toBe(true);
+    const rewind = await commitMemory(storage(parent), "session.messageCut", {
+      intent: {
+        canonicalSourceKey: parentKey,
+        sourceKey: parentKey,
+        targetKey: parentKey,
+        entryId: "u2",
+        expectedState: { sessionId: "parent-session", lifecycleRevision: "parent-lifecycle" },
+        mode: "rewind" as const,
+      },
+    });
+    assert(rewind.status === "created", "Rewind failed");
+    expect(rewind.entry.compactionQualityDegraded).toBeUndefined();
+    const active = await acquire();
+    expect((await readParentEntry(active))?.compactionQualityDegraded).toBeUndefined();
+  });
+
+  // The flag is derived from the selected path, not cleared unconditionally:
+  // switching away drops it, switching back to the degraded branch restores it.
+  it("restores the degraded flag when switching back to degraded history", async () => {
+    const { parent, acquire } = await fixture({}, degradedBranchTranscript);
+    expect((await readParentEntry(parent))?.compactionQualityDegraded).toBe(true);
+    const away = await commitMemory(storage(parent), "session.messageCut", {
+      intent: {
+        canonicalSourceKey: parentKey,
+        sourceKey: parentKey,
+        targetKey: parentKey,
+        entryId: "u2b",
+        expectedState: { sessionId: "parent-session", lifecycleRevision: "parent-lifecycle" },
+        mode: "switch" as const,
+      },
+    });
+    assert(away.status === "created", "Switch away failed");
+    expect(away.entry.compactionQualityDegraded).toBeUndefined();
+    const active = await acquire();
+    expect((await readParentEntry(active))?.compactionQualityDegraded).toBeUndefined();
+    const back = await commitMemory(storage(active), "session.messageCut", {
+      intent: {
+        canonicalSourceKey: parentKey,
+        sourceKey: parentKey,
+        targetKey: parentKey,
+        entryId: "a3",
+        expectedState: {
+          sessionId: away.entry.sessionId,
+          lifecycleRevision: away.entry.lifecycleRevision,
+        },
+        mode: "switch" as const,
+      },
+    });
+    assert(back.status === "created", "Switch back failed");
+    expect(back.entry.compactionQualityDegraded).toBe(true);
+    const restored = await acquire();
+    expect((await readParentEntry(restored))?.compactionQualityDegraded).toBe(true);
   });
 
   it("forks only the prefix before a user message and preserves source identity", async () => {

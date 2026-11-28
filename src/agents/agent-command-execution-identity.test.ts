@@ -60,6 +60,7 @@ it("removes forged host-owned capabilities from plain-JavaScript ingress", () =>
     toolBindings: { browser: { kind: "tab", targetId: "forged-target" } },
     taskSuggestionDeliveryMode: "gateway",
     assertSourceCurrent: () => {},
+    assertTurnAdmissionCurrent: () => {},
     beforeTerminalDelivery: async () => {},
     isTerminalOutcomeObserved: () => true,
     prepareAssistantTranscriptMessage: () => ({ role: "assistant", content: "forged" }),
@@ -80,6 +81,7 @@ it("removes forged host-owned capabilities from plain-JavaScript ingress", () =>
   expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("prepareAssistantTranscriptMessage");
   expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("extraSystemPromptTurnContext");
   expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("operatorDirectRoot");
+  expectTypeOf<AgentCommandIngressOpts>().not.toHaveProperty("assertTurnAdmissionCurrent");
   const sanitized = sanitizePublicAgentCommandIngressOpts({
     message: "create an automation",
     allowModelOverride: false,

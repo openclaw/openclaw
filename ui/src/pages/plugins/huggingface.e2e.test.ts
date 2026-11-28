@@ -1,5 +1,7 @@
+import path from "node:path";
 import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
-import manifest from "../../../../extensions/huggingface/openclaw.plugin.json" with { type: "json" };
+import { loadPluginManifest, PLUGIN_MANIFEST_FILENAME } from "../../../../src/plugins/manifest.ts";
+import { resolveBundledPluginPublicModulePath } from "../../../../src/test-utils/bundled-plugin-public-surface.ts";
 import {
   calendarInspection,
   calendarPlugin,
@@ -22,6 +24,18 @@ describeControlUiE2e("Hugging Face settings", () => {
   afterAll(teardownPluginsE2e);
 
   it("offers separate opt-in Hub tools and saves the plugin-owned setting", async () => {
+    const result = loadPluginManifest(
+      path.dirname(
+        resolveBundledPluginPublicModulePath({
+          pluginId: "huggingface",
+          artifactBasename: PLUGIN_MANIFEST_FILENAME,
+        }),
+      ),
+    );
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    const { manifest } = result;
     const plugin = {
       ...calendarPlugin,
       id: "huggingface",
@@ -62,7 +76,7 @@ describeControlUiE2e("Hugging Face settings", () => {
             }),
           }),
           uiHints: Object.fromEntries(
-            Object.entries(manifest.uiHints).map(([key, value]) => [
+            Object.entries(manifest.uiHints ?? {}).map(([key, value]) => [
               "plugins.entries.huggingface.config." + key,
               value,
             ]),

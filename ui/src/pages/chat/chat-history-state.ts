@@ -59,6 +59,7 @@ type ChatHistoryLoadState =
         promise: Promise<ObservedChatHistoryResult | undefined>;
         startup: boolean;
         deferBranches: boolean;
+        version: number;
       };
     } & ChatHistoryLoadRequest)
   | {
@@ -87,6 +88,7 @@ type ChatHistoryPaneRequests = {
   subscriptionError?: string;
   subscriptionRetry?: AbortController;
   initialHistory?: InitialChatHistoryReceipt;
+  compactOpeningSessionKey?: string;
   historyRead?: AbortController;
   syncRetries: Map<
     "subscription" | "history",
@@ -127,6 +129,18 @@ export function chatHistoryRequests(owner: object): ChatHistoryPaneRequests {
     chatHistoryPaneRequests.set(owner, requests);
   }
   return requests;
+}
+
+export function shouldRequestCompactOpening(state: ChatState, hasCompactReceipt = false): boolean {
+  if (state.settings?.compactSessionOpening !== true) {
+    return false;
+  }
+  const requests = chatHistoryRequests(state);
+  return (
+    !requests.acceptedHistory &&
+    !requests.windowReset?.isCurrent() &&
+    (hasCompactReceipt || (!state.currentSessionId && state.chatMessages.length === 0))
+  );
 }
 
 export function setChatHistoryRetrying(
@@ -260,6 +274,14 @@ export function getChatHistoryLoadState(state: ChatState): ChatHistoryLoadState 
   return requests.historyLoad;
 }
 
+/** A global key routes to the selected agent, so another agent's read proves nothing about it. */
+function isAcceptedForSelectedAgent(state: ChatState, requestAgentId: string | undefined) {
+  return (
+    !isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
+    resolveUiSelectedSessionAgentId(state) === requestAgentId
+  );
+}
+
 /** Same-session refreshes retain the accepted transcript's identity until replacement commits. */
 export function getAcceptedChatHistorySession(state: ChatState) {
   const accepted = chatHistoryRequests(state).acceptedHistory;
@@ -269,8 +291,7 @@ export function getAcceptedChatHistorySession(state: ChatState) {
     state.sessions === accepted.sessions &&
     state.connectionEpoch === accepted.connectionEpoch &&
     state.sessionKey === accepted.sessionKey &&
-    (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
-      resolveUiSelectedSessionAgentId(state) === accepted.requestAgentId) &&
+    isAcceptedForSelectedAgent(state, accepted.requestAgentId) &&
     accepted.sessionInfo?.sessionId &&
     state.currentSessionId === accepted.sessionInfo.sessionId
     ? accepted.sessionInfo
@@ -290,7 +311,8 @@ export function isChatSessionProvenAbsent(
     state.sessions === accepted.sessions &&
     state.connectionEpoch === accepted.connectionEpoch &&
     state.sessionKey === sessionKey &&
-    accepted.sessionKey === sessionKey
+    accepted.sessionKey === sessionKey &&
+    isAcceptedForSelectedAgent(state, accepted.requestAgentId)
   );
 }
 
@@ -320,8 +342,7 @@ export function isInitialChatHistoryUnavailable(state: ChatState): boolean {
     state.sessions === accepted.sessions &&
     (!state.connected || state.connectionEpoch === accepted.connectionEpoch) &&
     accepted.sessionKey === state.sessionKey &&
-    (!isUiSelectedGlobalSessionKey(state, state.sessionKey) ||
-      resolveUiSelectedSessionAgentId(state) === accepted.requestAgentId) &&
+    isAcceptedForSelectedAgent(state, accepted.requestAgentId) &&
     accepted.sessionInfo?.sessionId === state.currentSessionId
   ) {
     return false;
@@ -390,6 +411,7 @@ export function resetChatHistoryProjection(
   // snapshot owner and its coalesced request before creating the next epoch.
   requests.historyVersion += 1;
   delete requests.initialHistory;
+  delete requests.compactOpeningSessionKey;
   delete requests.windowReset;
   // Keep the presentation accessor installed when clearing accepted history.
   requests.acceptedHistory = undefined;

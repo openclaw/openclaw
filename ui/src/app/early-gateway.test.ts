@@ -194,7 +194,8 @@ it.each(["/dashboard/main", "/dashboard/main/abcdef12"])(
   },
 );
 
-it("starts literal dashboard history on the early transport after hello", async () => {
+it.each([false, true])("opens early dashboard history (compact %s)", async (compact) => {
+  saveSettings({ ...loadSettings(), compactSessionOpening: compact });
   window.history.replaceState({}, "", "/dashboard/main/dashboard/proof");
   early = startEarlyApplicationGateway(prepareApplicationStartup());
   expect(early).toBeDefined();
@@ -211,13 +212,19 @@ it("starts literal dashboard history on the early transport after hello", async 
     ok: true,
     payload: { type: "hello-ok", protocol: PROTOCOL_VERSION },
   });
+  await vi.dynamicImportSettled();
   await vi.advanceTimersByTimeAsync(0);
   expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual(
     expect.objectContaining({
       method: "sessions.messages.subscribe",
       params: expect.objectContaining({
         key: "agent:main:dashboard:proof",
-        initialHistory: { limit: 80, knownState: {}, maxBytes: 262144, toolResultMaxChars: 2000 },
+        initialHistory: {
+          limit: compact ? 24 : 80,
+          knownState: {},
+          maxBytes: 262144,
+          toolResultMaxChars: 2000,
+        },
       }),
     }),
   );
@@ -283,6 +290,7 @@ async function connectWarmGateway() {
       auth: { method: "token", role: "operator", scopes: [], recoveryScope: "account-a" },
     },
   });
+  await vi.dynamicImportSettled();
   await vi.advanceTimersByTimeAsync(0);
   return socket;
 }
@@ -298,6 +306,7 @@ it.each(["before", "after"])(
     const socket = await connectWarmGateway();
     if (timing === "after") {
       await warm.resolve();
+      await vi.dynamicImportSettled();
       await vi.advanceTimersByTimeAsync(0);
     }
     expect(socket.sent.map((frame) => JSON.parse(frame))).toContainEqual(
@@ -344,6 +353,7 @@ it.each(["different route cache", "foreground handoff", "retired recovery scope"
       warm.transport.client.retireOfflineRecoveryScope();
     }
     await warm.resolve();
+    await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(0);
     expect(socket.sent.map((frame) => JSON.parse(frame).method)).toEqual(["connect"]);
   },

@@ -33,7 +33,7 @@ import type { BareRootLaunchTarget } from "./run-main.gateway-types.js";
 
 export const TUI_REQUIRES_TTY =
   "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.";
-const ROOT_HELP_ALIASES = new Set(["tools", "help"]);
+const ROOT_HELP_ALIASES = new Set(["help"]);
 const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set(["setup", "onboard", "configure"]);
 const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliCommandDescriptors()
@@ -43,6 +43,19 @@ const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
     .filter((descriptor) => descriptor.parentDefaultHelp)
     .map((descriptor) => descriptor.name),
 ]);
+export async function loadCliStartupDotEnv(
+  invocation: ReturnType<typeof resolveCliArgvInvocation>,
+  loadGlobalEnv: boolean,
+): Promise<void> {
+  if (isRemoteAgentDispatchInvocation(invocation.argv, invocation.primary)) {
+    const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
+    await loadGatewayDispatchCliDotEnv();
+  } else {
+    const { loadCliDotEnv } = await import("./dotenv.js");
+    loadCliDotEnv({ loadGlobalEnv });
+  }
+}
+
 export function shouldLoadCliDotEnv(loadGlobalEnv: boolean): boolean {
   const cwd = tryProcessCwd();
   if (cwd && existsSync(path.join(cwd, ".env"))) {

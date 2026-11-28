@@ -1,5 +1,6 @@
 import { isTerminalSessionStatus } from "../../../config/sessions/types.js";
 import { persistGatewaySessionLifecycleEvent } from "../../../gateway/session-lifecycle-state.js";
+import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-events.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import {
@@ -7,18 +8,24 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
 } from "./subagent-lifecycle-events.js";
 import type { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { resolveSubagentYieldWaitSource } from "./subagent-registry-read.js";
 import { resolveYieldedRunContinuation } from "./subagent-registry-run-pause.js";
-import type { createSubagentSweepReadScope } from "./subagent-registry-sweep-cleanup.js";
+import type { createSubagentSweepContext } from "./subagent-registry-sweep-cleanup.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
-import { isYieldedSubagentRun } from "./subagent-run-liveness.js";
+import {
+  hasSubagentRunEnded,
+  isSubagentRunLive,
+  isSubagentRunQueued,
+  isYieldedSubagentRun,
+} from "./subagent-run-liveness.js";
 
 type CompleteRun = ReturnType<
   typeof createSubagentRegistryCompletionRuntime
 >["completeSubagentRunWithRecovery"];
-type SweepReadScope = ReturnType<typeof createSubagentSweepReadScope>;
+type SweepReadScope = ReturnType<typeof createSubagentSweepContext>;
 
 /**
  * Settles a yielded run that no continuation can reach (see
@@ -49,6 +56,15 @@ export async function settleUnreachableYieldedSubagentRun(params: {
         requester.lastRunId === requesterCompletion.runId);
   }
   const retired = subagentRuns.isCompletionAuthorityRetired(entry);
+  if (requesterEnded && !retired && isYieldedSubagentRun(entry) && entry.waitForMessage) {
+    // The parent may finish before its retained send replays after a plugin reload.
+    // Both lifecycle events and periodic sweeps consume that handoff owner's live fact.
+    const { hasRetainedSessionSendForSubagent } =
+      await import("../../tools/sessions-send-self-hold.js");
+    if (hasRetainedSessionSendForSubagent(entry)) {
+      return false;
+    }
+  }
   let continuation = isYieldedSubagentRun(entry)
     ? resolveYieldedRunContinuation(entry, requesterEnded)
     : undefined;
@@ -66,6 +82,12 @@ export async function settleUnreachableYieldedSubagentRun(params: {
   if (continuation?.state !== "unreachable") {
     return false;
   }
+  subagentRegistryLog.warn("Settling unreachable yielded subagent", {
+    runId,
+    requesterSessionKey: entry.requesterSessionKey,
+    reason: continuation.error,
+    yieldedAt: entry.execution.endedAt,
+  });
   // An outcome the yield already recorded is kept, as a collector that yields now ends with its
   // yielded turn as its result; only a run with no recorded outcome takes the diagnostic error.
   const outcome = entry.execution.outcome ?? {
@@ -112,5 +134,63 @@ export async function settleUnreachableYieldedSubagentRun(params: {
       });
     }
   }
+  return true;
+}
+
+const SUBAGENT_RESTART_INTERRUPTED_ERROR =
+  "The Gateway stopped before this subagent finished. Its run did not survive the restart; inspect its saved work before retrying.";
+
+/**
+ * Settles a running row hydrated from an earlier Gateway process. Restore retires its
+ * completion authority and no process reconstructs child execution, so without a
+ * terminal outcome its requester would wait for a completion that never arrives.
+ * Returns whether it did.
+ */
+export async function settleRestartInterruptedSubagentRun(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  readScope?: Pick<SweepReadScope, "completionCurrent">;
+  complete: CompleteRun;
+  now: number;
+  processStartedAt?: number;
+}): Promise<boolean> {
+  const { runId, entry, readScope, complete, now } = params;
+  const processStartedAt = params.processStartedAt ?? performance.timeOrigin;
+  if (
+    hasSubagentRunEnded(entry) ||
+    isYieldedSubagentRun(entry) ||
+    // Fresh requester custody owns the notice; the retired process cannot send it.
+    (subagentRuns.isCompletionAuthorityRetired(entry) && entry.expectsCompletionMessage === true) ||
+    // Wall-clock time alone cannot turn this Gateway's registered child into a crash orphan.
+    (entry.execution.lifecycleGeneration !== undefined &&
+      isAgentEventLifecycleGenerationCurrent(entry.execution.lifecycleGeneration)) ||
+    // Only an earlier process could have owned this execution; this process never did.
+    !(entry.createdAt < processStartedAt) ||
+    isSubagentRunLive(entry) ||
+    isSubagentRunQueued(entry)
+  ) {
+    return false;
+  }
+  subagentRegistryLog.warn("Settling subagent interrupted by Gateway restart", {
+    runId,
+    requesterSessionKey: entry.requesterSessionKey,
+    createdAt: entry.createdAt,
+  });
+  await complete(
+    {
+      runId,
+      expectedEntry: entry,
+      recoveryCurrent: readScope?.completionCurrent,
+      endedAt: now,
+      outcome: { status: "error", error: SUBAGENT_RESTART_INTERRUPTED_ERROR },
+      // The dead execution cannot publish another reply; the completion owner keeps any saved one.
+      terminalReply: { disposition: "empty" },
+      reason: SUBAGENT_ENDED_REASON_ERROR,
+      sendFarewell: true,
+      accountId: entry.requesterOrigin?.accountId,
+      triggerCleanup: true,
+    },
+    "sweeper-restart-interrupted",
+  );
   return true;
 }

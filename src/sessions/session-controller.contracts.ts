@@ -6,7 +6,7 @@ import type {
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
-import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
+import type { ReplyMessageInjectionOutcome } from "../auto-reply/reply/message-injection-authority.js";
 import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/queue-settings.types.js";
@@ -31,7 +31,6 @@ import type { AgentWorkAdmissionIdentity } from "./session-agent-work-admission.
 import type {
   ReplyBackendQueueMessageOptions,
   ReplyMessageInjectionResolution,
-  ReplyMessageInjectionRejectionReason,
   ReplyToolAuthorityRoute,
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRequester,
@@ -52,6 +51,8 @@ import type {
   SessionControllerWatchdog,
 } from "./session-controller.watchdog.js";
 import type { SessionForkContextSnapshot } from "./session-fork-context.types.js";
+
+export type { ReplyMessageInjectionOutcome } from "../auto-reply/reply/message-injection-authority.js";
 
 export type {
   ReplyBackendCancelReason,
@@ -126,13 +127,6 @@ export type ReplyRunInterruptTarget = {
   readonly [replyRunInterruptTargetOperation]: ReplyOperation;
 };
 
-export type ReplyMessageInjectionOutcome =
-  | { status: "indeterminate"; errorMessage: string }
-  | { status: "accepted" }
-  /** Terminal authority failure; the separately recorded acceptance stays unchanged. */
-  | { status: "failed"; error: Error }
-  | { status: "rejected"; reason: ReplyMessageInjectionRejectionReason; errorMessage?: string };
-
 export type ReplyMessageInjectionAttempt = {
   /** Native run identity captured with the opaque execution owner. */
   targetRunId: string | undefined;
@@ -198,6 +192,16 @@ export type ReplyOperation = {
   readonly terminalProducerBlocked: boolean;
   /** Set when a stale-watchdog expiry forced this operation's run_stalled result. */
   readonly staleExpiryReason?: ReplyOperationStaleReason;
+  /**
+   * Semantic cause a stuck-session recovery acted on when it aborted the embedded
+   * run (e.g. `blocked_tool_call`). Recorded by the controller's authoritative
+   * stall-stop path (expireOwner -> abortForStall) before the abort commits, so
+   * both the watchdog-timer-driven and diagnostics-triggered stops carry it into
+   * cron finalization; diagnostics supplies the precise cause when available, and
+   * the controller falls back to the watchdog decision reason otherwise. Absent
+   * when recovery did not abort the run or supplied no classification.
+   */
+  recoveryClassification?: string;
   readonly startedAtMs: number;
   readonly lastActivityAtMs: number;
   /** True when this operation has owned the supplied session ID. */
@@ -507,6 +511,7 @@ export type SessionControllerSourceCustody = {
   cancellationRetired?: boolean;
   stopHeartbeat?: () => void;
   releaseAuthority?: () => void;
+  releaseCallbacks?: () => void;
   failure?: unknown;
   disposeSource?: () => void;
   /** One in-process Gateway registration may adopt a pre-reserved source. */
@@ -522,6 +527,8 @@ export type SessionControllerInput = {
   sequence: number;
   readonly sourceTurnId?: string;
   protocolRunId?: string;
+  /** Producer records transcript custody after the input owner commits it. */
+  onTranscriptCommitted?: (runId: string) => void | Promise<void>;
   policy: Readonly<QueueSettings>;
   mailbox: SessionControllerMailbox;
   readonly custody: SessionControllerSourceCustody;
@@ -630,7 +637,8 @@ export type SessionControllerSourceAdapter = {
   /** Original personal ingress, bound at admission; identity evidence, not an execution grant. */
   initiatingPersonalOperator?: AdmittedRunOperatorAuthority;
   readonly scope?: string;
-  readonly authority?: { assertCurrent(): void; signal?: AbortSignal };
+  /** Stop signal and the producer's own data fence; an operator authority carries only Stop. */
+  readonly authority?: { assertCurrent?(): void; signal?: AbortSignal };
   readonly signal?: AbortSignal;
   readonly requester?: Readonly<{ deviceId?: string; connectionId?: string; clientId?: string }>;
   /** Known routing identity before a physical target exists; never execution authority. */
@@ -721,7 +729,6 @@ export type ReplyOperationRunState = {
   /** The Gateway accepted this question answer or rejected its values before commitment. */
   questionInputHandled?: true;
   messageInjectionAborted?: true;
-  agentTurn?: ReturnType<typeof resolveAgentTurnExecutionStatus>;
   agentTurnOwner?: ReplyOperation;
   messagingToolSentTargets?: MessagingToolSend[];
   backgroundWorkStarted?: boolean;
@@ -822,6 +829,8 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
   assertRegistrationActive: () => void;
   assertActive: () => void;
   personalToolParticipants?: ReplyTurnParticipants;
+  /** Host-admitted execution ceiling, never reconstructed from an approval request. */
+  readonly operatorAuthority?: AdmittedRunOperatorAuthority;
 };
 
 export type EmbeddedRunRegistration = {

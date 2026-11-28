@@ -214,6 +214,12 @@ async function submitGithubIssueOnce(
         : "authentication-unavailable",
     );
   }
+  // Reuse the same exact-content lookup before creation and after an uncertain response.
+  // GitHub search indexing can lag; this is not a cross-process creation lock.
+  const existing = await reconcileGithubIssue(issue, runGh, hooks);
+  if (existing.status === "created") {
+    return existing;
+  }
   const commitIssueCreate = await hooks.beforeIssueCreate?.();
   // The caller's live authority and durable claim must not yield before child creation.
   commitIssueCreate?.();

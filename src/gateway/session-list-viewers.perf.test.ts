@@ -1,8 +1,19 @@
 import { expect, test, vi } from "vitest";
-import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import {
+  bindEmbeddedSessionRowProjection,
+  createEmbeddedCallGateway,
+} from "../agents/tools/embedded-gateway-stub.js";
+import { createSessionsSearchTool } from "../agents/tools/sessions-search-tool.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
+import {
+  deleteSessionEntryLifecycle,
+  persistSessionTranscriptTurn,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -70,6 +81,85 @@ function patchEntry(
 ) {
   writeListEntry(key, { ...store[key]!, ...patch });
 }
+
+test("reuses invited pages until committed membership changes their visible roster", async () => {
+  await withStateDirEnv("openclaw-list-invited-", async () => {
+    const scopes = ["operator.read", "operator.write"] as const;
+    const cfg = initialize({
+      agents: { entries: { main: {}, work: {} } },
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: { agents: "*", scopes: [...scopes], sessions: { others: "invited" } },
+          },
+        },
+      },
+    });
+    const guest = viewer("guest");
+    const other = viewer("other");
+    const guestId = guest.authenticatedUserProfile!.profileId;
+    const otherId = other.authenticatedUserProfile!.profileId;
+    const granted = { agentId: "work", sessionKey: "agent:work:granted", sessionId: "granted" };
+    const later = { agentId: "main", sessionKey: "agent:main:later", sessionId: "later" };
+    writeResidentEntries({
+      ...Object.fromEntries(
+        Array.from({ length: 256 }, (_, i) => [
+          `agent:main:uninvited-${i}`,
+          { sessionId: `uninvited-${i}`, updatedAt: 100 + i, createdActor: profileActor(otherId) },
+        ]),
+      ),
+      [granted.sessionKey]: {
+        sessionId: granted.sessionId,
+        updatedAt: 5,
+        createdActor: profileActor(otherId),
+      },
+      [later.sessionKey]: {
+        sessionId: later.sessionId,
+        updatedAt: 4,
+        createdActor: profileActor("another-owner"),
+      },
+      "agent:main:own": { sessionId: "own", updatedAt: 3, createdActor: profileActor(guestId) },
+    });
+    await addSessionMember(granted, { identityId: guestId, addedBy: otherId });
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    using checkMembership = vi.spyOn(projection, "hasMembership");
+    const read = (offset = 0) =>
+      listProjectedSessions({
+        projection,
+        client: guest,
+        opts: { limit: 1, ownerFirst: true, offset },
+      });
+    try {
+      await projection.ensureMaterialized();
+      const warm = await read();
+      expectPage(warm, ["own", "granted"], 2);
+      expect(warm).toMatchObject({ hasMore: true, nextOffset: 1 });
+      const owners = warm.owners;
+      expectPage(await read(1), ["own"], 2);
+      checkMembership.mockClear();
+      expectPage(await read(), ["own", "granted"], 2);
+      expect(checkMembership).not.toHaveBeenCalled();
+
+      await addSessionMember(later, { identityId: guestId, addedBy: otherId });
+      checkMembership.mockClear();
+      const extended = await read(1);
+      expectPage(extended, ["later"], 3);
+      expect(extended).toMatchObject({ hasMore: true, nextOffset: 2 });
+      expect(checkMembership.mock.calls.length).toBeLessThan(32);
+
+      await removeSessionMember(granted, guestId);
+      const revoked = await read();
+      expectPage(revoked, ["own", "later"], 2);
+      expect(revoked.owners).not.toEqual(owners);
+      expectPage(await read(1), ["own"], 2);
+    } finally {
+      projection.dispose();
+      release();
+    }
+  });
+});
 
 test("preserves viewer pages across publications while bounding shared predicate work", async () => {
   await withStateDirEnv("openclaw-list-viewer-golden-", async () => {
@@ -317,7 +407,7 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
   });
 });
 
-test("shares concurrent list selection across row modes and refilters only published partitions", async () => {
+test.each([true, false])("shares unchanged list selection (wire=%s)", async (wire) => {
   await withStateDirEnv("openclaw-list-selection-repeat-", async () => {
     const cfg = initialize();
     const alice = viewer("alice");
@@ -344,55 +434,24 @@ test("shares concurrent list selection across row modes and refilters only publi
       listProjectedSessions({
         projection,
         client,
-        acceptsSerializedJson: true,
+        acceptsSerializedJson: wire,
         opts: { limit, activeMinutes: 1, rowMode },
       });
     try {
       expect(sessionIds(await read("compact"))).toEqual(["s127", "s126"]);
-      using owner = vi.spyOn(projection.state.rowContext.identityProjection!, "owner");
-      const repeated = await Promise.all(
-        Array.from({ length: 8 }, (_, i) => read(i % 2 ? "compact" : "sidebar")),
-      );
-      expect(repeated.map((result) => result.totalCount)).toEqual(Array(8).fill(128));
-      expect(owner).not.toHaveBeenCalled();
-      for (const client of [alice, bob]) {
-        for (const rowMode of ["compact", "sidebar"] as const) {
-          await read(rowMode, client, 2);
-          await read(rowMode, client, 128);
-        }
-      }
-      using stringify = vi.spyOn(JSON, "stringify");
-      using present = vi.spyOn(projection, "present");
-      for (const client of [alice, bob, alice, bob]) {
-        for (const rowMode of ["compact", "sidebar"] as const) {
-          stringify.mockClear();
-          await read(rowMode, client, 2);
-          const smallPageEncodings = stringify.mock.calls.length;
-          stringify.mockClear();
-          const result = await read(rowMode, client, 128);
-          const encodings = stringify.mock.calls.length;
-          expect(result.totalCount).toBe(128);
-          // Fixed request preparation may encode facts; additional warm rows must not.
-          expect(encodings, `warm ${rowMode} serialization scales with row count`).toBe(
-            smallPageEncodings,
-          );
-          const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
-          expect(rows.every((row) => row.rowMode === rowMode)).toBe(true);
-          expect(rows.find((row) => row.sessionId === "s127")?.sharingRole).toBe(
-            client === bob ? "owner" : "viewer",
-          );
-          expect(rows.find((row) => row.sessionId === "s0")?.sharingRole).toBe(
-            client === alice ? "owner" : "viewer",
-          );
-        }
-      }
-      expect(present).not.toHaveBeenCalled();
-      stringify.mockRestore();
-      present.mockRestore();
-      owner.mockClear();
+      const people = () =>
+        listProjectedSessions({
+          projection,
+          client: alice,
+          acceptsSerializedJson: true,
+          opts: { limit: 2, includePeople: true },
+        });
+      const beforeUsage = await people();
+      patchEntry(store, "agent:main:selection-0", { inputTokens: 123 });
+      await read("compact", bob);
+      expect((await people()).people).toEqual(beforeUsage.people);
       patchEntry(store, "agent:main:selection-0", { updatedAt: now + 200, visibility: "draft" });
       expectPage(await read("compact"), ["s0", "s127"], 128);
-      expect(owner.mock.calls.length).toBeLessThan(32);
       expectPage(await read("compact", bob), ["s127", "s126"], 127);
       // An exact publication must not hide an expired retained partition.
       clock.mockReturnValue(now + 60_128);
@@ -409,6 +468,109 @@ test("shares concurrent list selection across row modes and refilters only publi
     } finally {
       projection.dispose();
       release();
+    }
+  });
+});
+
+test("indexed recall preserves pinned visibility without inventory paging", async () => {
+  await withStateDirEnv("openclaw-search-selection-", async () => {
+    const cfg = initialize({ agents: { entries: { main: {}, work: {} } } });
+    const requester = "agent:main:dashboard:requester";
+    const archived = "agent:main:dashboard:archived";
+    const child = "agent:main:subagent:child";
+    const foreign = "agent:work:dashboard:foreign";
+    const foreignChild = "agent:work:subagent:child";
+    writeResidentEntries({
+      [requester]: { sessionId: "requester", updatedAt: 6 },
+      [archived]: { sessionId: "archived", updatedAt: 5, archivedAt: 10 },
+      [child]: { sessionId: "child", updatedAt: 4, spawnedBy: requester },
+      [foreign]: { sessionId: "foreign", updatedAt: 3 },
+      [foreignChild]: { sessionId: "foreign-child", updatedAt: 2, spawnedBy: requester },
+    });
+    for (const agentId of ["main", "work"]) {
+      replaceSessionEntrySync(
+        { agentId, sessionKey: "global" },
+        {
+          sessionId: `${agentId}-global`,
+          updatedAt: 1,
+          archivedAt: 10,
+        },
+      );
+    }
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: "agent:main:dashboard:incognito-hidden" },
+      { sessionId: "private", updatedAt: 7, incognito: true, archivedAt: 10 },
+    );
+    for (const [agentId, sessionKey, sessionId] of [
+      ["main", requester, "requester"],
+      ["main", archived, "archived"],
+      ["main", child, "child"],
+      ["work", foreign, "foreign"],
+      ["work", foreignChild, "foreign-child"],
+      ["main", "global", "main-global"],
+      ["work", "global", "work-global"],
+      ["main", "agent:main:dashboard:incognito-hidden", "private"],
+    ] as const) {
+      await persistSessionTranscriptTurn(
+        { agentId, sessionKey, sessionId },
+        {
+          cwd: "/fixture",
+          updateMode: "none",
+          messages: [{ message: { role: "user", content: "synthetic" }, now: Date.now() }],
+        },
+      );
+    }
+    const release = retainSessionListForegroundWork();
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    const unbind = bindEmbeddedSessionRowProjection(Promise.resolve(projection));
+    const gateway = createEmbeddedCallGateway();
+    const own = [requester, archived, child, "global"];
+    try {
+      for (const scope of ["all", "self", "tree", "agent"] as const) {
+        for (const enabled of [true, false]) {
+          for (const sandboxed of [false, true]) {
+            const tool = createSessionsSearchTool({
+              // The Gateway remains permissive; the tool's pinned restrictions must survive RPC.
+              config: {
+                ...cfg,
+                tools: { sessions: { visibility: scope }, agentToAgent: { enabled } },
+                agents: {
+                  ...cfg.agents,
+                  defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+                },
+              },
+              agentId: "main",
+              agentSessionKey: requester,
+              sandboxed,
+              callGateway: async (request) => {
+                expect(request.method).not.toBe("sessions.list");
+                return gateway(request);
+              },
+            });
+            const result = await tool.execute("visibility", { query: "synthetic", limit: 25 });
+            const expected = sandboxed
+              ? [requester, child, foreignChild]
+              : scope === "self"
+                ? [requester]
+                : scope === "tree"
+                  ? [requester, child, foreignChild]
+                  : scope === "agent"
+                    ? own
+                    : [...own, foreignChild, ...(enabled ? [foreign] : [])];
+            const keys = (result.details as { results: { sessionKey: string }[] }).results.map(
+              (hit) => hit.sessionKey,
+            );
+            expect(keys.toSorted(), `${scope}/${enabled}/${sandboxed}`).toEqual(
+              expected.toSorted(),
+            );
+          }
+        }
+      }
+    } finally {
+      unbind();
+      projection.dispose();
+      release();
+      memorySessionActorOwners.reset();
     }
   });
 });

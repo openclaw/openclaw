@@ -16,7 +16,11 @@ import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { createCronMutationCompletion } from "../mutation-completion.js";
 import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
 import { CronService } from "../service.js";
-import { createCronStoreHarness, createNoopLogger } from "../service.test-harness.js";
+import {
+  createCronStoreHarness,
+  createNoopLogger,
+  mockCronAvailableMemory,
+} from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
@@ -43,6 +47,8 @@ async function admissionFixture(id: string, count: number, command = false) {
     name: command ? `manual-blocker-${index}` : job.name,
   }));
   await saveCronStore(storePath, { version: 1, jobs: [...blockers, job] });
+  // No spare memory, so the blockers fill exactly the default run slots.
+  mockCronAvailableMemory(0);
   return { storePath, job, blockers };
 }
 
@@ -86,6 +92,8 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
               await new Promise(() => {});
             },
           });
+          // The subprocess owns this scheduler and its eight occupied slots.
+          cron.state.readAvailableMemoryBytes = () => 0;
           await cron.start();
           if (${killAfterAck}) {
             for (const id of ${JSON.stringify(blockers.map((entry) => entry.id))}) {

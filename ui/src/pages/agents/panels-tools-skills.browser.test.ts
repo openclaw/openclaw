@@ -1,9 +1,6 @@
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import type { ToolsCatalogResult, ToolsEffectiveResult } from "../../api/types.ts";
-import {
-  availableIdentity,
-  createIdentityFixture,
-} from "../../features/github-connections/github-identity-harness.test-support.ts";
+import { availableIdentity } from "../../features/github-connections/github-identity-harness.test-support.ts";
 import { githubIdentityViewFixture } from "../../features/github-connections/github-identity.test-support.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
@@ -86,41 +83,6 @@ function policyCatalog(
       },
     ],
   };
-}
-
-function pluginCatalog(optional: boolean): ToolsCatalogResult {
-  return {
-    agentId: "main",
-    profiles: [{ id: "full", label: "Full" }],
-    groups: [
-      {
-        id: "plugin:voice-call",
-        label: "voice-call",
-        source: "plugin",
-        pluginId: "voice-call",
-        tools: [
-          catalogTool("voice_call", {
-            source: optional ? "plugin" : (undefined as never),
-            pluginId: optional ? "voice-call" : undefined,
-            optional,
-            defaultProfiles: optional ? [] : ["full"],
-          }),
-        ],
-      },
-    ],
-  };
-}
-
-function agentIdentity(client: Parameters<typeof createIdentityFixture>[0]) {
-  const { identity, sync } = createIdentityFixture(
-    client,
-    {
-      runExternalMutation: async () => ({ ok: false, reason: "unavailable", error: "not used" }),
-    },
-    { scope: "agent" },
-  );
-  sync();
-  return identity;
 }
 
 async function settleGitHubIdentity(container: HTMLElement) {
@@ -286,67 +248,6 @@ describe("agents tools panel (browser)", () => {
     expect(container.querySelector(".agent-tools-runtime-chip")).toBeNull();
   });
 
-  it("renders catalog provenance and a prospective tool preview", async () => {
-    const { container } = mountTools({
-      catalog: {
-        ...pluginCatalog(true),
-        groups: [
-          {
-            id: "media",
-            label: "Media",
-            source: "core",
-            tools: [catalogTool("tts")],
-          },
-          ...pluginCatalog(true).groups,
-        ],
-      },
-      effective: {
-        agentId: "main",
-        profile: "messaging",
-        groups: [
-          previewTool("message", {
-            label: "Message Actions",
-            source: "channel",
-            channelId: "guildchat",
-          }),
-          previewTool("reproProbe__probe_tool", {
-            label: "Probe Tool",
-            source: "mcp",
-            pluginId: "bundle-mcp",
-          }),
-        ].map((tool) => ({
-          id: tool.source,
-          label: tool.source,
-          source: tool.source,
-          tools: [tool],
-        })),
-      },
-    });
-    await settleGitHubIdentity(container);
-
-    expect(container.querySelectorAll(".settings-kv dd")[3]?.textContent?.trim()).toBe("2");
-    expect(container.textContent).toContain(
-      "Based on saved session settings and discovered tools.",
-    );
-    expect(container.textContent).toContain("more tools may become available");
-    expect(container.textContent).toContain("unsaved edits aren’t included");
-    expect(texts(container, ".agent-tools-runtime-chip .mono")).toEqual([
-      "Message Actions",
-      "Probe Tool",
-    ]);
-    expect(texts(container, ".agent-tools-runtime-chip__meta")).toEqual([
-      "Channel: guildchat",
-      "MCP",
-    ]);
-    expect(texts(container, ".agent-tools-group__title > .settings-row__value")).toEqual([
-      "Plugin: voice-call",
-    ]);
-    expect(toolFact(container.querySelector("#agent-tool-tts"), "Source")).toBe("Built-in");
-    expect(toolFact(container.querySelector("#agent-tool-voice_call"), "Source")).toBe(
-      "Plugin: voice-call · Optional",
-    );
-  });
-
   it.each([false, true])(
     "renders effective GitHub facts without credential controls (inherited: %s)",
     async (inherited) => {
@@ -401,68 +302,18 @@ describe("agents tools panel (browser)", () => {
       if (inherited) {
         expect(section.textContent).toContain("GitHub sign-in");
         expect(section.textContent).toContain("repo, workflow");
-        expect(section.textContent).toContain("System GitHub");
+        expect(section.textContent).toContain("Uses the shared agent account");
       }
+      // Accounts are set in Profile; this panel only reads the agent's account.
       expect(section.querySelector(".settings-secret input")).toBeNull();
+      expect(section.textContent).not.toContain("Continue with GitHub");
+      expect(section.textContent).not.toContain("Use a PAT instead");
       expect(section.textContent).toContain("Manage accounts in Profile");
       expect(section.textContent).not.toMatch(
         /system-detected|github-api|OS account running the Gateway|Advanced: agent GitHub override/,
       );
     },
   );
-
-  it("renders only the pinned device link and one-time code while authorization is active", async () => {
-    const container = document.createElement("div");
-    const client = {
-      request: vi.fn(async () => ({
-        requestId: "github-device-11111111111111111111111111111111",
-        userCode: "ABCD-1234",
-        verificationUri: "https://github.com/login/device",
-        expiresInMs: 900_000,
-        pollAfterMs: 60_000,
-      })),
-    } as never;
-    const githubIdentity = agentIdentity(client);
-    await githubIdentity.startAuthorization();
-
-    mountSolid(AgentTools, createBaseParams({ githubIdentity }), container);
-    await settleGitHubIdentity(container);
-
-    expect(container.textContent).toContain("ABCD-1234");
-    const link = container.querySelector<HTMLAnchorElement>(
-      'a[href="https://github.com/login/device"]',
-    );
-    expect(link?.textContent?.trim()).toBe("Open github.com/login/device");
-    expect(link?.target).toBe("_blank");
-    expect(link?.rel.split(/\s+/)).toEqual(expect.arrayContaining(["noopener", "noreferrer"]));
-    expect(container.querySelector(".settings-secret input")).toBeNull();
-    expect(container.textContent).not.toContain("github-device-11111111111111111111111111111111");
-    githubIdentity.dispose();
-  });
-
-  it("keeps PAT fields hidden until the explicit fallback is selected", async () => {
-    const container = document.createElement("div");
-    const client = { request: vi.fn() } as never;
-    const githubIdentity = agentIdentity(client);
-
-    const view = mountSolid(AgentTools, createBaseParams({ githubIdentity }), container);
-    await settleGitHubIdentity(container);
-    expect(container.querySelector(".settings-secret input")).toBeNull();
-    expect(container.textContent).toContain("Use a PAT instead");
-
-    githubIdentity.showPatFallback();
-    await settleGitHubIdentity(container);
-    expect(container.querySelector(".settings-secret input")).not.toBeNull();
-    expect(container.textContent).not.toContain("Continue with GitHub");
-
-    view.update(
-      createBaseParams({
-        githubIdentity: githubIdentityViewFixture({ ...githubIdentity.read(), busy: true }),
-      }),
-    );
-    await settleGitHubIdentity(container);
-    expect(button(container, "Cancel").disabled).toBe(true);
-  });
 
   it("edits fallback tool access without selecting Full and can return to Inherit", async () => {
     const onOverridesChange = vi.fn();
@@ -485,16 +336,6 @@ describe("agents tools panel (browser)", () => {
     expect(onProfileChange).not.toHaveBeenCalled();
     button(container, "Inherit").click();
     expect(onProfileChange).toHaveBeenCalledExactlyOnceWith("main", null, false);
-  });
-
-  it("uses section-level plugin provenance for tool details", async () => {
-    const { container } = mountTools({ catalog: pluginCatalog(false) });
-    await Promise.resolve();
-
-    const tool = container.querySelector<HTMLDetailsElement>(".agent-tool-card");
-    tool!.open = true;
-
-    expect(toolFact(tool, "Source")).toBe("Plugin: voice-call");
   });
 
   it.each([

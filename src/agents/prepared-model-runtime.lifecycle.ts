@@ -1,9 +1,10 @@
 /** Process close owns every admitted model runtime and native catalog worker. */
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type {
-  PreparedModelRuntimeOwner,
-  PreparedModelRuntimeReplacement,
+import {
+  PREPARED_MODEL_RUNTIME_LIFETIMES_KEY,
+  type PreparedModelRuntimeOwner,
+  type PreparedModelRuntimeReplacement,
 } from "./prepared-model-runtime.types.js";
 
 export class PreparedModelRuntimeClosedError extends Error {
@@ -42,10 +43,16 @@ export function recordPreparedModelCatalogReplacement(
   catalogReplacements.set(previous.isCurrent, replacement.isCurrent);
 }
 
-export function hasCurrentPreparedModelCatalogReplacement(owner: {
-  isCurrent: () => boolean;
-}): boolean {
-  return !owner.isCurrent() && catalogReplacements.get(owner.isCurrent)?.() === true;
+export function hasCurrentPreparedModelCatalogReplacement(
+  owner: { isCurrent: () => boolean },
+  expected?: { isCurrent: () => boolean },
+): boolean {
+  const replacement = catalogReplacements.get(owner.isCurrent);
+  return (
+    !owner.isCurrent() &&
+    (!expected || expected.isCurrent === replacement) &&
+    replacement?.() === true
+  );
 }
 
 type ModelRuntimeClose = (error: Error) => Promise<void>;
@@ -57,7 +64,7 @@ class ProcessModelRuntimeLifetimes {
 }
 
 const lifetimes = resolveGlobalSingleton(
-  Symbol.for("openclaw.preparedModelRuntimeLifetimes"),
+  PREPARED_MODEL_RUNTIME_LIFETIMES_KEY,
   () => new ProcessModelRuntimeLifetimes(),
   () => closePreparedModelRuntimeSnapshots(),
 );

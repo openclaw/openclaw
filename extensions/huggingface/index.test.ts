@@ -2,6 +2,7 @@ import { createTestPluginApi, type TestPluginApiInput } from "openclaw/plugin-sd
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const bundledProvider = {
   baseUrl: "https://router.huggingface.co/v1",
@@ -22,6 +23,20 @@ function registerProvider() {
 describe("huggingface plugin", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("declares Hub tools as a separate opt-in OAuth connection", () => {
+    expect(manifest.mcpServers["hugging-face"]).toMatchObject({
+      transport: "streamable-http",
+      url: "https://huggingface.co/mcp",
+      auth: "oauth",
+      enabled: false,
+      enabledByConfig: ["hub", "enabled"],
+    });
+    expect(manifest.configSchema.properties.hub.properties.enabled).toEqual({
+      type: "boolean",
+      default: false,
+    });
   });
 
   it.each([

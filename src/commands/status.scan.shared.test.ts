@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createUnreachableGatewayProbe } from "./gateway-status/test-support.js";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
 import {
@@ -178,24 +179,49 @@ describe("resolveGatewayProbeSnapshot", () => {
     },
   );
 
-  it.each(["plugin-errors", "probe-failed"])(
-    "does not claim current local health from %s",
-    async (observation) => {
-      mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
-        healthy: true,
-        waitOutcome: "healthy",
-        ...(observation === "plugin-errors"
-          ? { activatedPluginErrors: ["fixture plugin failed"] }
-          : {}),
-      });
-      mocks.probeGateway.mockResolvedValue({
-        ...unreachableProbe(),
-        ok: observation !== "probe-failed",
-      });
-      const result = await resolveGatewayProbeSnapshot();
-      expect(result.localGatewayHealthy).toBe(false);
-    },
-  );
+  it("preserves a connected scope denial without another probe", async () => {
+    const warning =
+      "Gateway connected, but this CLI lacks operator.read. Reconnect with credentials granted operator.read, then run openclaw gateway status --deep.";
+    mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
+      healthy: false,
+      waitOutcome: "connected-no-operator-scope",
+      operatorScopeWarning: warning,
+    });
+    const result = await resolveGatewayProbeSnapshot();
+    expect(result).toMatchObject({
+      gatewayReachable: true,
+      localGatewayHealthy: false,
+      gatewayProbe: {
+        ok: false,
+        gatewayReached: true,
+        error: `${warning}; warn`,
+        auth: { capability: "connected_no_operator_scope" },
+      },
+    });
+    expect(result.gatewayProbe?.startupPhase).toBeUndefined();
+    expect(mocks.probeGateway).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { observation: "plugin-errors", healthy: true },
+    { observation: "probe-failed", healthy: false },
+  ])("reports local health with $observation", async ({ observation, healthy }) => {
+    mocks.waitForGatewayDiagnosticReadiness.mockResolvedValue({
+      healthy: true,
+      waitOutcome: "healthy",
+      // Plugin load errors are notices; the Gateway still serves.
+      ...(observation === "plugin-errors"
+        ? { activatedPluginErrors: ["fixture plugin failed"] }
+        : {}),
+    });
+    mocks.probeGateway.mockResolvedValue({
+      ...unreachableProbe(),
+      ok: observation !== "probe-failed",
+    });
+    const result = await resolveGatewayProbeSnapshot();
+    expect(result.localGatewayHealthy).toBe(healthy);
+  });
 
   it.each([true, false])(
     "uses bounded local fallback with explicit credentials=%s",
@@ -235,14 +261,20 @@ describe("resolveGatewayProbeSnapshot", () => {
     },
   );
 
-  it("does not use the local status RPC fallback for dotted localhost", async () => {
-    gatewayTarget("ws://localhost.:18789");
-    mocks.probeGateway.mockResolvedValue(unreachableProbe("ws://localhost.:18789"));
-
+  it.each([
+    ["local", "ws://localhost.:18789"],
+    ["remote", "wss://gateway.example/ws"],
+  ] as const)("does not use the status RPC fallback for a %s probe of %s", async (mode, url) => {
+    gatewayTarget(url);
+    mocks.resolveGatewayProbeTarget.mockReturnValue({
+      mode,
+      gatewayMode: mode,
+      remoteUrlMissing: false,
+    });
+    mocks.probeGateway.mockResolvedValue(unreachableProbe(url));
     const result = await resolveGatewayProbeSnapshot();
-
     expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(result.gatewayProbe?.ok).toBe(false);
+    expect(result.gatewayReachable).toBe(false);
   });
 
   it("gives the fallback status RPC only the remaining explicit CLI timeout", async () => {
@@ -259,20 +291,12 @@ describe("resolveGatewayProbeSnapshot", () => {
     expect(result.gatewayProbe).toMatchObject({ ok: false, error: "timeout; warn" });
   });
 
-  it("does not use the status RPC fallback for remote probe failures", async () => {
-    mocks.resolveGatewayProbeTarget.mockReturnValue({
-      mode: "remote",
-      gatewayMode: "remote",
-      remoteUrlMissing: false,
-    });
-    mocks.probeGateway.mockResolvedValue(unreachableProbe("wss://gateway.example/ws"));
-
-    const result = await resolveGatewayProbeSnapshot({
-      gateway: { mode: "remote", remote: { url: "wss://gateway.example/ws" } },
-    });
-
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(result.gatewayReachable).toBe(false);
+  it("stops an interrupted command instead of reporting its aborted probe", async () => {
+    mocks.probeGateway.mockResolvedValue(unreachableProbe());
+    const work = new AsyncWorkScope();
+    work.beginClose();
+    await expect(work.run(() => resolveGatewayProbeSnapshot())).rejects.toBe(work.signal.reason);
+    expect(readProbeCall().signal?.aborted).toBe(true);
   });
 });
 

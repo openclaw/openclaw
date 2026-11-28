@@ -1,3 +1,4 @@
+import type { ExpressionBuilder } from "kysely";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import {
@@ -268,22 +269,42 @@ export function pruneSessionCostUsageRollupsInDatabase(
   });
 }
 
-/** Doctor owns retired scopes; ordinary refreshes only prune observed stale rows. */
-export function retireLegacySessionCostUsageCacheInDatabase(db: EngineConnection): void {
-  return withSqliteDatabaseWriteScope(db, [], () => {
-    const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
+/** The rows Doctor retires: the v0 JSON cache entry and every retired projection scope. */
+function isRetiredSessionCostUsageCacheEntry(
+  eb: ExpressionBuilder<AgentCacheDatabase, "cache_entries">,
+) {
+  return eb.or([
+    eb.and([eb("scope", "=", LEGACY_CACHE_SCOPE), eb("key", "=", LEGACY_CACHE_KEY)]),
+    eb("scope", "in", RETIRED_ROLLUP_SCOPES),
+  ]);
+}
+
+/** Read-only: whether `retireLegacySessionCostUsageCacheInDatabase` would delete a row. */
+export function hasRetiredSessionCostUsageCacheEntriesInDatabase(db: EngineConnection): boolean {
+  const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
+  // Select the key only: v1 rows carry a multi-megabyte value (#115282).
+  return (
     executeSqliteQuerySync(
       db,
       kysely
-        .deleteFrom("cache_entries")
-        .where("scope", "=", LEGACY_CACHE_SCOPE)
-        .where("key", "=", LEGACY_CACHE_KEY),
-    );
+        .selectFrom("cache_entries")
+        .select("key")
+        .where(isRetiredSessionCostUsageCacheEntry)
+        .limit(1),
+    ).rows.length > 0
+  );
+}
+
+/** Doctor owns retired scopes; ordinary refreshes only prune observed stale rows. */
+export function retireLegacySessionCostUsageCacheInDatabase(db: EngineConnection): void {
+  return withSqliteDatabaseWriteScope(db, [], () => {
     // v1 duplicated a multi-megabyte pricing catalog per row (#115282).
     // Delete by scope so those values are never materialized during cleanup.
     executeSqliteQuerySync(
       db,
-      kysely.deleteFrom("cache_entries").where("scope", "in", RETIRED_ROLLUP_SCOPES),
+      getNodeSqliteKysely<AgentCacheDatabase>(db)
+        .deleteFrom("cache_entries")
+        .where(isRetiredSessionCostUsageCacheEntry),
     );
   });
 }

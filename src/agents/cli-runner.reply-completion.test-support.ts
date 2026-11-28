@@ -375,7 +375,7 @@ export function registerCliReplyCompletionTests({
     }
   });
 
-  it("does not mistake CLI WebChat progress for a final result", async () => {
+  it("does not mistake internal CLI WebChat progress for a final result", async () => {
     const sessionKey = "agent:main:webchat:dm:cli-internal-source";
     const { dir, sessionTarget } = createSessionFixture({ sessionKey });
     const config: OpenClawConfig = {
@@ -390,6 +390,7 @@ export function registerCliReplyCompletionTests({
       messageChannel: "webchat",
       messageProvider: "webchat",
       sourceReplyDeliveryMode: "message_tool_only",
+      inputProvenance: { kind: "internal_system" },
     });
     context.backendResolved.config.output = "jsonl";
     const tool = createMessageTool({
@@ -428,6 +429,109 @@ export function registerCliReplyCompletionTests({
     expect(result.messagingToolSentTexts).toEqual([text]);
     expect(result.meta.error).toMatchObject({ kind: "incomplete_turn", fallbackSafe: false });
     expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
+  });
+
+  it("ends a Control UI child-result turn at its final message-tool answer", async () => {
+    const sessionKey = "agent:main:dashboard:cli-child-result";
+    const { dir, sessionTarget } = createSessionFixture({ sessionKey });
+    const config: OpenClawConfig = { agents: { entries: { main: { workspace: dir } } } };
+    setRuntimeConfigSnapshot(config);
+    const inputProvenance = {
+      kind: "inter_session" as const,
+      sourceSessionKey: "agent:main:subagent:child",
+      sourceTool: "subagent_announce",
+    };
+    const context = createContext({
+      sessionKey,
+      runId: "cli-child-result",
+      ...sessionParams(sessionTarget, dir),
+      config,
+      messageChannel: "webchat",
+      messageProvider: "webchat",
+      sourceReplyDeliveryMode: "automatic",
+      terminalReplyExpectation: "required",
+      inputProvenance,
+    });
+    context.backendResolved.config.output = "jsonl";
+    const tool = createMessageTool({
+      config,
+      preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
+      currentChannelProvider: "webchat",
+      sourceReplyDeliveryMode: "automatic",
+      agentSessionKey: sessionKey,
+      runSessionKey: sessionKey,
+      sessionId: sessionTarget.sessionId,
+      agentId: "main",
+      runId: context.params.runId,
+      inputProvenance,
+    });
+    const text = "Your corrected dates are in.";
+    supervisorSpawnMock.mockImplementationOnce(async (input) => {
+      const args = { action: "send", message: text, final: true };
+      const toolResult = await tool.execute("cli-child-result-send", args);
+      expect(toolResult.content).toEqual([
+        {
+          type: "text",
+          text: "Sent visible reply to the current source conversation via internal-ui.",
+        },
+      ]);
+      captureMessage(input, args, toolResult);
+      emitResult(input);
+      return makeManagedRun();
+    });
+
+    const result = await run(context);
+
+    expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe("success");
+    expect(result.meta.error).toBeUndefined();
+    const assistantMessages = (await readTranscriptMessages(sessionTarget)).filter(
+      (message) => isRecord(message) && message.role === "assistant",
+    );
+    expect(assistantMessages.map(readAssistantDisplayContent)).toEqual([[{ type: "text", text }]]);
+  });
+
+  it("keeps the final answer after WebChat progress in message_tool_only", async () => {
+    const sessionKey = "agent:main:main";
+    const { dir, sessionTarget } = createSessionFixture({ sessionKey });
+    const config: OpenClawConfig = { agents: { entries: { main: { workspace: dir } } } };
+    setRuntimeConfigSnapshot(config);
+    const context = createContext({
+      sessionKey,
+      runId: "cli-webchat-progress",
+      ...sessionParams(sessionTarget, dir),
+      persistAssistantTranscript: true,
+      config,
+      messageChannel: "webchat",
+      messageProvider: "webchat",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    context.backendResolved.config.output = "jsonl";
+    const tool = createMessageTool({
+      config,
+      preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
+      currentChannelProvider: "webchat",
+      sourceReplyDeliveryMode: "message_tool_only",
+      agentSessionKey: sessionKey,
+      runSessionKey: sessionKey,
+      sessionId: sessionTarget.sessionId,
+      agentId: "main",
+      runId: context.params.runId,
+    });
+    const [progress, answer] = ["Build started.", "Build installed."];
+    supervisorSpawnMock.mockImplementationOnce(async (input) => {
+      const args = { action: "send", message: progress, final: false };
+      captureMessage(input, args, await tool.execute("cli-webchat-progress", args));
+      emitResult(input, answer);
+      return makeManagedRun();
+    });
+
+    const result = await run(context);
+
+    const transcriptTexts = (await readTranscriptMessages(sessionTarget))
+      .filter((message) => isRecord(message) && message.role === "assistant")
+      .map((message) => extractStoredAssistantText(message));
+    expect(transcriptTexts).toEqual([progress, answer]);
+    expect(result.payloads?.map((payload) => payload.text)).toContain(answer);
   });
 
   it.each([false, true])(
