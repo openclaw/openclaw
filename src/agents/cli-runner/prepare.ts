@@ -379,7 +379,9 @@ async function prepareCliRunContextWithinReadFence(
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   let effectiveAuthProfileId =
-    requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
+    params.nativeAuthOnly === true
+      ? undefined
+      : (requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined);
   let authStore: AuthProfileStore | undefined;
   let resolvedProfileAuth: ResolvedProviderAuth | undefined;
   const loadScopedAuthStore = (options: { profileId?: string } = {}) => {
@@ -397,6 +399,7 @@ async function prepareCliRunContextWithinReadFence(
   if (effectiveAuthProfileId) {
     authStore = await loadScopedAuthStore({ profileId: effectiveAuthProfileId });
   } else if (
+    params.nativeAuthOnly !== true &&
     backendResolved.autoSelectAuthProfile !== false &&
     (backendResolved.authEpochMode === "profile-only" || backendResolved.prepareExecution)
   ) {
@@ -434,7 +437,7 @@ async function prepareCliRunContextWithinReadFence(
   if (usesNativeAuthProfile) {
     effectiveAuthProfileId = undefined;
     authCredential = undefined;
-  } else if (params.nativeAuthOnly && effectiveAuthProfileId) {
+  } else if (params.nativeAuthOnly === "require-unbound" && effectiveAuthProfileId) {
     throw createUnrecordedScheduledAccountRefusal({
       jobId: params.jobId,
       runtime: backendResolved.id,

@@ -266,6 +266,7 @@ describe("cron handler inference binding persistence", () => {
     ["native", "absent"],
     ["worker", "absent"],
     ["worker", "ambient"],
+    ["direct", "absent"],
     ["direct", "environment"],
     ["direct", "configuration"],
     ["local", "configured"],
@@ -357,7 +358,6 @@ describe("cron handler inference binding persistence", () => {
   );
 
   it.for([
-    [{ runtime: "openclaw" }, undefined, "stored inference account"],
     [{ registered: false }, undefined, "codex"],
     [{ supported: false }, undefined, "does not support"],
     [{}, "codex/openai-compatible/gpt-5.4@missing-account", "missing-account"],
@@ -553,7 +553,10 @@ describe("cron handler inference binding persistence", () => {
     await updateModel(fixture, created.id, "synthetic-alias@" + subscriptionId);
     const adopted = await fixture.reload();
     expect(adopted.inferenceBinding).toMatchObject({ profileId: subscriptionId, source: "user" });
-    await updateModel(fixture, created.id, "synthetic-alias");
+    expect(await updateModel(fixture, created.id, "synthetic-alias")).toMatchObject({
+      payload: { model: "synthetic-alias" },
+      billingProfileId: subscriptionId,
+    });
     expect((await fixture.reload()).inferenceBinding).toEqual(adopted.inferenceBinding);
   });
   it.for([

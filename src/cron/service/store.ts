@@ -5,6 +5,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { describeUnavailableCronAgent } from "../agent-availability.js";
+import { needsLegacyReminderAccount } from "../inference-binding.js";
 import { captureCronMutationCommit } from "../mutation-completion.js";
 import { normalizeCronJobInput } from "../normalize.js";
 import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
@@ -66,8 +67,12 @@ function scheduleJobLoadDiagnostics(state: CronServiceState, inventory: CronStor
   }
   jobLoadDiagnosticsStarted.add(state);
   const jobs = inventory.filter(
-    (job) => !state.warnedInvalidPersistedJobKeys.has(`host:${job.id}`),
+    (job) =>
+      needsLegacyReminderAccount(job) && !state.warnedInvalidPersistedJobKeys.has(`host:${job.id}`),
   );
+  if (jobs.length === 0) {
+    return;
+  }
   const scope = state.schedulerScope;
   scope.schedule({
     id: `cron:load-diagnostics:${state.deps.storeKey}`,

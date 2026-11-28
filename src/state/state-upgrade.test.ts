@@ -7,7 +7,6 @@ import { load as loadSqliteVec } from "sqlite-vec";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcripts.js";
-import * as cronAdoption from "../commands/doctor/cron/inference-binding-migration.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadCronJobsStore, saveCronJobsStore } from "../cron/store.js";
@@ -57,7 +56,7 @@ afterEach(async () => {
   }
 });
 
-it("adopts a legacy automation account during boot without Doctor", async () => {
+it("keeps a legacy automation unbound when a stored account becomes available", async () => {
   await withOpenClawTestState(
     { label: "boot-cron-adoption", env: { OPENAI_API_KEY: undefined } },
     async (state) => {
@@ -99,25 +98,8 @@ it("adopts a legacy automation account during boot without Doctor", async () => 
         ],
       });
       const before = (await loadCronJobsStore(storePath)).jobs[0];
-      const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Offline proof"));
-      const adoption = vi.spyOn(cronAdoption, "maybeRepairCronInferenceBindings");
       await upgradeStateOnGatewayStart(state.env, () => true);
-      expect((await loadCronJobsStore(storePath)).jobs[0]).toEqual({
-        ...before,
-        inferenceBinding: {
-          version: 1,
-          provider: "openai",
-          profileId: "openai:default",
-          authorizationId: expect.any(String),
-          authRequirement: "api-key",
-          source: "auto",
-        },
-      });
-      const adopted = (await loadCronJobsStore(storePath)).jobs;
-      await upgradeStateOnGatewayStart(state.env, () => true);
-      expect(adoption).toHaveBeenCalledOnce();
-      expect(fetch).not.toHaveBeenCalled();
-      expect((await loadCronJobsStore(storePath)).jobs).toEqual(adopted);
+      expect((await loadCronJobsStore(storePath)).jobs[0]).toEqual(before);
     },
   );
 });

@@ -13,9 +13,8 @@ import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runt
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
-import { cronInferenceMigrationPayload } from "../cron/inference-binding.js";
 import {
-  inspectCronInferenceAccount,
+  inspectLegacyReminderAccount,
   prepareCronInferenceDiagnosticSession,
 } from "../cron/inference-diagnostics.js";
 import { resolveCronModelSelection } from "../cron/isolated-agent/model-selection.js";
@@ -34,13 +33,7 @@ async function describeCronInferenceMigration(
   job: CronStoredJob,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
-  const payload = cronInferenceMigrationPayload(job);
-  if (
-    !payload ||
-    job.inferenceBinding ||
-    job.runtimeAuthority ||
-    job.runtimeAuthorityRecoveryRequired
-  ) {
+  if (job.runtimeAuthority || job.runtimeAuthorityRecoveryRequired) {
     return undefined;
   }
   try {
@@ -67,16 +60,15 @@ async function describeCronInferenceMigration(
       workspaceDir: resolveAgentWorkspaceDir(config, agentId),
       agentConfigOverride: resolveAgentConfig(config, agentId),
       sessionEntry: session.sessionEntry,
-      payloadKind: payload.kind,
-      payloadModel: payload.kind === "agentTurn" ? payload.model : undefined,
-      isGmailHook: payload.kind === "agentTurn" && payload.externalContentSource === "gmail",
+      payloadKind: "systemEvent",
+      isGmailHook: false,
     });
     signal?.throwIfAborted();
     if (!selection.ok) {
       throw new Error(selection.error);
     }
     const cfg = selection.cfgWithAgentDefaults;
-    const account = await inspectCronInferenceAccount({
+    const account = await inspectLegacyReminderAccount({
       cfg,
       agentId,
       agentDir: selection.owner.agentDir,

@@ -170,7 +170,7 @@ memory sources to rebuild the PostgreSQL index and may re-embed them. See
     before converting the roster. Current keyed `agents.entries` configurations
     without a legacy marker keep their dynamic system-agent selection.
 
-    When adopting inference accounts for legacy jobs, Doctor shares one captured
+    When adopting inference accounts for legacy main-session reminders, Doctor shares one captured
     configuration across the migration. Agent workspaces can reuse provider
     preparation, while each job still resolves its own model, account preferences,
     and authorization. Existing bindings and model selections stay unchanged.

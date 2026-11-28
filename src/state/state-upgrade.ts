@@ -27,6 +27,7 @@ import {
 import { createConfigIO, readConfigSnapshotBeforeEngineSelection } from "../config/io.factory.js";
 import { resolveConfigIncludeWriteBoundary } from "../config/mutate.js";
 import { resolveStateDir } from "../config/paths.js";
+import { needsLegacyReminderAccount } from "../cron/inference-binding.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -406,7 +407,7 @@ export async function upgradeStateDirectory(params: {
       const inventory = await inspectCronJobsForDoctor({ env });
       if (
         inventory.jobs.some(
-          ({ definition }) => definition && definition.inferenceBinding === undefined,
+          ({ definition }) => definition && needsLegacyReminderAccount(definition),
         )
       ) {
         logStateMigrationResult(

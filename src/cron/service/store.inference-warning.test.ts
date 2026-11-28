@@ -1,8 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
-import { createTestModelDefinition } from "../../commands/test-runtime-config-helpers.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createCronInferenceMigrationDiagnostic } from "../../gateway/server-cron-inference.js";
@@ -26,30 +24,11 @@ const cfg: OpenClawConfig = {
       model,
       models: {
         "anthropic/*": { agentRuntime: { id: "claude-cli" } },
-        "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
-      },
-      modelPolicy: {
-        allow: ["anthropic/*", "remote/model", "profile-key/model", "openai/gpt-5.4"],
-      },
-    },
-  },
-  models: {
-    providers: {
-      remote: {
-        api: "openai-completions",
-        auth: "api-key",
-        apiKey: "synthetic-direct-key",
-        baseUrl: "https://remote.invalid.test/v1",
-        models: [createTestModelDefinition("model")],
       },
     },
   },
 };
-cfg.models!.providers!["profile-key"] = {
-  ...cfg.models!.providers!.remote!,
-  apiKey: "profile-key:stored",
-};
-const job = (id: string, selectedModel = model): CronStoredJob => ({
+const job = (id: string): CronStoredJob => ({
   id,
   name: id,
   agentId: "main",
@@ -57,9 +36,9 @@ const job = (id: string, selectedModel = model): CronStoredJob => ({
   createdAtMs: 1,
   updatedAtMs: 1,
   schedule: { kind: "every", everyMs: 60000 },
-  sessionTarget: "isolated",
+  sessionTarget: "main",
   wakeMode: "now",
-  payload: { kind: "agentTurn", message: "Synthetic work", model: selectedModel },
+  payload: { kind: "systemEvent", text: "Reminder" },
   delivery: { mode: "none" },
   state: {},
 });
@@ -81,7 +60,7 @@ function service(storePath: string) {
 }
 afterEach(() => vi.restoreAllMocks());
 
-it("inspects stored CLI and selected configured-key sources once without rewriting jobs", async () => {
+it("warns only for a legacy reminder needing an account", async () => {
   await withOpenClawTestState({ label: "cron-inference-startup" }, async (state) => {
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
@@ -91,62 +70,25 @@ it("inspects stored CLI and selected configured-key sources once without rewriti
           profileId: "anthropic:token",
           credential: { type: "token", provider: "anthropic", token: "synthetic-token" },
         },
-        {
-          profileId: "profile-key:stored",
-          credential: { type: "api_key", provider: "profile-key", key: "synthetic-stored-key" },
-        },
-        {
-          profileId: "openai:stored",
-          credential: { type: "api_key", provider: "openai", key: "synthetic-openai-key" },
-        },
       ],
     });
-    const jobs = [
-      job("stored"),
-      job("native", `${model}@anthropic:claude-cli`),
-      job("key", "remote/model"),
-      job("profile-key", "profile-key/model"),
-      // Codex runs host-managed stored accounts; the scheduled account guard refuses it unbound.
-      job("codex", "openai/gpt-5.4"),
+    const jobs: CronStoredJob[] = [
+      job("legacy"),
+      { ...job("new"), systemEventAccount: "session" },
+      {
+        ...job("live"),
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "Check" },
+      },
     ];
-    for (const id of ["pinned-key", "locked-native"]) {
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey: `agent:main:${id}` },
-        {
-          sessionId: id,
-          updatedAt: 1,
-          authProfileOverride: "anthropic:token",
-          authProfileOverrideSource: "user",
-          ...(id === "locked-native"
-            ? { modelSelectionLocked: true, agentRuntimeOverride: "claude-cli" }
-            : {}),
-        },
-      );
-      jobs.push({
-        ...job(id, id === "pinned-key" ? "remote/model" : model),
-        sessionTarget: `session:agent:main:${id}`,
-      });
-    }
     const storePath = state.statePath("cron", "jobs.json");
     await saveCronJobsStore(storePath, { version: 1, jobs });
-    const { cron, clock, warn, describe } = service(storePath);
+    const { cron, clock, warn } = service(storePath);
     try {
       await cron.list({ includeDisabled: true });
       await clock.advanceBy(0);
-      await cron.list({ includeDisabled: true });
-      expect(describe).toHaveBeenCalledTimes(jobs.length);
       expect(warn.mock.calls).toEqual([
-        [
-          { jobId: "stored", name: "stored" },
-          expect.stringContaining(
-            `openclaw automations edit stored --model ${model}@anthropic:token`,
-          ),
-        ],
-        [
-          { jobId: "profile-key", name: "profile-key" },
-          expect.stringContaining("openclaw doctor --fix"),
-        ],
-        [{ jobId: "codex", name: "codex" }, expect.stringContaining("openclaw doctor --fix")],
+        [{ jobId: "legacy", name: "legacy" }, expect.stringContaining("openclaw doctor --fix")],
       ]);
       expect((await loadCronJobsStore(storePath)).jobs).toEqual(jobs);
     } finally {
@@ -161,10 +103,7 @@ it.each(["budget", "stop"])(
     await withOpenClawTestState({ label: "cron-diagnostic-cutoff" }, async (state) => {
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
-      const jobs: CronStoredJob[] = [
-        { ...job("slow"), sessionTarget: "session:agent:main:slow" },
-        job("unchecked"),
-      ];
+      const jobs: CronStoredJob[] = [job("slow"), job("unchecked")];
       const storePath = state.statePath("cron", "jobs.json");
       await saveCronJobsStore(storePath, { version: 1, jobs });
       const pending = createDeferredCore();

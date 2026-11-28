@@ -64,16 +64,16 @@ it.each(["default", "configured"] as const)(
           createdAtMs: 1,
           updatedAtMs: 1,
           schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
-          sessionTarget: "isolated",
+          sessionTarget: "main",
           wakeMode: "now",
-          payload: { kind: "agentTurn", message: "Synthetic work" },
+          payload: { kind: "systemEvent", text: "Synthetic work" },
           delivery: { mode: "none" },
           state: {},
         }));
         const storePath = state.statePath("cron", "jobs.json");
         await saveCronJobsStore(storePath, { version: 1, jobs });
         await replaceSessionEntry(
-          { agentId: "main", sessionKey: "agent:main:cron:job-0" },
+          { agentId: "main", sessionKey: "agent:main:main" },
           {
             sessionId: "synthetic-session",
             updatedAt: 1,
@@ -110,7 +110,7 @@ it.each(["default", "configured"] as const)(
                 severity: "warning",
                 requirement: "cron-inference-account",
                 message: expect.stringContaining(
-                  `Automation ${job.name} (${job.id}): retain openai:default for openai/${job.id === "job-0" ? "gpt-5.5" : "gpt-5.4"}`,
+                  `Automation ${job.name} (${job.id}): retain openai:default for openai/gpt-5.5`,
                 ),
               }),
             );
@@ -177,9 +177,9 @@ it("shares runtime preparation across mixed-provider cron repairs without changi
         createdAtMs: 1,
         updatedAtMs: 1,
         schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
-        sessionTarget: "isolated",
+        sessionTarget: "main",
         wakeMode: "now",
-        payload: { kind: "agentTurn", message: "Synthetic tool-bearing work" },
+        payload: { kind: "systemEvent", text: "Synthetic tool-bearing work" },
         delivery: { mode: "none" },
         state: {},
       }));

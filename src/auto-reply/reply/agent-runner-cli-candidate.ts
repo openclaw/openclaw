@@ -26,7 +26,7 @@ import { assertParticipationRuntime } from "../../agents/participation-ceiling.j
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
-import { followsSessionInferenceAccount } from "../../cron/inference-binding.js";
+import { usesLiveCronInferenceAccount } from "../../cron/inference-binding.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -300,7 +300,7 @@ export async function runCliFallbackCandidate(
         const needsRecordedAccount =
           turn.followupRun.run.scheduledAutomation &&
           !scheduledInference &&
-          !followsSessionInferenceAccount(turn.followupRun.run.scheduledAutomation.job);
+          !usesLiveCronInferenceAccount(turn.followupRun.run.scheduledAutomation.job);
         if (needsRecordedAccount && authProfileId) {
           throw createUnrecordedScheduledAccountRefusal({
             jobId: turn.followupRun.run.scheduledAutomation?.job.id,
@@ -542,7 +542,13 @@ export async function runCliFallbackCandidate(
                   scheduledInference.assertCurrent(params.provider);
                 }
               : undefined,
-            nativeAuthOnly: needsRecordedAccount ? true : undefined,
+            nativeAuthOnly: needsRecordedAccount
+              ? "require-unbound"
+              : turn.followupRun.run.scheduledAutomation?.job.payload.kind === "agentTurn" &&
+                  !scheduledInference &&
+                  !authProfileId
+                ? true
+                : undefined,
             mediaImageLayout: params.currentTurnImages.mediaImageLayout,
             messageChannel: turn.followupRun.originatingChannel,
             messageProvider: hookMessageProvider,

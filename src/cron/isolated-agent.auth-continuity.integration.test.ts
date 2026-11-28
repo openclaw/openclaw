@@ -352,14 +352,12 @@ it.each(["API key", "OAuth", "scheduled-model OAuth"] as const)(
 );
 
 it.each([
-  ["configured key", undefined],
-  [
-    "unadopted stored account",
-    "Automation has no recorded inference account. Runtime openclaw would run openai/gpt-4.1 with stored account openai:platform. Record the account with openclaw automations edit legacy-account --model openai/gpt-4.1@openai:platform. For eligible host-managed accounts, openclaw doctor --fix can record it without pinning the model.",
-  ],
+  ["configured key", "Bearer synthetic-config-key"],
+  // An unpinned job selects its account like an interactive turn (#202699).
+  ["unrecorded stored account", `Bearer ${platformKey}`],
   ["replacement", undefined],
   ["revocation", undefined],
-] as const)("enforces %s before provider HTTP through the real runner", async (kind, error) => {
+] as const)("uses the expected credential for %s", async (kind, authorization) => {
   await withAuthState("cron-legacy-account", async (state) => {
     const openaiUrl = "https://api.openai.com/v1";
     const requests: Array<{ url: string; authorization: string | null }> = [];
@@ -422,15 +420,9 @@ it.each([
         expect(result.status, result.error).toBe("ok");
         expect(requests.some(({ url }) => url.startsWith(openaiUrl))).toBe(false);
         expect(requests.length).toBeGreaterThan(0);
-      } else if (error) {
-        expect(result.status).toBe("error");
-        expect(result.error).toContain(error);
-        expect(requests).toEqual([]);
       } else {
         expect(result.status, result.error).toBe("ok");
-        expect(requests).toEqual([
-          { url: `${openaiUrl}/responses`, authorization: "Bearer synthetic-config-key" },
-        ]);
+        expect(requests).toEqual([{ url: `${openaiUrl}/responses`, authorization }]);
       }
     } finally {
       await resetPreparedModelRuntimeSnapshotsForTest();

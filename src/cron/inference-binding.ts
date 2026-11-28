@@ -3,14 +3,31 @@ import type { ProviderModelRouteAuthRequirement } from "../plugin-sdk/provider-m
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { CronStoredJob } from "./types.js";
 
-export function followsSessionInferenceAccount(job: CronStoredJob | undefined): boolean {
+/** Unbound agent turns and chat-following reminders use the account selected for the run. */
+export function usesLiveCronInferenceAccount(job: CronStoredJob | undefined): boolean {
+  if (!job || job.inferenceBinding || job.runtimeAuthority || job.ownerTransferPending) {
+    return false;
+  }
   return (
-    job?.systemEventAccount === "session" &&
-    job.payload.kind === "systemEvent" &&
-    job.sessionTarget === "main" &&
-    !job.inferenceBinding &&
-    !job.runtimeAuthority &&
-    !job.runtimeAuthorityRecoveryRequired
+    job.payload.kind === "agentTurn" ||
+    (job.payload.kind === "systemEvent" &&
+      job.sessionTarget === "main" &&
+      job.systemEventAccount === "session" &&
+      !job.runtimeAuthorityRecoveryRequired)
+  );
+}
+
+/** Older reminders can adopt the chat account during upgrade. Agent turns select live. */
+export function needsLegacyReminderAccount(job: {
+  payload?: unknown;
+  systemEventAccount?: unknown;
+  inferenceBinding?: unknown;
+}): boolean {
+  return (
+    job.inferenceBinding === undefined &&
+    job.systemEventAccount !== "session" &&
+    isRecord(job.payload) &&
+    job.payload.kind === "systemEvent"
   );
 }
 

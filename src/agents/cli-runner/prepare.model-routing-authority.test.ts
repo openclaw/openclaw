@@ -117,7 +117,7 @@ describe("CLI model-routing receipt authority", () => {
     await fixture.cleanup();
   });
 
-  it.each(["native", "selected", "automatic"] as const)(
+  it.each(["native", "selected", "automatic", "live-native"] as const)(
     "keeps scheduled CLI credentials under their recorded owner (%s)",
     async (kind) => {
       const agentDir = path.join(fixture.session.dir, "credential-owner");
@@ -138,7 +138,7 @@ describe("CLI model-routing receipt authority", () => {
           {
             ...buildDefaultTestCliBackend(),
             authEpochMode: "profile-only",
-            autoSelectAuthProfile: kind === "automatic",
+            autoSelectAuthProfile: kind === "automatic" || kind === "live-native",
             prepareExecution,
           },
         ],
@@ -146,10 +146,10 @@ describe("CLI model-routing receipt authority", () => {
       const prepared = fixture.prepare({
         agentDir,
         trigger: "cron",
-        nativeAuthOnly: true,
+        nativeAuthOnly: kind === "live-native" ? true : "require-unbound",
         ...(kind === "selected" ? { authProfileId: profileId } : {}),
       });
-      if (kind === "native") {
+      if (kind === "native" || kind === "live-native") {
         expect((await prepared).effectiveAuthProfileId).toBeUndefined();
         expect(prepareExecution).toHaveBeenCalledOnce();
       } else {

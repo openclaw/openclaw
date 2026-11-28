@@ -12,7 +12,7 @@ import {
   findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
 } from "../../config/model-provider-config.js";
-import { followsSessionInferenceAccount } from "../../cron/inference-binding.js";
+import { usesLiveCronInferenceAccount } from "../../cron/inference-binding.js";
 import { resolveCronFallbacksOverride } from "../../cron/isolated-agent/run-fallback-policy.js";
 import { resolveCronScheduledToolPolicy } from "../../cron/scheduled-tool-policy.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
@@ -101,7 +101,7 @@ export function buildRunEntrySelection(
     fallbacksOverride: selection.fallbacksOverride,
     cyberAccessProgram: run.cyberAccessProgram,
     userLockedAuthProfileId:
-      run.scheduledAutomation && !followsSessionInferenceAccount(run.scheduledAutomation.job)
+      run.scheduledAutomation && !usesLiveCronInferenceAccount(run.scheduledAutomation.job)
         ? run.scheduledAutomation.job.inferenceBinding?.source === "user"
           ? run.scheduledAutomation.job.inferenceBinding.profileId
           : undefined

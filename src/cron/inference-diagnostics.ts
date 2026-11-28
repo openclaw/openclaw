@@ -10,7 +10,6 @@ import { resolveModelProviderAuthConfig } from "../agents/model-auth-provider-ro
 import { isCliProvider } from "../agents/model-selection-cli.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
-import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveSessionAuthProfileOverrideSource } from "../config/sessions/auth-profile-override-provenance.js";
 import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -70,11 +69,11 @@ export async function prepareCronInferenceDiagnosticSession(params: {
 }
 
 /** Read-only CLI warnings and prepared host auth facts; never grants account adoption. */
-export async function inspectCronInferenceAccount(params: {
+export async function inspectLegacyReminderAccount(params: {
   cfg: OpenClawConfig;
   agentId: string;
   agentDir: string;
-  job: Pick<CronStoredJob, "id" | "name" | "payload">;
+  job: Pick<CronStoredJob, "id" | "name">;
   provider: string;
   model: string;
   configuredProfileId?: string;
@@ -168,19 +167,8 @@ export async function inspectCronInferenceAccount(params: {
     return { cliExecution: true };
   }
   const modelRef = `${provider}/${model}`;
-  if (job.payload.kind === "systemEvent") {
-    return {
-      cliExecution: true,
-      warning: `Automation ${job.name || job.id} (${job.id}): ${execution.executionProvider} selects stored account ${selected.profileId} for ${modelRef}. Doctor cannot adopt a CLI account automatically. To keep this system event, select a model with an eligible host-managed account in the owning agent’s main session, then run openclaw doctor --fix. This changes the model used by other turns in that session too.`,
-    };
-  }
-  const edit = `openclaw automations edit ${quoteCliArg(job.id)} --model`;
-  const native =
-    execution.executionProvider === "claude-cli"
-      ? ` To explicitly use Claude CLI's native login instead, run ${edit} ${quoteCliArg(`${modelRef}@anthropic:claude-cli`)}.`
-      : "";
   return {
     cliExecution: true,
-    warning: `Automation ${job.name || job.id} (${job.id}): runtime ${execution.executionProvider} on ${modelRef} selects stored inference account ${selected.profileId}. Scheduled CLI runs never borrow a stored account; an explicit choice is required. To adopt it, run ${edit} ${quoteCliArg(`${modelRef}@${selected.profileId}`)}. This also sets the primary model.${native}`,
+    warning: `Automation ${job.name || job.id} (${job.id}): ${execution.executionProvider} selects stored account ${selected.profileId} for ${modelRef}. Doctor cannot adopt a CLI account automatically. To keep this system event, select a model with an eligible host-managed account in the owning agent’s main session, then run openclaw doctor --fix. This changes the model used by other turns in that session too.`,
   };
 }

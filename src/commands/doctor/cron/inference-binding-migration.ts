@@ -37,11 +37,12 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import {
   cronInferenceMigrationPayload,
+  needsLegacyReminderAccount,
   normalizeCronInferenceBinding,
   type CronInferenceBinding,
 } from "../../../cron/inference-binding.js";
 import {
-  inspectCronInferenceAccount,
+  inspectLegacyReminderAccount,
   prepareCronInferenceDiagnosticSession,
 } from "../../../cron/inference-diagnostics.js";
 import { resolveCronModelSelection } from "../../../cron/isolated-agent/model-selection.js";
@@ -97,7 +98,9 @@ export async function maybeRepairCronInferenceBindings(params: {
       if (
         !definition ||
         stored.invalidReason ||
-        (definition.inferenceBinding !== undefined && !params.shouldRepair) ||
+        (definition.inferenceBinding === undefined
+          ? !needsLegacyReminderAccount(definition)
+          : !params.shouldRepair) ||
         definition.runtimeAuthority !== undefined ||
         definition.runtimeAuthorityRecoveryRequired
       ) {
@@ -206,11 +209,11 @@ export async function maybeRepairCronInferenceBindings(params: {
           );
           continue;
         }
-        const account = await inspectCronInferenceAccount({
+        const account = await inspectLegacyReminderAccount({
           cfg: selected.cfgWithAgentDefaults,
           agentId,
           agentDir: selected.owner.agentDir,
-          job: { id: stored.id, name: job.name, payload },
+          job: { id: stored.id, name: job.name },
           provider: selected.provider,
           model: selected.model,
           configuredProfileId: selected.configuredProfileId,

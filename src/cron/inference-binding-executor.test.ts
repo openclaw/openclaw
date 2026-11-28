@@ -3,6 +3,7 @@ import * as modelRuntime from "../agents/embedded-agent-runner/model.js";
 import { prepareEmbeddedRunAuthPlan } from "../agents/embedded-agent-runner/run/auth-plan.js";
 import type { AgentHarness } from "../agents/harness/types.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
@@ -10,6 +11,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
 
 const harness: AgentHarness = {
   id: "openclaw",
@@ -118,6 +120,22 @@ it("refuses legacy adoption from ambient AWS SDK credentials at the auth boundar
       ),
     ).rejects.toThrow("Automation has no recorded inference account");
     expect(materialize).not.toHaveBeenCalled();
+  });
+});
+
+it("creates an unbound job for a selected AWS SDK profile", async () => {
+  await withAuthState(async () => {
+    const cfg = {
+      ...configFor(bedrockModel, { auth: "aws-sdk" }),
+      auth: { profiles: { "amazon-bedrock:sdk": { provider: "amazon-bedrock", mode: "aws-sdk" } } },
+    } as OpenClawConfig;
+    await expect(
+      captureCronInferenceBinding({
+        cfg,
+        agentId: "main",
+        model: "amazon-bedrock/anthropic.claude-sonnet@amazon-bedrock:sdk",
+      }),
+    ).resolves.toBeUndefined();
   });
 });
 

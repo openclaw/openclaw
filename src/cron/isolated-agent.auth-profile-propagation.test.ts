@@ -300,26 +300,12 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       const result = await runWithConfig(cfg, undefined, trigger);
 
       expect(h.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-      if (trigger === "cron") {
-        expect(result.status).toBe("error");
-        expect(result.error).toContain("Automation has no recorded inference account");
-        // The refusal names the runtime and account, and the exact command that records it.
-        expect(result.error).toContain(
-          "Runtime claude-cli would run openai/gpt-4o with stored account claude-cli:personal",
-        );
-        expect(result.error).toContain(
-          "openclaw automations edit test-job --model openai/gpt-4o@claude-cli:personal",
-        );
-        expect(result.errorClassification).toEqual({ kind: "permanent" });
-        expect(result.failureNotificationDetail).toEqual({ kind: "inference-account-unrecorded" });
-        expect(h.runCliAgentMock).not.toHaveBeenCalled();
-      } else {
-        expect(result.status, result.error).toBe("ok");
-        expect(h.runCliAgentMock).toHaveBeenCalledOnce();
-        expect(h.runCliAgentMock.mock.lastCall?.[0].trigger).toBe("event");
-        expect(h.runCliAgentMock.mock.lastCall?.[0].nativeAuthOnly).toBeUndefined();
-        expect(h.runCliAgentMock.mock.lastCall?.[0].authProfileId).toBe("claude-cli:personal");
-      }
+      // An unpinned scheduled fallback forwards the account an interactive turn would (#202699).
+      expect(result.status, result.error).toBe("ok");
+      expect(h.runCliAgentMock).toHaveBeenCalledOnce();
+      expect(h.runCliAgentMock.mock.lastCall?.[0].trigger).toBe(trigger);
+      expect(h.runCliAgentMock.mock.lastCall?.[0].nativeAuthOnly).toBeUndefined();
+      expect(h.runCliAgentMock.mock.lastCall?.[0].authProfileId).toBe("claude-cli:personal");
     },
   );
 
