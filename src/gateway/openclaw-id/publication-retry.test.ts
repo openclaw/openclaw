@@ -28,7 +28,6 @@ function fakeDiscovery() {
   const mirror = {
     snapshotSeq: 1,
     snapshotIssuedAt: 0,
-    descriptors: 0,
     snapshots: 0,
     snapshot: undefined as SignedStatement<"MembershipSnapshot"> | undefined,
   };
@@ -43,7 +42,6 @@ function fakeDiscovery() {
     registerClaw: vi.fn(),
     publishDescriptor: vi.fn(async () => {
       take("descriptor");
-      mirror.descriptors += 1;
     }),
     publishSnapshot: vi.fn(
       async (_clawId: string, snapshot: SignedStatement<"MembershipSnapshot">) => {

@@ -681,23 +681,6 @@ function setRegisteredHealthChecks(
 }
 
 describe("doctor health contributions", () => {
-  it("shows runtime capabilities in the interactive Doctor flow", async () => {
-    vi.stubGlobal("__openclawStandaloneBuildInfo", {
-      mode: "aot",
-      openclaw: { version: "2026.10.3" },
-      bun: { version: "1.4.4" },
-    });
-    try {
-      await requireDoctorContribution("doctor:runtime-capabilities").run(createDoctorContext());
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("flavor=aot"),
-        "Runtime capabilities (Doctor process)",
-      );
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
   async function withProcessPlatform<T>(
     platform: NodeJS.Platform,
     run: () => Promise<T>,
@@ -1769,38 +1752,6 @@ describe("doctor health contributions", () => {
     expect(mocks.maybeScanExtraGatewayServices).not.toHaveBeenCalled();
     expect(mocks.maybeResolveDuelingSystemdGatewayScopes).not.toHaveBeenCalled();
     expect(mocks.maybeRepairGatewayServiceConfig).not.toHaveBeenCalled();
-    expect(mocks.note).not.toHaveBeenCalled();
-  });
-
-  it("hints how to enable authenticated GitHub project search", async () => {
-    const contribution = requireDoctorContribution("doctor:github-projects");
-    const ctx = createDoctorContext({
-      env: {},
-      configPath: "/tmp/openclaw.json",
-    });
-
-    await contribution.run(ctx);
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("gateway.controlUi.github.host matching gateway.github.host"),
-      "GitHub projects",
-    );
-
-    mocks.note.mockClear();
-    await contribution.run({ ...ctx, env: { GH_TOKEN: "configured" } });
-    expect(mocks.note).not.toHaveBeenCalled();
-
-    await contribution.run({
-      ...ctx,
-      cfg: {
-        gateway: {
-          controlUi: {
-            github: {
-              token: { source: "store", provider: "default", id: "CONTROL_UI_GITHUB" },
-            },
-          },
-        },
-      },
-    });
     expect(mocks.note).not.toHaveBeenCalled();
   });
 

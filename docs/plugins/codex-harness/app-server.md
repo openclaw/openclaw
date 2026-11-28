@@ -199,7 +199,10 @@ If a subscription profile hits a Codex usage limit, OpenClaw records the
 reset time when Codex reports one and tries the next ordered auth profile
 for the same Codex run. When the reset time passes, the subscription
 profile becomes eligible again without changing the selected `openai/gpt-*`
-model or Codex runtime.
+model or Codex runtime. Purchased credits can cover exhausted included usage.
+Before clearing a saved block, OpenClaw checks that the usage response identifies
+both the active ChatGPT account and user. A model stays blocked while the provider
+still names it as restricted. Separate quota limits and spending caps still apply.
 
 An exhausted usage percentage does not put a model on cooldown when Codex
 reports ordinary usage as available or unknown. A known exhausted quota can

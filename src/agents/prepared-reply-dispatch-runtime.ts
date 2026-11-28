@@ -10,11 +10,45 @@ import { markPreparedPluginGenerationConfigured } from "./prepared-model-runtime
 import type {
   PreparedModelRuntimeLease,
   PreparedModelRuntimeOwner,
+  PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
   PreparedReplyDispatchRuntime,
 } from "./prepared-model-runtime.types.js";
 
 const EMPTY_REPLY_DISPATCH_PUBLICATION: readonly PreparedReplyDispatchRuntime[] = Object.freeze([]);
+
+/**
+ * Projects one prepared generation into the closed facts agent-turn admission consumes.
+ * Configured publications serve channel inbound dispatch, so they require its registry; a run
+ * generation dispatches agent turns only and serves them from its runtime registry.
+ */
+export function projectReplyDispatchRuntime(
+  snapshot: PreparedModelRuntimeSnapshot,
+  pluginGeneration: PreparedModelRuntimePluginGeneration | undefined,
+  provenance: "configured" | "run" = "configured",
+): PreparedReplyDispatchRuntime {
+  const owner = resolvePublishedModelCatalogOwner(snapshot);
+  const inboundPluginRegistry =
+    provenance === "run"
+      ? (pluginGeneration?.inboundPluginRegistry ?? pluginGeneration?.pluginRegistry)
+      : pluginGeneration?.inboundPluginRegistry;
+  if (!pluginGeneration || !inboundPluginRegistry) {
+    throw new PreparedModelRuntimeOwnerNotPublishedError(
+      `prepared inbound plugin registry was not published for ${snapshot.agentDir}`,
+    );
+  }
+  return Object.freeze({
+    agentId: owner.agentId,
+    agentDir: owner.agentDir,
+    workspaceDir: owner.workspaceDir,
+    config: owner.config,
+    readPolicyConfig: getPreparedModelRuntimePolicyConfigReader(snapshot),
+    modelCatalog: owner.modelCatalog,
+    readFullModelCatalog: snapshot.readFullModelCatalog,
+    inboundPluginRegistry,
+    pluginGeneration,
+  });
+}
 
 function buildReplyDispatchPublication(
   owners: Iterable<PreparedModelRuntimeOwner>,
@@ -27,26 +61,7 @@ function buildReplyDispatchPublication(
           `prepared reply dispatch runtime owner was not published for ${runtimeOwner.input.agentId ?? runtimeOwner.input.agentDir}`,
         );
       }
-      const snapshot = runtimeOwner.snapshot;
-      const owner = resolvePublishedModelCatalogOwner(snapshot);
-      const pluginGeneration = runtimeOwner.pluginGeneration;
-      const inboundPluginRegistry = pluginGeneration?.inboundPluginRegistry;
-      if (!pluginGeneration || !inboundPluginRegistry) {
-        throw new PreparedModelRuntimeOwnerNotPublishedError(
-          `prepared inbound plugin registry was not published for ${snapshot.agentDir}`,
-        );
-      }
-      return Object.freeze({
-        agentId: owner.agentId,
-        agentDir: owner.agentDir,
-        workspaceDir: owner.workspaceDir,
-        config: owner.config,
-        readPolicyConfig: getPreparedModelRuntimePolicyConfigReader(snapshot),
-        modelCatalog: owner.modelCatalog,
-        readFullModelCatalog: snapshot.readFullModelCatalog,
-        inboundPluginRegistry,
-        pluginGeneration,
-      });
+      return projectReplyDispatchRuntime(runtimeOwner.snapshot, runtimeOwner.pluginGeneration);
     })
     .toSorted((left, right) => left.agentId.localeCompare(right.agentId));
   if (new Set(runtimes.map((runtime) => runtime.agentId)).size !== runtimes.length) {

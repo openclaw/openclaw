@@ -553,29 +553,26 @@ describe("provider retry and cold history", () => {
   it.each([
     {
       name: "transient override",
-      suppressOnly: false,
       api: "openai-completions",
       override: false,
       retained: false,
     },
     {
       name: "retained override",
-      suppressOnly: false,
       api: "openai-completions",
       override: true,
       retained: true,
     },
   ])(
     "preserves hidden runtime input across provider retry and cold session reopen: $name",
-    async ({ api, override, retained, suppressOnly }) => {
+    async ({ api, override, retained }) => {
       const { appendOnlyRuntimeContext } = resolveTranscriptPolicy({
         modelApi: api,
         runtimeHandle: {
           provider: "fixture",
           plugin: {
             ...provider,
-            buildReplayPolicy:
-              override === undefined ? undefined : () => ({ appendOnlyRuntimeContext: override }),
+            buildReplayPolicy: () => ({ appendOnlyRuntimeContext: override }),
           },
         },
       });
@@ -600,11 +597,11 @@ describe("provider retry and cold history", () => {
               : createAssistant(model, "done"),
           );
         });
-        const createPersistedSession = async (suppressInput = false) => {
+        const createPersistedSession = async () => {
           const sessionManager = guardSessionManager(
             SessionManager.open(target, state.workspaceDir),
             {
-              suppressNextUserMessagePersistence: suppressInput,
+              suppressNextUserMessagePersistence: false,
             },
           );
           const { session } = await createTestSession({ sessionManager, settingsManager });
@@ -622,11 +619,11 @@ describe("provider retry and cold history", () => {
             sessionManager,
             setActiveSessionSystemPrompt: vi.fn(),
           });
-          const submit = (text: string, runtimeOnly = false, suppressPrompt = false) => {
+          const submit = (text: string, runtimeOnly = false) => {
             const baseInput = createBaseInput();
             return submitEmbeddedAttemptPrompt({
               ...baseInput,
-              attempt: { ...baseInput.attempt, suppressNextUserMessagePersistence: suppressPrompt },
+              attempt: { ...baseInput.attempt, suppressNextUserMessagePersistence: false },
               activeSession: session,
               appendOnlyRuntimeContext,
               runtimeOnly,
@@ -642,14 +639,14 @@ describe("provider retry and cold history", () => {
           };
           return { session, sessionManager, submit };
         };
-        const first = await createPersistedSession(suppressOnly);
+        const first = await createPersistedSession();
         if (retained) {
           await first.session.sendCustomMessage(
             { customType: "test.extension-context", content: "extension context", display: false },
             { deliverAs: "nextTurn" },
           );
         }
-        await first.submit(RUNTIME_EVENT_USER_PROMPT, !suppressOnly, suppressOnly);
+        await first.submit(RUNTIME_EVENT_USER_PROMPT, true);
         expect(requests).toHaveLength(2);
         expect(requests[1]).toEqual(requests[0]);
         expect(requests[0]).toContainEqual(

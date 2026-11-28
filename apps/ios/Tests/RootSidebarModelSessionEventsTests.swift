@@ -49,6 +49,59 @@ struct RootSidebarModelSessionEventsTests {
         }
     }
 
+    @Test func `recent rows follow conversation activity`() async throws {
+        let appModel = NodeAppModel()
+        let model = RootSidebarModel()
+        func working(_ name: String, _ time: Double) -> OpenClawChatSessionEntry {
+            var row = Self.row(label: name)
+            row.key = "agent:main:\(name.lowercased())"
+            row.sessionId = name
+            row.updatedAt = time
+            row.lastActivityAt = time
+            row.hasActiveRun = true
+            return row
+        }
+        var outline = working("Outline", 100)
+        var draft = working("Draft", 200)
+        let review = working("Review", 300)
+        model.applyRoster(.init(sessions: [outline, review, draft], isCached: false))
+        func visibleKeys() -> [String] {
+            let sections = RootSidebarModel.sections(
+                sessions: model.sessions, query: "", currentSessionKey: "main", mainSessionKey: "main",
+                activeAgentID: "main", groups: [], rosterIsComplete: true)
+            return RootSidebar.sessionRows(in: RootSidebar.sessionLayout(sections).sections, collapsedParents: [])
+                .map(\.id)
+        }
+        let initial = [review.key, draft.key, outline.key]
+        #expect(visibleKeys() == initial)
+
+        // A lifecycle update changes the running row, but not either conversation clock.
+        outline.updatedAt = 400
+        outline.hasActiveSubagentRun = true
+        _ = try await model.handleSessionEvent(Self.event(reason: "lifecycle", row: outline), appModel: appModel)
+        #expect(visibleKeys() == initial)
+
+        // A newer metadata write on a different row must not outrank the finished reply below.
+        draft.updatedAt = 600
+        draft.model = "other-model"
+        _ = try await model.handleSessionEvent(Self.event(row: draft), appModel: appModel)
+        #expect(visibleKeys() == initial)
+
+        outline.updatedAt = 500
+        outline.lastActivityAt = 500
+        outline.hasActiveRun = false
+        outline.hasActiveSubagentRun = false
+        outline.unread = true
+        _ = try await model.handleSessionEvent(Self.event(reason: "lifecycle", row: outline), appModel: appModel)
+        #expect(visibleKeys() == [outline.key, review.key, draft.key])
+
+        // Sending a message counts immediately, without waiting for another reply or unread mark.
+        draft.lastInteractionAt = 700
+        draft.updatedAt = 700
+        _ = try await model.handleSessionEvent(Self.event(row: draft), appModel: appModel)
+        #expect(visibleKeys() == [draft.key, outline.key, review.key])
+    }
+
     func eventBurst() async throws {
         let appModel = NodeAppModel()
         let model = RootSidebarModel()

@@ -7,15 +7,27 @@ import SwiftUI
 /// Requests stay bound to the agent and physical connection captured when the sheet opens.
 public struct OpenClawChatModelSignInContext: Sendable {
     public let agentID: String
+    public let canRemoveSignIn: Bool
+    public let canStartSignIn: Bool
+    public let canSetAPIKey: Bool
+    public let canCheckConnection: Bool
     public let request: @MainActor @Sendable (String, [String: AnyCodable]) async throws -> Data
     public let isCurrent: @MainActor @Sendable () async -> Bool
 
     public init(
         agentID: String,
+        canRemoveSignIn: Bool = false,
+        canStartSignIn: Bool = true,
+        canSetAPIKey: Bool = false,
+        canCheckConnection: Bool = false,
         request: @escaping @MainActor @Sendable (String, [String: AnyCodable]) async throws -> Data,
         isCurrent: @escaping @MainActor @Sendable () async -> Bool)
     {
         self.agentID = agentID
+        self.canRemoveSignIn = canRemoveSignIn
+        self.canStartSignIn = canStartSignIn
+        self.canSetAPIKey = canSetAPIKey
+        self.canCheckConnection = canCheckConnection
         self.request = request
         self.isCurrent = isCurrent
     }
@@ -23,19 +35,71 @@ public struct OpenClawChatModelSignInContext: Sendable {
 
 struct ChatModelAuthStatus: Decodable {
     struct Capability: Decodable {
+        /// The provider these options sign in to; the phone groups options by it.
+        let provider: String?
         let loginOptions: [LoginOption]?
+        let apiKeySupported: Bool?
     }
 
-    struct LoginOption: Decodable, Identifiable {
+    struct LoginOption: Decodable, Identifiable, Equatable {
         let id: String
         let label: String
         let hint: String?
+        let groupLabel: String?
+        var kind: String?
+    }
+
+    struct Expiry: Decodable, Equatable {
+        /// Milliseconds since 1970.
+        let at: Double
+    }
+
+    struct Profile: Decodable, Equatable {
+        let profileId: String
+        let type: String?
+        let status: String?
+        let displayName: String?
+        let email: String?
+        let planLabel: String?
+        let expiry: Expiry?
+        /// Only saved sign-ins this server can remove carry it.
+        let logoutSupported: Bool?
+        var source: String?
+    }
+
+    struct Usage: Decodable, Equatable {
+        struct Window: Decodable, Equatable {
+            let label: String
+            let usedPercent: Double
+            let resetAt: Double?
+        }
+
+        let windows: [Window]
+        let plan: String?
+        let authProfileId: String?
+    }
+
+    struct NativeAuth: Decodable, Equatable {
+        let kind: String?
+        let plan: String?
+    }
+
+    struct APIKey: Decodable, Equatable {
+        /// "config" or "env".
+        let source: String?
     }
 
     struct Provider: Decodable, Identifiable {
         let provider: String
+        /// The credential owner when it differs from `provider`, such as a CLI-backed runtime.
+        let authProvider: String?
         let displayName: String
         let status: String
+        let expiry: Expiry?
+        let profiles: [Profile]?
+        let nativeAuth: NativeAuth?
+        let apiKey: APIKey?
+        let usage: Usage?
         var id: String {
             self.provider
         }
@@ -62,6 +126,29 @@ struct ChatModelAuthStatus: Decodable {
     }
 }
 
+/// What the last load, sign-in or sign-out came to. Each platform words it for its own screen.
+enum ChatModelSignInOutcome: Equatable {
+    /// Account status could not be read.
+    case loadFailed
+    /// The server has not finished preparing account status.
+    case statusNotReady
+    /// The server refused to start the sign-in.
+    case startFailed
+    /// The connection the sheet opened on is gone; nothing more can be sent on it.
+    case connectionChanged
+    /// A step failed in transit.
+    case stopped
+    case cancelUnconfirmed
+    case finished
+    /// The sign-in ended without finishing: cancelled, or failed with the server's reason.
+    case ended(status: String?, error: String?)
+    /// It ended, and the status read after it failed.
+    case endedStatusUnknown
+    /// The server rejected an answer and asks the same step again.
+    case stepError(String)
+    case signOutFailed
+}
+
 @MainActor
 @Observable
 final class ChatModelSignInModel {
@@ -70,7 +157,11 @@ final class ChatModelSignInModel {
     private(set) var sessionID: String?
     private(set) var busy = false
     private(set) var cancelling = false
-    private(set) var message: String?
+    private(set) var outcome: ChatModelSignInOutcome?
+    /// The option of the sign-in running now, or of the last one, so its outcome shows under it.
+    private(set) var attempt: ChatModelAuthStatus.LoginOption?
+    /// The provider whose sign-out is in flight.
+    private(set) var signingOut: String?
     var text = ""
     var selection = 0
     var confirmation = false
@@ -91,21 +182,35 @@ final class ChatModelSignInModel {
         do {
             try await self.readStatus()
         } catch {
-            self
-                .message =
-                String(
-                    localized: "Could not load sign-in options. Check the connection or update your Gateway.")
+            let current = await self.context.isCurrent()
+            guard !self.closed else { return }
+            if current {
+                self.outcome = .loadFailed
+            } else {
+                self.authStatus = nil
+                self.outcome = .connectionChanged
+            }
         }
     }
 
+    /// Pull to refresh on the phone: a load problem from before gives way to the fresh read.
+    func reload() async {
+        switch self.outcome {
+        case .loadFailed, .statusNotReady: self.outcome = nil
+        default: break
+        }
+        await self.refresh()
+    }
+
     func start(_ option: ChatModelAuthStatus.LoginOption) async {
-        guard !self.busy, !self.closed, self.sessionID == nil,
+        guard self.canStartSignIn, !self.busy, !self.closed, self.sessionID == nil,
               self.authStatus?.loginOptions.contains(where: { $0.id == option.id }) == true
         else { return }
         let id = UUID().uuidString
         self.sessionID = id
         self.cancelRequested = false
-        self.message = nil
+        self.outcome = nil
+        self.attempt = option
         self.step = nil
         await self.run(id) {
             let data: Data
@@ -117,13 +222,11 @@ final class ChatModelSignInModel {
                 ])
             } catch let error as GatewayResponseError {
                 if self.sessionID == id { self.sessionID = nil }
-                self
-                    .message =
-                    String(localized: "Sign-in could not start. Refresh the options or use Models in the web app.")
+                self.outcome = .startFailed
                 throw error
             } catch let error as GatewayNodeSessionRequestError {
                 if self.sessionID == id { self.sessionID = nil }
-                self.message = String(localized: "The connection changed. Close sign-in and open it again.")
+                self.outcome = .connectionChanged
                 throw error
             }
             let result = try JSONDecoder().decode(WizardStartResult.self, from: data)
@@ -175,10 +278,117 @@ final class ChatModelSignInModel {
         } catch {
             if await self.retireIfContextLost(id) { return }
             if self.sessionID == id, !self.closed {
-                self
-                    .message =
-                    String(localized: "Cancellation is not confirmed. Check the connection and try Cancel again.")
+                self.outcome = .cancelUnconfirmed
             }
+        }
+    }
+
+    /// Removes the provider's saved sign-ins the server marked removable, then reads status again.
+    func signOut(provider: String, profileIDs: [String]) async {
+        guard !self.busy, self.sessionID == nil, !self.closed, !profileIDs.isEmpty else { return }
+        self.busy = true
+        self.signingOut = provider
+        self.outcome = nil
+        self.attempt = nil
+        defer {
+            self.busy = false
+            self.signingOut = nil
+        }
+        do {
+            _ = try await self.request("models.authLogout", [
+                "agentId": AnyCodable(self.context.agentID), "provider": AnyCodable(provider),
+                "profileIds": AnyCodable(profileIDs.map(AnyCodable.init)),
+            ])
+            try await self.readStatus()
+            if await self.context.isCurrent(), !self.closed { await self.onAuthChanged() }
+        } catch {
+            guard !self.closed else { return }
+            if await !(self.context.isCurrent()) {
+                self.authStatus = nil
+                self.outcome = .connectionChanged
+            } else {
+                self.outcome = .signOutFailed
+            }
+        }
+    }
+
+    var canStartSignIn: Bool {
+        self.context.canStartSignIn
+    }
+
+    func canRemoveSignIn(provider: String, profileID: String) -> Bool {
+        self.context.canRemoveSignIn && self.authStatus?.providers.first { $0.provider == provider }?
+            .profiles?.contains { $0.profileId == profileID && $0.logoutSupported == true } == true
+    }
+
+    func removeSignIn(provider: String, profileID: String) async {
+        guard self.canRemoveSignIn(provider: provider, profileID: profileID) else { return }
+        await self.signOut(provider: provider, profileIDs: [profileID])
+    }
+
+    var canCheckConnection: Bool {
+        self.context.canCheckConnection
+    }
+
+    var canSetAPIKey: Bool {
+        self.context.canSetAPIKey
+    }
+
+    /// A successful probe proves at least one route works, not that all accounts work.
+    func checkConnection(provider: String) async -> String {
+        struct Receipt: Decodable {
+            let status: String
+            let error: String?
+        }
+        guard self.canCheckConnection, !self.busy, self.sessionID == nil else {
+            return String(localized: "Can’t check the connection right now.")
+        }
+        self.busy = true
+        defer { self.busy = false }
+        do {
+            let data = try await request("models.probe", [
+                "provider": AnyCodable(provider), "agentId": AnyCodable(context.agentID),
+            ])
+            let receipt = try JSONDecoder().decode(Receipt.self, from: data)
+            if receipt.status == "ok" {
+                return String(localized: "Provider responded.")
+            }
+            return receipt.error?.trimmedNonEmpty ?? String(localized: "Couldn’t verify the connection.")
+        } catch {
+            return String(localized: "Couldn’t verify the connection.")
+        }
+    }
+
+    /// Sets the provider’s key, not an arbitrary named profile. The secret is never retained by the model.
+    func setAPIKey(provider: String, key: String) async -> String {
+        struct Receipt: Decodable {
+            let provider: String
+            let profileId: String
+            let warning: String?
+        }
+        guard self.canSetAPIKey, !self.busy, self.sessionID == nil, let key = key.trimmedNonEmpty,
+              authStatus?.providerCapabilities?.contains(where: {
+                  $0.provider == provider && $0.apiKeySupported == true
+              }) == true
+        else { return String(localized: "Can’t update the API key right now.") }
+        self.busy = true
+        defer { self.busy = false }
+        do {
+            let data = try await request("models.authSetApiKey", [
+                "provider": AnyCodable(provider), "agentId": AnyCodable(context.agentID),
+                "apiKey": AnyCodable(key),
+            ])
+            let receipt = try JSONDecoder().decode(Receipt.self, from: data)
+            do { try await self.readStatus() } catch { self.outcome = .loadFailed }
+            if await self.context.isCurrent(), !self.closed {
+                await self.onAuthChanged()
+            }
+            if receipt.warning?.trimmedNonEmpty != nil {
+                return String(localized: "API key saved, but some provider settings couldn’t be updated.")
+            }
+            return String(localized: "API key saved.")
+        } catch {
+            return String(localized: "Couldn’t confirm whether the API key was saved. Refresh before trying again.")
         }
     }
 
@@ -197,10 +407,7 @@ final class ChatModelSignInModel {
             if await self.retireIfContextLost(id) {
                 if !cancellationAlreadyRequested { try? await self.closeSession(id) }
             } else if !self.closed, self.sessionID == id, !self.cancelRequested {
-                self
-                    .message =
-                    String(
-                        localized: "Sign-in stopped. Check the connection, then cancel this attempt and retry.")
+                self.outcome = .stopped
             }
         }
     }
@@ -213,7 +420,7 @@ final class ChatModelSignInModel {
         self.sessionID = nil
         self.step = nil
         self.authStatus = nil
-        self.message = String(localized: "The connection changed. Close sign-in and open it again.")
+        self.outcome = .connectionChanged
         return true
     }
 
@@ -226,7 +433,7 @@ final class ChatModelSignInModel {
             }
             let preservesInput = self.step?.id == result.step?.id && result.error != nil
             self.step = result.step
-            self.message = result.error
+            self.outcome = result.error.map { .stepError($0) }
             if !preservesInput {
                 self.text = anyCodableString(result.step?.initialvalue)
                 self.confirmation = anyCodableBool(result.step?.initialvalue)
@@ -253,16 +460,12 @@ final class ChatModelSignInModel {
         self.sessionID = nil
         self.step = nil
         guard await self.context.isCurrent(), !self.closed else { return }
-        self.message = error == nil && status == "done"
-            ? String(localized: "Sign-in finished.")
-            : String(localized: "Sign-in ended. Review the account status before trying again.")
+        self.outcome = error == nil && status == "done" ? .finished : .ended(status: status, error: error)
         // Native login publishes credentials before settling, including writes followed by errors.
         do {
             try await self.readStatus()
         } catch {
-            self
-                .message =
-                String(localized: "Sign-in ended, but account status could not be loaded. Refresh to check it.")
+            self.outcome = .endedStatusUnknown
         }
         if await self.context.isCurrent(), !self.closed { await self.onAuthChanged() }
     }
@@ -270,9 +473,15 @@ final class ChatModelSignInModel {
     private func readStatus() async throws {
         let data = try await self.request("models.authStatus", ["agentId": AnyCodable(self.context.agentID)])
         let status = try JSONDecoder().decode(ChatModelAuthStatus.self, from: data)
+        guard status.unavailable == nil else {
+            // Status is still being prepared; keep the last usable account data.
+            self.outcome = .statusNotReady
+            return
+        }
         self.authStatus = status
-        if status.unavailable != nil {
-            self.message = String(localized: "Account status is not ready. Refresh after setup finishes.")
+        switch self.outcome {
+        case .loadFailed, .statusNotReady, .endedStatusUnknown: self.outcome = nil
+        default: break
         }
     }
 
@@ -284,6 +493,7 @@ final class ChatModelSignInModel {
     }
 }
 
+#if os(macOS)
 @MainActor
 struct OpenClawChatModelSignInSheet: View {
     @Environment(\.dismiss) private var dismiss
@@ -304,7 +514,7 @@ struct OpenClawChatModelSignInSheet: View {
                         self.accounts
                     }
                     if self.model.busy || self.model.cancelling { ProgressView() }
-                    if let message = self.model.message {
+                    if let message = self.model.outcome.map(Self.message) {
                         Text(message).font(OpenClawChatTypography.callout).textSelection(.enabled)
                     }
                 }
@@ -329,6 +539,34 @@ struct OpenClawChatModelSignInSheet: View {
         .frame(idealWidth: 460, idealHeight: 480)
         .task { await self.model.refresh() }
         .onDisappear { Task { await self.model.close() } }
+    }
+
+    private static func message(_ outcome: ChatModelSignInOutcome) -> String {
+        switch outcome {
+        case .loadFailed:
+            String(localized: "Could not load sign-in options. Check the connection or update your Gateway.")
+        case .statusNotReady:
+            String(localized: "Account status is not ready. Refresh after setup finishes.")
+        case .startFailed:
+            String(localized: "Sign-in could not start. Refresh the options or use Models in the web app.")
+        case .connectionChanged:
+            String(localized: "The connection changed. Close sign-in and open it again.")
+        case .stopped:
+            String(localized: "Sign-in stopped. Check the connection, then cancel this attempt and retry.")
+        case .cancelUnconfirmed:
+            String(localized: "Cancellation is not confirmed. Check the connection and try Cancel again.")
+        case .finished:
+            String(localized: "Sign-in finished.")
+        case .ended:
+            String(localized: "Sign-in ended. Review the account status before trying again.")
+        case .endedStatusUnknown:
+            String(localized: "Sign-in ended, but account status could not be loaded. Refresh to check it.")
+        case let .stepError(message):
+            message
+        case .signOutFailed:
+            // macOS offers no sign-out; kept for completeness.
+            String(localized: "Sign-in ended. Review the account status before trying again.")
+        }
     }
 
     private var accounts: some View {
@@ -409,3 +647,4 @@ struct OpenClawChatModelSignInSheet: View {
         }
     }
 }
+#endif

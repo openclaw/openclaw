@@ -86,6 +86,13 @@ const OBSERVE = "desktop.observe";
 const requestCount = (gateway: Awaited<ReturnType<typeof installMockGateway>>, method: string) =>
   expect.poll(async () => (await gateway.getRequests(method)).length);
 
+const populatedDesktop = {
+  id: "worker-desktop-1",
+  type: "worker",
+  status: "available",
+  desktop: true,
+};
+
 function coldOpenScenario(
   populated = false,
   processName = "Build application",
@@ -126,6 +133,8 @@ function coldOpenScenario(
               totalTokens: 2000,
               totalTokensFresh: true,
               contextTokens: 100000,
+              // Backing Desktop data means the session names its desktop.
+              placement: { state: "active", environmentId: populatedDesktop.id },
             },
             {
               key: "agent:main:subagent:panel-content",
@@ -158,14 +167,8 @@ function coldOpenScenario(
           ? populatedBrowser("browser", "OpenClaw", "https://example.test/")
           : [browserTabs(false)],
       },
-      "environments.list": {
-        environments: rows({
-          id: "worker-desktop-1",
-          type: "worker",
-          status: "available",
-          desktop: true,
-        }),
-      },
+      "environments.list": { environments: rows(populatedDesktop) },
+      ...(populated ? { [INVENTORY]: populatedDesktop } : {}),
       "session.discussion.info": {
         state: "open",
         ...(populated

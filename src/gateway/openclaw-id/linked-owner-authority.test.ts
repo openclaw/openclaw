@@ -27,7 +27,6 @@ const cfg: OpenClawConfig = {
           scopes: ["operator.talk"],
           agents: [],
           sessions: { others: "none" },
-          accessPolicyPlugin: "fixture-policy",
         },
       },
     },

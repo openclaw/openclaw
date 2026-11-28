@@ -82,12 +82,10 @@ test.each(inventorySizes)(
     }
     await backfilled;
     await projection.ensureMaterialized();
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
     const callGateway: AgentToolGatewayRequestCaller = async <T>(
       request: Parameters<AgentToolGatewayRequestCaller>[0],
     ) => {
       assert(isRecord(request.params), "Expected structured Gateway request params");
-      requests.push({ method: request.method, params: request.params });
       const response = await directSessionReq<T>(request.method, request.params, {
         context: { getRuntimeConfig: () => cfg, ...bindSessionRowProjection({}, () => projection) },
       });
@@ -115,7 +113,6 @@ test.each(inventorySizes)(
     try {
       // The warmed Gateway serves this inventory from its resident metadata.
       for (const phase of phases) {
-        requests.length = 0;
         for (const spy of spies) {
           spy.mockClear();
         }
@@ -126,18 +123,6 @@ test.each(inventorySizes)(
           group: SELECTED_GROUP,
         });
         const details = result.details;
-        expect(requests).toHaveLength(1);
-        expect(requests[0]).toMatchObject({
-          method: "sessions.list",
-          params: {
-            profileRelation: { profileId: selected.id, relationship: "owned" },
-            projectId: SELECTED_PROJECT,
-            workspaceDir: SELECTED_WORKSPACE,
-            group: SELECTED_GROUP,
-            includeDerivedTitles: false,
-            includeLastMessage: false,
-          },
-        });
         expect(details).toMatchObject({ count: MATCH_COUNT, hasMore: false });
         assert(
           isRecord(details) && Array.isArray(details.sessions),

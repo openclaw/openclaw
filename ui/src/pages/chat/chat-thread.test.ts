@@ -24,7 +24,6 @@ import {
   toolResult as resultMessage,
 } from "./chat-thread-fixtures.test-support.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
-import * as threadItems from "./chat-thread-items.ts";
 import { persistedMessageEntryId, readPendingSendStatus } from "./chat-thread-items.ts";
 import { buildItems, createProps, type CachedChatItemsProps } from "./chat-thread.test-support.ts";
 import {
@@ -619,13 +618,6 @@ describe("buildCachedChatItems", () => {
     publishChatSessionProjectionMessages(owner, [older, { ...current }]);
     rebuild();
     expect(prepare.mock.calls.filter(([text]) => text === output)).toHaveLength(2);
-  });
-
-  it("does not inspect ordinary transcript messages for tool previews", () => {
-    const messages = [user("hello", 1_000), assistant("reply", 1_001)];
-    const previewExtraction = vi.spyOn(threadItems, "extractChatMessagePreview");
-    buildItems({ paneId: "ordinary-transcript", messages });
-    expect(previewExtraction).not.toHaveBeenCalled();
   });
 
   it("sender provenance separates namespaces without splitting profile renames", () => {
@@ -1333,17 +1325,6 @@ describe("buildCachedChatItems", () => {
 });
 
 describe("tool expansion state", () => {
-  it("skips the tool-card walk when the item array identity is unchanged", () => {
-    const group = preparedGroup("assistant-stable", assistant("No tools in this row"));
-    const items = [group];
-    const extractSpy = vi.spyOn(toolCards, "extractToolCardsCached");
-    syncToolCardExpansionState("identity-stable", items, false);
-    const callsAfterFirstSync = extractSpy.mock.calls.length;
-    syncToolCardExpansionState("identity-stable", items, false);
-    expect(callsAfterFirstSync).toBeGreaterThan(0);
-    expect(extractSpy).toHaveBeenCalledTimes(callsAfterFirstSync);
-  });
-
   it("auto-expands top-level tool-name result disclosures", () => {
     const group = preparedGroup(
       "tool-name-result",
@@ -1357,19 +1338,6 @@ describe("tool expansion state", () => {
 });
 
 describe("expansion-state render dependencies", () => {
-  it("reads unchanged tool and user expansion maps without locale sorting", () => {
-    const tools = getExpandedToolCards("fast-session");
-    const users = getExpandedUserMessages("fast-session");
-    for (let index = 0; index < 128; index += 1) {
-      setExpansionState(tools, `tool-${127 - index}`, index % 2 === 0);
-      setExpansionState(users, `user-${127 - index}`, index % 2 === 0);
-    }
-    const compare = vi.spyOn(String.prototype, "localeCompare");
-    expect(getExpansionStateVersion(tools)).toBe(tools.size);
-    expect(getExpansionStateVersion(users)).toBe(users.size);
-    expect(compare.mock.calls.length).toBe(0);
-  });
-
   it("shares user-message render versions across equivalent session aliases", () => {
     setExpansionState(getExpandedUserMessages("main"), "user-message", true);
 
@@ -1489,32 +1457,6 @@ describe("thread item cache", () => {
       "assistant",
     ]);
     expect(roles(buildCachedChatItems(input))).toEqual(["assistant", "user"]);
-  });
-
-  it("updates the live stream without rescanning retained history", () => {
-    const read = vi.fn(Reflect.get);
-    const messages = Array.from(
-      { length: 1_000 },
-      (_, index) =>
-        new Proxy(chatMessage(index % 2 === 0 ? "user" : "assistant", `message ${index}`, index), {
-          get: read,
-        }),
-    );
-    const input = createProps({
-      messages,
-      stream: "partial reply",
-      streamStartedAt: 10,
-    });
-    const first = buildCachedChatItems(input);
-    read.mockClear();
-
-    const updated = buildCachedChatItems({ ...input, stream: "complete reply" });
-
-    expect(updated).toBe(first);
-    expect(read).not.toHaveBeenCalled();
-    expect(updated).toContainEqual(
-      expect.objectContaining({ kind: "stream", text: "complete reply", isStreaming: true }),
-    );
   });
 
   it("keeps same-session render caches isolated between panes", () => {

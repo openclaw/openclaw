@@ -276,12 +276,10 @@ image: ghcr.io/openclaw/openclaw:2026.7.1-2-slim
 
 Images from `2026.8.1` onward need a [writable cache location](/install/kubernetes#architecture-notes); the shipped manifest provides it through `XDG_CACHE_HOME`. When upgrading an older deployment, apply that environment entry along with the image change.
 
-The official image entrypoint runs Doctor before the Gateway, but this manifest's
-explicit `command` bypasses it. Before upgrading an existing PVC, back up its
-state, scale the Deployment to zero, wait for its pods to terminate, and run the
-new image's `openclaw doctor --fix --non-interactive` in a one-off pod or Job with
-the same state/config mounts. Restore one replica only after Doctor succeeds.
-See [container upgrade and recovery](/install/docker#upgrading-container-images).
+Before upgrading an existing PVC, back up its state, scale the Deployment to zero,
+and wait for its pods to terminate. Replace the image and restore one replica.
+The Gateway migrates supported state during boot; installed plugins converge
+after readiness. See [container upgrades](/install/docker#upgrading-container-images).
 
 ### Expose beyond port-forward
 

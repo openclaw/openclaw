@@ -5,6 +5,7 @@ import {
   createModelChatUpstream,
   createModelGatewayFixture,
 } from "./model-gateway.test-support.ts";
+import { openTencentTokenHubKeyForm } from "./model-providers.test-support.ts";
 
 // A first-run agent has no model. Adding a provider's API key from Models must end in a chat
 // that answers, without a detour through Set up a model.
@@ -44,10 +45,8 @@ suite.define(() => {
 
         let clicks = 0;
         const started = Date.now();
-        await page.locator("[data-models-catalog-search]").fill("Tencent");
-        await page.locator('[data-models-catalog-provider="tencent-tokenhub"] button').click();
-        clicks++;
-        const form = page.getByRole("dialog", { name: "Add provider" });
+        const form = await openTencentTokenHubKeyForm(page);
+        clicks += 2; // Connect, then choose the TokenHub key.
         // A provider with config still shows its display name, not its config id.
         expect((await form.locator(".oc-dialog__title").textContent())?.trim()).toBe(
           "Tencent TokenHub",

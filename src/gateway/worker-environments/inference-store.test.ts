@@ -49,7 +49,10 @@ const REQUEST: WorkerInferenceStartParams = {
   runId: "run-inference-store",
   turnId: "turn-inference-store",
   modelRef: { provider: "fixture-provider", model: "fixture-model" },
-  context: { messages: [] },
+  context: {
+    messages: [{ role: "user", content: '🐚é\n"\ud800', timestamp: 1 }],
+    tools: [{ name: "lookup", description: "Find a fixture", parameters: { type: "object" } }],
+  },
   options: {},
 };
 const TURN_CLAIM: NonNullable<WorkerConnectionIdentity["turnClaim"]> = {
@@ -170,7 +173,10 @@ describe("worker inference SQLite store", async () => {
         sessionKey: "agent:main:inference-store",
         storePath: path.join(root, "sessions.sqlite"),
       },
-      request: REQUEST,
+      request: {
+        ...REQUEST,
+        modelRef: { model: REQUEST.modelRef.model, provider: REQUEST.modelRef.provider },
+      },
       sink,
     });
     if (!result.ok) {

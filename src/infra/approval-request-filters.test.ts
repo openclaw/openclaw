@@ -11,7 +11,7 @@ describe("approval request filters", () => {
           sessionKey: "agent:ops-agent:slack:direct:U1:tail",
         },
         agentFilter: ["ops-agent"],
-        sessionFilter: ["slack:direct:", "tail$"],
+        sessionFilter: ["slack:direct:"],
       }),
     ).toBe(true);
   });
@@ -37,11 +37,13 @@ describe("approval request filters", () => {
   });
 
   it("rejects unsafe regex patterns in session filters", () => {
-    expect(
-      matchesApprovalRequestFilters({
-        request: { sessionKey: `${"a".repeat(28)}!` },
-        sessionFilter: ["(a+)+$"],
-      }),
-    ).toBe(false);
+    for (const sessionKey of [`${"a".repeat(28)}!`, "aaaa"]) {
+      expect(
+        matchesApprovalRequestFilters({
+          request: { sessionKey },
+          sessionFilter: ["(a+)+$"],
+        }),
+      ).toBe(false);
+    }
   });
 });

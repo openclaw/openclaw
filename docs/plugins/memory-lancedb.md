@@ -325,6 +325,9 @@ Optimization requires exclusive offline custody. It refuses while the active
 state directory has a Gateway owner or another plugin handle has the local table
 open, including handles from other profiles. Normal shared readers and writers
 remain supported outside maintenance. Restart the Gateways after it completes.
+Read-only commands (`ltm stats`, memory health in Doctor, and Doctor detection,
+including `openclaw doctor --lint`) read the table without taking custody, so
+they never write into the database directory.
 
 Local filesystem paths and `file:` URLs share the same custody lock. Remote URI
 tables require distributed custody and are refused. Older plugin versions and

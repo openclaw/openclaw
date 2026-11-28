@@ -19,6 +19,7 @@ import {
   type ProviderAuthFailureReason,
 } from "../../plugins/provider-auth-failure.js";
 import {
+  sortProviderLoginChoices,
   formatProviderLoginChoiceRef,
   isProviderCliLoginChoiceStartable,
   matchesProviderLoginMethod,
@@ -69,11 +70,20 @@ export async function readGatewayLoginParams(
     : await prompter
         .select({
           message: "Choose a provider sign-in method",
-          options: choices.map((entry) => ({
-            value: formatProviderLoginChoiceRef(entry),
-            label: entry.choiceLabel,
-            hint: `${entry.providerId} / ${entry.methodId}`,
-          })),
+          searchable: true,
+          options: sortProviderLoginChoices(choices).map((entry) => {
+            const group = entry.groupLabel;
+            return {
+              value: formatProviderLoginChoiceRef(entry),
+              label:
+                group && !entry.choiceLabel.startsWith(group)
+                  ? `${group} · ${entry.choiceLabel}`
+                  : entry.choiceLabel,
+              hint: [entry.choiceHint, `${entry.providerId} / ${entry.methodId}`]
+                .filter(Boolean)
+                .join(" · "),
+            };
+          }),
         })
         .catch((error: unknown) => {
           if (error instanceof WizardCancelledError) {

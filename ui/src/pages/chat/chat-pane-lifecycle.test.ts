@@ -297,6 +297,7 @@ it("routes explicit composer focus to its visible editor after the textarea is h
     focusElement: editor,
     scrollElement: editor,
     coordsAtPos: () => null,
+    isAtomicRange: () => false,
     sync: vi.fn(),
     requestSync: vi.fn(),
     focus: () => editor.focus(),
@@ -585,7 +586,9 @@ it.each(["queue", "dismiss"] as const)(
     pane.collaboration.suggestions = [pending];
 
     const resolving = pane.resolveCurrentSessionSuggestion(pending, resolution);
-    expect(pane.suggestionChatProps(true, false, true).sessionSuggestions).toEqual([pending]);
+    expect(pane.sessionSuggestionChatProps(true, false, true).sessionSuggestions).toEqual([
+      pending,
+    ]);
     expect(request).toHaveBeenCalledTimes(1);
     pane.handleSessionSuggestionEvent({ action: "resolved", suggestion: resolved });
     expect(pane.collaboration.suggestions).toEqual([resolved]);
@@ -787,7 +790,7 @@ it("shows only live author resolutions, closes dismissed chips, and retires acce
   const dismissed = { ...pendingSuggestion(state, "dismissed"), state: "dismissed" as const };
   const list = { suggestions: [pending, accepted, dismissed], role: "viewer" as const };
   request.mockResolvedValue(list);
-  const view = () => pane.suggestionChatProps(true, false, true);
+  const view = () => pane.sessionSuggestionChatProps(true, false, true);
   const [tray, publishTray] = createSignal(() => view());
   const { container } = mountSolid(() =>
     createComponent(ChatSessionSuggestions, {

@@ -419,7 +419,6 @@ export function observeRetainedWork(instance: NonNullable<ReturnType<typeof getP
   });
   return {
     entered: entered.promise,
-    reject: entered.reject,
     restore: () => observation.mockRestore(),
   };
 }

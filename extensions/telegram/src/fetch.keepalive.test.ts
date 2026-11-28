@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import { readFile } from "node:fs/promises";
-import type { Socket } from "node:net";
+import { createServer, type Socket } from "node:net";
 import { setImmediate } from "node:timers/promises";
 import { Api } from "grammy";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -104,6 +104,39 @@ it("rich sends avoid the idle socket retired as a reply starts, without disablin
     },
   );
 });
+
+it.each(["sendMessage", "sendRichMessage"] as const)(
+  "marks %s safe to retry when the peer resets during the TLS handshake",
+  async (method) => {
+    let handshakes = 0;
+    const server = createServer((socket) => {
+      socket.once("data", () => {
+        handshakes++;
+        socket.resetAndDestroy();
+      });
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      assert(address && typeof address !== "string");
+      await withApi(`https://127.0.0.1:${address.port}`, async (api) => {
+        const send =
+          method === "sendMessage"
+            ? api.sendMessage(1, "hello")
+            : api.raw.sendRichMessage({ chat_id: 1, rich_message: { blocks: [] } });
+        const error: unknown = await send.catch((caught: unknown) => caught);
+        expect(isSafeToRetrySendError(error)).toBe(true);
+        expect(handshakes).toBe(1);
+      });
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    }
+  },
+);
 
 it.each(["close", "body"] as const)(
   "does not replay an accepted send when the response is lost through %s",

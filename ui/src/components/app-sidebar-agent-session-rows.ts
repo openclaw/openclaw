@@ -285,6 +285,7 @@ export function projectSidebarSessionReference({
   resolveAttention,
   mainSessionKeys,
   involvingMe = false,
+  involvedChildren,
   ownerId,
 }: {
   host: Pick<
@@ -303,12 +304,16 @@ export function projectSidebarSessionReference({
   resolveAttention: Parameters<typeof projectSessionTree>[0]["resolveAttention"];
   mainSessionKeys?: ReadonlySet<string>;
   involvingMe?: boolean;
+  involvedChildren?: readonly GatewaySessionRow[];
   ownerId?: string | null;
 }) {
+  const sourceRows =
+    (result !== undefined ? result : host.sessionData.resultForAgent(agentId))?.sessions ?? [];
   const visibility = projectSidebarArchiveVisibility({
     sessionData: host.sessionData,
-    sourceRows:
-      (result !== undefined ? result : host.sessionData.resultForAgent(agentId))?.sessions ?? [],
+    sourceRows: involvingMe
+      ? [...sourceRows, ...(involvedChildren ?? [])].filter((child) => !child.hiddenFromInvolvingMe)
+      : sourceRows,
     selectedAgentId: agentId,
     statusFilter: host.sessionsStatusFilter,
     showSystem: host.sessionsShowSystem,

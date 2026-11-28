@@ -280,6 +280,34 @@ it("keeps search visible across reopening, routes row typing to it, and matches 
   view.unmount();
 });
 
+it("distinguishes saved checkouts of the same repository when selecting a project", async () => {
+  const fixture = createRepositoryFixture();
+  const { browser, request } = fixture;
+  const projects = ["primary", "release"].map((id) => ({
+    id,
+    displayName: "atlas",
+    repositoryIdentity: "acme/atlas",
+    repoRoot: `/checkouts/${id}/atlas`,
+    source: "registered" as const,
+  }));
+  request.mockResolvedValue({ projects });
+  prepareCatalog(fixture, true);
+  const view = mountProjectChip(fixture, () => ({
+    folder: "",
+    workspace: "/workspace",
+    projectId: browser.projectId,
+    selectedRemoteProject: browser.remoteProject,
+    projects: browser.projects,
+    recents: [],
+    projectQuery: browser.projectQuery,
+  }));
+  await waitForSolid(() =>
+    expect(view.getByText("acme/atlas · /checkouts/primary/atlas")).not.toBeNull(),
+  );
+  view.getByRole("button", { name: /release\/atlas/ }).click();
+  expect(browser.projectId).toBe("release");
+});
+
 it.each([
   { connection: "restricted", admin: false, write: false },
   { connection: "admin", admin: true, write: true },

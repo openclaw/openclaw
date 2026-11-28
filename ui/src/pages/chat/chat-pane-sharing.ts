@@ -4,10 +4,10 @@ import type {
   SessionSuggestionResolution,
   SessionSuggestionsListResult,
   SessionTypingEvent,
-  TaskSuggestion,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { focusComposerInput } from "../../lib/composer-input.ts";
@@ -108,8 +108,37 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     void this.loadSessionSharing(session, true);
   }
 
+  protected sessionSuggestionChatProps(
+    connected: boolean,
+    archived: boolean,
+    multiIdentity: boolean,
+  ) {
+    const snapshot = this.context.gateway.snapshot;
+    const canWrite = connected && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
+    return {
+      sessionSuggestions:
+        multiIdentity ||
+        (this.state && selectedChatSessionRow(this.state)?.invitedAccess === "suggest")
+          ? this.visibleSessionSuggestions
+          : [],
+      onCloseSessionSuggestion: (id: string) => {
+        this.collaboration.liveResolutions = new Map(this.collaboration.liveResolutions).set(
+          id,
+          false,
+        );
+      },
+      sessionSuggestionLiveResolutions: this.collaboration.liveResolutions,
+      sessionSuggestionRole: this.collaboration.role,
+      sessionSuggestionBusyIds: this.collaboration.resolutions,
+      sessionSuggestionsArchived: archived,
+      canResolveSessionSuggestions:
+        canWrite && isGatewayMethodAdvertised(snapshot, "session.suggestions.resolve") === true,
+      onResolveSessionSuggestion: this.resolveCurrentSessionSuggestion.bind(this),
+    };
+  }
+
   protected suggestionMatchesCurrentSession(
-    suggestion: Pick<TaskSuggestion | SessionSuggestion, "agentId" | "sessionKey">,
+    suggestion: Pick<SessionSuggestion, "agentId" | "sessionKey">,
   ): boolean {
     const state = this.state;
     return Boolean(

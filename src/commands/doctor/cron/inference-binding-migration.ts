@@ -36,6 +36,7 @@ import { prepareSqliteTargetFromSessionStorePath } from "../../../config/session
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import {
+  cronInferenceMigrationPayload,
   normalizeCronInferenceBinding,
   type CronInferenceBinding,
 } from "../../../cron/inference-binding.js";
@@ -104,20 +105,27 @@ export async function maybeRepairCronInferenceBindings(params: {
       }
       let verifyingSavedAccount = false;
       let modelRef: string | undefined;
+      let isSystemEvent = false;
       let listAccountsCommand = "openclaw models auth list";
       const label = `${normalizeOptionalString(definition.name) ?? stored.id} (${stored.id})`;
+      const accountEditAdvice = () =>
+        isSystemEvent
+          ? `To bind a stored account for the main session’s model without changing the reminder, run openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef ?? "<provider/model>"}@<profileId>`)}.`
+          : `To choose the account, run openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef ?? "<provider/model>"}@<profileId>`)}.`;
       try {
         // Malformed legacy rows must not abandon adoption for unrelated jobs or partitions.
         // Normalize only resolver input; the committed definition retains every authored field.
         const job = normalizeCronJobCreate(definition);
-        if (!job || job.payload.kind !== "agentTurn" || job.sessionTarget === "main") {
+        const payload = job && cronInferenceMigrationPayload(job);
+        if (!job || !payload) {
           continue;
         }
         const previous = normalizeCronInferenceBinding(definition.inferenceBinding);
         if (previous && isUserModelAuthProfileId(previous.profileId)) {
           continue;
         }
-        modelRef = job.payload.model;
+        isSystemEvent = payload.kind === "systemEvent";
+        modelRef = payload.kind === "agentTurn" ? payload.model : undefined;
         const agentId = tryResolveCronJobEffectiveAgentId(
           job,
           tryResolveAmbientOwnerAgentId(params.cfg),
@@ -163,8 +171,9 @@ export async function maybeRepairCronInferenceBindings(params: {
           workspaceDir: resolveAgentWorkspaceDir(config, agentId),
           agentConfigOverride: resolveAgentConfig(config, agentId),
           sessionEntry: session.sessionEntry,
-          payloadModel: job.payload.model,
-          isGmailHook: job.payload.externalContentSource === "gmail",
+          payloadKind: payload.kind,
+          payloadModel: modelRef,
+          isGmailHook: payload.kind === "agentTurn" && payload.externalContentSource === "gmail",
         });
         if (!selected.ok) {
           throw new Error(selected.error);
@@ -201,7 +210,7 @@ export async function maybeRepairCronInferenceBindings(params: {
           cfg: selected.cfgWithAgentDefaults,
           agentId,
           agentDir: selected.owner.agentDir,
-          job: { id: stored.id, name: job.name },
+          job: { id: stored.id, name: job.name, payload },
           provider: selected.provider,
           model: selected.model,
           configuredProfileId: selected.configuredProfileId,
@@ -255,7 +264,9 @@ export async function maybeRepairCronInferenceBindings(params: {
             credential: sessionCredential,
           });
         let explicitProfileId =
-          selected.configuredProfileId ??
+          (payload.kind === "systemEvent" && account.preference?.source === "user"
+            ? account.preference.profileId
+            : selected.configuredProfileId) ??
           ((sessionPin === "user" || sessionPin === "user-link") && compatibleSessionPin
             ? sessionProfileId
             : undefined);
@@ -430,7 +441,7 @@ export async function maybeRepairCronInferenceBindings(params: {
             "A personal inference account requires explicit adoption by its authorized owner.",
           );
         }
-        const description = `Automation ${label}: retain ${candidate.profileId} for ${modelRef}; model/default/fallback selections stay unchanged.${alternatives.length > 0 ? ` Also eligible: ${alternatives.join(", ")}; to change, run openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef}@<profileId>`)}.` : ""}`;
+        const description = `Automation ${label}: retain ${candidate.profileId} for ${modelRef}; model/default/fallback selections stay unchanged.${alternatives.length > 0 ? ` Also eligible: ${alternatives.join(", ")}. ${accountEditAdvice()}` : ""}`;
         if (!params.shouldRepair) {
           warnings.push(
             `${description} Its runs are refused until it records this account. Run openclaw doctor --fix to record it.`,
@@ -464,7 +475,7 @@ export async function maybeRepairCronInferenceBindings(params: {
       } catch (error) {
         const recovery = isInvalidCronSessionTargetIdError(error)
           ? `Repair its session target with openclaw automations edit ${quoteCliArg(stored.id)} --session <target>, then retry Doctor.`
-          : `Inspect available accounts with ${listAccountsCommand}, then explicitly adopt the intended stored account with openclaw automations edit ${quoteCliArg(stored.id)} --model ${quoteCliArg(`${modelRef ?? "<provider/model>"}@<profileId>`)}.`;
+          : `Inspect available accounts with ${listAccountsCommand}. ${accountEditAdvice()}`;
         const reason =
           verifyingSavedAccount &&
           error instanceof AuthProfileAuthorizationError &&

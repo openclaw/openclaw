@@ -61,6 +61,23 @@ async function startPanelWithPendingOpen(sessionKey?: string, hosted = false) {
   return { createOptions: createOptions!, open, panel, requests };
 }
 
+/** An embedded panel whose one listed session is the session it opens. */
+function embeddedSessionClient(sessionId: string): TerminalGatewayClient {
+  createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
+  const session = terminalOpenResult(sessionId);
+  return {
+    forceReconnect() {},
+    // SAFETY: The fixture returns the declared response for each terminal method.
+    request: async <T>(method: string) =>
+      (method === "terminal.open"
+        ? session
+        : method === "terminal.list"
+          ? { sessions: [{ ...session, attached: true, createdAtMs: 1 }] }
+          : { ok: true }) as T,
+    addEventListener: () => () => {},
+  };
+}
+
 describe("OpenClawTerminalPanel", () => {
   beforeAll(async () => {
     // Load the real responder before short RPC assertions begin on a cold worker.
@@ -155,19 +172,7 @@ describe("OpenClawTerminalPanel", () => {
     const Terminal = lazy(() => import("./terminal-panel-registration.tsx"), {
       export: "TerminalPanelHost",
     });
-    createGhosttyTerminalMock.mockResolvedValue(createTerminalController());
-    const currentSession = terminalOpenResult("embedded-current-session");
-    const client: TerminalGatewayClient = {
-      forceReconnect() {},
-      // SAFETY: The fixture returns the declared response for each terminal method.
-      request: async <T>(method: string) =>
-        (method === "terminal.open"
-          ? currentSession
-          : method === "terminal.list"
-            ? { sessions: [{ ...currentSession, attached: true, createdAtMs: 1 }] }
-            : { ok: true }) as T,
-      addEventListener: () => () => {},
-    };
+    const client = embeddedSessionClient("embedded-current-session");
     const container = document.body.appendChild(document.createElement("div"));
     const [themeMode, setThemeMode] = createSignal<"dark" | "light">("dark");
     const mounted = mountSolid(
@@ -200,6 +205,30 @@ describe("OpenClawTerminalPanel", () => {
       await container.querySelector("openclaw-terminal-panel")!.updateComplete;
       expect(container.querySelector(".tp-session-menu")).toBeNull();
       expect(container.querySelector(".tp-composer input")).not.toBeNull();
+      await waitForFast(() => expect(terminalIntentQueue.hasActions).toBe(false));
+    } finally {
+      container.querySelector("openclaw-terminal-panel")?.closeTerminalPanel();
+      mounted.unmount();
+      container.remove();
+    }
+  });
+
+  it("shows the terminal an agent requested before the embedded panel mounted", async () => {
+    const { TerminalPanelHost } = await import("./terminal-panel-registration.tsx");
+    const client = embeddedSessionClient("agent-requested-session");
+    // screen terminal_show on a chat route queues a restore before the side panel exists.
+    await terminalIntentQueue.queue(
+      { kind: "restore", agentId: null },
+      { deferUntilHostChange: true },
+    );
+    const container = document.body.appendChild(document.createElement("div"));
+    const mounted = mountSolid(
+      () => TerminalPanelHost({ client, available: true, embedded: true, mobile: false }),
+      { container },
+    );
+    try {
+      await waitForFast(() => expect(container.querySelector(".tp-composer input")).not.toBeNull());
+      expect(container.querySelector(".tp-viewport--covered")).toBeNull();
       await waitForFast(() => expect(terminalIntentQueue.hasActions).toBe(false));
     } finally {
       container.querySelector("openclaw-terminal-panel")?.closeTerminalPanel();

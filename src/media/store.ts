@@ -16,6 +16,7 @@ import {
   detectMime,
   extensionForMime,
   getFileExtension,
+  isZipContainerMime,
   normalizeMimeType,
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
@@ -365,8 +366,12 @@ function extensionForAuthoritativeHeaderMime(contentType?: string): string | und
   return extensionForMime(mime);
 }
 
-function isGenericContainerMime(mime?: string): boolean {
-  return mime === "application/zip" || mime === "application/octet-stream";
+function isContainerMime(mime?: string): boolean {
+  return (
+    mime === "application/zip" ||
+    mime === "application/octet-stream" ||
+    (mime !== undefined && isZipContainerMime(mime))
+  );
 }
 
 function isImageHeaderMime(contentType?: string): boolean {
@@ -382,7 +387,7 @@ function resolveSavedMediaExtension(params: {
 }): string {
   const trustedHeaderExt =
     params.headerExt &&
-    isGenericContainerMime(params.detectedMime) &&
+    isContainerMime(params.detectedMime) &&
     isImageHeaderMime(params.contentType)
       ? undefined
       : params.headerExt;

@@ -66,8 +66,8 @@ afterEach(async () => {
 
 const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
-function mockCallArg(mock: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
-  const arg = mock.mock.calls[index]?.[0];
+function mockCallArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const arg = mock.mock.calls[0]?.[0];
   return requireRecord(arg);
 }
 

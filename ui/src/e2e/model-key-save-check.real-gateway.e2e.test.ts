@@ -13,7 +13,7 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.js";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.js";
-import { expandProvider } from "./model-providers.test-support.ts";
+import { expandProvider, openTencentTokenHubKeyForm } from "./model-providers.test-support.ts";
 import { respondAsReasoningModel } from "./reasoning-upstream.test-support.js";
 
 const STATUS_BY_KEY: Record<string, [number, string]> = {
@@ -285,9 +285,7 @@ suite.define(() => {
         expect(await row.getByLabel("API key", { exact: true }).count()).toBe(0);
 
         // Adding a provider checks the key the same way, inside the add dialog.
-        await page.locator("[data-models-catalog-search]").fill("tencent-tokenhub");
-        await page.locator('[data-models-catalog-provider="tencent-tokenhub"] button').click();
-        const form = page.getByRole("dialog", { name: "Add provider" });
+        const form = await openTencentTokenHubKeyForm(page);
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-revoked");
         const added = await saveAndRead(form, () =>
           form.getByRole("button", { name: "Save provider", exact: true }).click(),

@@ -18,6 +18,8 @@ import {
 
 export type WhamCooldownProbeResult = {
   available?: true;
+  /** Ordinary capacity can recover other model-scoped blocks while this model is restricted. */
+  exceptModel?: string;
   cooldownMs: number;
   cooldownClassification?: AuthProfileCooldownClassification;
   blockedUntil?: number;
@@ -32,6 +34,7 @@ export function isSameWhamCredential(
     current?.type === "oauth" &&
     normalizeProviderId(expected.provider) === normalizeProviderId(current.provider) &&
     expected.access === current.access &&
+    expected.idToken === current.idToken &&
     expected.accountId === current.accountId
   );
 }
@@ -72,8 +75,7 @@ function applyWhamCooldownResult(params: {
   if (
     !cooldownClassification &&
     (params.reason === "rate_limit" ||
-      (!params.whamResult.available &&
-        params.computed.blockedReason === "subscription_limit" &&
+      (params.computed.blockedReason === "subscription_limit" &&
         isBlockedWindowActiveForModel(params.computed, params.now)))
   ) {
     // A probe without an exhausted window or auth evidence adds no local delay:
@@ -105,6 +107,14 @@ export function reconcileWhamBlock(
   result: WhamCooldownProbeResult,
   now: number,
 ): ProfileUsageStats {
+  if (
+    result.exceptModel &&
+    (stats.blockedScope !== "model" ||
+      !stats.blockedModel ||
+      stats.blockedModel === result.exceptModel)
+  ) {
+    return stats;
+  }
   return {
     ...stats,
     blockedUntil: result.blockedUntil,

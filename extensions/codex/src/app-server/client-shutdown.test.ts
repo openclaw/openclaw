@@ -12,6 +12,10 @@ import {
 import { clearSharedCodexAppServerClientIfCurrentAndUnclaimed } from "./shared-client.js";
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
+import {
+  closeCodexAppServerTransportAndWait,
+  type CodexAppServerCloseResult,
+} from "./transport.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -21,18 +25,36 @@ afterEach(() => {
 });
 
 describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
-  it.each(["confirmed", "unconfirmed"])("preserves %s force-kill containment", async (cleanup) => {
+  const outcomes = ["confirmed", "unconfirmed"];
+  if (process.platform === "linux") {
+    outcomes.push("deadline", "joining deadline", "startup deadline");
+  }
+  it.each(outcomes)("preserves %s force-kill containment", async (cleanup) => {
     vi.useFakeTimers();
     const harness = createClientHarness({ autoEmitExit: false });
     const root = { pid: 12345, ppid: process.pid, pgid: 12345, state: "S", startedAt: "fake" };
     Object.assign(harness.process, { pid: root.pid });
+    const resumeRetry = Promise.withResolvers<void>();
+    let scans = 0;
     // Model OS reads/signals; the real containment owner must produce the receipt.
-    vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockImplementation(async () => {
-      if (cleanup === "unconfirmed") {
-        throw new processSnapshot.ProcessInspectionError("unavailable");
-      }
-      return [{ ...root }];
-    });
+    vi.spyOn(processSnapshot, "readCodexAppServerProcessSnapshot").mockImplementation(
+      async (deadline) => {
+        if (cleanup === "joining deadline" && ++scans === 2) {
+          await resumeRetry.promise;
+          throw new processSnapshot.ProcessInspectionError("deadline");
+        }
+        if (cleanup.endsWith("deadline")) {
+          await new Promise((resolve) => {
+            setTimeout(resolve, Math.ceil(deadline! - performance.now()));
+          });
+          throw new processSnapshot.ProcessInspectionError("deadline");
+        }
+        if (cleanup === "unconfirmed") {
+          throw new processSnapshot.ProcessInspectionError("unavailable");
+        }
+        return [{ ...root }];
+      },
+    );
     vi.spyOn(processSnapshot, "readCodexAppServerProcess").mockImplementation(async () => ({
       ...root,
     }));
@@ -41,20 +63,72 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
         root.state = value === "SIGSTOP" ? "T" : "S";
       }
       if (value === "SIGKILL") {
-        harness.process.emit("exit", null, "SIGKILL");
+        if (cleanup.endsWith("deadline")) {
+          setTimeout(() => harness.process.emit("exit", null, "SIGKILL"), 25);
+        } else {
+          harness.process.emit("exit", null, "SIGKILL");
+        }
       }
       return true;
     };
     const kill = vi.spyOn(process, "kill").mockImplementation(signal);
     vi.mocked(harness.process.kill).mockImplementation((value) => signal(root.pid, value));
     const warning = vi.spyOn(embeddedAgentLog, "warn");
+    if (cleanup === "joining deadline") {
+      harness.client.close({ forceKillDelayMs: 200 });
+    }
+    if (cleanup === "startup deadline") {
+      const startup = closeCodexAppServerTransportAndWait(harness.process, {
+        drainStdio: true,
+        forceKillDelayMs: 10,
+        exitTimeoutMs: 40,
+      });
+      await vi.advanceTimersByTimeAsync(2_040);
+      await expect(startup).resolves.toEqual({ exited: true, cleanup: "uncertain" });
+      return;
+    }
     const closing = harness.client.closeAndWait({ forceKillDelayMs: 10, exitTimeoutMs: 100 });
-    await vi.advanceTimersByTimeAsync(20);
+    if (cleanup === "joining deadline") {
+      // Each waiter observes exit within its own deadline while the transport owns the retry.
+      const later = harness.client.closeAndWait({ exitTimeoutMs: 150 });
+      let diagnosticResult: CodexAppServerCloseResult | undefined;
+      const diagnostics = closeCodexAppServerTransportAndWait(harness.process, {
+        drainStdio: true,
+        exitTimeoutMs: 100,
+      }).then((result) => {
+        diagnosticResult = result;
+      });
+      let ownerSettled = false;
+      const owner = harness.client.closeAndWait({ exitTimeoutMs: 500 }).then(() => {
+        ownerSettled = true;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(2_301);
+        await expect(closing).resolves.toEqual({ exited: false, cleanup: "uncertain" });
+        expect(diagnosticResult).toEqual({ exited: false, cleanup: "uncertain" });
+        expect(harness.process.stderr.destroyed).toBe(false);
+        expect(scans).toBe(2);
+        expect(kill).not.toHaveBeenCalledWith(-root.pid, "SIGKILL");
+        Object.assign(harness.process, { exitCode: 0 });
+        harness.process.emit("exit", 0, null);
+        await vi.advanceTimersByTimeAsync(50);
+        await expect(later).resolves.toEqual({ exited: true, cleanup: "uncertain" });
+        expect(ownerSettled).toBe(false);
+      } finally {
+        resumeRetry.resolve();
+      }
+      await vi.advanceTimersByTimeAsync(75);
+      await Promise.all([owner, diagnostics]);
+      expect(kill).not.toHaveBeenCalledWith(-root.pid, "SIGKILL");
+      return;
+    }
+    // The existing exit wait leaves time to observe a real asynchronous process exit.
+    await vi.advanceTimersByTimeAsync(cleanup === "deadline" ? 2_111 : 11);
+    expect(kill).toHaveBeenCalledWith(-root.pid, "SIGKILL");
     await expect(closing).resolves.toEqual({
       exited: true,
       cleanup: cleanup === "confirmed" ? "terminated" : "uncertain",
     });
-    expect(kill).toHaveBeenCalledWith(-root.pid, "SIGKILL");
     expect(warning).toHaveBeenCalledTimes(cleanup === "confirmed" ? 1 : 0);
     expect(vi.getTimerCount()).toBe(0);
   });

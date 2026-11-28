@@ -431,7 +431,10 @@ describe("bundled channel ingress runtime ownership", () => {
     const retained = ownerApi.runtime.agent.runCommandFromIngress;
 
     await expect(retained(options, commandRuntime)).resolves.toEqual({ payloads: [] });
-    expect(command).toHaveBeenLastCalledWith(options, commandRuntime);
+    expect(command).toHaveBeenLastCalledWith(
+      { ...options, senderIsOwner: false, toolBindings: undefined },
+      commandRuntime,
+    );
     await expect(
       foreignApi.runtime.agent.runCommandFromIngress(options, commandRuntime),
     ).rejects.toThrow('Plugin "foreign" cannot run turns for channel "discord"');
@@ -440,7 +443,10 @@ describe("bundled channel ingress runtime ownership", () => {
     const claimed = { ...options, messageChannel: "community", senderIsOwner: true };
     const retainedCommunity = communityApi.runtime.agent.runCommandFromIngress;
     await expect(retainedCommunity(claimed, commandRuntime)).resolves.toEqual({ payloads: [] });
-    expect(command).toHaveBeenLastCalledWith(claimed, commandRuntime);
+    expect(command).toHaveBeenLastCalledWith(
+      { ...claimed, toolBindings: undefined },
+      commandRuntime,
+    );
     let channelReads = 0;
     const changingOptions = {
       ...options,
@@ -465,6 +471,60 @@ describe("bundled channel ingress runtime ownership", () => {
     await expect(retainedCommunity(claimed, commandRuntime)).rejects.toThrow(
       'Plugin "community-chat" cannot run turns for channel "community"',
     );
+    expect(command).toHaveBeenCalledTimes(3);
+  });
+
+  it("admits channel-less voice-bridge turns with bindings only for the plugin's own tools", async () => {
+    const runtime = createPluginRuntime();
+    const command = vi.fn(async () => ({ payloads: [] }));
+    Object.defineProperty(runtime.agent, "runCommandFromIngress", {
+      configurable: true,
+      value: command,
+    });
+    const registryBuilder = createRegistry(runtime);
+    const addPlugin = (id: string, origin: "bundled" | "workspace") => {
+      const record = createPluginRecord({ id, origin, contracts: { tools: [`${id}_call`] } });
+      registryBuilder.registry.plugins.push(record);
+      return registryBuilder.createApi(record, { config: {} }).runtime.agent.runCommandFromIngress;
+    };
+    const bundled = addPlugin("phone", "bundled");
+    const community = addPlugin("bridge", "workspace");
+    markPluginRegistryActive(registryBuilder.registry);
+    const commandRuntime = { log: vi.fn(), error: vi.fn() } as never;
+    const guest = {
+      message: "caller turn",
+      allowModelOverride: false,
+      toolBindings: { phone_call: { kind: "active-call", callId: "call-1" } },
+    };
+
+    await expect(bundled(guest, commandRuntime)).resolves.toEqual({ payloads: [] });
+    expect(command).toHaveBeenLastCalledWith(
+      { ...guest, senderIsOwner: false, messageChannel: undefined },
+      commandRuntime,
+    );
+    // A bundled bridge that authenticated its owner (FaceTime owner handles) may elevate.
+    await expect(bundled({ ...guest, senderIsOwner: true }, commandRuntime)).resolves.toEqual({
+      payloads: [],
+    });
+    expect(command).toHaveBeenLastCalledWith(
+      { ...guest, senderIsOwner: true, messageChannel: undefined },
+      commandRuntime,
+    );
+    const communityGuest = { message: "caller turn", allowModelOverride: false };
+    await expect(community(communityGuest, commandRuntime)).resolves.toEqual({ payloads: [] });
+
+    await expect(
+      community({ ...communityGuest, senderIsOwner: true }, commandRuntime),
+    ).rejects.toThrow('Plugin "bridge" cannot admit authenticated owner authority');
+    await expect(bundled({ ...guest, messageChannel: "discord" }, commandRuntime)).rejects.toThrow(
+      'Plugin "phone" cannot run turns for channel "discord"',
+    );
+    await expect(
+      bundled({ ...guest, toolBindings: { browser: { kind: "tab" } } }, commandRuntime),
+    ).rejects.toThrow('Plugin "phone" cannot bind tool "browser" it does not declare.');
+    await expect(
+      community({ ...communityGuest, toolBindings: guest.toolBindings }, commandRuntime),
+    ).rejects.toThrow('Plugin "bridge" cannot bind tool "phone_call" it does not declare.');
     expect(command).toHaveBeenCalledTimes(3);
   });
 

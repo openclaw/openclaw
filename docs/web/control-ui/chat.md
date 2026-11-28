@@ -12,7 +12,7 @@ sidebarTitle: "Chat"
 
 How the chat pane behaves: session controls, the composer, and how the transcript renders.
 
-Session sharing distinguishes owners, members, and viewers. A read-only session does not grant permission to send messages. Starting suggested tasks requires admin access; reconnect first if the Gateway is disconnected. Public sharing asks **Make this session public?** before publishing. Review the conversation and images for private information: disabling public access cannot recall downloaded copies.
+Session sharing distinguishes owners, members, and viewers. A read-only session does not grant permission to send messages. Public sharing asks **Make this session public?** before publishing. Review the conversation and images for private information: disabling public access cannot recall downloaded copies.
 
 ## Goals, questions, and recovery
 
@@ -181,9 +181,9 @@ A parent update that receives `already_pending` from `sessions_yield` has not
 created another handoff. After that update settles, it does not leave a stale
 waiting status or start a new idle clock, even while an earlier child continues.
 The intervening user message starts a request of its own, so it does not mark
-the original handoff as resumed. A later automatic child completion gets a rule
-such as **Resumed · 2s later · Agent finished**, rather than inventing a new confirmed
-handoff or child list. Its settled duration and the completed reply remain
+the original handoff as resumed. A later automatic child completion gets an activity row
+with the agent completion and when it happened, rather than inventing a new
+confirmed handoff or child list. Its settled duration and the completed reply remain
 after reload.
 
 The parent’s own working indicator remains visible while the parent is actively
@@ -205,10 +205,11 @@ handoff, unless a **Resumed** rule marks the resume.
 
 Work the agent picks up again on its own continues the block it belongs to, with
 or without a handoff: when a background command finishes, when the Gateway
-restarts during a run, or when a subagent of this session finishes. A thin rule
-such as **Resumed · 3m later · Background command finished** marks each place it
-picked up again; the other labels are **Gateway restarted** and **Agent
-finished**. An answer the agent already gave stays in place above the rule. A
+restarts during a run, or when a subagent of this session finishes. An activity row
+such as **A background command finished · 3m later** marks where work picked up
+again. A subagent completion shows its outcome once in the existing agent
+activity row, with the elapsed time alongside it. An earlier answer stays in
+place above the activity. A
 heartbeat, a scheduled automation, or a message from another person or session
 still starts a block of its own. In dashboard sessions, tool activity recorded after the resumed
 answer, such as the step that sent it, joins the activity before that answer,
@@ -578,17 +579,9 @@ When authentication status is available, each provider heading in the chat model
 
 ## Suggested tasks
 
-Suggested task cards offer **Start in a new session** and **Start in a new
-worktree**. Both start the task in the background and keep your current
-conversation and draft open. The card disappears after the task starts; select
-the new session in the sidebar when you want to follow its progress.
-**Start in this session** runs the task in the current conversation.
-
-Before starting a worktree, OpenClaw checks that the suggested folder is a Git
-repository with a commit. If it is not, the card keeps the prompt and lets you
-select a registered project or enter the correct repository path. Select
-**Start in a new worktree** again to continue; no child session is started for
-an invalid source folder.
+Discuss follow-up work in Chat, then use **New session** when you want to start a
+separate conversation. The Control UI does not display agent-generated task cards.
+The TUI supports task suggestions separately.
 
 ## Mobile composer
 
@@ -997,8 +990,10 @@ renaming its existing Git branch. Concurrent naming requests share the same work
 if that request fails, a waiting dashboard request retries once. Naming starts
 when the first reply begins; if it fails while that reply is still running, as on
 a model server that handles one request at a time, it retries once after the turn
-ends. If both model routes fail, the session uses a two-word crustacean-themed name.
-The Gateway logs a warning when chat naming uses this fallback.
+ends. If naming still fails, OpenClaw does not save a title. The session shows a
+shortened version of the first message if it has text. The next message triggers
+another naming attempt unless you set a custom name first.
+The Gateway logs a warning when chat naming fails.
 
 Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Completed answers stay visible outside collapsed work, including when a later Gateway notice arrives. The completed response footer keeps the final answer's timestamp when earlier tool activity is restored after a reload. Expand a tool row to inspect its command, path, or query. Inspect subagent status from the parent conversation with `/subagents list` and `/subagents info <id|#>`, or read recent child messages with `/subagents log <id|#>`. See [Sub-agent slash command](/tools/subagents/slash-command).
 
@@ -1077,7 +1072,7 @@ When a reply fails and its thread notice is unavailable, the card above the comp
     - **Review** and file tabs retain their own content. A pending file or artifact updates only its own open tab: it cannot select itself over a newer tab, reopen a closed preview, or return after you leave the chat page. Switching tabs or hiding the whole side panel preserves the pending preview without changing your chosen layout when it finishes. Text attachments retain their Preview or View raw text mode while switching between open files. Background download-link refreshes keep an unchanged attachment's reader in place, including keyboard focus and code-block controls.
     - Each chat pane has a main view and a unified side panel. When Chat and Desktop are both present, the panel’s **Panel position** menu offers a **Swap** action that exchanges them; Dashboard keeps its own view controls. Expanding or restoring a panel preserves live content and drafts. The header’s **Panels** control hides or reopens the side panel without clearing its tabs, and the browser remembers each session’s arrangement.
     - On desktop, the **Panel position** menu in the panel header places it left, right, or below the main area. Use the adjacent expand/restore control to change how much of the pane it occupies. On mobile, **Panels** opens the shared sheet; its expand/restore control changes the sheet height without changing the saved desktop docking arrangement. Drag the grabber or empty header space to resize it: a slow release keeps the height you chose, a flick moves to the next height (docked, expanded, or full), and a downward flick or a pull past half its minimum height closes it.
-    - In **Processes**, **Finished** starts collapsed; click its heading to expand or collapse the list.
+    - In **Processes**, **Finished** starts collapsed; click its heading to expand or collapse the list. In the mobile output reader, the process name, status, output, and retention notes scroll together. **Back** and the available **Stop** action stay in view.
     - **Details → Processes** previews only running commands, with their elapsed time and available **Stop** action. Its count includes every running process; the preview shows up to three on desktop and two on mobile. Select a command to open its output, or **View all processes** to open the full list, including finished commands. The Details section disappears when no processes are running; **Panels → Processes** remains available.
     - A new Browser side panel uses the chat pane's available width and the rendered chat column to reclaim unused chat margins. This default applies on web, macOS, and Tauri; saved widths and manual divider adjustments take precedence.
     - The chat header model and thinking pickers patch the active session immediately through `sessions.patch`; they are persistent session overrides, not one-turn-only send options. A confirmed model selection stays visible if the following session refresh fails; later Gateway updates can still change it. For catalog-backed OpenAI models, the effort picker offers **Off** only when the model advertises disabled reasoning. Inheriting the model's default effort does not turn reasoning off.

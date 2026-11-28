@@ -58,7 +58,7 @@ type TrustCase = [
 ];
 
 describe("resolveExecWrapperTrustPlan", () => {
-  test.each<TrustCase>([
+  test.for<TrustCase>([
     [
       "command carrier",
       posix,
@@ -211,18 +211,16 @@ describe("resolveExecWrapperTrustPlan", () => {
         blockedWrapper: "env",
       },
     ],
-  ])(
-    "trust plan: %s",
-    (_name, enabled, argv, expected, { depth, platform }: NonNullable<TrustCase[4]> = {}) => {
-      if (!enabled) {
-        return;
-      }
-      const { dispatchChain: _dispatchChain, ...policyPlan } = resolveExecWrapperTrustPlan(
-        argv,
-        depth,
-        platform,
-      );
-      expect(policyPlan).toEqual({ argv, policyArgv: argv, ...defaultPolicyPlan, ...expected });
-    },
-  );
+  ])("trust plan: %s", ([_name, enabled, argv, expected, options]: TrustCase, { skip }) => {
+    if (!enabled) {
+      skip("wrapper case is not supported on this platform");
+    }
+    const { depth, platform } = options ?? {};
+    const { dispatchChain: _dispatchChain, ...policyPlan } = resolveExecWrapperTrustPlan(
+      argv,
+      depth,
+      platform,
+    );
+    expect(policyPlan).toEqual({ argv, policyArgv: argv, ...defaultPolicyPlan, ...expected });
+  });
 });

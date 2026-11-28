@@ -21,7 +21,10 @@ import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { workerInferencePlacement } from "../gateway/worker-environments/inference-placement.js";
-import type { CronInferenceBinding } from "./inference-binding.js";
+import {
+  CRON_INFERENCE_ACCOUNT_RETIRED_CODE,
+  type CronInferenceBinding,
+} from "./inference-binding.js";
 import { resolveCronCandidateExecution } from "./isolated-agent/candidate-execution.js";
 import {
   resolveCronModelSelection,
@@ -313,8 +316,12 @@ export async function acquireCronInferenceAuthorization(params: {
       assertCurrent() {},
     });
     if (authority.authorizationId !== params.binding.authorizationId) {
-      throw new Error(
-        `${label} runs on account ${params.binding.profileId}, which was signed in again or replaced since the job recorded it. To keep using it: openclaw automations edit ${jobId} --model <provider/model>@${params.binding.profileId}.`,
+      // Only an edit can record the new authorization, so no later occurrence can run either.
+      throw Object.assign(
+        new Error(
+          `${label} runs on account ${params.binding.profileId}, which was signed in again or replaced since the job recorded it. To keep using it: openclaw automations edit ${jobId} --model <provider/model>@${params.binding.profileId}.`,
+        ),
+        { code: CRON_INFERENCE_ACCOUNT_RETIRED_CODE },
       );
     }
     authority.assertCurrent();
@@ -327,10 +334,16 @@ export async function acquireCronInferenceAuthorization(params: {
       error instanceof AuthProfileAuthorizationError &&
       error.code === "MCP_AUTHORIZATION_RETIRED"
     ) {
-      throw new Error(
+      // The code survives fallback summaries, which keep each attempt's code but only the
+      // last attempt's error. A retirement that only ended this capture's owner (for example
+      // a state database lifecycle change) can pass at the next occurrence, so it carries none.
+      const refusal = new Error(
         `${label} runs on account ${params.binding.profileId}, which was removed or signed out. Sign in again, or choose another account: openclaw automations edit ${jobId} --model <provider/model>@<profileId> (list accounts: openclaw gateway call models.authStatus). To use a key in the environment or provider config instead: openclaw automations edit ${jobId} --model <provider/model>.`,
         { cause: error },
       );
+      throw error.accountGone
+        ? Object.assign(refusal, { code: CRON_INFERENCE_ACCOUNT_RETIRED_CODE })
+        : refusal;
     }
     throw error;
   }

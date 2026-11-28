@@ -40,6 +40,7 @@ import {
 } from "./sidebar-attention-focus.ts";
 import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 import "../styles/hub-tabs.css";
+import { createSidebarMentionExit, inboxEntryIdentity } from "./sidebar-inbox-rows.ts";
 import {
   renderSidebarApprovalItem as SidebarApprovalItem,
   SidebarIssueItem,
@@ -151,6 +152,7 @@ function createSidebarAttentionFocus(root: () => HTMLElement): SidebarAttentionF
         ([element, kind]) =>
           element.isConnected &&
           root().contains(element) &&
+          !element.closest("[inert]") &&
           (row ? kind !== "control" : kind !== "row-only"),
       )
       .map(([element]) => element)
@@ -195,7 +197,7 @@ function SidebarInboxItem(props: {
   panel: SidebarAttentionPanelParams;
   approvalPending: boolean;
   onApprovalDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
-  mentions: MentionsCapability;
+  dismissMentions: (ids: readonly string[]) => void;
   readContext: () => ApplicationContext;
   isMentionDismissing: (id: string) => boolean;
 }) {
@@ -254,7 +256,7 @@ function SidebarInboxItem(props: {
               "mentions.dismiss",
               "operator.read",
             )}
-            onDismiss={() => void props.mentions.dismiss([entry().mention.id])}
+            onDismiss={() => props.dismissMentions([entry().mention.id])}
             onNavigate={(route, options) => props.panel.onNavigate(route, options)}
           />
         )}
@@ -280,34 +282,6 @@ function SidebarInboxItem(props: {
       </Match>
     </Switch>
   );
-}
-
-function inboxEntryIdentity(
-  entry: SidebarInboxEntry,
-  connectionRevision: number,
-  recoveryScope: string | undefined,
-): string {
-  switch (entry.type) {
-    case "approval":
-      return JSON.stringify([entry.type, entry.approval.id]);
-    case "mention":
-      return JSON.stringify([entry.type, entry.mention.id]);
-    case "attention":
-      return JSON.stringify([entry.type, entry.kind, entry.signature]);
-    case "outbox":
-      return JSON.stringify([
-        entry.type,
-        entry.id,
-        entry.sessionKey,
-        entry.agentId,
-        connectionRevision,
-        recoveryScope,
-      ]);
-    case "scopeUpgrade":
-    case "update":
-      return entry.type;
-  }
-  return entry satisfies never;
 }
 
 export function SidebarAttentionPanel(
@@ -444,12 +418,24 @@ export function SidebarAttentionPanel(
   const canDismissShown = createMemo(
     () => visibleDismissals().length > 0 || mentionDismissals().length > 0,
   );
+  const hello = createMemo(() => gateway.read().snapshot.hello);
+  const profile = createMemo(() => gateway.read().snapshot.selfUser?.identity?.id);
+  const { exits, dismissMentions, retainExits } = createSidebarMentionExit(
+    mentionSource,
+    focus,
+    () => list,
+    () => {
+      selectedTab();
+      hello();
+      profile();
+    },
+  );
   const dismissShown = () => {
     for (const dismissal of visibleDismissals()) {
       props.onDismiss(dismissal);
     }
     if (mentionDismissals().length > 0) {
-      void mentionSource.dismiss(mentionDismissals());
+      dismissMentions(mentionDismissals());
     }
   };
   const headerMenuItems = createMemo((): MenuItem[] => [
@@ -507,17 +493,20 @@ export function SidebarAttentionPanel(
     identities?.revision();
     return context;
   };
-  const renderedEntries = createMemo(() => {
-    const currentGateway = gateway.read();
-    return visibleEntries().map((entry) => ({
-      entry,
-      identity: inboxEntryIdentity(
+  const renderedEntries = createMemo<{ entry: SidebarInboxEntry; identity: string }[]>(
+    (previous) => {
+      const currentGateway = gateway.read();
+      const rows = visibleEntries().map((entry) => ({
         entry,
-        currentGateway.connectionRevision,
-        currentGateway.snapshot.client?.recoveryScope,
-      ),
-    }));
-  });
+        identity: inboxEntryIdentity(
+          entry,
+          currentGateway.connectionRevision,
+          currentGateway.snapshot.client?.recoveryScope,
+        ),
+      }));
+      return retainExits(rows, previous, mentions.read().error !== null);
+    },
+  );
   return (
     <SidebarAttentionFocusContext value={focus}>
       <button
@@ -643,7 +632,7 @@ export function SidebarAttentionPanel(
                 </div>
               </Show>
               <Show
-                when={visibleEntries().length === 0 && !mentionsLoading() && !showMentionStatus()}
+                when={renderedEntries().length === 0 && !mentionsLoading() && !showMentionStatus()}
               >
                 <div class="sidebar-issues-panel__empty">
                   <span class="sidebar-issues-panel__empty-icon" aria-hidden="true">
@@ -666,9 +655,11 @@ export function SidebarAttentionPanel(
                     onApprovalDecision={(event, id, decision) =>
                       void decideApproval(event, id, decision)
                     }
-                    mentions={mentionSource}
+                    dismissMentions={dismissMentions}
                     readContext={readContext}
-                    isMentionDismissing={(id) => mentions.read().dismissing.includes(id)}
+                    isMentionDismissing={(id) =>
+                      exits().has(id) || mentions.read().dismissing.includes(id)
+                    }
                   />
                 )}
               </For>
