@@ -208,6 +208,7 @@ function parseFeishuMessageItem(
     senderType: item.sender?.sender_type,
     // Text placeholders use item metadata; posts/cards already render native mention elements.
     content: msgType === "text" ? normalizeMentions(content, item.mentions) : content,
+    rawContent,
     contentType: msgType,
     createTime: parseStrictNonNegativeInteger(item.create_time),
     ...(item.root_id ? { rootId: item.root_id } : {}),
