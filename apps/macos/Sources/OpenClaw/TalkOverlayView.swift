@@ -22,7 +22,10 @@ struct TalkOverlayView: View {
                 .opacity(isPaused ? 0.55 : 1)
                 .background(
                     TalkOrbInteractionView(
-                        onSingleClick: { self.controller.actions()?.togglePaused() },
+                        onSingleClick: {
+                            guard self.controller.model.isVisible else { return }
+                            self.controller.actions()?.togglePaused()
+                        },
                         onDoubleClick: { self.controller.actions()?.stopSpeaking() },
                         onDragStart: { self.controller.actions()?.pauseForDrag() }))
                 .overlay(alignment: .topLeading) {
@@ -79,13 +82,13 @@ private struct TalkOrbInteractionView: NSViewRepresentable {
     }
 }
 
-private final class OrbInteractionNSView: NSView {
+final class OrbInteractionNSView: NSView {
     var onSingleClick: (() -> Void)?
     var onDoubleClick: (() -> Void)?
     var onDragStart: (() -> Void)?
     private var mouseDownEvent: NSEvent?
     private var didDrag = false
-    private var suppressSingleClick = false
+    private var pendingSingleClick: Task<Void, Never>?
 
     override var acceptsFirstResponder: Bool {
         true
@@ -98,9 +101,8 @@ private final class OrbInteractionNSView: NSView {
     override func mouseDown(with event: NSEvent) {
         self.mouseDownEvent = event
         self.didDrag = false
-        self.suppressSingleClick = event.clickCount > 1
-        if event.clickCount == 2 {
-            self.onDoubleClick?()
+        if event.clickCount > 1 {
+            self.cancelPendingSingleClick()
         }
     }
 
@@ -111,18 +113,46 @@ private final class OrbInteractionNSView: NSView {
             let dy = event.locationInWindow.y - startEvent.locationInWindow.y
             if abs(dx) + abs(dy) < 2 { return }
             self.didDrag = true
+            self.cancelPendingSingleClick()
             self.onDragStart?()
             self.window?.performDrag(with: startEvent)
         }
     }
 
-    override func mouseUp(with event: NSEvent) {
-        if !self.didDrag, !self.suppressSingleClick {
-            self.onSingleClick?()
-        }
+    override func mouseUp(with _: NSEvent) {
+        guard let clickCount = self.mouseDownEvent?.clickCount else { return }
         self.mouseDownEvent = nil
-        self.didDrag = false
-        self.suppressSingleClick = false
+        guard !self.didDrag else { return }
+
+        if clickCount == 2 {
+            self.onDoubleClick?()
+        } else if clickCount < 2 {
+            // AppKit can report a separate single click at a different location within the interval.
+            if self.pendingSingleClick != nil {
+                self.cancelPendingSingleClick()
+                self.onSingleClick?()
+            }
+            let deadline = ContinuousClock.now + .seconds(NSEvent.doubleClickInterval)
+            self.pendingSingleClick = Task { [weak self] in
+                do { try await Task.sleep(until: deadline, clock: .continuous) } catch { return }
+                guard let self, !Task.isCancelled else { return }
+                self.pendingSingleClick = nil
+                self.onSingleClick?()
+            }
+        }
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow == nil {
+            self.mouseDownEvent = nil
+            self.cancelPendingSingleClick()
+        }
+    }
+
+    private func cancelPendingSingleClick() {
+        self.pendingSingleClick?.cancel()
+        self.pendingSingleClick = nil
     }
 }
 
