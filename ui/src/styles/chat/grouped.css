@@ -116,6 +116,18 @@
   margin-block-start: 0;
 }
 
+/* A single activity row that opens the turn sits between the reply line and
+   the answer. Space the answer text like the reply line above the row: the
+   bubble's own top padding is the whole gap, so cancel the column gap. */
+.chat-agent-run-body
+  > :is(
+    .chat-activity-group--step,
+    .chat-activity-group:not(.is-open, .chat-activity-group--inline, .chat-activity-group--bubble)
+  ):first-child
+  + .chat-bubble:not(.chat-bubble--tool-shell) {
+  margin-block-start: calc(-1 * var(--chat-message-gap));
+}
+
 .chat-group.tool {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, 100%));
   display: block;
