@@ -1,11 +1,6 @@
 /** Keeps public and private runtime projections on the same captured catalog. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  createModelProviderRouteOverrideResolver,
-  resolveMergedModelProviderConfig,
-} from "../config/model-provider-config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderModelRouteSource } from "../plugin-sdk/provider-model-types.js";
@@ -25,14 +20,13 @@ import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
+import { createCatalogNativePolicyPreparer } from "./model-catalog-decision-runtime.js";
 import {
-  projectModelCatalogEntryForRoute,
   createConfiguredModelCatalogOverridesResolver,
+  projectModelCatalogEntryForRoute,
   type ModelCatalogRouteProjection,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
-import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import type { ModelRef } from "./model-ref-shared.js";
 import { buildConfiguredModelCatalog as buildInventoryCatalog } from "./model-selection-shared.js";
 import {
@@ -82,21 +76,30 @@ function selectRuntimeEntry(
   };
 }
 
+const toRouteProjection = (
+  evaluation: ModelAuthAvailabilityEvaluation,
+): ModelCatalogRouteProjection =>
+  evaluation.routeResolution === null
+    ? { kind: "unmanaged" }
+    : evaluation.selectedRoute
+      ? { kind: "selected", route: evaluation.selectedRoute }
+      : { kind: "unresolved" };
+
 /** Indexes physical variants for paired logical catalog projection. */
 export function createModelCatalogView(params: {
   cfg: OpenClawConfig;
   catalog: ModelCatalogEntry[];
   routeVariants?: readonly ModelCatalogEntry[];
   keyOf?: ReturnType<typeof createModelCatalogIdentityKeyResolver>;
+  resolveOverrides?: ReturnType<typeof createConfiguredModelCatalogOverridesResolver>;
 }) {
   const keyOf = params.keyOf ?? createModelCatalogIdentityKeyResolver();
   const variantsByKey = groupRecords(params.routeVariants ?? params.catalog, keyOf);
   // Identity lookups use the same captured policy as this view's physical index.
   const variantsOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">, key = keyOf(entry)) =>
     variantsByKey.get(key);
-  const resolveOverrides = createConfiguredModelCatalogOverridesResolver({
-    cfg: params.cfg,
-  });
+  const resolveOverrides =
+    params.resolveOverrides ?? createConfiguredModelCatalogOverridesResolver({ cfg: params.cfg });
   const projectRoute = (
     entry: ModelCatalogEntry,
     projection: ModelCatalogRouteProjection,
@@ -114,32 +117,37 @@ export function createModelCatalogView(params: {
       >;
     }
   >();
+  const getProjectionCache = (entry: ModelCatalogEntry) => {
+    let cached = projections.get(entry);
+    if (!cached) {
+      cached = { overrides: resolveOverrides(entry), rows: new Map() };
+      projections.set(entry, cached);
+    }
+    return cached;
+  };
+  const readProjection = (
+    entry: ModelCatalogEntry,
+    projection: ModelCatalogRouteProjection,
+    identityKey?: string,
+  ) => {
+    // Reuse only paired metadata from this view's donor scope. Readiness stays with callers;
+    // configured overrides are captured lazily at the entry's first publication.
+    const cached = getProjectionCache(entry);
+    const key = projection.kind === "selected" ? projection.route : projection.kind;
+    let row = cached.rows.get(key);
+    if (!row) {
+      row = projectRoute(entry, projection, cached.overrides, variantsOf(entry, identityKey));
+      cached.rows.set(key, row);
+    }
+    return row;
+  };
   return {
     logicalEntries: dedupeByKey(params.catalog, keyOf),
     variantsOf,
     selectRuntimeEntry(selection: Parameters<typeof selectRuntimeEntry>[0]) {
       return selectRuntimeEntry(selection, variantsOf(selection.entry) ?? []);
     },
-    readProjection(
-      entry: ModelCatalogEntry,
-      projection: ModelCatalogRouteProjection,
-      identityKey?: string,
-    ) {
-      // Reuse only paired metadata from this view's donor scope. Readiness stays with callers;
-      // configured overrides are captured lazily at the entry's first publication.
-      let cached = projections.get(entry);
-      if (!cached) {
-        cached = { overrides: resolveOverrides(entry), rows: new Map() };
-        projections.set(entry, cached);
-      }
-      const key = projection.kind === "selected" ? projection.route : projection.kind;
-      let row = cached.rows.get(key);
-      if (!row) {
-        row = projectRoute(entry, projection, cached.overrides, variantsOf(entry, identityKey));
-        cached.rows.set(key, row);
-      }
-      return row;
-    },
+    readProjection,
     implicitNativeRuntime(entry: Pick<ModelCatalogEntry, "provider" | "id">) {
       // An API metadata donor is not evidence of API credentials. Host bindings
       // and credentials still take precedence in evaluateNative below.
@@ -155,22 +163,19 @@ export function createModelCatalogView(params: {
       evaluation: ModelAuthAvailabilityEvaluation,
       routeVariants?: readonly ModelCatalogEntry[],
     ) {
-      const projection: ModelCatalogRouteProjection =
-        evaluation.routeResolution === null
-          ? { kind: "unmanaged" }
-          : evaluation.selectedRoute
-            ? {
-                kind: "selected",
-                route: evaluation.selectedRoute,
-              }
-            : { kind: "unresolved" };
-      // Runtime selection can narrow donors without rebuilding the configured-row index.
-      return projectRoute(
-        entry,
-        projection,
-        resolveOverrides(entry),
-        routeVariants ?? variantsOf(entry),
-      );
+      const projection = toRouteProjection(evaluation);
+      const observed = variantsOf(entry);
+      if (
+        !routeVariants ||
+        (observed !== undefined &&
+          routeVariants.length === observed.length &&
+          routeVariants.every((variant, index) => variant === observed[index]))
+      ) {
+        return readProjection(entry, projection);
+      }
+      // Rows in the shared cache use the full donor set.
+      const cached = getProjectionCache(entry);
+      return projectRoute(entry, projection, cached.overrides, routeVariants);
     },
   };
 }
@@ -187,7 +192,9 @@ export function createModelCatalogSnapshotView(
   });
 }
 
-/** Transports a logical model was listed on; availability and run auth plan from the same rows. */
+/**
+ * Transports a logical model was listed on; availability and run auth plan from the same rows.
+ */
 export function listModelCatalogObservedRoutes(
   variants: readonly Pick<ModelCatalogEntry, "api" | "baseUrl">[],
 ): ProviderModelRouteSource[] {
@@ -212,7 +219,6 @@ export function prepareModelCatalogView(params: {
   retainedModel?: ModelRef;
   resolveOpenAIProviderRoutes?: ReturnType<typeof createProviderModelRoutesResolver>;
 }) {
-  let preparedOpenAIProviderRoutes = params.resolveOpenAIProviderRoutes;
   const defaultModel = resolveNativeModelPrimary(params.cfg, params.agentId);
   const agentDir = params.agentDir ?? resolveAgentDir(params.cfg, params.agentId);
   const catalog = [...params.snapshot.entries];
@@ -265,10 +271,11 @@ export function prepareModelCatalogView(params: {
     catalog,
     routeVariants: params.snapshot.routeVariants,
   });
-  const runtimePolicies = new WeakMap<
-    ModelCatalogEntry,
-    { policy: ReturnType<typeof resolveAgentHarnessPolicy>; hostConfigured?: boolean }
-  >();
+  const { getRuntimePolicy, prepareHostConfiguration, prepareNativePolicy } =
+    createCatalogNativePolicyPreparer({
+      ...params,
+      implicitNativeRuntime: (entry) => routes.implicitNativeRuntime(entry),
+    });
   const providerEndpoints = new Map<string, { endpoint?: string; api?: string }>();
   for (const [id, configured] of Object.entries(params.cfg.models?.providers ?? {})) {
     const provider = normalizeProviderId(id);
@@ -286,36 +293,13 @@ export function prepareModelCatalogView(params: {
     catalog,
     defaultModel,
     isCurrent,
+    prepareNativePolicy,
     evaluateNative: (
       entry: ModelCatalogEntry,
       host: ModelAuthAvailabilityEvaluation,
       runtimeId?: string,
     ): ModelAuthAvailabilityEvaluation => {
-      let prepared = runtimePolicies.get(entry);
-      if (!prepared) {
-        let policy = resolveAgentHarnessPolicy({
-          provider: entry.provider,
-          modelId: entry.id,
-          modelApi: entry.api,
-          modelBaseUrl: entry.baseUrl,
-          config: params.cfg,
-          agentScope: { kind: "prepared", agentId: params.agentId },
-          resolveOpenAIProviderRoutes: (observed) =>
-            (preparedOpenAIProviderRoutes ??= createProviderModelRoutesResolver({
-              provider: "openai",
-              config: params.cfg,
-            }))(observed),
-        });
-        if (
-          !policy.forcedByEnvironment &&
-          policy.runtimeSource === "implicit" &&
-          policy.runtime === "auto"
-        ) {
-          policy = { ...policy, runtime: routes.implicitNativeRuntime(entry) ?? policy.runtime };
-        }
-        prepared = { policy };
-        runtimePolicies.set(entry, prepared);
-      }
+      const prepared = getRuntimePolicy(entry);
       const runtime = runtimeId ?? host.requestedRuntimeId ?? prepared.policy.runtime;
       if (runtime === "auto" || runtime === "openclaw") {
         return host;
@@ -324,41 +308,7 @@ export function prepareModelCatalogView(params: {
         entry.nativeRuntime === runtime ||
         routes.variantsOf(entry)?.some((variant) => variant.nativeRuntime === runtime) === true;
       const provider = normalizeProviderId(entry.provider);
-      if (prepared.hostConfigured === undefined) {
-        const sameProvider =
-          !params.profileProvider || normalizeProviderId(params.profileProvider) === provider;
-        const configured = resolveMergedModelProviderConfig(params.cfg, provider);
-        const modelKey = (id: string) =>
-          stripSelfProviderModelPrefix(provider, splitTrailingAuthProfile(id).model.trim()).trim();
-        // This view captures configuration; native account readiness remains live below.
-        prepared.hostConfigured = Boolean(
-          (sameProvider && params.preferredProfileId) ||
-          (sameProvider && params.pinnedProfileId) ||
-          configured?.api ||
-          configured?.baseUrl ||
-          configured?.apiKey ||
-          configured?.auth ||
-          configured?.models?.some(
-            (model) => modelKey(model.id) === modelKey(entry.id) && (model.api || model.baseUrl),
-          ) ||
-          Object.keys(params.cfg.auth?.order ?? {}).some(
-            (id) => normalizeProviderId(id) === provider,
-          ) ||
-          Object.values(params.cfg.auth?.profiles ?? {}).some(
-            (profile) => normalizeProviderId(profile.provider) === provider,
-          ) ||
-          createModelProviderRouteOverrideResolver({
-            authoredConfig: params.cfg,
-            provider,
-          })(entry.id) === "present" ||
-          hasAuthoredProviderRequestParams({
-            config: params.cfg,
-            provider,
-            modelId: entry.id,
-            agentId: params.agentId,
-          }),
-        );
-      }
+      prepareHostConfiguration(entry, provider, prepared);
       // Native account evidence cannot replace an authored host binding or live host credentials.
       if (
         prepared.hostConfigured ||
