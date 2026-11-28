@@ -14,6 +14,7 @@ function generationValidPrivateFieldsForSameSession(
     return undefined;
   }
   const state: Partial<InternalSessionEntry> = {
+    ...(existingEntry.titleFallbackReady ? { titleFallbackReady: true } : {}),
     ...(existingEntry.localWorkspaceHandoff
       ? { localWorkspaceHandoff: existingEntry.localWorkspaceHandoff }
       : {}),
