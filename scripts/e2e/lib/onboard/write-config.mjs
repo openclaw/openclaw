@@ -16,7 +16,12 @@ if (scenario === "guided-skip-ui") {
     throw new Error("guided-skip-ui requires workspace and mock OpenAI port arguments");
   }
   config = {
-    gateway: { mode: "local", bind: "loopback", controlUi: { enabled: false } },
+    gateway: {
+      mode: "local",
+      bind: "loopback",
+      auth: { mode: "token", token: "openclaw-onboard-health-e2e-token" },
+      controlUi: { enabled: false },
+    },
     agents: { defaults: { workspace } },
     wizard: {
       securityAcknowledgedAt: "2026-01-01T00:00:00.000Z",
