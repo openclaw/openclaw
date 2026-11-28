@@ -445,13 +445,19 @@ require the capability are rejected before the CLI process starts.
 
 ### Failure isolation
 
-OpenClaw isolates the selected plugin engine from the core reply path. If a
-non-legacy engine is missing, fails contract validation, throws during factory
-creation, or throws from a lifecycle method, OpenClaw quarantines that engine
-for the current Gateway process and downgrades context-engine work to the
-built-in `legacy` engine. The error is logged with the failed operation so the
-operator can repair, update, or disable the plugin without the agent going
-silent.
+OpenClaw isolates the selected plugin engine from the core reply path. Agent
+turns resolve the engine fresh for each turn: if it is missing, fails contract
+validation, or throws during factory creation, that one turn uses the built-in
+`legacy` engine and the next turn retries the plugin engine.
+
+Work that OpenClaw resolves outside a turn, such as subagent spawn and cleanup
+and queued or CLI compaction, uses process quarantine instead. If the engine
+fails during that work, including a throw from one of its lifecycle methods,
+OpenClaw quarantines it for the current Gateway process. Those calls then use `legacy` until the plugin is
+reloaded or the Gateway restarts. Agent turns, including their overflow
+compaction, ignore this quarantine and keep retrying the plugin engine. `openclaw health` and `openclaw status` report the
+quarantine, and the log names the failed operation, so the operator can repair,
+update, or disable the plugin without the agent going silent.
 
 Subagent hook failures do not quarantine the engine. When
 `prepareSubagentSpawn` throws, the subagent spawn fails with that error. When
@@ -618,7 +624,7 @@ The slot is exclusive at run time - only one registered context engine is resolv
 
 - Use `openclaw doctor` to verify your engine is loading correctly.
 - If switching engines, existing sessions continue with their current history. The new engine takes over for future runs.
-- Engine errors are logged and the selected plugin engine is quarantined for the current Gateway process. OpenClaw falls back to `legacy` for user turns so replies can continue, but you should still repair, update, disable, or uninstall the broken plugin.
+- Engine errors are logged. If an agent turn cannot resolve the engine, that turn uses `legacy` and the next turn retries it. Failures in subagent work or queued and CLI compaction quarantine the engine for those calls until the plugin reloads or the Gateway restarts; agent turns, including their overflow compaction, keep using it. Replies continue either way, but you should still repair, update, disable, or uninstall the broken plugin.
 - For development, use `openclaw plugins install -l ./my-engine` to link a local plugin directory without copying.
 
 ## Related

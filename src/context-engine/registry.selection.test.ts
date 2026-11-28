@@ -186,6 +186,37 @@ describe("selection", () => {
     },
   );
 
+  it("keeps plugin ownership for logical-turn engines while host-resolved calls are quarantined", async () => {
+    const { registry } = fixture();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    await withPluginRuntimeRegistryScope(registry, async () => {
+      const standalone = await resolveContextEngine(selectedConfig);
+      expect(resolveContextEngineOwnerPluginId(standalone)).toBe(engineId);
+      await recordContextEngineQuarantine({
+        engineId,
+        owner: `plugin:${engineId}`,
+        operation: "onSubagentEnded",
+        error: new Error("database is locked"),
+        defaultEngineId: "legacy",
+      });
+      const turn = await resolveLogicalTurnContextEngines(selectedConfig);
+      try {
+        expect(turn.configuredFailure).toBeUndefined();
+        expect(turn.configured.engine.info.id).toBe(engineId);
+        // The turn runs the plugin engine, so its runtime LLM policy must stay attributed to it.
+        expect(resolveContextEngineOwnerPluginId(turn.configured.engine)).toBe(engineId);
+        expect(standalone.info.id).toBe("legacy");
+        expect(resolveContextEngineOwnerPluginId(standalone)).toBeUndefined();
+      } finally {
+        await Promise.all([
+          standalone.dispose?.(),
+          turn.configured.engine.dispose?.(),
+          turn.fallback.engine.dispose?.(),
+        ]);
+      }
+    });
+  });
+
   it.each([
     ["standalone", "missing"],
     ["standalone", "factory"],

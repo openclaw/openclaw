@@ -587,7 +587,7 @@ it("formatContextEngineHealthLine summarizes quarantined context engines", () =>
   };
 
   expect(formatContextEngineHealthLine(summary)).toBe(
-    "Context engine: warning (1 quarantined; downgraded to legacy: lossless-claw)",
+    "Context engine: warning (1 quarantined: lossless-claw; subagent work and queued or CLI compaction use legacy until restart or plugin reload; agent turns, including their overflow compaction, still retry the engine)",
   );
 });
 
