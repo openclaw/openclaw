@@ -532,6 +532,34 @@ it("retires idle readers under memory pressure and reopens for later reads", asy
   }
 });
 
+it("retires idle readers on request, leaving later reads a new reader", async () => {
+  const sessions: Array<ReturnType<typeof createScopedSqliteReadOnlyWorker>> = [];
+  const pool = createSqliteReadOnlyWorkerPool((launch) => {
+    const session = createScopedSqliteReadOnlyWorker(launch);
+    sessions.push(session);
+    return session;
+  });
+  const launch = captureSqliteReadOnlyWorkerLaunch(env, "canonical");
+  const readFromPool = () =>
+    pool.run(source, { ...readOptions(), mode: "operation", command: readCommand() }, launch);
+  const expected = { operation: "agentRetirement.sessionStoreBlocker", value: blocker };
+  try {
+    await expect(readFromPool()).resolves.toEqual(expected);
+    const idle = lastChild();
+    // An idle reader stays up, with its store open, until its idle timeout.
+    expect(idle.exitCode).toBeNull();
+
+    await pool.retireIdle();
+
+    expect(idle).toMatchObject({ exitCode: 0, connected: false });
+    await expect(readFromPool()).resolves.toEqual(expected);
+    expect(sessions).toHaveLength(2);
+    expect(lastChild()).not.toBe(idle);
+  } finally {
+    await Promise.all(sessions.map((session) => session.close()));
+  }
+});
+
 it("releases startup metadata maintenance before admitting a Gateway", async () => {
   const root = tempDirs.make("openclaw-startup-metadata-owner-");
   const stateEnv = {

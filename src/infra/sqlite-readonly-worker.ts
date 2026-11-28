@@ -393,6 +393,11 @@ export function closeSqliteReadOnlyWorkersForBroker(broker: SpawnBrokerHost): Pr
   return sqliteReadOnlyWorkerPool.closeBroker(broker);
 }
 
+/** Retires this process's idle pooled SQLite readers, which otherwise keep their stores open. */
+export function retireIdleSqliteReadOnlyWorkers(): Promise<void> {
+  return sqliteReadOnlyWorkerPool.retireIdle();
+}
+
 /** Installation maintenance has no database path or database-size budget. */
 export async function reclaimAbandonedSqliteSnapshots(
   signal: AbortSignal,

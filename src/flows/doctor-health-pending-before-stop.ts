@@ -18,7 +18,10 @@ import {
 } from "../commands/doctor-maintenance-pending.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
+import {
+  retireIdleSqliteReadOnlyWorkers,
+  withSqliteReadOnlyWorkerScope,
+} from "../infra/sqlite-readonly-worker.js";
 import { resolveCommandProcessSignal, withCommandProcessScope } from "../process/exec-spawn.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -224,8 +227,7 @@ export async function decideDoctorPendingBeforeStop(params: {
                 await decideContributions(ctx, decide);
                 await decideReadinessSteps({ options: params.options, preflight, decide });
               },
-              // Its own scope: readers it starts close here, not when the command exits, so
-              // none of them holds a store open through the stop.
+              // Its own scope, closed here rather than when the command exits.
               { signal: signal ?? new AbortController().signal, deadlineOwnedByCaller: false },
             ),
           signal,
@@ -233,6 +235,12 @@ export async function decideDoctorPendingBeforeStop(params: {
       } catch (error) {
         signal?.throwIfAborted();
         failure = formatErrorMessage(error).replace(/\s+/gu, "_").slice(0, 200);
+      } finally {
+        // Pooled readers outlive their scope with the stores open; none may hold one into
+        // the stop.
+        await retireIdleSqliteReadOnlyWorkers().catch((error: unknown) => {
+          failure ??= `reader-retirement:${formatErrorMessage(error).replace(/\s+/gu, "_").slice(0, 160)}`;
+        });
       }
     },
     () => ({ ...summarize(decisions), ...(failure ? { failed: failure } : {}) }),
