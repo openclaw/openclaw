@@ -453,13 +453,11 @@ extension OpenClawChatComposer {
         #endif
     }
 
-    /// Keep recovery visible while voice-note capture runs or when Talk hides the picker during an auth failure.
+    /// Keep the sign-in route available while voice-note capture replaces the model picker.
     var showsModelSignInRow: Bool {
         #if os(iOS)
         guard self.composerChrome == .clean else { return true }
-        let recoveryNeeded = self.viewModel.composerModelAvailabilityMessage != nil
-        return self.voiceNoteControl?.recorder.isRecording == true ||
-            (self.cleanShowsCameraFlip && recoveryNeeded)
+        return self.voiceNoteControl?.recorder.isRecording == true
         #else
         !self.usesDesktopModelMenu
         #endif

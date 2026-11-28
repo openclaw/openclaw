@@ -40,6 +40,19 @@ extension OpenClawSnapshotUITests {
         XCTAssertEqual(surface.frame.height, restingHeight, accuracy: 1)
     }
 
+    func testTalkHidesSignInRecoveryWhenModelAuthFails() throws {
+        let app = try self.launchTalkFixture(
+            "listening",
+            live: false,
+            extra: [
+                "--openclaw-selected-model-auth-failure-fixture",
+                "--openclaw-model-sign-in-fixture", "ordinary",
+            ])
+        XCTAssertTrue(app.staticTexts["Sign-in failed for this model."].waitForExistence(timeout: 8))
+        XCTAssertFalse(app.buttons["chat-model-sign-in"].exists)
+        XCTAssertFalse(app.buttons["chat-composer-inline-model"].exists)
+    }
+
     func testTalkSaysEachStateInOnePlace() throws {
         let expected: [(String, String)] = [
             ("connecting", "Connecting…"),

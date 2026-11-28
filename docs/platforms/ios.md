@@ -67,7 +67,7 @@ and busy-state restrictions; opening sign-in does not grant permission to change
 When the selected model's credentials block an online send, the warning remains visible
 and Send stays disabled. Drafts routed through the durable queue are not blocked by this
 model-availability check. A separate **Sign in** link remains available during voice-note
-recording, and when Talk hides the model picker while the selected model needs authentication.
+recording.
 Provider authentication and Gateway permissions are unchanged.
 
 ## Settings
