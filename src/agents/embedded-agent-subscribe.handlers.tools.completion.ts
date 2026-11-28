@@ -371,7 +371,7 @@ export async function prepareToolExecutionEnd(
     });
     ctx.trimMessagingToolSent();
   }
-  if (sentToCurrentSource && committedMediaUrls.length > 0) {
+  if (sentToCurrentSource && !messageDelivery?.partialDelivery && committedMediaUrls.length > 0) {
     ctx.state.currentSourceMessagingToolSentMediaUrls.push(...committedMediaUrls);
     ctx.trimMessagingToolSent();
   }

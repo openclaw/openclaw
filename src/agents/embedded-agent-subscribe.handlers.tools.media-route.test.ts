@@ -58,4 +58,42 @@ describe("message-tool media route evidence", () => {
       );
     },
   );
+
+  it("does not record media from partial same-route sends as delivery evidence", async () => {
+    const { ctx } = createTestContext();
+    Object.assign(ctx.params, {
+      config: {},
+      sourceReplyDeliveryMode: "message_tool_only",
+      messageChannel: "test-channel",
+      currentAccountId: "account-1",
+      currentChannelId: "chat123",
+      currentThreadId: "thread-1",
+    });
+    ctx.consumeToolSendReceipt = () => ({
+      details: {
+        messageDelivery: { status: "settled", partialDelivery: true, createdThreadIds: [] },
+      },
+    });
+
+    await executeTool(ctx, {
+      toolName: "message",
+      toolCallId: "partial-media-send",
+      args: {
+        action: "send",
+        channel: "test-channel",
+        accountId: "account-1",
+        target: "chat123",
+        threadId: "thread-1",
+        message: "Text sent before attachment failure",
+        media: "/tmp/current-route.png",
+      },
+      result: { details: { ok: true } },
+    });
+
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/current-route.png"]);
+    expect(ctx.state.messagingToolSentTargets).toContainEqual(
+      expect.objectContaining({ to: "chat123", mediaUrls: ["/tmp/current-route.png"] }),
+    );
+    expect(ctx.state.currentSourceMessagingToolSentMediaUrls).toEqual([]);
+  });
 });
