@@ -128,6 +128,77 @@ describe("registered mcp.authLogin", () => {
     expect(requests).toHaveLength(before);
   });
 
+  it("reuses a saved plugin sign-in after switching to an opt-in declaration", async () => {
+    await clearMcpOAuthCredentials(identity());
+    const previous = getCurrentPluginMetadataSnapshotState();
+    const metadata = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "legacy",
+          configSchema: { type: "object", properties: {} },
+          mcpServers: { docs: config },
+        },
+        {
+          id: "optional",
+          configSchema: {
+            type: "object",
+            properties: { tools: { type: "object", properties: { enabled: { type: "boolean" } } } },
+          },
+          mcpServers: { docs: { ...config, enabledByConfig: ["tools", "enabled"] } },
+        },
+      ],
+    });
+    const settings = (legacy: boolean, tools: boolean): OpenClawConfig => ({
+      gateway: { port: gatewayPort, reload: { mode: "off" } },
+      plugins: {
+        entries: {
+          legacy: { enabled: legacy },
+          optional: { enabled: true, config: { tools: { enabled: tools } } },
+        },
+      },
+    });
+    try {
+      const original = settings(true, false);
+      setGatewayPluginMetadataSnapshot(metadata, { config: original });
+      await writeConfigFile(original);
+      const started = await begin();
+      expect((await callback(started.state)).status).toBe(200);
+      expect(await terminal(started.sessionId)).toMatchObject({ status: "done" });
+      const saved = await store();
+      expect(saved.tokens?.access_token).toBe("fixture-access");
+
+      for (const enabled of [true, false]) {
+        const cfg = settings(false, enabled);
+        await writeConfigFile(cfg);
+        const runtime = await getOrCreateSessionMcpRuntime({
+          sessionId: randomUUID(),
+          workspaceDir: resolveStateDir(),
+          cfg,
+          manifestRegistry: metadata.manifestRegistry,
+        });
+        try {
+          if (enabled) {
+            expect(await runtime.callTool("docs", "echo", {})).toMatchObject({
+              content: [{ type: "text", text: "Authenticated connector reply" }],
+            });
+          } else {
+            expect((await runtime.getCatalog()).servers).toEqual({});
+          }
+          expect((await store()).tokens).toEqual(saved.tokens);
+        } finally {
+          await runtime.dispose();
+        }
+      }
+    } finally {
+      if (previous.owner === "gateway") {
+        setGatewayPluginMetadataSnapshot(previous.snapshot);
+      } else {
+        setCurrentPluginMetadataSnapshot(previous.snapshot);
+      }
+      await configure();
+    }
+  });
+
   it("explains an unavailable browser callback without starting OAuth", async () => {
     const origin = "http://localhost:3000";
     let client: WebSocket | undefined;

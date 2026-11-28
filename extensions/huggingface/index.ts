@@ -8,8 +8,8 @@ const PROVIDER_ID = "huggingface";
 
 export default defineSingleProviderPluginEntry({
   id: PROVIDER_ID,
-  name: "Hugging Face Provider",
-  description: "Bundled Hugging Face provider plugin",
+  name: "Hugging Face",
+  description: "Hugging Face Inference Providers and optional Hub tools",
   manifest,
   provider: {
     label: "Hugging Face",

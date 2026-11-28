@@ -1,11 +1,23 @@
 {
   "id": "huggingface",
+  "name": "Hugging Face",
+  "description": "Inference Providers and optional Hub tools for models, datasets, Spaces, and papers.",
   "categories": ["models"],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
   "providers": ["huggingface"],
+  "mcpServers": {
+    "hugging-face": {
+      "transport": "streamable-http",
+      "url": "https://huggingface.co/mcp",
+      "auth": "oauth",
+      "enabled": false,
+      "enabledByConfig": ["hub", "enabled"],
+      "description": "Optional Hugging Face Hub tools. Enable this MCP server and connect your account separately from inference."
+    }
+  },
   "modelCatalog": {
     "providers": {
       "huggingface": {
@@ -84,12 +96,25 @@
       "title": "Model discovery",
       "order": 10,
       "properties": ["discovery"]
+    },
+    {
+      "id": "hub",
+      "title": "Hub tools",
+      "order": 20,
+      "properties": ["hub"]
     }
   ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "hub": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean", "default": false }
+        }
+      },
       "discovery": {
         "type": "object",
         "additionalProperties": false,
@@ -100,6 +125,14 @@
     }
   },
   "uiHints": {
+    "hub": {
+      "label": "Hub tools",
+      "help": "Optional access to models, datasets, Spaces, and papers through Hugging Face's MCP service. Uses a separate OAuth connection, not your inference token."
+    },
+    "hub.enabled": {
+      "label": "Enable Hub tools",
+      "help": "Off by default. Enable this, save, then connect your Hugging Face account. Disabling Hub tools leaves inference and saved credentials unchanged."
+    },
     "discovery": {
       "label": "Model Discovery",
       "help": "Plugin-owned controls for Hugging Face model auto-discovery."

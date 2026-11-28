@@ -334,7 +334,10 @@ export type PluginManifestControlUi = {
   settingsViews?: import("../../packages/gateway-protocol/src/plugin-control-ui-settings.js").ControlUiSettingsPlacement[];
 };
 
-export type PluginManifestMcpServer = Record<string, unknown>;
+export type PluginManifestMcpServer = Record<string, unknown> & {
+  /** Path inside this plugin's config that must be exactly true to activate this server. */
+  enabledByConfig?: string[];
+};
 
 export type PluginManifestConfigLiteral = string | number | boolean | null;
 
