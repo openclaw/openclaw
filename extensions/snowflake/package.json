@@ -1,0 +1,25 @@
+{
+  "name": "@openclaw/snowflake-provider",
+  "version": "2026.9.7",
+  "description": "OpenClaw Snowflake Cortex provider plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": ["./index.ts"],
+    "install": {
+      "clawhubSpec": "clawhub:@openclaw/snowflake-provider",
+      "npmSpec": "@openclaw/snowflake-provider",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.9.7"
+    },
+    "compat": { "pluginApi": ">=2026.9.7" },
+    "build": { "openclawVersion": "2026.9.7", "bundledDist": false },
+    "release": { "publishToClawHub": true, "publishToNpm": true }
+  }
+}
