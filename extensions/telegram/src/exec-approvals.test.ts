@@ -143,6 +143,17 @@ describe("telegram exec approvals", () => {
     expect(await eligibleAccounts(cfg, makeChannelApprovalRequest("req-6"))).toEqual([true, false]);
   });
 
+  it("ignores a disabled telegram account whose token is an unresolved SecretRef", async () => {
+    const cfg = buildMultiAccountTelegramConfig(undefined, false);
+    Object.assign(cfg.channels?.telegram?.accounts?.ops ?? {}, {
+      botToken: { source: "exec", provider: "vault", id: "telegram/ops" },
+    });
+
+    expect(await eligibleAccounts(cfg, makeChannelApprovalRequest("req-7"))).toEqual([true, false]);
+    expect(isTelegramExecApprovalClientEnabled({ cfg, accountId: "ops" })).toBe(false);
+    expect(isTelegramExecApprovalApprover({ cfg, accountId: "ops", senderId: "123" })).toBe(true);
+  });
+
   it("only injects approval buttons on eligible telegram targets", () => {
     const results = (["dm", "channel", "both"] as const).map((target) => {
       const cfg = buildConfig({ enabled: true, approvers: ["123"], target });

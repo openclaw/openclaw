@@ -83,6 +83,7 @@ function resolveRuntimeTokenValue(params: {
   cfg?: Pick<OpenClawConfig, "secrets">;
   value: unknown;
   path: string;
+  inactiveSurface?: boolean;
 }): RuntimeTokenValueResolution {
   const resolved = resolveSecretInputString({
     value: params.value,
@@ -92,6 +93,11 @@ function resolveRuntimeTokenValue(params: {
   });
   if (resolved.status === "available" || resolved.status === "missing") {
     return resolved;
+  }
+  // The runtime snapshot never resolves SecretRefs on inactive surfaces, so
+  // strict resolution would fail every reader of a disabled account.
+  if (params.inactiveSurface) {
+    return { status: "configured_unavailable" };
   }
   if (resolved.ref.source === "env") {
     const envValue = resolveEnvSecretRefValue({
@@ -116,6 +122,8 @@ function resolveRuntimeTokenValue(params: {
 type ResolveTelegramTokenOpts = {
   envToken?: string | null;
   accountId?: string | null;
+  /** Set for disabled accounts: unresolved SecretRefs report as unavailable instead of throwing. */
+  inactiveSurface?: boolean;
   logMissingFile?: (message: string) => void;
 };
 
@@ -158,6 +166,7 @@ export function resolveTelegramToken(
     const token = resolveRuntimeTokenValue({
       cfg,
       value: config?.botToken,
+      inactiveSurface: opts.inactiveSurface,
       path: `${path}.botToken`,
     });
     if (token.status === "available") {

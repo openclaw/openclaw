@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, describe, expect, it } from "vitest";
+import { listTelegramAccountIds } from "./accounts.js";
 import { telegramApprovalCapability } from "./approval-native.js";
 
 const execApprovals = { enabled: true, approvers: ["700000001"], target: "dm" as const };
@@ -279,5 +280,41 @@ describe("telegram native approval adapter", () => {
     });
 
     expect(target ?? null).toEqual(want);
+  });
+
+  it("authorizes approvers across every account when a disabled account holds an unresolved SecretRef", async () => {
+    // Approval custody asks every configured account, so a disabled account's
+    // unresolved token must not break authorization for the active ones.
+    const multiAccountCfg = {
+      channels: {
+        telegram: {
+          execApprovals,
+          accounts: {
+            active: { botToken: "tok-active" },
+            retired: {
+              enabled: false,
+              botToken: { source: "exec", provider: "vault", id: "telegram/retired" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const authorize = (senderId: string) =>
+      Promise.all(
+        listTelegramAccountIds(multiAccountCfg).map(async (accountId) => {
+          const result = await telegramApprovalCapability.authorizeActorActionAsync?.({
+            cfg: multiAccountCfg,
+            accountId,
+            senderId,
+            action: "approve",
+            approvalKind: "exec",
+          });
+          return result?.authorized;
+        }),
+      );
+
+    expect(listTelegramAccountIds(multiAccountCfg)).toEqual(["active", "retired"]);
+    expect(await authorize("700000001")).toEqual([true, true]);
+    expect(await authorize("999")).toEqual([false, false]);
   });
 });
