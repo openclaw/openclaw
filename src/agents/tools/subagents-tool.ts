@@ -110,19 +110,20 @@ function mapRun(
     ...(pausedForMs === undefined ? {} : { pausedForMs }),
   };
 }
+
 // Only the current tree grants visibility. A settled predecessor cannot extend it.
-function canObserveWaitResult(run: SubagentRunRecord, readable: SubagentRunReadRecord[]): boolean {
-  const settled = run.execution.status === "terminal" && !isSubagentPausedByYield(run);
+function isReadablePredecessor(run: SubagentRunRecord, readable: SubagentRunReadRecord[]): boolean {
+  if (run.execution.status !== "terminal" || isSubagentPausedByYield(run)) {
+    return false;
+  }
   return readable.some(
     (current) =>
-      current.runId === run.runId ||
-      (settled &&
-        current.requesterSessionKey === run.requesterSessionKey &&
-        current.requesterAgentId === run.requesterAgentId &&
-        current.requesterStorePath === run.requesterStorePath &&
-        current.controllerSessionKey === run.controllerSessionKey &&
-        current.controllerStorePath === run.controllerStorePath &&
-        matchesSubagentChildSessionOwner(current, run.childSessionKey, run.childAgentId)),
+      current.requesterSessionKey === run.requesterSessionKey &&
+      current.requesterAgentId === run.requesterAgentId &&
+      current.requesterStorePath === run.requesterStorePath &&
+      current.controllerSessionKey === run.controllerSessionKey &&
+      current.controllerStorePath === run.controllerStorePath &&
+      matchesSubagentChildSessionOwner(current, run.childSessionKey, run.childAgentId),
   );
 }
 
@@ -391,8 +392,11 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
               runIds,
               readRuns: (snapshot) => {
                 const { readable } = readCurrentScope();
+                const visible = new Set(readable.map((entry) => entry.runId));
                 const selected = runIds.flatMap((id) => snapshot.get(id) ?? []);
-                return selected.filter((run) => canObserveWaitResult(run, readable));
+                return selected.filter(
+                  (run) => visible.has(run.runId) || isReadablePredecessor(run, readable),
+                );
               },
               timeoutMs:
                 Math.min(60, readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30) * 1000,
