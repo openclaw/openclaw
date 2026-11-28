@@ -15,12 +15,14 @@ import type {
 } from "../composer-capability-types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { ChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
+import type { ComposerCorrectionControlsProps } from "./composer-correction-controls.tsx";
 
 export type ChatComposerPlusMenuProps = {
   attachments: ChatAttachmentControlsProps;
   inputHandle: ChatAttachmentInputHandle;
   pluginActions?: readonly ComposerMenuAction[];
   capabilityMenu?: ChatComposerCapabilityMenuSource;
+  correctionControls?: ComposerCorrectionControlsProps;
   disabled: boolean;
   open: boolean;
   view: ChatComposerPlusMenuView;

@@ -1,8 +1,11 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
+import type { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { storedChatOutboxScopeKey } from "../../lib/chat/outbox-store.ts";
 import {
   readSessionMethodAccess,
@@ -62,6 +65,47 @@ type PermissionSelection = {
 };
 
 const permissionSelections = new WeakMap<ChatPageHost, Map<string, PermissionSelection>>();
+
+export function createChatPaneDictationProps(
+  state: ChatPageHost,
+  draft: Pick<ReturnType<typeof createComposerDraftSource>, "captureRevision">,
+  isPaneCurrent: () => boolean,
+  profileId: string | null,
+  gateway: Pick<ApplicationGateway, "snapshot" | "connectionRevision">,
+): Pick<
+  ChatProps,
+  | "composerHoldToRecord"
+  | "composerCorrections"
+  | "dictationContextKey"
+  | "captureDictationDraft"
+  | "onComposerCorrectionsChange"
+  | "realtimeTalkInputDeviceId"
+  | "onComposerHoldToRecordChange"
+> {
+  return {
+    composerHoldToRecord: state.settings.composerHoldToRecord,
+    composerCorrections: state.settings.composerCorrections,
+    // The existing presentation scope survives transport-only epoch changes.
+    // Actual account/client/session and draft guards still own retirement.
+    dictationContextKey: JSON.stringify([gatewayPresentationScope(gateway).key, profileId]),
+    captureDictationDraft: () => {
+      const isDraftCurrent = draft.captureRevision();
+      const physicalSessionId = state.currentSessionId;
+      return () =>
+        isPaneCurrent() && state.currentSessionId === physicalSessionId && isDraftCurrent();
+    },
+    onComposerCorrectionsChange: (mode) => {
+      state.settings = patchSettings({
+        composerCorrections:
+          mode === "explicit" ? { version: 1, mode, locale: "en-US" } : undefined,
+      });
+    },
+    realtimeTalkInputDeviceId: state.settings.realtimeTalkInputDeviceId,
+    onComposerHoldToRecordChange: (enabled) => {
+      state.settings = patchSettings({ composerHoldToRecord: enabled });
+    },
+  };
+}
 
 export function createChatPaneQueuedEditProps(
   state: ChatPageHost,

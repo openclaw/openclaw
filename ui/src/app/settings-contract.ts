@@ -34,6 +34,24 @@ export const normalizeChatSendShortcut = normalizeChoice(
   UI_PREFERENCE_DEFAULTS.chatSendShortcut,
 );
 
+export type DictationCorrectionsPreference = {
+  version: 1;
+  mode: "explicit";
+  locale: "en-US";
+};
+
+/** Missing, disabled, malformed and future settings retain ordinary dictation. */
+export function normalizeDictationCorrections(
+  value: unknown,
+): DictationCorrectionsPreference | undefined {
+  return isRecord(value) &&
+    value.version === 1 &&
+    value.mode === "explicit" &&
+    value.locale === "en-US"
+    ? { version: 1, mode: "explicit", locale: "en-US" }
+    : undefined;
+}
+
 const CHAT_FOLLOW_UP_MODES = ["queue", "steer"] as const;
 export type ChatFollowUpMode = (typeof CHAT_FOLLOW_UP_MODES)[number];
 
@@ -213,6 +231,8 @@ export type UiSettings = {
   realtimeTalkInputDeviceId?: string;
   realtimeTalkVideoDeviceId?: string;
   composerHoldToRecord?: boolean;
+  // Browser-local review preference; no transcript or Literal state is saved.
+  composerCorrections?: DictationCorrectionsPreference;
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;
   chatSplitLayout?: ChatSplitLayout;

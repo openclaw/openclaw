@@ -150,6 +150,57 @@ Without these settings, the existing realtime Talk and transcription-provider
 selection remain unchanged. Browser microphone capture requires a secure context
 (HTTPS or localhost) and microphone permission.
 
+### Review spoken corrections
+
+In the Control UI's conversation composer, open **Microphone input** next to the
+microphone, or choose **+ (Add attachment) → Microphone input** in a narrow pane
+or on a phone. **Spoken corrections** starts **Off**. Choose **Review original
+(corrections unavailable)** to inspect recognized text
+after you stop dictating. Spoken correction suggestions are unavailable in this
+revision. Words such as `no`, `sorry`, `actually`, and `scratch that` remain part
+of the recognized text. For example, `I work Tuesday, no Wednesday shifts are
+available` stays unchanged; it does not become a correction of Tuesday.
+
+The preference belongs to this browser and Gateway and is excluded from remote
+preference sync. An upgrade does not enable it. **Literal for this recording**
+bypasses review for the next recording only and keeps correction words as
+dictated text. It does not carry into another recording. Changing either setting
+applies to the next capture; a recording already in progress keeps its choice.
+
+In review mode, **Review dictated text** shows **Original recognized text** and
+explains that no correction is available. Choose **Keep original** to add that
+text to the unsent draft, or **Cancel** to discard this recording. **Accept
+correction** is unavailable. Sending and starting another recording wait until
+the pending recording is resolved. Keeping text never sends a message.
+
+The review has no dismissal timer. Its original text remains available to read,
+and the choices support keyboard navigation. Escape closes an open composer menu
+first; another Escape cancels pending dictation. A selection that predates a
+reviewed recording is preserved. Existing prose insertion can normalize spacing
+around inserted text; the review itself retains the recognized text unchanged.
+
+A transport interruption, finalization timeout, or failed finalization preserves
+text already received within the same authorized conversation. A failed final
+drain keeps the earlier received preview. The UI cannot recover words the
+recognizer never supplied or reconstruct earlier words from a transcript the
+provider already revised.
+
+Editing the draft, changing conversation or account, entering Talk, or losing
+write permission can retire the recording or disable its insertion. Equal text
+does not make an old recording current again. If an original remains visible
+after its draft changes, copy any needed text and cancel the obsolete review.
+
+There is no extra model request, provider selection, context collection, or
+transcript log for correction review. Existing speech-provider routing and
+retention still apply. Recognized text and Literal are not saved as preferences.
+Malformed or unsupported preference versions fall back to Off. Selecting **Off**
+affects the next recording; an eligible pending review can still keep its original.
+
+This integration is for the browser conversation composer. It does not add
+correction controls to New Session, native clients, headless callers, or external
+applications. It does not edit sent messages or undo actions. It also does not
+provide filler removal, punctuation rewriting, or a semantic correction service.
+
 ## Human mention delivery
 
 The Control UI binds each [selected person](/concepts/multi-user#mentioning-people) to the submitted message text. `chat.send`, the initial message on `sessions.create`, and `sessions.send` accept an optional `mentions` array of `{ profileId, start, end }` annotations. There are at most ten annotations. `start` is inclusive and `end` is exclusive, measured in UTF-16 code units. The Gateway validates their text ranges and recipients before accepting the input. Plain `@name` text and agent output do not create human mentions. Copying or quoting text does not copy its recipient selections.

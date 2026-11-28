@@ -93,6 +93,10 @@ export function controlUiStableChunkName(id: string): string | undefined {
   }
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/pages/chat/components/chat-microphone-meter-canvas.tsx":
+    case "ui/src/pages/chat/talk/microphone-meter.ts":
+      // Ordinary Chat only needs the meter's CSS dots; painting starts on voice activity.
+      return "chat-microphone-meter";
     case "ui/src/components/solid/registry-category-icon.tsx":
     case "ui/src/pages/plugins/catalog-grid.tsx":
     case "ui/src/pages/plugins/plugin-card.tsx":

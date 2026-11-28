@@ -3,8 +3,8 @@ import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import type { ComposerCorrectionControlsProps } from "./components/composer-correction-controls.tsx";
 import {
-  discoverRealtimeTalkInputs,
   observeRealtimeTalkDevices,
   type RealtimeTalkDeviceIssue,
   type RealtimeTalkInputDevice,
@@ -42,6 +42,7 @@ export type MicrophonePickerProps = {
   voiceActive: boolean;
   issue: RealtimeTalkDeviceIssue | null;
   holdToDictate?: boolean;
+  correctionControls?: ComposerCorrectionControlsProps;
   showRealtimeCapability?: boolean;
   realtimeStatus: ComposerTalkCapabilityStatus;
   dictationStatus: ComposerTalkCapabilityStatus;
@@ -165,9 +166,15 @@ export class ComposerMicrophoneOwner extends EventTarget {
     const request = ++this.discoveryRequest;
     this.dispatchEvent(new Event("change"));
     // A closed or replaced picker cannot turn delayed discovery into a prompt.
-    const result = await discoverRealtimeTalkInputs(
-      () => this.open && request === this.discoveryRequest,
-    ).catch(() => ({ devices: [], issue: "failed" as const }));
+    let result: { devices: RealtimeTalkInputDevice[]; issue: RealtimeTalkDeviceIssue | null };
+    try {
+      const { discoverRealtimeTalkInputs } = await import("./talk/input-discovery.ts");
+      result = await discoverRealtimeTalkInputs(
+        () => this.open && request === this.discoveryRequest,
+      );
+    } catch {
+      result = { devices: [], issue: "failed" };
+    }
     if (request !== this.discoveryRequest) {
       return;
     }

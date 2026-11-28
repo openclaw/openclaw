@@ -1,16 +1,19 @@
-import { createMemo, lazy, onSettled, Show } from "solid-js";
+import { createMemo, Errored, lazy, Loading, Show } from "solid-js";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { createMediaQuerySource } from "../../../lib/reactive/platform.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
 import { isRealtimeTalkMicrophoneIssueMessage } from "../talk/input.ts";
 import type { RealtimeTalkLevelSignal } from "../talk/level.ts";
-import { createMicrophoneMeter, type MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
+import type { MicrophoneMeterStatus } from "../talk/microphone-meter.ts";
 import type { RealtimeTalkStatus } from "../talk/session.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatComposerEnglish);
+
+const MicrophoneMeterCanvas = lazy(() => import("./chat-microphone-meter-canvas.tsx"), {
+  export: "MicrophoneMeterCanvas",
+});
 
 export function voiceStatusLabel(
   status: RealtimeTalkStatus | undefined,
@@ -60,54 +63,17 @@ export function MicrophoneActivity(props: {
           if (initialStatus === "connecting") {
             return null;
           }
-          const initialSource = initial.source;
-          const reducedMotion = createMediaQuerySource("(prefers-reduced-motion: reduce)");
-          let canvas: HTMLCanvasElement | undefined;
-          onSettled(() => {
-            const currentHost = host;
-            const surface = canvas;
-            if (!currentHost || !surface) {
-              return undefined;
-            }
-            let renderer: ReturnType<typeof createMicrophoneMeter> | undefined;
-            const initialLevel = initialSource?.value ?? 0;
-            const setLevel = (level: number) => {
-              const value = String(level);
-              if (currentHost.dataset.level !== value) {
-                currentHost.dataset.level = value;
-              }
-              // CSS already draws silence. Allocate only when there is activity to paint.
-              if (
-                !renderer &&
-                (initialStatus === "thinking" || (initialStatus === "listening" && level > 0))
-              ) {
-                renderer = createMicrophoneMeter(
-                  currentHost,
-                  surface,
-                  initialStatus,
-                  reducedMotion,
-                );
-                // Preserve the first transition from silence rather than jumping to its target.
-                renderer.setLevel(initialLevel);
-              }
-              renderer?.setLevel(level);
-            };
-            // The owner's subscription immediately supplies its current level.
-            const stop = initialSource?.subscribe(setLevel);
-            if (!initialSource) {
-              setLevel(0);
-            }
-            return () => {
-              stop?.();
-              renderer?.dispose();
-            };
-          });
+          // The CSS dots remain available while the decorative canvas loads or fails.
           return (
-            <canvas
-              ref={(element) => (canvas = element)}
-              class="agent-chat__voice-activity-canvas"
-              aria-hidden="true"
-            />
+            <Errored fallback={() => null}>
+              <Loading>
+                <MicrophoneMeterCanvas
+                  host={() => host}
+                  source={initial.source}
+                  status={initialStatus}
+                />
+              </Loading>
+            </Errored>
           );
         }}
       </Show>

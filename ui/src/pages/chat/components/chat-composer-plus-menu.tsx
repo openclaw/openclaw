@@ -91,6 +91,9 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuProps }) {
   });
   const view = createMemo(() => {
     const current = props.menu.view;
+    if (current === "microphone") {
+      return props.menu.correctionControls ? current : "root";
+    }
     if (current.startsWith("plugin:")) {
       return props.menu.pluginActions?.some((action) => `plugin:${action.pluginId}` === current)
         ? current

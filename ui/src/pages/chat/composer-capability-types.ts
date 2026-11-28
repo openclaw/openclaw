@@ -6,6 +6,7 @@ import type { ComposerLibraryProps } from "./composer-library-session.ts";
 
 export type ChatComposerPlusMenuView =
   | "root"
+  | "microphone"
   | "skills"
   | "connectors"
   | "libraries"

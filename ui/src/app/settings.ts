@@ -37,6 +37,7 @@ import {
   normalizeChatSendShortcut,
   normalizeChatWorkspaceDock,
   normalizeDashboardsDisplay,
+  normalizeDictationCorrections,
   normalizeSessionFilesDisplay,
   normalizeTextScale,
   UI_APPEARANCE_DEFAULTS,
@@ -449,6 +450,7 @@ export function loadUiPreferences(
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
       composerHoldToRecord: booleanSetting("composerHoldToRecord"),
+      composerCorrections: normalizeDictationCorrections(parsed.composerCorrections),
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
@@ -610,6 +612,7 @@ export function saveSettings(
     realtimeTalkInputDeviceId: normalizeOptionalString(next.realtimeTalkInputDeviceId),
     realtimeTalkVideoDeviceId: normalizeOptionalString(next.realtimeTalkVideoDeviceId),
     composerHoldToRecord: next.composerHoldToRecord === false ? false : undefined,
+    composerCorrections: normalizeDictationCorrections(next.composerCorrections),
     talkCameraAutoEnable: next.talkCameraAutoEnable,
     chatSplitLayout: next.chatSplitLayout || undefined,
     // Right dock is the default; only the opt-in bottom dock persists.

@@ -3,13 +3,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { i18n } from "../i18n/index.ts";
+import {
+  loadChatComposerState,
+  persistChatComposerState,
+} from "../pages/chat/composer-draft-storage.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createShellOwner } from "./app-host-solid.test-support.ts";
 import type { ShellGatewayOwner } from "./app-shell-gateway.ts";
 import type { ApplicationContext } from "./context.ts";
-import type { RequestMock } from "./server-prefs.test-support.ts";
+import { createProfilePrefsServer, type RequestMock } from "./server-prefs.test-support.ts";
 import { resetServerUiPrefsSync } from "./server-prefs.ts";
-import { loadSettings, patchSettings } from "./settings.ts";
+import { loadSettings, patchSettings, settingsKeyForGateway } from "./settings.ts";
 
 function createPreferenceShell(
   prefs: Record<string, string>,
@@ -85,6 +89,105 @@ describe("OpenClaw shell locale preferences", () => {
     expect(recordServerSelection).toHaveBeenLastCalledWith("claw", "ws://theme.test");
     expect(loadSettings().theme).toBe("claw");
   });
+});
+
+it("keeps correction preferences local through the shell listener, profile writes, and remote reconciliation", async () => {
+  resetServerUiPrefsSync();
+  vi.stubGlobal("sessionStorage", createStorageMock());
+  vi.spyOn(i18n, "useSystemLocale").mockResolvedValue();
+  const scope = "ws://corrections-sync.test";
+  patchSettings({
+    gatewayUrl: scope,
+    composerHoldToRecord: false,
+    realtimeTalkInputDeviceId: "usb-microphone",
+  });
+  const backend = createProfilePrefsServer({ a: { "ui.fontUi": "geist" } }, scope, {});
+  const profile = backend.connect("a");
+  Object.assign(profile.writer, { canPatch: true });
+  Object.assign(profile.writer.state, { configSnapshot: { config: {}, hash: "initial" } });
+  const client = Object.assign(profile.writer.state.client!, {
+    recoveryScope: "correction-profile",
+    recoveryScopeReady: true,
+  });
+  // SAFETY: The synthetic transport implements the preference writer's production I/O boundary.
+  const runtimeConfig = profile.writer as ApplicationContext["runtimeConfig"];
+  // SAFETY: This fixture supplies every context capability used by settings sync and reconciliation.
+  const context = {
+    gateway: {
+      connection: { gatewayUrl: scope },
+      snapshot: {
+        phase: "connected",
+        client,
+        selfUser: { id: "a" },
+        hello: { auth: { scopes: ["operator.write"] } },
+      },
+    },
+    theme: { refresh: vi.fn(), recordServerSelection: vi.fn() },
+    runtimeConfig,
+  } as unknown as ApplicationContext;
+  const shell = createShellOwner();
+  // Register the real listener before supplying its live context; avoid unrelated boot subscriptions.
+  shell.connect();
+  // SAFETY: The existing shell fixture exposes its actual runtime and preference owner.
+  const preferences = shell as unknown as ShellServerPreferencesState;
+  preferences.runtime = { context };
+  const draft = {
+    settings: { gatewayUrl: scope },
+    client,
+    sessionKey: "agent:main:unsent",
+    chatMessage: "Keep this existing draft verbatim.",
+    chatQueue: [],
+  };
+  const corrections = { version: 1, mode: "explicit", locale: "en-US" } as const;
+  try {
+    expect(persistChatComposerState(draft)).toBe(true);
+    await preferences.shellGateway.reconcileServerUiPrefs(runtimeConfig);
+    profile.request.mockClear();
+
+    patchSettings({ composerCorrections: corrections });
+    await vi.dynamicImportSettled();
+    expect(profile.request).not.toHaveBeenCalled();
+    expect(JSON.parse(localStorage.getItem(settingsKeyForGateway(scope))!)).toHaveProperty(
+      "composerCorrections",
+      corrections,
+    );
+
+    patchSettings({ fontUi: "lora" });
+    await vi.dynamicImportSettled();
+    expect(backend.profiles.a).toEqual({ "ui.fontUi": "lora" });
+    expect(profile.request.mock.calls.filter(([method]) => method === "users.prefs.set")).toEqual([
+      ["users.prefs.set", { entries: { "ui.fontUi": "lora" } }],
+    ]);
+
+    Object.assign(backend.profiles.a!, { "ui.fontUi": "system", "ui.composerCorrections": null });
+    preferences.shellGateway.handleGatewayEvent({
+      type: "event",
+      event: "users.prefs.changed",
+      payload: { profileId: "a", keys: ["ui.fontUi", "ui.composerCorrections"] },
+    });
+    await vi.dynamicImportSettled();
+    expect(loadSettings(scope)).toMatchObject({
+      fontUi: "system",
+      composerCorrections: corrections,
+      composerHoldToRecord: false,
+      realtimeTalkInputDeviceId: "usb-microphone",
+    });
+    expect(
+      profile.request.mock.calls.filter(([method]) => method === "users.prefs.set"),
+    ).toHaveLength(1);
+    profile.request.mockClear();
+    patchSettings({ composerCorrections: undefined });
+    await vi.dynamicImportSettled();
+    expect(profile.request).not.toHaveBeenCalled();
+    expect(loadSettings(scope).composerCorrections).toBeUndefined();
+    expect(loadChatComposerState(draft, draft.sessionKey).snapshot).toEqual({
+      draft: "Keep this existing draft verbatim.",
+      queue: [],
+    });
+  } finally {
+    shell.disconnect();
+    await vi.dynamicImportSettled();
+  }
 });
 
 // Reset only between realms: each pending drain keeps its original module state.

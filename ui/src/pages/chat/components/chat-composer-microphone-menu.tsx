@@ -1,17 +1,19 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, onSettled } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
-import type { MenuEntry } from "../../../components/solid/menu.tsx";
+import type { MenuControls, MenuEntry } from "../../../components/solid/menu.tsx";
 import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
 import { type RealtimeTalkDeviceIssue, realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
 import { voiceApiKeyMessage } from "../voice-api-key-notice.tsx";
+import { ComposerCorrectionControls } from "./composer-correction-controls.tsx";
 
 export function MicrophoneMenu(props: {
   picker: MicrophonePickerProps;
+  controls: MenuControls;
   renderItems: (items: () => readonly MenuEntry[]) => JSX.Element;
   onReady: (items: (() => MenuEntry[]) | undefined) => void;
   onDevicePointer: (pointer: boolean) => void;
@@ -238,5 +240,14 @@ export function MicrophoneMenu(props: {
     props.onReady(items);
     return () => props.onReady(undefined);
   });
-  return <>{props.renderItems(items)}</>;
+  return (
+    <>
+      {props.renderItems(items)}
+      <Show when={props.picker.correctionControls}>
+        {(corrections) => (
+          <ComposerCorrectionControls {...corrections()} menuControls={props.controls} />
+        )}
+      </Show>
+    </>
+  );
 }

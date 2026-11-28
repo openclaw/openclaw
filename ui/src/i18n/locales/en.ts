@@ -69,6 +69,7 @@ type EnglishCatalog = TranslationMap & {
       clawhub: TranslationMap;
       sidebar: TranslationMap;
       composer: TranslationMap;
+      corrections: TranslationMap;
       queue: TranslationMap;
       mentions: TranslationMap;
       permissions: TranslationMap;
@@ -1514,6 +1515,7 @@ const startupEnglish = {
   chat: {
     sessionAutomation: {},
     activityPills: {},
+    corrections: {},
     mobileDetails: {
       people: "People",
       outputs: "Outputs",

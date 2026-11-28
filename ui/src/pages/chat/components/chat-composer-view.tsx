@@ -26,6 +26,7 @@ import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx"
 import { ComposerContent } from "./chat-composer-content.tsx";
 import { ContextNotice } from "./chat-composer-context.tsx";
 import { renderChatPrimaryActionsSolid as ChatPrimaryActions } from "./chat-composer-controls.tsx";
+import { ChatComposerCorrections } from "./chat-composer-corrections.tsx";
 import "../../../styles/chat/emoji-menu.css";
 import "../../../styles/chat/mention-menu.css";
 import { ChatComposerDisabledBanner } from "./chat-composer-disabled-banner.tsx";
@@ -604,6 +605,8 @@ export function renderChatComposerView(
                     pluginActions: readPluginActions()?.(),
                     inputHandle,
                     capabilityMenu: props.capabilityMenu,
+                    correctionControls:
+                      context().runControlsProps.microphonePicker?.correctionControls,
                     disabled: !context().canCompose || props.suggestionComposer === true,
                     open: capabilityOpen(),
                     view: capabilityView(),
@@ -664,6 +667,7 @@ export function renderChatComposerView(
             </div>
           </div>
           <ComposerWidthEdge options={() => props} shell={() => shell} />
+          <ChatComposerCorrections context={context()} />
         </regions.ComposerInputScope>
       ) : memberWelcome.active() ? (
         memberWelcome.step()
