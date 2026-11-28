@@ -570,7 +570,7 @@ describe("openclaw path CLI", () => {
         expected: {
           ok: false,
           reason: "type-mismatch",
-          detail: "frontmatter key 'title' already exists",
+          detail: "frontmatter key 'title' already exists; use set, not insert",
         },
       },
       {
