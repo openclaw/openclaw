@@ -479,6 +479,17 @@ class ChatMarkdownTest {
   }
 
   @Test
+  fun fenceInfoAttributesMayFollowTheLanguageAfterAnyWhitespace() {
+    val code = "val x = 1"
+
+    val expected = codeHighlightTokens(code, "kotlin")
+
+    assertTrue(expected.isNotEmpty())
+    assertEquals(expected, codeHighlightTokens(code, "kotlin linenums"))
+    assertEquals(expected, codeHighlightTokens(code, "kotlin\tlinenums"))
+  }
+
+  @Test
   fun highlightedCodeAppliesThemeTokenColors() {
     val colors = CodeTokenColors(keyword = Color.Red, string = Color.Green, comment = Color.Gray, number = Color.Blue)
 

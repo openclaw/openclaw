@@ -360,7 +360,7 @@ internal fun codeHighlightTokens(
   val key =
     language
       ?.trim()
-      ?.substringBefore(' ')
+      ?.takeWhile { !it.isWhitespace() }
       ?.lowercase(Locale.US)
       .orEmpty()
   val spec = codeLanguageSpecs[key] ?: return emptyList()
