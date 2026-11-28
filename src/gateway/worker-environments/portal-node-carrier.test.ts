@@ -15,10 +15,122 @@ import {
   deferredPortalValue,
 } from "./portal-node-carrier.test-support.js";
 import * as support from "./service.test-support.js";
+import { WorkerEnvironmentMutationPendingError } from "./store-errors.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
 describe("worker node portal carrier", () => {
   support.setupWorkerEnvironmentServiceSuite();
+
+  it.each(["discovery", "dispatch"] as const)(
+    "waits for inventory settlement during %s and rechecks attachment ownership",
+    async (stage) => {
+      const record = await support.seedReadyNodeDesktop("worker-node-portal-pending");
+      const proof = portalNodeProof(record.nodeDeviceId!);
+      const transport = pendingPortalTransport({ proof, isProofCurrent: () => true });
+      const streamed = fakePortalBroker();
+      const carrier = createWorkerNodePortalCarrier({ store: support.testState.store });
+      carrier.bindRuntime({ transport: transport.transport, streamBroker: streamed.broker });
+      const portal = await carrier.open({
+        environmentId: record.environmentId,
+        ownerEpoch: record.ownerEpoch,
+        remotePort: 4321,
+      });
+      const settled = createDeferred();
+      const refused = createDeferred();
+      let pending = stage === "discovery";
+      const assertCurrent = () => {
+        if (pending) {
+          refused.resolve();
+          throw new WorkerEnvironmentMutationPendingError(record.environmentId, settled.promise);
+        }
+      };
+      if (stage === "dispatch") {
+        transport.invoke.mockImplementationOnce(async (request) => {
+          pending = true;
+          expect(request.isDispatchAuthorized()).toBe(false);
+          return { ok: false, error: { code: "REVOKED", message: "runtime authority closed" } };
+        });
+      }
+      const connection = portal.connect(assertCurrent);
+      // Attach a handler before the barrier so the baseline's rejection is observed.
+      const result = connection.then(
+        (stream) => ({ stream }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await refused.promise;
+        await setImmediate();
+        expect(transport.invoke).toHaveBeenCalledTimes(stage === "dispatch" ? 1 : 0);
+        pending = false;
+        settled.resolve();
+        await support.waitForFast(() =>
+          expect(transport.invoke).toHaveBeenCalledTimes(stage === "dispatch" ? 2 : 1),
+        );
+        if (stage === "dispatch") {
+          // Discard the fake broker's cancelled first ticket.
+          streamed.attachNext().destroy();
+        }
+        const stream = streamed.attachNext();
+        expect(await result).toEqual({ stream });
+      } finally {
+        settled.resolve();
+        await portal.close();
+        await result;
+      }
+    },
+  );
+
+  it.each(["revocation", "close"] as const)(
+    "does not admit a portal after %s while inventory settlement is pending",
+    async (ending) => {
+      const record = await support.seedReadyNodeDesktop("worker-node-portal-pending-stop");
+      const transport = pendingPortalTransport({
+        proof: portalNodeProof(record.nodeDeviceId!),
+        isProofCurrent: () => true,
+      });
+      const carrier = createWorkerNodePortalCarrier({ store: support.testState.store });
+      carrier.bindRuntime({
+        transport: transport.transport,
+        streamBroker: fakePortalBroker().broker,
+      });
+      const portal = await carrier.open({
+        environmentId: record.environmentId,
+        ownerEpoch: record.ownerEpoch,
+        remotePort: 4321,
+      });
+      const settled = createDeferred();
+      const refused = createDeferred();
+      let revoked = false;
+      const result = portal
+        .connect(() => {
+          if (revoked) {
+            throw new Error("attachment revoked");
+          }
+          refused.resolve();
+          throw new WorkerEnvironmentMutationPendingError(record.environmentId, settled.promise);
+        })
+        .catch((error: unknown) => error);
+      try {
+        await refused.promise;
+        if (ending === "close") {
+          await portal.close();
+        } else {
+          revoked = true;
+          settled.resolve();
+        }
+        expect(await result).toMatchObject({
+          message:
+            ending === "close"
+              ? "Worker environment node portal owner stopped"
+              : "attachment revoked",
+        });
+        expect(transport.invoke).not.toHaveBeenCalled();
+      } finally {
+        settled.resolve();
+        await portal.close();
+      }
+    },
+  );
 
   it.each(["discovery", "dispatch"] as const)(
     "rejects resource revocation during %s before node I/O",
