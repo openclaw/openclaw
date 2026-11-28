@@ -60,6 +60,11 @@ export function isNativeAppUiClient(client?: {
   );
 }
 
+/** Shared Control UI renderers; identity never grants operator authority or client capabilities. */
+export function isControlUiClient(client?: { id?: string | null; mode?: string | null }): boolean {
+  return client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI || isNativeAppUiClient(client);
+}
+
 export type GatewayClientMode = (typeof GATEWAY_CLIENT_MODES)[keyof typeof GATEWAY_CLIENT_MODES];
 
 export type GatewayClientInfo = {
