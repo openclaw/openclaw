@@ -25,9 +25,9 @@ When a Gateway restart interrupts a running script before webhook delivery, Open
 
 Primary webhooks record delivery after an HTTP 2xx acknowledgment. An HTTP rejection
 records **Not delivered**. If the request may have reached the receiver but its
-response is lost or times out, delivery stays **Unknown**; the transport does not
-retry that ambiguous send. Required delivery also leaves completion unknown,
-while best-effort delivery can complete successfully without claiming delivery.
+response is lost or times out, delivery stays **Unknown**. OpenClaw does
+not retry that ambiguous send. If execution succeeded, completion also stays
+**Unknown**.
 
 When `gateway.publicOrigin` is configured and the Control UI is enabled, chat
 notifications include an `Inspect` link into the Control UI. Command and script
@@ -90,9 +90,9 @@ When an announcement omits `delivery.accountId`, OpenClaw uses the remembered se
 
 For announce delivery in the Control UI Automations editor, choose a channel and an explicit **Account ID** under **Advanced** to see configured conversation targets in the **To** field. Selecting a target preserves your chosen account and does not infer a topic. Changing the agent, delivery mode, channel, account, or recipient clears the previous topic when you save. These configured suggestions apply only to the primary announce destination; failure-alert routing remains separate. You can still enter a target that is not in the suggestions.
 
-On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <channel-plugin-id>` unless a provider-prefixed `--to` or a preserved session route selects the channel. Use `--best-effort-deliver` only when unresolved fallback delivery is acceptable; it does not choose a channel, and a delivery failure does not fail the job.
+On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <channel-plugin-id>` unless a provider-prefixed `--to` or a preserved session route selects the channel.
 
-Channel announcements retry transient failures only when no payload may have reached the recipient. A successful retry records delivery without retaining the earlier attempt's error, including with best-effort delivery. Partial or ambiguous sends are not replayed by the announcement retry loop.
+Channel announcements retry transient failures only when no payload may have reached the recipient. A successful retry records delivery and clears the earlier attempt's error. Partial or ambiguous sends are not replayed by the announcement retry loop.
 
 When announce delivery uses `channel: "last"` or omits `channel`, a provider-prefixed target such as `telegram:123` can select the channel before the scheduler falls back to session history or a single configured channel. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the target prefix must name the same provider; `channel: "whatsapp"` with `to: "telegram:123"` is rejected instead of letting WhatsApp interpret the Telegram ID as a phone number. Target-kind and service prefixes (`channel:<id>`, `user:<id>`, `imessage:<handle>`, `sms:<number>`) stay channel-owned target syntax, not provider selectors.
 
