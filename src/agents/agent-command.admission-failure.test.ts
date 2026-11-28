@@ -260,3 +260,45 @@ it.each([
   expect(platformSend).not.toHaveBeenCalled();
   expect(state.deliverAgentCommandResultMock).not.toHaveBeenCalled();
 });
+
+it.each([
+  ["before it started", false],
+  ["after it started", undefined],
+] as const)("marks whether a run that failed %s showed nothing", async (when, providerStarted) => {
+  const { opts } = await fixture();
+  state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
+    if (when === "after it started") {
+      await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+    }
+    throw new Error("Attempt failed");
+  });
+
+  const error = await agentCommandFromGatewayIngress(opts, ...GATEWAY_INGRESS_ARGS).catch(
+    (caught: unknown) => caught,
+  );
+
+  expect(error).toBeInstanceOf(Error);
+  if (providerStarted === false) {
+    expect(error).toMatchObject({ providerStarted: false });
+  } else {
+    expect(error).not.toHaveProperty("providerStarted");
+  }
+});
+
+it("does not mark a shutdown reason that other runs share", async () => {
+  const { opts } = await fixture();
+  const controller = new AbortController();
+  const shutdown = new Error("Gateway is restarting");
+  state.runAgentAttemptMock.mockImplementationOnce(async () => {
+    controller.abort(shutdown);
+    throw shutdown;
+  });
+
+  await expect(
+    agentCommandFromGatewayIngress(
+      { ...opts, abortSignal: controller.signal },
+      ...GATEWAY_INGRESS_ARGS,
+    ),
+  ).rejects.toThrow();
+  expect(shutdown).not.toHaveProperty("providerStarted");
+});

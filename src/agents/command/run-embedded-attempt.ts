@@ -671,6 +671,16 @@ export async function runEmbeddedAgentAttempt(params: RunEmbeddedAgentAttemptPar
       });
       await fallbackTrajectoryRecorder?.flush();
       await deferredLifecycle.complete();
+      // A turn that never started showed nothing; callers that owe a reply need that fact.
+      // Shutdown aborts every run with one shared reason, which must not carry this run's mark.
+      if (
+        !executionStarted &&
+        !params.opts.abortSignal?.aborted &&
+        err instanceof Error &&
+        Object.isExtensible(err)
+      ) {
+        Object.assign(err, { providerStarted: false });
+      }
       throw err;
     }
   }
