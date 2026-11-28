@@ -536,10 +536,10 @@ contains more than the visible summary. To change models, use the model picker
 in the composer; retrying continues from the existing conversation without
 replaying the original request. Internal updates that return no answer keep their
 failed-run diagnostics without adding a retry notice to an already successful
-conversation. Older reports for results that did not reach the conversation are
-listed under **Subagent results not delivered**. Expand the entry to read the
-saved result. If the reply itself was waiting for that result and could not
-finish, its failure notice stays in the conversation.
+conversation. When a background subagent result could not be delivered, it
+appears under **Saved subagent result** (or **Saved subagent results**). Expand
+the entry to read it. If the reply itself was waiting for that subagent and
+could not finish, its failure notice stays in the conversation.
 
 Open **Panels**, then choose **Subagents** to inspect child runs, including swarm
 workers. **Details** also lists the conversation's subagents and opens a selected

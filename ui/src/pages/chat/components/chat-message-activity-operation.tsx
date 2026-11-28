@@ -98,8 +98,8 @@ export function PreparedActivityRow(props: {
         </span>
         <span class="chat-tool-disclosure__content">
           <span class="chat-tool-row__title">
-            {isDeliveryReport() && detail()
-              ? t("chat.toolCards.subagentReport")
+            {isDeliveryReport()
+              ? t("chat.toolCards.subagentResult")
               : props.activity.title || resolveToolDisplayIdentity(props.activity.name ?? "").label}
           </span>
         </span>

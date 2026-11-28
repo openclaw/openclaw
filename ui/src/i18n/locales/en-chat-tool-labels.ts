@@ -4,9 +4,9 @@ import { en } from "./en.ts";
 const enChatToolLabels = {
   chat: {
     toolCards: {
-      undeliveredSubagentResult: "Subagent result not delivered",
-      undeliveredSubagentResults: "Subagent results not delivered",
-      subagentReport: "Subagent report",
+      savedSubagentResult: "Saved subagent result",
+      savedSubagentResults: "Saved subagent results",
+      subagentResult: "Subagent result",
       patch: {
         move: "Move {source} → {path}",
         add: "Add {path}",

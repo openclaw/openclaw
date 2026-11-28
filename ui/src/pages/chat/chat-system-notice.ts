@@ -138,7 +138,7 @@ export function projectChatSystemNotice(
     ];
   }
   if (raw?.role === "custom" && raw.customType === "subagent-delivery-failed") {
-    const title = t("chat.toolCards.undeliveredSubagentResult");
+    const title = t("chat.toolCards.savedSubagentResult");
     const error = extractTextCached(item.message) ?? "";
     // The work log owns these reports; hiding tools must not hide a retained result.
     return showToolCalls

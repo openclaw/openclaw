@@ -68,8 +68,8 @@ export function describeToolGroup(
       total: all.length,
       label: t(
         all.length === 1
-          ? "chat.toolCards.undeliveredSubagentResult"
-          : "chat.toolCards.undeliveredSubagentResults",
+          ? "chat.toolCards.savedSubagentResult"
+          : "chat.toolCards.savedSubagentResults",
       ),
       outcomes: [],
     };
