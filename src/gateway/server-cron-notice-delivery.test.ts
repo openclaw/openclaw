@@ -6,6 +6,7 @@ import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/ru
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readVisibleSessionTranscriptMessageEntries } from "../plugin-sdk/session-transcript-runtime.js";
 import { captureSessionGeneration } from "../sessions/session-notice.js";
+import { projectChatDisplayMessages } from "./chat-display-projection.core.js";
 import { createGatewayCronTargetResolver } from "./server-cron-targets.js";
 import {
   createCronFixture,
@@ -24,7 +25,7 @@ installRequesterCronAuthorityTestHooks();
 
 const NOTICE = '⚠️ Automation "Health check" was auto-disabled: proof notice.';
 
-async function visibleNotices(): Promise<number> {
+async function shownNoticeRoles(): Promise<unknown[]> {
   const generation = await captureSessionGeneration({
     config: getRuntimeConfigSnapshot()!,
     agentId: "main",
@@ -36,10 +37,10 @@ async function visibleNotices(): Promise<number> {
     sessionId: generation?.sessionId ?? SESSION_ID,
     ...(generation ? { storePath: generation.storePath } : {}),
   });
-  // JSON escapes the notice's quotes; match its unquoted tail.
-  return entries.filter((entry) =>
-    JSON.stringify(entry).includes("was auto-disabled: proof notice."),
-  ).length;
+  // Roles of what chat shows; JSON escapes the notice's quotes, so match its unquoted tail.
+  return projectChatDisplayMessages(entries.map((entry) => entry.message))
+    .filter((message) => JSON.stringify(message).includes("was auto-disabled: proof notice."))
+    .map((message) => message.role);
 }
 
 it("shows a cron system notice once when the owner conversation's model cannot run", async () => {
@@ -74,10 +75,8 @@ it("shows a cron system notice once when the owner conversation's model cannot r
     const receipt = expectDefined(handoff.mock.results[0]?.value, "notice receipt");
     const settled = await receipt.settled;
     expect(settled.status).not.toBe("completed");
-    await vi.waitFor(async () => expect(await visibleNotices()).toBeGreaterThan(0), {
-      timeout: 10_000,
-    });
-    expect(await visibleNotices()).toBe(1);
+    // Shown once, as the posted notice rather than the turn's input.
+    expect(await shownNoticeRoles()).toEqual(["assistant"]);
   } finally {
     handoff.mockRestore();
   }
