@@ -16,6 +16,18 @@ export type ChannelPairingPrompt = {
   request: ChannelsPairingRequest;
   notify: boolean;
   bootstrapCommandOwner: boolean;
+  /** The existing person the approving administrator says this sender is, if any. */
+  linkProfileId: string | null;
+};
+
+export type ChannelPairingPromptPatch = Partial<
+  Pick<ChannelPairingPrompt, "notify" | "bootstrapCommandOwner" | "linkProfileId">
+>;
+
+/** People an administrator can link an approved sender to; `selfProfileId` is the approver. */
+export type ChannelPairingLinkTargets = {
+  selfProfileId: string | null;
+  people: ReadonlyArray<{ id: string; label: string }>;
 };
 
 /** What the last Save of one channel reported; only that channel's dialog shows it. */
@@ -47,6 +59,7 @@ export type ChannelsProps = {
   pairingNotice: string | null;
   canManagePairing: boolean;
   canAdmin: boolean;
+  pairingLinkTargets: ChannelPairingLinkTargets | null;
   showAdvancedSettings: boolean;
   selectedChannel: string | null;
   onShowDetail: (channelId: string) => void;
@@ -59,9 +72,7 @@ export type ChannelsProps = {
   onPairingReviewAccount: (channel: string, accountId: string) => void;
   onPairingApprove: (request: ChannelsPairingRequest) => void;
   onPairingDismiss: (request: ChannelsPairingRequest) => void;
-  onPairingPromptChange: (
-    patch: Partial<Pick<ChannelPairingPrompt, "notify" | "bootstrapCommandOwner">>,
-  ) => void;
+  onPairingPromptChange: (patch: ChannelPairingPromptPatch) => void;
   onPairingPromptCancel: () => void;
   onPairingPromptConfirm: () => void;
   onWhatsAppStart: (force: boolean) => void | Promise<void>;

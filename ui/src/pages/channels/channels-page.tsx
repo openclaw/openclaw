@@ -36,6 +36,12 @@ import {
   rebaseChannelConfigEdits,
 } from "./channel-config-draft.ts";
 import { createChannelConfigNavigation } from "./channel-config-navigation.ts";
+import {
+  formatPairingApprovalNotice,
+  pairingLinkLabel,
+  projectPairingPeople,
+  readPairingLinkTargets,
+} from "./pairing-link.ts";
 import { createChannelPluginPresentation } from "./plugin-presentation-loader.ts";
 import { ChannelsView, resolveChannelLabel, resolveChannelOrder } from "./view.tsx";
 import type { ChannelPairingPrompt, ChannelSaveFeedback, ChannelsProps } from "./view.types.ts";
@@ -77,6 +83,7 @@ export function ChannelsPage() {
   const gatewayProjection = projectGateway(context.gateway);
   const channelsProjection = projectChannels(channelCapability);
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
+  const people = projectPairingPeople(context.gateway);
   const settings = projectSource(context.theme, {
     read: () => loadSettings().showAdvancedSettings === true,
     // The projection owns theme observation for the persisted advanced-settings preference.
@@ -565,13 +572,12 @@ export function ChannelsPage() {
         request,
         notify: false,
         bootstrapCommandOwner: false,
+        linkProfileId: null,
       },
     });
   }
 
-  function patchPairingPrompt(
-    patch: Partial<Pick<ChannelPairingPrompt, "notify" | "bootstrapCommandOwner">>,
-  ) {
+  function patchPairingPrompt(patch: Parameters<ChannelsProps["onPairingPromptChange"]>[0]) {
     if (!operations.prompt) {
       return;
     }
@@ -597,28 +603,20 @@ export function ChannelsPage() {
       return;
     }
 
+    const linked = prompt.linkProfileId
+      ? pairingLinkLabel(people.read(), prompt.linkProfileId)
+      : "";
     const result = await channelCapability.approvePairing({
       ...target,
       notify: prompt.notify,
       bootstrapCommandOwner: prompt.bootstrapCommandOwner,
+      ...(prompt.linkProfileId ? { linkProfileId: prompt.linkProfileId } : {}),
     });
     if (!result || operations.prompt !== prompt) {
       return;
     }
     updateOperations({ prompt: null });
-    setPairingNotice(
-      t(
-        result.commandOwnerBootstrap === "unavailable"
-          ? result.notification === "failed"
-            ? "channels.pairing.approvedFollowupsFailedNotice"
-            : "channels.pairing.approvedOwnerFailedNotice"
-          : result.notification === "failed"
-            ? "channels.pairing.approvedNotificationFailedNotice"
-            : result.commandOwnerBootstrap === "configured"
-              ? "channels.pairing.approvedOwnerNotice"
-              : "channels.pairing.approvedNotice",
-      ),
-    );
+    setPairingNotice(formatPairingApprovalNotice(result, linked));
   }
 
   function presentWhatsApp(pending: Promise<void>) {
@@ -653,6 +651,11 @@ export function ChannelsPage() {
       pairingNotice: pairingNotice(),
       canManagePairing,
       canAdmin,
+      // Only an administrator approving a request reads the people directory.
+      pairingLinkTargets:
+        canAdmin && operations.prompt?.kind === "approve"
+          ? readPairingLinkTargets(people.read(), context.gateway.snapshot.selfUser?.id)
+          : null,
       showAdvancedSettings: settings.read(),
       onPairingRoot: (element) => {
         pairingRoot = element;

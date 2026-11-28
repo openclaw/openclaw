@@ -86,6 +86,7 @@ export function createChannelsViewProps(
     pairingNotice: null,
     canManagePairing: true,
     canAdmin: true,
+    pairingLinkTargets: null,
     showAdvancedSettings: false,
     selectedChannel: null,
     onShowDetail: () => {},

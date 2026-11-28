@@ -4,6 +4,7 @@ import { getChannelSetupPlugin } from "../channels/plugins/setup-registry.js";
 import type {
   ChannelSetupPlugin,
   ChannelSetupWizardAdapter,
+  SetupChannelsOptions,
 } from "../channels/plugins/setup-wizard-types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -26,10 +27,11 @@ export function formatAccountLabel(accountId: string): string {
 /** Separates the operator's administrative identity from channel chat access. */
 export async function maybeConfigureCommandOwner(params: {
   cfg: OpenClawConfig;
-  channels: Array<{ id: ChannelChoice; label: string }>;
+  channels: Array<{ id: ChannelChoice; label: string; accountId: string }>;
   prompter: WizardPrompter;
+  operatorProfile?: SetupChannelsOptions["operatorProfile"];
 }): Promise<OpenClawConfig> {
-  const { cfg, channels, prompter } = params;
+  const { cfg, channels, prompter, operatorProfile } = params;
   if (hasConfiguredCommandOwners(cfg) || channels.length === 0) {
     return cfg;
   }
@@ -77,6 +79,22 @@ export async function maybeConfigureCommandOwner(params: {
   });
   if (!confirmed) {
     return cfg;
+  }
+  if (
+    operatorProfile &&
+    (await prompter.confirm({
+      message: t("wizard.channels.commandOwnerLinkProfile", {
+        owner,
+        profile: operatorProfile.label,
+      }),
+      initialValue: true,
+    }))
+  ) {
+    operatorProfile.onLink({
+      channelId: channel.id,
+      accountId: channel.accountId,
+      senderId: owner.slice(owner.indexOf(":") + 1),
+    });
   }
   return { ...cfg, commands: { ...cfg.commands, ownerAllowFrom: [owner] } };
 }

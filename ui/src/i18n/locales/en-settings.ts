@@ -331,6 +331,15 @@ const enSettings = {
       commandOwnerHelp:
         "Command owners can run privileged commands and approve dangerous actions. This option is only available while no owner is configured.",
       commandOwnerNeedsAdmin: "No command owner is set. Ask an admin to set one.",
+      linkPerson: "Link to person",
+      linkNone: "Don’t link",
+      linkSelf: "This is me ({name})",
+      linkHelp:
+        "Linking records that this chat account belongs to that person, so messages from it act with their current role. Only link someone you know: the sender proved control of the account by messaging the bot, not who they are.",
+      linkedNotice: "Linked to {name}.",
+      linkedElsewhereNotice:
+        "This sender is already linked to another person. Unlink it from that person first.",
+      linkFailedNotice: "Couldn’t link the sender to a person.",
       approvedNotice: "DM access approved.",
       approvedOwnerNotice: "DM access approved. Command owner set.",
       approvedNotificationFailedNotice: "DM access approved. Couldn’t notify the requester.",

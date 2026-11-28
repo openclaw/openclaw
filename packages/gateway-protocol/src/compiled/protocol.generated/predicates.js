@@ -977,7 +977,7 @@ var External = [
     /(^probe$|^timeoutMs$|^channel$)/u,
     /(^channel$|^accountId$)/u,
     /(^format$|^channel$|^accountId$|^expectedOwnerId$)/u,
-    /(^channel$|^accountId$|^requestId$|^notify$|^bootstrapCommandOwner$)/u,
+    /(^channel$|^accountId$|^requestId$|^notify$|^bootstrapCommandOwner$|^linkProfileId$)/u,
     /(^channel$|^accountId$|^code$|^expectedOwnerId$)/u,
     /(^channel$|^accountId$|^requestId$)/u,
     /(^channel$|^accountId$)/u,
@@ -7955,7 +7955,10 @@ var External = [
     (value.notify === void 0 || !("notify" in value) || check_64(value.notify)) &&
     (value.bootstrapCommandOwner === void 0 ||
       !("bootstrapCommandOwner" in value) ||
-      check_64(value.bootstrapCommandOwner)),
+      check_64(value.bootstrapCommandOwner)) &&
+    (value.linkProfileId === void 0 ||
+      !("linkProfileId" in value) ||
+      check_264(value.linkProfileId)),
   check_1120 = (value) =>
     typeof value == "object" &&
     value !== null &&

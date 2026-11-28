@@ -559,6 +559,8 @@ export const zh_CN = {
       commandOwnerUserId: "你的个人 {label} 用户 ID（不是机器人、服务器或频道 ID）",
       commandOwnerInvalidId: "请输入一个不含空格或通配符的用户 ID。",
       commandOwnerConfirm: "这是我的账号：允许 {owner} 管理此安装？",
+      commandOwnerLinkProfile:
+        "同时将 {owner} 关联到你的个人资料（{profile}），让 OpenClaw 知道这个聊天账号是你？",
       account: "{label} 账号",
       configuredAction: "{label} 已配置。你想怎么处理？",
       configuredDeleteUnsupported: "{label} 不支持删除配置项。",

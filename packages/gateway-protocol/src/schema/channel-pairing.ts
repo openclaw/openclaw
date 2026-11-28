@@ -2,7 +2,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
-import { NonEmptyString } from "./primitives.js";
+import { NonEmptyString, UserProfileIdSchema } from "./primitives.js";
 
 const CliPairingAccountIdSchema = Type.String({ minLength: 1, pattern: "\\S" });
 
@@ -76,6 +76,8 @@ export const ChannelsPairingApproveParamsSchema = Type.Union([
     requestId: NonEmptyString,
     notify: Type.Optional(Type.Boolean()),
     bootstrapCommandOwner: Type.Optional(Type.Boolean()),
+    /** Administrator attestation: link the approved sender to this existing person profile. */
+    linkProfileId: Type.Optional(UserProfileIdSchema),
   }),
   closedObject({
     channel: NonEmptyString,
@@ -91,6 +93,9 @@ export const ChannelsPairingApproveResultSchema = closedObject({
   notification: Type.String({ enum: ["not-requested", "sent", "unsupported", "failed"] }),
   commandOwnerBootstrap: Type.String({
     enum: ["not-requested", "configured", "already-configured", "unavailable"],
+  }),
+  identityLink: Type.String({
+    enum: ["not-requested", "linked", "linked-elsewhere", "unavailable"],
   }),
 });
 

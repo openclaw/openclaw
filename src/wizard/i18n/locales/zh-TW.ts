@@ -561,6 +561,8 @@ export const zh_TW = {
       commandOwnerUserId: "你的個人 {label} 使用者 ID（不是機器人、伺服器或頻道 ID）",
       commandOwnerInvalidId: "請輸入一個不含空格或萬用字元的使用者 ID。",
       commandOwnerConfirm: "這是我的帳號：允許 {owner} 管理此安裝？",
+      commandOwnerLinkProfile:
+        "同時將 {owner} 連結到你的個人檔案（{profile}），讓 OpenClaw 知道這個聊天帳號是你？",
       account: "{label} 帳號",
       configuredAction: "{label} 已設定。你想怎麼處理？",
       configuredDeleteUnsupported: "{label} 不支援刪除設定項。",

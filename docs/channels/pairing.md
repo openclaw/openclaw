@@ -47,10 +47,19 @@ approval dialog also offers these explicit options when supported:
 - **Notify the requester after approval**
 - **Also make this sender the first command owner**, shown only when no command
   owner exists and you have admin access
+- **Link to person**, shown when you have admin access: choose **This is me** to
+  link the sender to your own profile, or pick another existing person. The
+  sender proved they control the account by messaging the bot; the link records
+  your attestation of who they are. See
+  [Channel identity links](/concepts/user-model#channel-identity-links).
 
 After approval, **DM access approved** confirms access even if notifying the
-requester or setting the command owner fails. Do not approve the request again.
-If the command owner could not be set, ask an admin to set one.
+requester, setting the command owner, or linking the sender fails. Do not
+approve the request again. If the command owner could not be set, ask an admin
+to set one. A sender already linked to another person keeps that link; unlink it
+from that person first. The shared **Owner** profile cannot be linked.
+
+Approving from the CLI never links the sender to a person.
 
 Choose **Dismiss** to remove a pending request without approving it. Dismissal is
 not a permanent block; the sender can request access again later.
@@ -81,6 +90,15 @@ Run `openclaw channels add` and complete the channel setup. When no command owne
 exists, the wizard offers **Set up my operator account** separately from chat
 access. Enter your personal user ID and confirm the exact account that may
 administer this installation. **Skip for now** leaves ownership unchanged.
+
+When you run channel setup from the Control UI signed in with your own
+administrator profile, the wizard then asks whether to also link that account to
+your profile. Linking happens after the channel config is saved, and the wizard
+reports whether it succeeded. The link uses the personal ID exactly as entered,
+so enter it in the form the channel reports for incoming messages (for example,
+Signal UUID senders appear as `uuid:<UUID>`). Setup from the CLI, or signed in as the shared
+**Owner**, does not offer the link. The DM allowlist step never links anyone: an
+allowlist decides who may message the bot, not who they are.
 
 This also works for Discord servers and other group channels with DMs disabled.
 An owner can use `/update`, restart the Gateway, change configuration, and approve

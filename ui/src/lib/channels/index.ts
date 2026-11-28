@@ -670,9 +670,7 @@ export function createChannelCapability(gateway: {
       publish();
     },
     refreshPairing: (): Promise<void> => run(() => loadChannelPairing()),
-    approvePairing: (
-      params: Required<Extract<ChannelsPairingApproveParams, { requestId: string }>>,
-    ) =>
+    approvePairing: (params: Extract<ChannelsPairingApproveParams, { requestId: string }>) =>
       run(() =>
         mutateChannelPairing(params.requestId, "approve", (client) =>
           client.request<ChannelsPairingApproveResult>("channels.pairing.approve", params),
