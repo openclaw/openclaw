@@ -60,6 +60,28 @@ async function writeRichProject(root: string): Promise<void> {
 }
 
 describe("Template projects", () => {
+  it("identifies each invalid manifest field when building a package", async () => {
+    const project = tempDirs.make("openclaw-template-invalid-fields-");
+    await writePackage(project);
+    await writeFile(
+      join(project, "CLAW.md"),
+      [
+        "---",
+        "schemaVersion: 1",
+        "agent: { id: field-demo }",
+        "skills:",
+        "  - { ref: field-handbook, version: latest }",
+        '  - { ref: field-notes, version: "^2.0.0" }',
+        "---",
+      ].join("\n") + "\n",
+    );
+    const build = buildTemplateProject(project, join(project, "demo.tgz"));
+    await expect(build).rejects.toMatchObject({ code: "project_invalid" });
+    for (const index of [0, 1]) {
+      await expect(build).rejects.toThrow(`$.skills[${index}].version`);
+    }
+  });
+
   it("builds and plans native agent settings and exact dependencies from CLAW.md alone", async () => {
     const project = tempDirs.make("openclaw-template-inline-");
     await writePackage(project);
