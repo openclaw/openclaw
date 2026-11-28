@@ -112,14 +112,27 @@ function createUndiciOriginDispatcher(
     : createUndiciPool(origin, options);
 }
 
+/**
+ * Agent options whose origin factory is always callable. Wrappers that must
+ * observe created children delegate through it without asserting the optional
+ * Undici member.
+ */
+export type Http1AgentOptions = NonNullable<UndiciAgentOptions> & {
+  factory: NonNullable<NonNullable<UndiciAgentOptions>["factory"]>;
+};
+
 export function buildHttp1AgentOptions(
   options: UndiciAgentOptions = {},
   timeoutMs?: number,
-): NonNullable<UndiciAgentOptions> {
+): Http1AgentOptions {
   const timeout = normalizedTimeout(timeoutMs);
   return {
-    factory: createUndiciOriginDispatcher,
     ...options,
+    // Undici's own default factory is a per-origin Pool/Client. Ours is the
+    // HTTP/1-only origin dispatcher. Normalize so callers can rely on a callable
+    // factory: an explicit custom factory wins, undefined falls back to ours,
+    // matching what Undici's Agent constructor would otherwise apply.
+    factory: options.factory ?? createUndiciOriginDispatcher,
     // Undici 8 defaults to HTTP/2, whose dispatcher overrides are unreliable.
     allowH2: false,
     connect:

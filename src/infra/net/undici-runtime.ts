@@ -5,6 +5,7 @@ import {
   buildHttp1ProxyAgentOptions,
   buildProxyConnectOptions,
   loadUndiciModule,
+  type Http1AgentOptions,
 } from "./undici-dispatcher-options.js";
 import { withUndiciErrorDiagnostics } from "./undici-error-diagnostics.js";
 
@@ -45,7 +46,52 @@ export function createHttp1Agent(
   timeoutMs?: number,
 ): import("undici").Agent {
   const { Agent } = loadUndiciRuntimeDeps();
-  return withUndiciErrorDiagnostics(new Agent(buildHttp1AgentOptions(options, timeoutMs)));
+  const agentOptions = buildHttp1AgentOptions(options, timeoutMs);
+  // Undici's Agent[kClose] starts child closes and clears kClients before the
+  // children finish, so a later Agent[kDestroy] iterates an empty map and never
+  // reaches a child holding an unfinished streaming response. Track each origin
+  // dispatcher the factory creates so the bounded-shutdown destroy fallback can
+  // still tear those children down; otherwise the socket keeps the process alive.
+  const ownedOriginDispatchers = new Set<import("undici").Dispatcher>();
+  const createOriginDispatcher = agentOptions.factory;
+  const factory: Http1AgentOptions["factory"] = (origin, childOptions) => {
+    const child = createOriginDispatcher(origin, childOptions);
+    for (const tracked of ownedOriginDispatchers) {
+      if (Reflect.get(tracked, "destroyed") === true) {
+        ownedOriginDispatchers.delete(tracked);
+      }
+    }
+    ownedOriginDispatchers.add(child);
+    return child;
+  };
+  const agent = withUndiciErrorDiagnostics(new Agent({ ...agentOptions, factory }));
+  return new Proxy(agent, {
+    get(target, property, receiver) {
+      if (property === "destroy") {
+        return (first?: Error | null | LifecycleCallback, second?: LifecycleCallback) => {
+          const callback = typeof first === "function" ? first : second;
+          const error = typeof first === "function" ? null : (first ?? null);
+          const owned = [...ownedOriginDispatchers];
+          ownedOriginDispatchers.clear();
+          const completion = Promise.all([
+            target.destroy(error),
+            ...owned.map((child) => child.destroy(error)),
+          ]).then(() => undefined);
+          if (!callback) {
+            return completion;
+          }
+          void completion.then(
+            () => callback(null, null),
+            (failure: unknown) => callback(toErrorObject(failure, "Agent destroy failed"), null),
+          );
+          return undefined;
+        };
+      }
+      // Helper methods keep the wrapper as their receiver so dispatch/close still
+      // address the real agent; only the destroy fallback also reaches children.
+      return Reflect.get(target, property, receiver);
+    },
+  });
 }
 
 function isSocksProxy(uri: string | undefined): boolean {
