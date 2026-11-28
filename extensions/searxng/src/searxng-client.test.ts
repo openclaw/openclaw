@@ -65,9 +65,26 @@ it.each([
   expect(fetch).not.toHaveBeenCalled();
 });
 
+it.each([
+  [{ country: "DE" }, "unsupported_country"],
+  [{ freshness: "week" }, "unsupported_freshness"],
+  [{ date_after: "2026-01-01" }, "unsupported_date_filter"],
+] as const)(
+  "reports unsupported filter %j instead of searching unfiltered",
+  async (filter, error) => {
+    const fetch = mockFetch([]);
+    await expect(search({ ...filter })).resolves.toMatchObject({ error });
+    expect(fetch).not.toHaveBeenCalled();
+  },
+);
+
 it("builds the configured request and normalizes, filters, and caps its results", async () => {
   const fetch = mockFetch([
-    row("cat", { content: "Meow", img_src: "https://img.test/cat.jpg" }),
+    row("cat", {
+      content: "Meow",
+      img_src: "https://img.test/cat.jpg",
+      publishedDate: "2026-11-27T09:15:00",
+    }),
     row("bad-title", { title: { text: "bad" } }),
     row("bad-url", { url: 3 }),
     row("text", { content: { text: "bad" } }),
@@ -83,6 +100,7 @@ it("builds the configured request and normalizes, filters, and caps its results"
         title: expect.stringContaining("cat"),
         snippet: expect.stringContaining("Meow"),
         img_src: "https://img.test/cat.jpg",
+        published: "2026-11-27T09:15:00",
         siteName: "example.com",
       },
       { url: "https://example.com/text" },

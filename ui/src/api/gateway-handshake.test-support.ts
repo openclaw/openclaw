@@ -46,6 +46,10 @@ export function useHandshakeHarness(crypto: unknown = { randomUUID: () => "hands
 
 export async function startConnect(client: GatewayBrowserClient, nonce = "handshake-challenge") {
   client.start();
+  return await challengeConnect(nonce);
+}
+
+export async function challengeConnect(nonce: string) {
   const ws = getLatestWebSocket();
   ws.emitOpen();
   ws.emitConnectChallenge({ nonce, ts: 1_800_000_000_000 });

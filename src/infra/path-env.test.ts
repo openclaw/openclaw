@@ -122,11 +122,11 @@ describe("ensureOpenClawCliOnPath", () => {
   }
 
   it("prepends the bundled app bin dir when a sibling openclaw exists", () => {
-    const { tmp, appBinDir, appCli } = setupAppCliRoot("case-bundled");
+    const { tmp, appBinDir } = setupAppCliRoot("case-bundled");
     resetBootstrapEnv();
 
     const updated = bootstrapPath({
-      execPath: appCli,
+      execPath: path.join(appBinDir, "node"),
       cwd: tmp,
       homeDir: tmp,
       platform: "darwin",
@@ -313,6 +313,7 @@ describe("ensureOpenClawCliOnPath", () => {
       homeDir: tmp,
       platform: "linux",
     });
+    expect(updated).toContain(xdgBinHome);
     expect(updated.indexOf(xdgBinHome)).toBeLessThan(updated.indexOf(localBin));
   });
 

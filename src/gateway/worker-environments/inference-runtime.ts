@@ -71,13 +71,12 @@ function buildContext(context: WorkerInferenceContext): Context | undefined {
     tools.push({
       name: tool.name,
       description: tool.description,
-      parameters: structuredClone(tool.parameters) as TSchema,
+      parameters: tool.parameters as TSchema,
     });
   }
   return {
     ...(context.systemPrompt !== undefined ? { systemPrompt: context.systemPrompt } : {}),
-    // Clone so provider mutation cannot touch the request.
-    messages: structuredClone(context.messages) as Context["messages"],
+    messages: context.messages as Context["messages"],
     ...(tools.length > 0 ? { tools } : {}),
   };
 }

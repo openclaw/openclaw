@@ -54,13 +54,14 @@ export async function resolveGatewayRequesterToolPolicies(
   options: {
     runtimePolicySessionKey: string;
     policyAgentId: string;
-    nodeExecSurface: boolean;
+    /** The grant belongs to a Gateway-launched CLI run, the twin of an embedded run. */
+    embeddedRunPolicy: boolean;
     accountId?: string;
   },
 ) {
-  // Only immutable Gateway-launched grants can opt into node exec. Match the
-  // embedded runner's wildcard sender policy while preserving owner WebChat.
-  const isOwnerInternalSession = options.nodeExecSurface && isInternalOwnerRequester(params);
+  // A Gateway-launched CLI run matches the embedded runner's sender policy: a senderless
+  // caller gets the wildcard entry, and owner WebChat keeps its exemption.
+  const isOwnerInternalSession = options.embeddedRunPolicy && isInternalOwnerRequester(params);
   const policies = await withPreparedSessionCapabilityRead(() =>
     resolveRequesterToolPolicies({
       config: params.cfg,
@@ -88,7 +89,7 @@ export async function resolveGatewayRequesterToolPolicies(
       modelId: params.modelId,
       senderPolicyMode: params.scheduledToolPolicy
         ? "never"
-        : options.nodeExecSurface
+        : options.embeddedRunPolicy
           ? isOwnerInternalSession
             ? "never"
             : "always"

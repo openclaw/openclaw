@@ -700,10 +700,9 @@ export default defineSingleProviderPluginEntry({
         ctx.modelApi === "google-generative-ai"
           ? googleReplay.sanitizeReplayHistoryAsync?.(ctx)
           : undefined,
-      resolveReasoningOutputMode: (ctx) =>
-        ctx.modelApi === "google-generative-ai"
-          ? googleReplay.resolveReasoningOutputMode?.(ctx)
-          : undefined,
+      // GenerateContent already separates native thought Parts from answer text.
+      resolveReasoningOutputMode: ({ modelApi }) =>
+        modelApi === "google-generative-ai" ? "native" : undefined,
       resolveThinkingProfile: resolveClawRouterThinkingProfile,
       normalizeToolSchemas: (ctx) => resolveToolFamily(ctx.modelId ?? "").normalizeToolSchemas(ctx),
       inspectToolSchemas: (ctx) => resolveToolFamily(ctx.modelId ?? "").inspectToolSchemas(ctx),

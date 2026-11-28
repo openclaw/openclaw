@@ -7,7 +7,7 @@ const url = "https://example.com/usage";
 const responseFetch = (response: Response) => withFetchPreconnect(async () => response);
 const streamResponse = (source: UnderlyingSource<Uint8Array>) =>
   new Response(new ReadableStream<Uint8Array>(source));
-const request = (fetchFn: typeof fetch, init: RequestInit = {}, timeout = 1000) =>
+const request = (fetchFn: typeof fetch, init: RequestInit, timeout = 1000) =>
   fetchJson(url, init, timeout, fetchFn);
 
 afterEach(() => vi.restoreAllMocks());

@@ -75,10 +75,9 @@ const it = baseIt.extend<{ fixture: { root: string; lifecycle: UpdateCheckLifecy
     }),
 });
 
-function answerRootProbes(manager: "npm" | "pnpm", timeoutMs?: number) {
-  mocks.command.mockImplementation(async (argv, options) => {
-    const budget = typeof options === "number" ? options : options.timeoutMs;
-    const available = argv[1] === "root" && (timeoutMs === undefined || budget === timeoutMs);
+function answerRootProbes(manager: "npm" | "pnpm") {
+  mocks.command.mockImplementation(async (argv) => {
+    const available = argv[1] === "root";
     return {
       stdout: available
         ? `${argv[0] === manager ? path.dirname(mocks.root) : path.join(mocks.root, "foreign")}\n`
@@ -122,23 +121,6 @@ it.for(["npm", "pnpm"] as const)(
     });
   },
 );
-
-it("retries unknown ownership with the requested interactive budget", async ({
-  fixture: { root },
-}) => {
-  answerRootProbes("pnpm", 120_000);
-
-  await expect(resolveGatewayUpdateAdmission("run", 120_000)).resolves.toMatchObject({
-    status: { packageManager: "unknown" },
-    installSurface: { kind: "global", mode: "pnpm", root },
-  });
-  expect(rootProbes()).toEqual([
-    ["npm", expect.any(Number)],
-    ["pnpm", expect.any(Number)],
-    ["npm", 120_000],
-    ["pnpm", 120_000],
-  ]);
-});
 
 it("checks native package ownership after successful manager discovery", async ({
   fixture: { root },

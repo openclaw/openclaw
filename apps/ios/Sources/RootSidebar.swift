@@ -12,6 +12,7 @@ struct RootSidebar: View {
     @State private var pullToSearch = RootSidebarPullTracker()
     @State private var collapsedParents: Set<String> = []
     @State private var presentedAttention: OpenClawChatAttentionPresentation?
+    @State private var hasShownStartupSkeleton = false
     @AppStorage("sidebar.pinnedSessionsCollapsed") private var pinnedSessionsCollapsed = false
     @AppStorage("sidebar.sessionsCollapsed") private var sessionsCollapsed = false
     @AppStorage(RootTabs.pinnedSidebarPagesStorageKey) private var pinnedPagesStorage: String = ""
@@ -26,11 +27,6 @@ struct RootSidebar: View {
 
     var body: some View {
         let categories = self.sessionCategories
-        let sessionSections = self.visibleSessionSections(categories: categories)
-        let sessionLayout = Self.sessionLayout(sessionSections)
-        let sidebarSessionKeys = Set(Self.flattened(sessionSections.flatMap(\.nodes)).map(\.session.key))
-        let actualSessionKeys = Set(self.model.sessions.map(\.key))
-        let showsAllSessions = sidebarSessionKeys.intersection(actualSessionKeys).count >= 15
         let rowPass = SessionRowPass(
             selectedSessionKey: resolvedSelectedSessionKey,
             mainSessionKey: resolvedMainSessionKey,
@@ -41,29 +37,11 @@ struct RootSidebar: View {
             VStack(alignment: .leading, spacing: 16) {
                 self.pagesSection(approvals: rowPass.approvals)
                     .padding(.top, 2)
-                if !sessionLayout.pinnedNodes.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        self.sessionSectionHeader(
-                            String(localized: "Pinned"),
-                            isCollapsed: self.$pinnedSessionsCollapsed,
-                            id: "RootTabs.Sidebar.PinnedSection")
-                        if !self.pinnedSessionsCollapsed {
-                            ForEach(self.displayRows(sessionLayout.pinnedNodes)) { row in
-                                self.sessionTreeRow(row, rowPass: rowPass)
-                            }
-                        }
-                    }
-                }
-                self.sessionsSection(
-                    sections: sessionLayout.sections,
-                    hasPinnedSessions: !sessionLayout.pinnedNodes.isEmpty,
-                    showsAllSessions: showsAllSessions,
-                    rowPass: rowPass)
+                self.sessionArea(rowPass: rowPass)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 10)
             .padding(.vertical, 10)
-            .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.2), value: sessionLayout.pinnedNodes.map(\.id))
             .modifier(RootSidebarAnchoredContent(anchor: self.scrollAnchor))
         }
         .scrollEdgeEffectStyle(.soft, for: .vertical)
@@ -264,6 +242,73 @@ struct RootSidebar: View {
         return Image(uiImage: image)
     }
 
+    private func sessionArea(rowPass: SessionRowPass) -> some View {
+        let preparing = self.model.isPreparingDrawerSessions(appModel: self.appModel)
+        let reserveRows = preparing || (self.hasShownStartupSkeleton && self.appModel.isOperatorGatewayConnected)
+        return ZStack(alignment: .topLeading) {
+            if reserveRows {
+                // Keep the loading footprint under the incoming list. Longer lists still scroll
+                // naturally; shorter ones don't pull the drawer up during the handoff.
+                RootSidebarSessionSkeleton(
+                    pinsCollapsed: self.pinnedSessionsCollapsed,
+                    sessionsCollapsed: self.sessionsCollapsed)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Text(String(localized: "Loading sessions")))
+                    .opacity(preparing ? 1 : 0)
+                    .accessibilityHidden(!preparing)
+                    .allowsHitTesting(false)
+            }
+            if !preparing {
+                self.drawerSessionSections(rowPass: rowPass)
+                    .transition(.opacity)
+            }
+        }
+        .animation(self.reduceMotion || preparing ? nil : .easeOut(duration: 0.16), value: preparing)
+        .onChange(of: preparing, initial: true) { _, loading in
+            if loading { self.hasShownStartupSkeleton = true }
+        }
+    }
+
+    private func drawerSessionSections(rowPass: SessionRowPass) -> some View {
+        let sessionSections = self.visibleSessionSections(categories: rowPass.categories)
+        let sessionLayout = Self.sessionLayout(sessionSections)
+        let sidebarSessionKeys = Set(Self.flattened(sessionSections.flatMap(\.nodes)).map(\.session.key))
+        let actualSessionKeys = Set(self.model.sessions.map(\.key))
+        let showsAllSessions = sidebarSessionKeys.intersection(actualSessionKeys).count >= 15
+        return VStack(alignment: .leading, spacing: 16) {
+            if !sessionLayout.pinnedNodes.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    self.sessionSectionHeader(
+                        String(localized: "Pinned"),
+                        isCollapsed: self.$pinnedSessionsCollapsed,
+                        id: "RootTabs.Sidebar.PinnedSection")
+                    if !self.pinnedSessionsCollapsed {
+                        ForEach(self.displayRows(sessionLayout.pinnedNodes)) { row in
+                            self.sessionTreeRow(row, rowPass: rowPass)
+                        }
+                    }
+                }
+            }
+            self.sessionsSection(
+                sections: sessionLayout.sections,
+                hasPinnedSessions: !sessionLayout.pinnedNodes.isEmpty,
+                showsAllSessions: showsAllSessions,
+                rowPass: rowPass)
+        }
+        .animation(self.reduceMotion ? nil : .easeInOut(duration: 0.2), value: sessionLayout.pinnedNodes.map(\.id))
+    }
+
+    private var loadingSessionsRow: some View {
+        HStack(spacing: 9) {
+            ProgressView().controlSize(.small)
+            Text(String(localized: "Loading sessions"))
+                .font(OpenClawType.captionMedium)
+                .foregroundStyle(OpenClawSidebarPalette.muted)
+        }
+        .frame(minHeight: 44)
+        .padding(.horizontal, 10)
+    }
+
     private func sessionsSection(
         sections: [ChatSessionSidebarModel.Section],
         hasPinnedSessions: Bool,
@@ -306,16 +351,9 @@ struct RootSidebar: View {
                     targetID: "section:recent")
             }
             if !self.sessionsCollapsed {
-                let rows = self.sessionRows(in: sections)
+                let rows = Self.sessionRows(in: sections, collapsedParents: self.collapsedParents)
                 if self.model.isRefreshing, self.model.sessions.isEmpty {
-                    HStack(spacing: 9) {
-                        ProgressView().controlSize(.small)
-                        Text(String(localized: "Loading sessions"))
-                            .font(OpenClawType.captionMedium)
-                            .foregroundStyle(OpenClawSidebarPalette.muted)
-                    }
-                    .frame(minHeight: 44)
-                    .padding(.horizontal, 10)
+                    self.loadingSessionsRow
                 } else if rows.isEmpty, !hasPinnedSessions {
                     Text(String(localized: "No sessions"))
                         .font(OpenClawType.captionMedium)
@@ -543,9 +581,13 @@ struct RootSidebar: View {
         nodes.flatMap { [$0] + self.flattened($0.children) }
     }
 
-    private func sessionRows(in sections: [ChatSessionSidebarModel.Section]) -> [ChatSessionSidebarModel.Row] {
-        let recent = sections.flatMap(\.nodes).sorted { ($0.session.updatedAt ?? 0) > ($1.session.updatedAt ?? 0) }
-        return Array(self.displayRows(recent).prefix(Self.recentSessionCap))
+    static func sessionRows(
+        in sections: [ChatSessionSidebarModel.Section], collapsedParents: Set<String>) -> [ChatSessionSidebarModel.Row]
+    {
+        let rows = ChatSessionSidebarModel.rows(sections.flatMap(\.nodes), byConversationActivity: true) {
+            !collapsedParents.contains($0.id)
+        }
+        return Array(rows.prefix(Self.recentSessionCap))
     }
 
     static let recentSessionCap = 15
