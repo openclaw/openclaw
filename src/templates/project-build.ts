@@ -2,6 +2,7 @@ import { link, lstat, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promise
 import { dirname, join } from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import * as tar from "tar/raw";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveFilesystemPath } from "../infra/home-dir.js";
@@ -77,7 +78,9 @@ export async function buildTemplateProject(projectPath: string, outputPath: stri
   if (!project.ok) {
     throw new TemplateProjectError(
       "project_invalid",
-      project.diagnostics.map((item) => `${item.code}: ${item.message}`).join("\n"),
+      project.diagnostics
+        .map((item) => sanitizeTerminalText(`${item.code} at ${item.path}: ${item.message}`))
+        .join("\n"),
     );
   }
 

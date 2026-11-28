@@ -235,6 +235,10 @@ starting an agent turn, enabling automations, or changing OpenClaw state.
 Requirements needing online preflight appear as blockers. `build` creates a
 deterministic `.tgz` and refuses to overwrite an existing file.
 
+If `validate`, `dev`, or `build` reports an invalid manifest field, use its path
+to find the entry in `CLAW.md`. For example, `$.skills[1].version` is the
+version of the second skill.
+
 `validate` and `build` accept a project-directory symlink and resolve the
 canonical project root. Manifest confinement and managed source-file checks
 remain unchanged.
