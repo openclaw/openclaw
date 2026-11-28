@@ -152,7 +152,11 @@ export async function addWorkboardCardComment(
   );
 }
 
-function reconcileCardConflict(state: ReturnType<typeof getWorkboardState>, error: unknown) {
+function reconcileCardConflict(
+  state: ReturnType<typeof getWorkboardState>,
+  error: unknown,
+  applyCard = replaceCard,
+) {
   if (
     isGatewayRequestError(error) &&
     error.code === "workboard_conflict" &&
@@ -160,7 +164,7 @@ function reconcileCardConflict(state: ReturnType<typeof getWorkboardState>, erro
     error.details.type === "workboard_card_conflict"
   ) {
     const card = normalizeCardPayload(error.details);
-    replaceCard(state, card);
+    applyCard(state, card);
     return { card, message: error.message };
   }
   return null;
@@ -254,7 +258,7 @@ type WorkboardCardMutationParams = WorkboardClientContext & {
 export async function runWorkboardCardMutation<T>(
   params: WorkboardCardMutationParams & {
     cardIds?: readonly string[];
-    reconcileConflict?: boolean;
+    reconcileConflict?: false | typeof replaceCard;
   },
   mutate: (state: ReturnType<typeof getWorkboardState>, client: GatewayBrowserClient) => Promise<T>,
 ): Promise<T | false> {
@@ -278,7 +282,7 @@ export async function runWorkboardCardMutation<T>(
     return await mutate(state, params.client);
   } catch (error) {
     if (params.reconcileConflict !== false) {
-      reconcileCardConflict(state, error);
+      reconcileCardConflict(state, error, params.reconcileConflict);
     }
     state.error = formatError(error);
     return false;
@@ -294,17 +298,47 @@ export async function updateWorkboardCardProperties(
   params: WorkboardClientContext & {
     card: WorkboardCard;
     patch: Partial<Pick<WorkboardCard, "priority" | "labels" | "agentId" | "title" | "notes">>;
+    previewInline?: boolean;
   },
 ) {
-  return runWorkboardCardMutation({ ...params, cardId: params.card.id }, async (state, client) => {
-    const payload = await client.request("workboard.cards.update", {
-      id: params.card.id,
-      expectedUpdatedAt: params.card.updatedAt,
-      patch: params.patch,
-    });
-    replaceCard(state, normalizeCardPayload(payload));
-    return true;
-  });
+  const applyCard: typeof replaceCard = params.previewInline
+    ? (state, receipt) => {
+        const index = state.cards.findIndex((card) => card.id === receipt.id);
+        const current = state.cards[index];
+        if (!current || current.updatedAt > receipt.updatedAt) {
+          return;
+        }
+        if (current.position === receipt.position) {
+          // A property edit doesn't move the card behind peers with the same position.
+          setWorkboardCards(state, state.cards.with(index, receipt));
+        } else {
+          replaceCard(state, receipt);
+        }
+      }
+    : replaceCard;
+  return runWorkboardCardMutation(
+    { ...params, cardId: params.card.id, reconcileConflict: applyCard },
+    async (state, client) => {
+      const { card, patch } = params;
+      // Only the observed card gets the preview. A replacement from the Gateway
+      // supplies its own values; dropping the preview never restores an old list.
+      if (params.previewInline) {
+        state.inlinePreviews.set(card, { ...card, ...patch });
+        notifyWorkboard(params.host);
+      }
+      try {
+        const payload = await client.request("workboard.cards.update", {
+          id: card.id,
+          expectedUpdatedAt: card.updatedAt,
+          patch,
+        });
+        applyCard(state, normalizeCardPayload(payload));
+        return true;
+      } finally {
+        state.inlinePreviews.delete(card);
+      }
+    },
+  );
 }
 
 export async function deleteWorkboardCard(
