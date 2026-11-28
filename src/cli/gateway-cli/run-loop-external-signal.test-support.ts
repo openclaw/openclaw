@@ -3,50 +3,103 @@ import {
   gatewayWorkAdmissionActual,
   runLoopFixture as mocks,
 } from "./run-loop-mocks.test-support.js";
-import { withLifecycleClock } from "./run-loop.test-support.js";
+import { createGatewayRunSignals } from "./run-loop-signals.js";
+import { withIsolatedSignals, withLifecycleClock } from "./run-loop.test-support.js";
 
 export function registerExternalRestartSignalTests(waitForLoopTurn: () => Promise<void>): void {
-  it.each([true, false])(
-    "uses the external SIGUSR2 policy when the intent read times out (allowed: %s)",
-    async (allowed) => {
-      const intent = Promise.withResolvers<{ force: true }>();
-      mocks.consumeGatewayRestartIntentPayload.mockReturnValueOnce(intent.promise);
-      mocks.consumeGatewayRestartAuthorization.mockReturnValueOnce(false);
-      mocks.isGatewayRestartExternallyAllowed.mockReturnValueOnce(allowed);
-      await mocks.withRunningGateway(({ captureSignal, close }) =>
-        withLifecycleClock(async () => {
-          captureSignal("SIGUSR2")();
-          await vi.advanceTimersByTimeAsync(1_000);
-          expect(mocks.scheduleGatewayRestart).toHaveBeenCalledTimes(allowed ? 1 : 0);
-          intent.resolve({ force: true });
-          await vi.advanceTimersByTimeAsync(0);
-          expect(close).not.toHaveBeenCalled();
-        }),
-      );
+  async function withExternalSignalHarness(
+    options: {
+      consumeIntent: () => Promise<{ force: true } | null>;
+      externalAllowed: boolean;
     },
-  );
+    run: (harness: {
+      request: ReturnType<typeof vi.fn>;
+      restart: () => void;
+      signals: ReturnType<typeof createGatewayRunSignals>;
+    }) => Promise<void>,
+  ) {
+    await withIsolatedSignals(({ captureSignal }) =>
+      withLifecycleClock(async () => {
+        const iteration = {};
+        const request = vi.fn();
+        const signals = createGatewayRunSignals({
+          lifecycle: {
+            prepareGatewayRestartIntentConsumption: () => options.consumeIntent,
+            consumeGatewayRestartAuthorization: () => false,
+            consumeGatewayRestartIntent: () => null,
+            peekGatewayRestartReason: () => undefined,
+            markGatewayRestartHandled: mocks.markGatewayRestartHandled,
+            rollbackGatewayRestartSignalAdmission: mocks.rollbackGatewayRestartSignalAdmission,
+            isGatewayRestartExternallyAllowed: () => options.externalAllowed,
+            abortPendingChannelReloads: mocks.abortPendingChannelReloads,
+            scheduleGatewayRestart: mocks.scheduleGatewayRestart,
+          },
+          logger: mocks.gatewayLog,
+          timeoutMs: 1_000,
+          getIteration: () => iteration,
+          isTerminal: () => false,
+          isForcedExitStarted: () => false,
+          isForegroundUpdateClosed: () => false,
+          getRequest: () => null,
+          isRuntimeResetPending: () => false,
+          isShuttingDown: () => false,
+          getExternalRestartOwner: () => undefined,
+          publishExternalRestartReceipt: async () => {},
+          getTerminalHostedStop: () => undefined,
+          updateSuccessor: { stop: vi.fn(), stopRequested: false },
+          request,
+        });
+        try {
+          await run({ request, restart: captureSignal("SIGUSR2"), signals });
+        } finally {
+          signals.close();
+          gatewayWorkAdmissionActual.resetGatewayWorkAdmission();
+        }
+      }),
+    );
+  }
 
-  it("accepts another SIGUSR2 after scheduling a timed-out signal throws", async () => {
-    const intent = Promise.withResolvers<null>();
-    mocks.consumeGatewayRestartIntentPayload.mockReturnValueOnce(intent.promise);
-    mocks.consumeGatewayRestartAuthorization.mockReturnValueOnce(false).mockReturnValueOnce(false);
-    mocks.isGatewayRestartExternallyAllowed.mockReturnValueOnce(true).mockReturnValueOnce(true);
+  it("accepts another SIGUSR2 after successful-read scheduling throws", async () => {
     mocks.scheduleGatewayRestart.mockImplementationOnce(() => {
       throw new Error("scheduler unavailable");
     });
-    await mocks.withRunningGateway(({ captureSignal }) =>
-      withLifecycleClock(async () => {
-        const restart = captureSignal("SIGUSR2");
-        restart();
-        await vi.advanceTimersByTimeAsync(1_000);
-        intent.resolve(null);
+    await withExternalSignalHarness(
+      { consumeIntent: async () => null, externalAllowed: true },
+      async ({ restart, signals }) => {
         restart();
         await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
+        restart();
+        await vi.advanceTimersByTimeAsync(0);
+        await Promise.resolve();
+        await signals.pending;
         expect(mocks.scheduleGatewayRestart).toHaveBeenCalledTimes(2);
         expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(false);
-      }),
+      },
     );
   });
+
+  it.each([true, false])(
+    "does not use the external SIGUSR2 policy when the intent read times out (allowed: %s)",
+    async (allowed) => {
+      const intent = Promise.withResolvers<{ force: true }>();
+      await withExternalSignalHarness(
+        { consumeIntent: () => intent.promise, externalAllowed: allowed },
+        async ({ request, restart, signals }) => {
+          restart();
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(mocks.scheduleGatewayRestart).not.toHaveBeenCalled();
+          intent.resolve({ force: true });
+          await vi.advanceTimersByTimeAsync(0);
+          await Promise.resolve();
+          await Promise.resolve();
+          await signals.pending;
+          expect(mocks.scheduleGatewayRestart).not.toHaveBeenCalled();
+          expect(request).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
 
   it.each([
     { allowed: false, publicationFails: false },
