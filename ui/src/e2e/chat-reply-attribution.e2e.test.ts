@@ -296,6 +296,83 @@ suite.define(() => {
     );
   });
 
+  it.each([true, false])(
+    "centers a single tool row on the avatar (reply line: %s)",
+    async (shared) => {
+      const key = `agent:main:dashboard:single-tool-row-${shared}`;
+      const messages = sequence([
+        ...(shared ? [message("earlier-prompt", "user", "Review the checklist.", peer)] : []),
+        message("edit-prompt", "user", "Fix the rule.", {
+          ...self,
+          idempotencyKey: "edit-run:user",
+        }),
+        message(
+          "edit-call",
+          "assistant",
+          "",
+          { runId: "edit-run" },
+          {
+            content: [
+              {
+                type: "toolCall",
+                id: "edit-rule",
+                name: "edit",
+                arguments: { path: "/repo/AGENTS.md", oldText: "old", newText: "new" },
+              },
+            ],
+          },
+        ),
+        message(
+          "edit-result",
+          "toolResult",
+          "Successfully replaced text.",
+          { runId: "edit-run" },
+          { toolName: "edit", toolCallId: "edit-rule" },
+        ),
+        message("edit-answer", "assistant", "The rule is fixed.", { runId: "edit-run" }),
+      ]);
+      await suite.withPage(
+        { viewport: { width: 1200, height: 900 }, locale: "en-US" },
+        async ({ page }) => {
+          await preparePage(page, key, messages, "light", shared);
+          const group = page.locator('.chat-group.assistant:has([data-entry-id="edit-answer"])');
+          await group.locator(".chat-tool-row").waitFor();
+          if (shared) {
+            await replyButton(group, "Replying to Alice Chen").waitFor();
+          }
+          // Compare rendered text bounds, not line boxes: the answer's taller
+          // line height would otherwise hide the visible difference.
+          const [above, below, offset] = await group.evaluate((element) => {
+            const text = (selector: string) => {
+              const node = element.querySelector(selector);
+              if (!node) {
+                return undefined;
+              }
+              const range = document.createRange();
+              range.selectNodeContents(node);
+              return range.getClientRects()[0]!;
+            };
+            const center = (selector: string) => {
+              const box = element.querySelector(selector)!.getBoundingClientRect();
+              return box.top + box.height / 2;
+            };
+            const row = text(".chat-tool-row__verb")!;
+            const reply = text(".chat-reply-attribution__label-text");
+            return [
+              reply ? row.top - reply.bottom : undefined,
+              text('[data-entry-id="edit-answer"] .chat-text p')!.top - row.bottom,
+              center(".chat-tool-row") - center(".chat-avatar-slot"),
+            ];
+          });
+          expect(Math.abs(offset!)).toBeLessThanOrEqual(0.5);
+          if (shared) {
+            expect(Math.abs(below! - above!)).toBeLessThanOrEqual(1);
+          }
+        },
+      );
+    },
+  );
+
   it.each(viewports)(
     "keeps participant actions owned by their message at $width px",
     async ({ width, height, touch, theme }) => {
