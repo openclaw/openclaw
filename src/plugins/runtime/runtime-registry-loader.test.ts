@@ -19,22 +19,12 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../../config/plugin-auto-enable.js").applyPluginAutoEnable>(),
   resolvePluginMetadataSnapshot:
     vi.fn<typeof import("../plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot>(),
-  listAgentEntries: vi.fn<typeof import("../../agents/agent-scope.js").listAgentEntries>(() => []),
-  resolveAgentWorkspaceDir: vi.fn<
-    typeof import("../../agents/agent-scope.js").resolveAgentWorkspaceDir
-  >(() => "/resolved-workspace"),
-  tryResolveConfiguredAgentWorkspaceDir: vi.fn<
-    typeof import("../../agents/agent-scope.js").tryResolveConfiguredAgentWorkspaceDir
-  >(() => "/resolved-workspace"),
   resolvePluginControlPlaneWorkspace: vi.fn<
     typeof import("../control-plane-workspace.js").resolvePluginControlPlaneWorkspace
   >((params) => ({
     workspaceDir: params.workspaceDir ?? "/resolved-workspace",
     workspaceScope: "selected",
   })),
-  resolveDefaultAgentId: vi.fn<typeof import("../../agents/agent-scope.js").resolveDefaultAgentId>(
-    () => "default",
-  ),
 }));
 
 vi.mock("../loader.js", () => ({
@@ -81,18 +71,6 @@ vi.mock("../plugin-metadata-snapshot.js", async (importOriginal) => ({
   resolvePluginMetadataSnapshot: (
     ...args: Parameters<typeof mocks.resolvePluginMetadataSnapshot>
   ) => mocks.resolvePluginMetadataSnapshot(...args),
-}));
-
-vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentEntries: (...args: Parameters<typeof mocks.listAgentEntries>) =>
-    mocks.listAgentEntries(...args),
-  resolveAgentWorkspaceDir: (...args: Parameters<typeof mocks.resolveAgentWorkspaceDir>) =>
-    mocks.resolveAgentWorkspaceDir(...args),
-  tryResolveConfiguredAgentWorkspaceDir: (
-    ...args: Parameters<typeof mocks.tryResolveConfiguredAgentWorkspaceDir>
-  ) => mocks.tryResolveConfiguredAgentWorkspaceDir(...args),
-  resolveDefaultAgentId: (...args: Parameters<typeof mocks.resolveDefaultAgentId>) =>
-    mocks.resolveDefaultAgentId(...args),
 }));
 
 vi.mock("../control-plane-workspace.js", () => ({
