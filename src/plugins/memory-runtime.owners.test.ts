@@ -106,7 +106,7 @@ function registerMemoryOwner(config: OpenClawConfig, options: { legacy?: boolean
   api.registerMemoryCapability({ runtime: runtimeImplementation });
   const runtime = owner.registry.memoryCapabilities[0]?.capability.runtime;
   assert(runtime);
-  return { ...owner, record, runtime, instance: getPluginInstance(record)! };
+  return { ...owner, runtime, instance: getPluginInstance(record)! };
 }
 
 function registerAdapter(
