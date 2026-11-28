@@ -1473,7 +1473,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     let sourceEffectsAllowed = true;
     const callGateway = createGatewayMock({}, () => {
       sourceEffectsAllowed = false;
-      throw new Error("incomplete terminal response code=incomplete_result");
+      throw Object.assign(new Error("incomplete terminal response"), { code: "incomplete_result" });
     });
     const sendMessage = createSendMessageMock();
     const result = await deliverFixture("discord", {

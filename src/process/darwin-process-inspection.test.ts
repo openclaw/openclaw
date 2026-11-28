@@ -126,3 +126,90 @@ it("reads arguments without requesting environment and keeps errors distinct fro
   fail(native.command, "access-denied");
   await expect(commandLine()).rejects.toMatchObject({ reason: "permission" });
 });
+
+const execEio = new ProcSafeError(
+  "operation-failed",
+  "operation-failed: Input/output error (os error 5)",
+);
+const argv = { argv: ["/opt/codex", "app-server"] };
+function failCommandOnce(error = execEio) {
+  return native.command.mockImplementationOnce(() => {
+    throw error;
+  });
+}
+
+it("waits out a native argv EIO for the observed startup child", async () => {
+  const [child] = await snapshot([row.pid]);
+  failCommandOnce().mockReturnValue(argv);
+  await expect(readDarwinProcessCommandLine(child!, performance.now() + 1000)).resolves.toBe(
+    "/opt/codex app-server",
+  );
+
+  native.census.mockClear();
+  native.command.mockClear();
+  expect(await readDarwinProcessCommandLine(child!, performance.now() + 1000)).toBe(
+    "/opt/codex app-server",
+  );
+  expect(native.census).not.toHaveBeenCalled();
+  expect(native.command).toHaveBeenCalledExactlyOnceWith(row.pid);
+
+  failCommandOnce();
+  await expect(commandLine()).rejects.toMatchObject({ cause: execEio });
+});
+
+it("refuses a child replaced in the same second during the successful retry", async () => {
+  const [child] = await snapshot([row.pid]);
+  failCommandOnce().mockReturnValue(argv);
+  native.census.mockReturnValueOnce([row]).mockReturnValue([
+    {
+      ...row,
+      identity: { ...row.identity!, startTimeMicros: row.identity!.startTimeMicros - 1 },
+    },
+  ]);
+  await expect(
+    readDarwinProcessCommandLine(child!, performance.now() + 1000),
+  ).rejects.toMatchObject({
+    reason: "unavailable",
+  });
+});
+
+it.each([
+  { name: "gone", rows: [] },
+  { name: "different parent", rows: [{ ...row, parentPid: row.parentPid! + 1 }] },
+  { name: "different group", rows: [{ ...row, processGroupId: row.processGroupId! + 1 }] },
+  { name: "zombie", rows: [{ ...row, state: "zombie" }] },
+])("refuses the $name child before retrying its command", async ({ rows }) => {
+  const [child] = await snapshot([row.pid]);
+  failCommandOnce().mockReturnValue(argv);
+  native.census.mockReturnValue(rows);
+  await expect(
+    readDarwinProcessCommandLine(child!, performance.now() + 1000),
+  ).rejects.toMatchObject({
+    reason: "unavailable",
+  });
+  expect(native.command).toHaveBeenCalledOnce();
+});
+
+it("stops persistent startup EIO at the original deadline", async () => {
+  const [child] = await snapshot([row.pid]);
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
+  native.command.mockImplementation(() => {
+    now += 6;
+    throw execEio;
+  });
+  await expect(readDarwinProcessCommandLine(child!, 10)).rejects.toMatchObject({
+    reason: "deadline",
+  });
+});
+
+it.each([
+  new ProcSafeError("access-denied", "access-denied: permission denied"),
+  new ProcSafeError("operation-failed", "operation-failed: Invalid argument (os error 22)"),
+])("keeps other native command failures terminal at startup: %s", async (error) => {
+  const [child] = await snapshot([row.pid]);
+  failCommandOnce(error).mockReturnValue(argv);
+  await expect(
+    readDarwinProcessCommandLine(child!, performance.now() + 1000),
+  ).rejects.toMatchObject({ cause: error });
+});

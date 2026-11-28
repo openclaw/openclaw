@@ -64,6 +64,21 @@ extension OpenClawChatViewModel {
         return !self.supportsComposerCapabilities || self.composerCapabilityCatalog.effortMutationAvailable
     }
 
+    /// Why the phone's effort controls are locked: shown under them in the bar and read as the chip's hint.
+    /// Nil while they can change, including the moment a change saves, so the bar does not grow and shrink
+    /// on every pick. A running reply does not lock them: a change applies from the next message.
+    var composerPhoneEffortLockReason: String? {
+        if !self.composerEffortMutationAvailable {
+            return String(localized: "You don’t have permission to change this.")
+        }
+        return nil
+    }
+
+    /// Whether the effort control has anything to offer: levels to choose, or speed options.
+    var composerOffersEffortChoices: Bool {
+        self.showsThinkingPicker || self.selectedModelSupportsFastMode
+    }
+
     public var composerVerboseMutationAvailable: Bool {
         guard !self.isSubmittingDraft || self.newChatDraft?.key != self.sessionKey else { return false }
         return !self.supportsComposerCapabilities || self.composerCapabilityCatalog.verboseMutationAvailable

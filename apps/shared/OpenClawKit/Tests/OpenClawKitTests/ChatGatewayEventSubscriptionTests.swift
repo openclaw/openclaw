@@ -110,6 +110,10 @@ struct ChatGatewayEventSubscriptionTests {
                 }
                 """#,
                 "agent:run-1:future-stream"),
+            (
+                "session.tool",
+                #"{"runId":"run-1","stream":"tool","data":{"phase":"start","name":"exec","args":{"command":"ls"}}}"#,
+                "agent:run-1:tool"),
             ("progressCard.changed", #"{"sessionKey":"global","revision":7}"#, "progress:global"),
             (
                 "question.requested",

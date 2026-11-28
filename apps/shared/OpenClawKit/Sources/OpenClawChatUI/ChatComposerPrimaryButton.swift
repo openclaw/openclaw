@@ -20,6 +20,8 @@ extension OpenClawChatComposer {
                 queueModes: self.inputModel?.sendModeChoices ?? [],
                 action: { mode in
                     self.markAwaitingReplyIfNeeded()
+                    // The message leaves from the field this button sits in.
+                    ChatSendEntrance.composerWillSend()
                     self.sendDraftIfEnabled(queueMode: mode)
                 }),
             stop: .init(
@@ -62,6 +64,47 @@ extension OpenClawChatComposer {
                 .frame(width: cleanControlHeight, height: cleanControlHeight)
         }
         #endif
+    }
+
+    var stopButtonFill: Color {
+        #if os(iOS)
+        OpenClawChatTheme.accent
+        #else
+        OpenClawChatTheme.danger
+        #endif
+    }
+
+    var sendButtonFill: Color {
+        #if os(iOS)
+        OpenClawChatTheme.accent
+        #else
+        self.userAccent ?? OpenClawChatTheme.userBubble
+        #endif
+    }
+
+    var disabledSendButtonFill: Color {
+        #if os(iOS)
+        let cleanFill = self.sendButtonFill.opacity(0.4)
+        #else
+        let cleanFill = Color.clear
+        #endif
+        return self.composerChrome == .clean ? cleanFill : Color.secondary.opacity(0.32)
+    }
+
+    var sendButtonForeground: Color {
+        #if os(iOS)
+        return self.canSendMessage || self.composerChrome == .full ? .white : .white.opacity(0.7)
+        #else
+        let disabledInk: Color = self.composerChrome == .full ? .white : .secondary.opacity(0.55)
+        return self.canSendMessage ? OpenClawChatTheme.userText(on: self.userAccent) : disabledInk
+        #endif
+    }
+
+    var sendButtonBorderOpacity: Double {
+        if self.composerChrome == .clean, !self.canSendMessage {
+            return 0
+        }
+        return self.canSendMessage ? 0.18 : 0.08
     }
 
     #if os(iOS)

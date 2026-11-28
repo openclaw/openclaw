@@ -143,3 +143,65 @@ extension OpenClawChatView {
         }
     }
 }
+
+func chatErrorPresentation(
+    for error: String) -> (title: String, message: String, systemImage: String, tint: Color)
+{
+    if chatErrorIsDisconnected(error) {
+        return ("Disconnected", "Reconnect to your gateway to continue.", "wifi.slash", .orange)
+    }
+    if error.lowercased().contains("timed out") {
+        return ("Timed out", "The gateway took too long to respond.", "clock.badge.exclamationmark", .orange)
+    }
+    // Unknown errors: keep the raw text as the description so it stays actionable.
+    return ("Something went wrong", error, "exclamationmark.triangle.fill", .orange)
+}
+
+/// The one width rule of the chat pane: a margin and a centred reading column derived from the
+/// measured pane width, shared by transcript rows, cards and the composer.
+struct ChatColumnLayout: Equatable {
+    static let maxColumnWidth: CGFloat = 768
+    private static let compactMargin: CGFloat = 16
+
+    #if os(iOS)
+    /// The safe-area bar travels with the keyboard; count the surface's inset toward the gap.
+    @MainActor static func keyboardPadding(
+        style: OpenClawChatView.Style, chrome: OpenClawChatView.ComposerChrome, visible: Bool) -> CGFloat
+    {
+        guard visible, UIDevice.current.userInterfaceIdiom == .phone else { return 0 }
+        let inset = OpenClawChatComposer.surfaceInset(style: style, chrome: chrome)
+        return max(0, Self.compactMargin / 2 - inset)
+    }
+    #endif
+
+    let margin: CGFloat
+    let columnWidth: CGFloat
+
+    /// An unmeasured pane (width 0, before its first layout) assumes the widest column.
+    init(paneWidth: CGFloat) {
+        let width = paneWidth > 0 ? paneWidth : .infinity
+        self.margin = width < 700 ? Self.compactMargin : 24
+        self.columnWidth = max(0, min(Self.maxColumnWidth, width - 2 * self.margin))
+    }
+
+    /// User bubbles and media from either speaker leave room on the opposite side of the column.
+    var bubbleAndMediaMaxWidth: CGFloat {
+        (self.columnWidth < 600 ? 0.82 : 0.68) * self.columnWidth
+    }
+}
+
+extension EnvironmentValues {
+    @Entry var openClawChatColumn = ChatColumnLayout(paneWidth: 0)
+}
+
+extension View {
+    /// Centres content on the reading column. `inset` widens the frame for chrome that draws its
+    /// visible surface that far inside it (the composer), so the surface itself spans the column.
+    /// Padding by the margin, rather than framing to the measured column, never collapses the
+    /// column while the pane is still unmeasured.
+    func chatColumn(_ layout: ChatColumnLayout, inset: CGFloat = 0) -> some View {
+        self.frame(maxWidth: ChatColumnLayout.maxColumnWidth + 2 * inset)
+            .padding(.horizontal, layout.margin - inset)
+            .frame(maxWidth: .infinity)
+    }
+}

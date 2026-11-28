@@ -402,7 +402,7 @@ describe("chat pane connection lifecycle", () => {
           "sessions.messages.subscribe",
           expect.objectContaining({
             key: h.state.sessionKey,
-            initialHistory: expect.objectContaining({ limit: 80 }),
+            initialHistory: expect.objectContaining({ limit: 24 }),
           }),
           expect.anything(),
         ],

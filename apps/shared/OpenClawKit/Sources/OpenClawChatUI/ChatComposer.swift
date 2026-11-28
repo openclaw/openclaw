@@ -82,7 +82,7 @@ struct OpenClawChatComposerPresentationOwner: Equatable {
 
 @MainActor
 struct OpenClawChatComposer: View {
-    private enum ModelSignInAction {
+    enum ModelSignInAction {
         case open
         case refresh
     }
@@ -141,7 +141,11 @@ struct OpenClawChatComposer: View {
     /// UIKit owns first responder; its bridge needs stored state, not an unbound SwiftUI FocusState.
     @State var isFocused = false
     @Environment(\.isEnabled) var interactionEnabled
+    @Environment(\.openClawChatComposerPanels) var composerPanels
     @State var showsPermissionsSheet = false
+    /// Text or an attachment tile keeps the composer open when the keyboard goes down; only an empty
+    /// composer closes to one row.
+    @State var hasComposerContent = false
     #else
     @FocusState private var isFocused: Bool
     #endif
@@ -208,18 +212,23 @@ struct OpenClawChatComposer: View {
                 .foregroundStyle(.secondary)
             }
         }
+        #if os(macOS)
         .sheet(isPresented: Binding(
-            get: { self.signInContext != nil },
-            set: { if !$0 { self.signInContext = nil } }))
-        {
-            if let context = self.signInContext {
-                OpenClawChatModelSignInSheet(context: context) { await self.viewModel.refreshModelSignIn() }
+                get: { self.signInContext != nil },
+                set: {
+                    if !$0 {
+                        self.signInContext = nil
+                    }
+                })) {
+                    if let context = self.signInContext {
+                        OpenClawChatModelSignInSheet(context: context) { await self.viewModel.refreshModelSignIn() }
+                    }
             }
-        }
+        #endif
         #if os(iOS)
         // Presented from here, not from the shield: the shield leaves the hierarchy while capabilities reload.
-        .chatComposerPermissionsSheet(isPresented: self.$showsPermissionsSheet, viewModel: self.viewModel)
-            .modifier(ChatNewDraftFocus(composer: self))
+            .chatComposerPermissionsSheet(isPresented: self.$showsPermissionsSheet, viewModel: self.viewModel)
+        .modifier(ChatNewDraftFocus(composer: self))
         #endif
         .onChange(of: self.presentationOwner) { _, _ in
             self.invalidateModelSignIn()
@@ -235,22 +244,7 @@ struct OpenClawChatComposer: View {
         #endif
     }
 
-    var modelSignInButton: some View {
-        Button {
-            self.performModelSignInAction(.open)
-        } label: {
-            HStack(spacing: 6) {
-                if self.modelSignInAction == .open {
-                    ProgressView().controlSize(.small)
-                }
-                Text("Model sign-in").font(OpenClawChatTypography.caption)
-            }
-        }
-        .disabled(self.modelSignInAction != nil)
-        .accessibilityIdentifier("chat-model-sign-in")
-    }
-
-    private func performModelSignInAction(_ action: ModelSignInAction) {
+    func performModelSignInAction(_ action: ModelSignInAction) {
         guard self.modelSignInAction == nil else { return }
         let owner = self.presentationOwner
         let request = ModelSignInRequest(action: action)
@@ -280,7 +274,7 @@ struct OpenClawChatComposer: View {
         }
     }
 
-    private var modelSignInAction: ModelSignInAction? {
+    var modelSignInAction: ModelSignInAction? {
         self.modelSignInRequest?.action
     }
 
@@ -748,6 +742,7 @@ struct OpenClawChatComposer: View {
             .padding(.vertical, self.isDesktopLayout ? 0 : 2)
         #endif
         .modifier(CleanChatComposerSurface(cornerRadius: cleanCornerRadius, usesSystemGlassEdge: true))
+        .modifier(ChatComposerPanelBridge(composer: self))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-composer-surface")
     }
@@ -755,7 +750,15 @@ struct OpenClawChatComposer: View {
     @ViewBuilder
     private var cleanEditor: some View {
         #if os(iOS)
-        self.cleanPhoneEditor(expanded: self.isFocused)
+        self.cleanPhoneEditor(expanded: self.isFocused || self.hasComposerContent)
+            .background {
+                // Read the draft in its own section so typing does not re-evaluate the whole composer.
+                ChatComposerSection {
+                    Color.clear.onChange(
+                        of: self.viewModel.hasDraftToSend,
+                        initial: true) { self.hasComposerContent = $1 }
+                }
+            }
         #elseif os(macOS)
         if self.isDesktopLayout {
             self.desktopEditor
@@ -1360,7 +1363,7 @@ extension OpenClawChatComposer {
         #if os(macOS)
         self.isDesktopLayout ? CleanChatComposerMetrics.surfaceCornerRadius : 24
         #elseif os(iOS)
-        self.isFocused ? CleanChatComposerMetrics.expandedCornerRadius :
+        self.isFocused || self.hasComposerContent ? CleanChatComposerMetrics.expandedCornerRadius :
             self.cleanControlHeight / 2 + CleanChatComposerMetrics.collapsedControlInset
         #else
         CleanChatComposerMetrics.surfaceCornerRadius
@@ -1377,47 +1380,6 @@ extension OpenClawChatComposer {
 
     private var editorOverlayAlignment: Alignment {
         self.composerChrome == .clean ? .leading : .topLeading
-    }
-
-    var stopButtonFill: Color {
-        #if os(iOS)
-        OpenClawChatTheme.accent
-        #else
-        OpenClawChatTheme.danger
-        #endif
-    }
-
-    var sendButtonFill: Color {
-        #if os(iOS)
-        OpenClawChatTheme.accent
-        #else
-        self.userAccent ?? OpenClawChatTheme.userBubble
-        #endif
-    }
-
-    var disabledSendButtonFill: Color {
-        #if os(iOS)
-        let cleanFill = self.sendButtonFill.opacity(0.4)
-        #else
-        let cleanFill = Color.clear
-        #endif
-        return self.composerChrome == .clean ? cleanFill : Color.secondary.opacity(0.32)
-    }
-
-    var sendButtonForeground: Color {
-        #if os(iOS)
-        return self.canSendMessage || self.composerChrome == .full ? .white : .white.opacity(0.7)
-        #else
-        let disabledInk: Color = self.composerChrome == .full ? .white : .secondary.opacity(0.55)
-        return self.canSendMessage ? OpenClawChatTheme.userText(on: self.userAccent) : disabledInk
-        #endif
-    }
-
-    var sendButtonBorderOpacity: Double {
-        if self.composerChrome == .clean, !self.canSendMessage {
-            return 0
-        }
-        return self.canSendMessage ? 0.18 : 0.08
     }
 
     var canSendMessage: Bool {
@@ -1519,7 +1481,7 @@ extension OpenClawChatComposer {
         else { return }
         self.cancelActiveCameraEncoding()
         let sendableImage = OpenClawSendableCameraImage(value: image)
-        let fileName = "camera-\(UUID().uuidString.prefix(8)).jpg"
+        let fileName = "\(OpenClawChatGeneratedAttachmentName.picked(.camera)).jpg"
         let viewModel = owner.viewModel
         let session = owner.session
         // Pin routing before JPEG encoding suspends so an external agent or
