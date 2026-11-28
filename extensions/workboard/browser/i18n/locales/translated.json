@@ -476,7 +476,19 @@
       "noKnownLabels": "已加载的卡片中还没有标签。",
       "labelLengthLimit": "标签最多可包含 40 个字符。",
       "bulkLabelLimit": "这会使某张所选卡片的标签超过 12 个。请减少选择的标签。",
-      "labelLimit": "已选择 12 个标签。请先移除一个，再添加其他标签。"
+      "labelLimit": "已选择 12 个标签。请先移除一个，再添加其他标签。",
+      "inactive": "Workboard 未处于活动状态。请重新加载此页面。",
+      "unknownError": "无法完成此 Workboard 操作。",
+      "gatewayUnavailable": "未连接到 Gateway，Workboard 无法刷新。",
+      "cardResponseMissing": "无法确认卡片更改。",
+      "cardChanged": "此卡片已更改。请刷新 Workboard 以查看最新版本。",
+      "cardChangedBeforeEdit": "此编辑器中的卡片不是最新版本。请取消并重新打开。",
+      "editConflict": "此卡片在你编辑期间发生了更改。请先查看最新值，再保存你的修改。",
+      "scheduledStartBlocked": "此卡片已设定启动时间。请等到预定时间再启动。",
+      "alreadyStarted": "此卡片已关联一个会话。要启动其他会话，请在“编辑卡片”中清除关联。",
+      "sessionCreateFailed": "无法确认是否已为此卡片创建会话。",
+      "stopSessionUnresolved": "找不到要停止的会话。请打开“编辑卡片”检查会话关联。",
+      "staleSessionReason": "关联的会话近期未报告活动。"
     }
   },
   "zh-TW": {
@@ -956,7 +968,19 @@
       "noKnownLabels": "已載入的卡片中尚無標籤。",
       "labelLengthLimit": "標籤最多可包含 40 個字元。",
       "bulkLabelLimit": "這會使所選卡片的標籤超過 12 個。請減少選取的標籤。",
-      "labelLimit": "已選取 12 個標籤。請先移除一個，再新增其他標籤。"
+      "labelLimit": "已選取 12 個標籤。請先移除一個，再新增其他標籤。",
+      "inactive": "Workboard 尚未啟用。請重新載入此頁面。",
+      "unknownError": "無法完成此 Workboard 操作。",
+      "gatewayUnavailable": "Workboard 無法在未連線至 Gateway 的情況下重新整理。",
+      "cardResponseMissing": "無法確認卡片變更。",
+      "cardChanged": "此卡片已變更。請重新整理 Workboard 以查看最新版本。",
+      "cardChangedBeforeEdit": "此編輯器中的卡片不是最新版本。請取消並重新開啟。",
+      "editConflict": "卡片在您編輯時已變更。請先檢查最新的值，再儲存您的編輯內容。",
+      "scheduledStartBlocked": "此卡片已排程。請等到排定時間再啟動。",
+      "alreadyStarted": "此卡片已連結至工作階段。若要啟動其他工作階段，請在「編輯卡片」中清除連結。",
+      "sessionCreateFailed": "無法確認是否已為此卡片建立工作階段。",
+      "stopSessionUnresolved": "找不到要停止的工作階段。請開啟「編輯卡片」以檢查工作階段連結。",
+      "staleSessionReason": "已連結的工作階段近期未回報活動。"
     }
   },
   "pt-BR": {
@@ -1436,7 +1460,19 @@
       "noKnownLabels": "Ainda não há etiquetas nos cartões carregados.",
       "labelLengthLimit": "As etiquetas podem ter até 40 caracteres.",
       "bulkLabelLimit": "Isso faria com que um cartão selecionado tivesse mais de 12 etiquetas. Escolha menos etiquetas.",
-      "labelLimit": "12 etiquetas selecionadas. Remova uma para adicionar outra."
+      "labelLimit": "12 etiquetas selecionadas. Remova uma para adicionar outra.",
+      "inactive": "O Workboard não está ativo. Recarregue esta página.",
+      "unknownError": "Não foi possível concluir esta ação do Workboard.",
+      "gatewayUnavailable": "Não foi possível atualizar o Workboard sem uma conexão com o Gateway.",
+      "cardResponseMissing": "Não foi possível confirmar a alteração do cartão.",
+      "cardChanged": "Este cartão foi alterado. Atualize o Workboard para ver a versão mais recente.",
+      "cardChangedBeforeEdit": "Este editor não tem a versão mais recente do cartão. Cancele e abra-o novamente.",
+      "editConflict": "O cartão foi alterado enquanto você o editava. Revise os valores mais recentes antes de salvar suas alterações.",
+      "scheduledStartBlocked": "Este cartão está agendado. Aguarde até o horário agendado para iniciá-lo.",
+      "alreadyStarted": "Este cartão já tem uma sessão vinculada. Para iniciar outra sessão, remova o vínculo em Editar cartão.",
+      "sessionCreateFailed": "Não foi possível confirmar a criação de uma sessão para este cartão.",
+      "stopSessionUnresolved": "Não foi possível encontrar a sessão a ser interrompida. Abra Editar cartão para verificar o vínculo da sessão.",
+      "staleSessionReason": "A sessão vinculada não informou atividade recente."
     }
   },
   "de": {
@@ -1916,7 +1952,19 @@
       "noKnownLabels": "Noch keine Labels in den geladenen Karten.",
       "labelLengthLimit": "Labels dürfen bis zu 40 Zeichen lang sein.",
       "bulkLabelLimit": "Dadurch würde eine ausgewählte Karte mehr als 12 Labels erhalten. Wählen Sie weniger Labels aus.",
-      "labelLimit": "12 Labels ausgewählt. Entfernen Sie eines, um ein weiteres hinzuzufügen."
+      "labelLimit": "12 Labels ausgewählt. Entfernen Sie eines, um ein weiteres hinzuzufügen.",
+      "inactive": "Workboard ist nicht aktiv. Lade diese Seite neu.",
+      "unknownError": "Diese Workboard-Aktion konnte nicht abgeschlossen werden.",
+      "gatewayUnavailable": "Workboard konnte ohne Verbindung zum Gateway nicht aktualisiert werden.",
+      "cardResponseMissing": "Die Änderung an der Karte konnte nicht bestätigt werden.",
+      "cardChanged": "Diese Karte wurde geändert. Aktualisiere Workboard, um die neueste Version zu sehen.",
+      "cardChangedBeforeEdit": "Dieser Editor enthält nicht die neueste Version der Karte. Brich die Bearbeitung ab und öffne ihn erneut.",
+      "editConflict": "Die Karte wurde während deiner Bearbeitung geändert. Prüfe die aktuellen Werte, bevor du deine Änderungen speicherst.",
+      "scheduledStartBlocked": "Diese Karte ist für einen späteren Zeitpunkt geplant. Warte bis zum geplanten Zeitpunkt, um sie zu starten.",
+      "alreadyStarted": "Diese Karte hat bereits eine verknüpfte Sitzung. Um eine andere Sitzung zu starten, entferne die Verknüpfung unter „Karte bearbeiten“.",
+      "sessionCreateFailed": "Es konnte nicht bestätigt werden, dass eine Sitzung für diese Karte erstellt wurde.",
+      "stopSessionUnresolved": "Die zu stoppende Sitzung konnte nicht gefunden werden. Öffne „Karte bearbeiten“, um die Sitzungsverknüpfung zu prüfen.",
+      "staleSessionReason": "Die verknüpfte Sitzung hat in letzter Zeit keine Aktivität gemeldet."
     }
   },
   "es": {
@@ -2396,7 +2444,19 @@
       "noKnownLabels": "Aún no hay etiquetas en las tarjetas cargadas.",
       "labelLengthLimit": "Las etiquetas pueden tener hasta 40 caracteres.",
       "bulkLabelLimit": "Esto haría que una tarjeta seleccionada tuviera más de 12 etiquetas. Elige menos etiquetas.",
-      "labelLimit": "12 etiquetas seleccionadas. Elimina una para añadir otra."
+      "labelLimit": "12 etiquetas seleccionadas. Elimina una para añadir otra.",
+      "inactive": "Workboard no está activo. Recarga esta página.",
+      "unknownError": "No se pudo completar esta acción de Workboard.",
+      "gatewayUnavailable": "Workboard no se pudo actualizar sin una conexión con el Gateway.",
+      "cardResponseMissing": "No se pudo confirmar el cambio en la tarjeta.",
+      "cardChanged": "Esta tarjeta ha cambiado. Actualiza Workboard para ver la versión más reciente.",
+      "cardChangedBeforeEdit": "Este editor no tiene la versión más reciente de la tarjeta. Cancela y vuelve a abrirlo.",
+      "editConflict": "La tarjeta ha cambiado mientras la editabas. Revisa los valores más recientes antes de guardar tus cambios.",
+      "scheduledStartBlocked": "Esta tarjeta está programada. Espera hasta la hora programada para iniciarla.",
+      "alreadyStarted": "Esta tarjeta ya tiene una sesión vinculada. Para iniciar otra sesión, elimina el vínculo en Editar tarjeta.",
+      "sessionCreateFailed": "No se pudo confirmar que se haya creado una sesión para esta tarjeta.",
+      "stopSessionUnresolved": "No se pudo encontrar la sesión que se debe detener. Abre Editar tarjeta para comprobar el vínculo de la sesión.",
+      "staleSessionReason": "La sesión vinculada no ha notificado actividad reciente."
     }
   },
   "ja-JP": {
@@ -2876,7 +2936,19 @@
       "noKnownLabels": "読み込まれたカードにはまだラベルがありません。",
       "labelLengthLimit": "ラベルは40文字まで入力できます。",
       "bulkLabelLimit": "この操作を行うと、選択したカードのラベルが12個を超えます。選択するラベルを減らしてください。",
-      "labelLimit": "ラベルが12個選択されています。別のラベルを追加するには、1個削除してください。"
+      "labelLimit": "ラベルが12個選択されています。別のラベルを追加するには、1個削除してください。",
+      "inactive": "Workboard は有効になっていません。このページを再読み込みしてください。",
+      "unknownError": "この Workboard の操作を完了できませんでした。",
+      "gatewayUnavailable": "Gateway に接続されていないため、Workboard を更新できませんでした。",
+      "cardResponseMissing": "カードの変更を確認できませんでした。",
+      "cardChanged": "このカードは変更されています。Workboard を更新して最新の状態を確認してください。",
+      "cardChangedBeforeEdit": "このエディターにはカードの最新の状態が反映されていません。キャンセルして開き直してください。",
+      "editConflict": "編集中にカードが変更されました。編集内容を保存する前に、最新の値を確認してください。",
+      "scheduledStartBlocked": "このカードには開始予定時刻が設定されています。その時刻までお待ちください。",
+      "alreadyStarted": "このカードにはすでにセッションがリンクされています。別のセッションを開始するには、「カードを編集」でリンクを解除してください。",
+      "sessionCreateFailed": "このカードのセッションが作成されたことを確認できませんでした。",
+      "stopSessionUnresolved": "停止するセッションが見つかりませんでした。「カードを編集」を開いてセッションのリンクを確認してください。",
+      "staleSessionReason": "リンクされたセッションから最近のアクティビティが報告されていません。"
     }
   },
   "ko": {
@@ -3356,7 +3428,19 @@
       "noKnownLabels": "불러온 카드에 아직 라벨이 없습니다.",
       "labelLengthLimit": "라벨은 최대 40자까지 입력할 수 있습니다.",
       "bulkLabelLimit": "선택한 카드의 라벨이 12개를 초과하게 됩니다. 라벨을 더 적게 선택하세요.",
-      "labelLimit": "라벨 12개를 선택했습니다. 다른 라벨을 추가하려면 하나를 제거하세요."
+      "labelLimit": "라벨 12개를 선택했습니다. 다른 라벨을 추가하려면 하나를 제거하세요.",
+      "inactive": "Workboard가 활성화되어 있지 않습니다. 이 페이지를 새로고침하세요.",
+      "unknownError": "이 Workboard 작업을 완료하지 못했습니다.",
+      "gatewayUnavailable": "Gateway에 연결되지 않아 Workboard를 새로고침하지 못했습니다.",
+      "cardResponseMissing": "카드 변경 사항을 확인하지 못했습니다.",
+      "cardChanged": "이 카드가 변경되었습니다. 최신 버전을 보려면 Workboard를 새로고침하세요.",
+      "cardChangedBeforeEdit": "이 편집기에 카드의 최신 버전이 없습니다. 취소한 후 다시 여세요.",
+      "editConflict": "편집하는 동안 카드가 변경되었습니다. 편집 내용을 저장하기 전에 최신 값을 검토하세요.",
+      "scheduledStartBlocked": "이 카드는 시작이 예약되어 있습니다. 예약된 시간까지 기다린 후 시작하세요.",
+      "alreadyStarted": "이 카드에는 이미 연결된 세션이 있습니다. 다른 세션을 시작하려면 카드 편집에서 연결을 해제하세요.",
+      "sessionCreateFailed": "이 카드의 세션이 생성되었는지 확인하지 못했습니다.",
+      "stopSessionUnresolved": "중지할 세션을 찾지 못했습니다. 카드 편집을 열어 세션 연결을 확인하세요.",
+      "staleSessionReason": "연결된 세션에서 최근 활동이 보고되지 않았습니다."
     }
   },
   "fr": {
@@ -3836,7 +3920,19 @@
       "noKnownLabels": "Aucune étiquette dans les cartes chargées pour le moment.",
       "labelLengthLimit": "Les étiquettes peuvent contenir jusqu’à 40 caractères.",
       "bulkLabelLimit": "Cela attribuerait plus de 12 étiquettes à une carte sélectionnée. Choisissez moins d’étiquettes.",
-      "labelLimit": "12 étiquettes sélectionnées. Retirez-en une pour en ajouter une autre."
+      "labelLimit": "12 étiquettes sélectionnées. Retirez-en une pour en ajouter une autre.",
+      "inactive": "Workboard n’est pas actif. Rechargez cette page.",
+      "unknownError": "Impossible d’effectuer cette action dans Workboard.",
+      "gatewayUnavailable": "Impossible d’actualiser Workboard sans connexion au Gateway.",
+      "cardResponseMissing": "Impossible de confirmer la modification de la carte.",
+      "cardChanged": "Cette carte a été modifiée. Actualisez Workboard pour voir la dernière version.",
+      "cardChangedBeforeEdit": "Cet éditeur ne dispose pas de la dernière version de la carte. Annulez et rouvrez-le.",
+      "editConflict": "La carte a été modifiée pendant votre saisie. Vérifiez les dernières valeurs avant d’enregistrer vos modifications.",
+      "scheduledStartBlocked": "Cette carte est planifiée. Attendez l’heure prévue pour la démarrer.",
+      "alreadyStarted": "Cette carte est déjà liée à une session. Pour démarrer une autre session, supprimez le lien dans Modifier la carte.",
+      "sessionCreateFailed": "Impossible de confirmer la création d’une session pour cette carte.",
+      "stopSessionUnresolved": "Impossible de trouver la session à arrêter. Ouvrez Modifier la carte pour vérifier le lien vers la session.",
+      "staleSessionReason": "La session liée n’a signalé aucune activité récente."
     }
   },
   "hi": {
@@ -4316,7 +4412,19 @@
       "noKnownLabels": "लोड किए गए कार्ड में अभी कोई लेबल नहीं है।",
       "labelLengthLimit": "लेबल में अधिकतम 40 वर्ण हो सकते हैं।",
       "bulkLabelLimit": "इससे किसी चुने हुए कार्ड में 12 से ज़्यादा लेबल हो जाएंगे। कम लेबल चुनें।",
-      "labelLimit": "12 लेबल चुने गए हैं। दूसरा जोड़ने के लिए एक हटाएं।"
+      "labelLimit": "12 लेबल चुने गए हैं। दूसरा जोड़ने के लिए एक हटाएं।",
+      "inactive": "Workboard सक्रिय नहीं है। यह पेज फिर से लोड करें।",
+      "unknownError": "Workboard में यह कार्रवाई पूरी नहीं हो सकी।",
+      "gatewayUnavailable": "Gateway से कनेक्शन के बिना Workboard रीफ़्रेश नहीं हो सका।",
+      "cardResponseMissing": "कार्ड में बदलाव की पुष्टि नहीं हो सकी।",
+      "cardChanged": "यह कार्ड बदल गया है। नवीनतम संस्करण देखने के लिए Workboard रीफ़्रेश करें।",
+      "cardChangedBeforeEdit": "इस एडिटर में कार्ड का नवीनतम संस्करण नहीं है। रद्द करें और इसे फिर से खोलें।",
+      "editConflict": "आपके संपादन के दौरान कार्ड बदल गया। अपने बदलाव सहेजने से पहले नवीनतम मानों की समीक्षा करें।",
+      "scheduledStartBlocked": "यह कार्ड शेड्यूल किया गया है। इसे शुरू करने के लिए इसके निर्धारित समय तक प्रतीक्षा करें।",
+      "alreadyStarted": "इस कार्ड से पहले से एक सत्र लिंक है। कोई दूसरा सत्र शुरू करने के लिए, कार्ड संपादित करें में जाकर लिंक हटाएँ।",
+      "sessionCreateFailed": "इस कार्ड के लिए सत्र बनाए जाने की पुष्टि नहीं हो सकी।",
+      "stopSessionUnresolved": "रोकने के लिए सत्र नहीं मिला। सत्र का लिंक जाँचने के लिए कार्ड संपादित करें खोलें।",
+      "staleSessionReason": "लिंक किए गए सत्र ने हाल की किसी गतिविधि की सूचना नहीं दी है।"
     }
   },
   "ar": {
@@ -4796,7 +4904,19 @@
       "noKnownLabels": "لا توجد تصنيفات في البطاقات المحمّلة بعد.",
       "labelLengthLimit": "يمكن أن يصل طول التصنيف إلى 40 حرفًا.",
       "bulkLabelLimit": "سيؤدي هذا إلى تجاوز عدد التصنيفات في إحدى البطاقات المحددة 12 تصنيفًا. اختر تصنيفات أقل.",
-      "labelLimit": "تم تحديد 12 تصنيفًا. أزل أحدها لإضافة تصنيف آخر."
+      "labelLimit": "تم تحديد 12 تصنيفًا. أزل أحدها لإضافة تصنيف آخر.",
+      "inactive": "Workboard غير نشط. أعد تحميل هذه الصفحة.",
+      "unknownError": "تعذّر إكمال هذا الإجراء في Workboard.",
+      "gatewayUnavailable": "تعذّر تحديث Workboard دون اتصال بـ Gateway.",
+      "cardResponseMissing": "تعذّر تأكيد التغيير على البطاقة.",
+      "cardChanged": "تغيّرت هذه البطاقة. حدّث Workboard لعرض أحدث إصدار.",
+      "cardChangedBeforeEdit": "لا يحتوي هذا المحرّر على أحدث إصدار من البطاقة. ألغِ التحرير وأعد فتحه.",
+      "editConflict": "تغيّرت البطاقة أثناء تحريرك لها. راجع أحدث القيم قبل حفظ تعديلاتك.",
+      "scheduledStartBlocked": "هذه البطاقة مجدولة. انتظر حتى موعدها المحدد لبدئها.",
+      "alreadyStarted": "هذه البطاقة مرتبطة بجلسة بالفعل. لبدء جلسة أخرى، أزل الارتباط من «تحرير البطاقة».",
+      "sessionCreateFailed": "تعذّر تأكيد إنشاء جلسة لهذه البطاقة.",
+      "stopSessionUnresolved": "تعذّر العثور على الجلسة لإيقافها. افتح «تحرير البطاقة» للتحقق من ارتباط الجلسة.",
+      "staleSessionReason": "لم تُبلغ الجلسة المرتبطة عن أي نشاط حديث."
     }
   },
   "it": {
@@ -5276,7 +5396,19 @@
       "noKnownLabels": "Non ci sono ancora etichette nelle schede caricate.",
       "labelLengthLimit": "Le etichette possono contenere fino a 40 caratteri.",
       "bulkLabelLimit": "Questa operazione assegnerebbe più di 12 etichette a una scheda selezionata. Scegli meno etichette.",
-      "labelLimit": "12 etichette selezionate. Rimuovine una per aggiungerne un'altra."
+      "labelLimit": "12 etichette selezionate. Rimuovine una per aggiungerne un'altra.",
+      "inactive": "Workboard non è attivo. Ricarica questa pagina.",
+      "unknownError": "Impossibile completare questa azione di Workboard.",
+      "gatewayUnavailable": "Impossibile aggiornare Workboard senza una connessione al Gateway.",
+      "cardResponseMissing": "Impossibile confermare la modifica alla scheda.",
+      "cardChanged": "Questa scheda è stata modificata. Aggiorna Workboard per vedere la versione più recente.",
+      "cardChangedBeforeEdit": "Questo editor non dispone della versione più recente della scheda. Annulla e riaprilo.",
+      "editConflict": "La scheda è stata modificata mentre la stavi modificando. Controlla i valori più recenti prima di salvare le tue modifiche.",
+      "scheduledStartBlocked": "Questa scheda è programmata. Attendi l'orario previsto per avviarla.",
+      "alreadyStarted": "Questa scheda ha già una sessione collegata. Per avviare una sessione diversa, rimuovi il collegamento in Modifica scheda.",
+      "sessionCreateFailed": "Impossibile confermare la creazione di una sessione per questa scheda.",
+      "stopSessionUnresolved": "Impossibile trovare la sessione da interrompere. Apri Modifica scheda per controllare il collegamento alla sessione.",
+      "staleSessionReason": "La sessione collegata non ha segnalato attività recenti."
     }
   },
   "tr": {
@@ -5756,7 +5888,19 @@
       "noKnownLabels": "Yüklenen kartlarda henüz etiket yok.",
       "labelLengthLimit": "Etiketler en fazla 40 karakter olabilir.",
       "bulkLabelLimit": "Bu işlem, seçili kartlardan birinin 12'den fazla etikete sahip olmasına neden olur. Daha az etiket seçin.",
-      "labelLimit": "12 etiket seçildi. Başka bir etiket eklemek için birini kaldırın."
+      "labelLimit": "12 etiket seçildi. Başka bir etiket eklemek için birini kaldırın.",
+      "inactive": "Workboard etkin değil. Bu sayfayı yeniden yükleyin.",
+      "unknownError": "Bu Workboard işlemi tamamlanamadı.",
+      "gatewayUnavailable": "Gateway bağlantısı olmadığı için Workboard yenilenemedi.",
+      "cardResponseMissing": "Kart değişikliği doğrulanamadı.",
+      "cardChanged": "Bu kart değişti. En güncel sürümü görmek için Workboard’u yenileyin.",
+      "cardChangedBeforeEdit": "Bu düzenleyicide kartın en güncel sürümü yok. İptal edip yeniden açın.",
+      "editConflict": "Siz düzenleme yaparken kart değişti. Düzenlemelerinizi kaydetmeden önce en güncel değerleri gözden geçirin.",
+      "scheduledStartBlocked": "Bu kart zamanlanmış. Başlatmak için planlanan zamanı bekleyin.",
+      "alreadyStarted": "Bu karta zaten bir oturum bağlı. Farklı bir oturum başlatmak için Kartı düzenle bölümündeki bağlantıyı kaldırın.",
+      "sessionCreateFailed": "Bu kart için bir oturum oluşturulduğu doğrulanamadı.",
+      "stopSessionUnresolved": "Durdurulacak oturum bulunamadı. Oturum bağlantısını kontrol etmek için Kartı düzenle bölümünü açın.",
+      "staleSessionReason": "Bağlı oturum son zamanlarda etkinlik bildirmedi."
     }
   },
   "uk": {
@@ -6236,7 +6380,19 @@
       "noKnownLabels": "У завантажених картках ще немає міток.",
       "labelLengthLimit": "Мітки можуть містити до 40 символів.",
       "bulkLabelLimit": "Унаслідок цієї дії вибрана картка матиме понад 12 міток. Виберіть менше міток.",
-      "labelLimit": "Вибрано 12 міток. Видаліть одну, щоб додати іншу."
+      "labelLimit": "Вибрано 12 міток. Видаліть одну, щоб додати іншу.",
+      "inactive": "Workboard не активний. Перезавантажте цю сторінку.",
+      "unknownError": "Не вдалося виконати цю дію у Workboard.",
+      "gatewayUnavailable": "Не вдалося оновити Workboard без підключення до Gateway.",
+      "cardResponseMissing": "Не вдалося підтвердити зміну картки.",
+      "cardChanged": "Ця картка змінилася. Оновіть Workboard, щоб побачити останню версію.",
+      "cardChangedBeforeEdit": "У цьому редакторі відкрито не останню версію картки. Скасуйте редагування та відкрийте її знову.",
+      "editConflict": "Картка змінилася під час редагування. Перегляньте актуальні значення, перш ніж зберігати зміни.",
+      "scheduledStartBlocked": "Для цієї картки заплановано запуск. Дочекайтеся запланованого часу, щоб запустити її.",
+      "alreadyStarted": "Ця картка вже має пов’язаний сеанс. Щоб запустити інший сеанс, видаліть зв’язок у вікні «Редагувати картку».",
+      "sessionCreateFailed": "Не вдалося підтвердити створення сеансу для цієї картки.",
+      "stopSessionUnresolved": "Не вдалося знайти сеанс для зупинки. Відкрийте вікно «Редагувати картку», щоб перевірити зв’язок із сеансом.",
+      "staleSessionReason": "Пов’язаний сеанс останнім часом не повідомляв про активність."
     }
   },
   "id": {
@@ -6716,7 +6872,19 @@
       "noKnownLabels": "Belum ada label pada kartu yang dimuat.",
       "labelLengthLimit": "Label dapat berisi hingga 40 karakter.",
       "bulkLabelLimit": "Tindakan ini akan membuat salah satu kartu yang dipilih memiliki lebih dari 12 label. Kurangi jumlah label yang dipilih.",
-      "labelLimit": "12 label dipilih. Hapus satu untuk menambahkan label lain."
+      "labelLimit": "12 label dipilih. Hapus satu untuk menambahkan label lain.",
+      "inactive": "Workboard tidak aktif. Muat ulang halaman ini.",
+      "unknownError": "Tidak dapat menyelesaikan tindakan Workboard ini.",
+      "gatewayUnavailable": "Workboard tidak dapat diperbarui tanpa koneksi ke Gateway.",
+      "cardResponseMissing": "Tidak dapat mengonfirmasi perubahan kartu.",
+      "cardChanged": "Kartu ini telah berubah. Perbarui Workboard untuk melihat versi terbaru.",
+      "cardChangedBeforeEdit": "Editor ini tidak memiliki versi terbaru kartu. Batalkan dan buka kembali.",
+      "editConflict": "Kartu berubah saat Anda mengeditnya. Tinjau nilai terbaru sebelum menyimpan perubahan Anda.",
+      "scheduledStartBlocked": "Kartu ini dijadwalkan. Tunggu hingga waktu yang dijadwalkan untuk memulainya.",
+      "alreadyStarted": "Kartu ini sudah memiliki sesi tertaut. Untuk memulai sesi lain, hapus tautannya di Edit kartu.",
+      "sessionCreateFailed": "Tidak dapat mengonfirmasi bahwa sesi telah dibuat untuk kartu ini.",
+      "stopSessionUnresolved": "Tidak dapat menemukan sesi yang akan dihentikan. Buka Edit kartu untuk memeriksa tautan sesi.",
+      "staleSessionReason": "Sesi tertaut belum melaporkan aktivitas terbaru."
     }
   },
   "pl": {
@@ -7196,7 +7364,19 @@
       "noKnownLabels": "We wczytanych kartach nie ma jeszcze etykiet.",
       "labelLengthLimit": "Etykiety mogą mieć maksymalnie 40 znaków.",
       "bulkLabelLimit": "Spowodowałoby to przekroczenie limitu 12 etykiet na jednej z wybranych kart. Wybierz mniej etykiet.",
-      "labelLimit": "Wybrano 12 etykiet. Usuń jedną, aby dodać kolejną."
+      "labelLimit": "Wybrano 12 etykiet. Usuń jedną, aby dodać kolejną.",
+      "inactive": "Workboard nie jest aktywny. Odśwież tę stronę.",
+      "unknownError": "Nie udało się wykonać tej czynności w Workboard.",
+      "gatewayUnavailable": "Nie udało się odświeżyć Workboard bez połączenia z Gateway.",
+      "cardResponseMissing": "Nie udało się potwierdzić zmiany karty.",
+      "cardChanged": "Ta karta została zmieniona. Odśwież Workboard, aby zobaczyć najnowszą wersję.",
+      "cardChangedBeforeEdit": "Ten edytor nie zawiera najnowszej wersji karty. Anuluj edycję i otwórz go ponownie.",
+      "editConflict": "Karta została zmieniona podczas edycji. Sprawdź najnowsze wartości przed zapisaniem swoich zmian.",
+      "scheduledStartBlocked": "Ta karta ma zaplanowany czas rozpoczęcia. Poczekaj do tego czasu, aby ją uruchomić.",
+      "alreadyStarted": "Ta karta ma już powiązaną sesję. Aby rozpocząć inną sesję, usuń powiązanie w oknie edycji karty.",
+      "sessionCreateFailed": "Nie udało się potwierdzić utworzenia sesji dla tej karty.",
+      "stopSessionUnresolved": "Nie udało się znaleźć sesji do zatrzymania. Otwórz okno edycji karty, aby sprawdzić powiązanie z sesją.",
+      "staleSessionReason": "Powiązana sesja nie zgłosiła ostatnio żadnej aktywności."
     }
   },
   "th": {
@@ -7676,7 +7856,19 @@
       "noKnownLabels": "ยังไม่มีป้ายกำกับในการ์ดที่โหลดไว้",
       "labelLengthLimit": "ป้ายกำกับมีความยาวได้ไม่เกิน 40 อักขระ",
       "bulkLabelLimit": "การดำเนินการนี้จะทำให้การ์ดที่เลือกมีป้ายกำกับเกิน 12 รายการ โปรดเลือกป้ายกำกับให้น้อยลง",
-      "labelLimit": "เลือกป้ายกำกับแล้ว 12 รายการ ลบออกหนึ่งรายการเพื่อเพิ่มรายการใหม่"
+      "labelLimit": "เลือกป้ายกำกับแล้ว 12 รายการ ลบออกหนึ่งรายการเพื่อเพิ่มรายการใหม่",
+      "inactive": "Workboard ไม่ได้ทำงานอยู่ โปรดโหลดหน้านี้ใหม่",
+      "unknownError": "ไม่สามารถดำเนินการนี้ใน Workboard ให้เสร็จสมบูรณ์ได้",
+      "gatewayUnavailable": "Workboard ไม่สามารถรีเฟรชได้หากไม่มีการเชื่อมต่อกับ Gateway",
+      "cardResponseMissing": "ไม่สามารถยืนยันการเปลี่ยนแปลงการ์ดได้",
+      "cardChanged": "การ์ดนี้มีการเปลี่ยนแปลง โปรดรีเฟรช Workboard เพื่อดูเวอร์ชันล่าสุด",
+      "cardChangedBeforeEdit": "หน้าต่างแก้ไขนี้ไม่มีการ์ดเวอร์ชันล่าสุด โปรดยกเลิกแล้วเปิดใหม่",
+      "editConflict": "การ์ดมีการเปลี่ยนแปลงขณะที่คุณกำลังแก้ไข โปรดตรวจสอบค่าล่าสุดก่อนบันทึกการแก้ไข",
+      "scheduledStartBlocked": "การ์ดนี้มีกำหนดเวลาไว้ โปรดรอจนถึงเวลาที่กำหนดจึงจะเริ่มได้",
+      "alreadyStarted": "การ์ดนี้มีเซสชันที่เชื่อมโยงอยู่แล้ว หากต้องการเริ่มเซสชันอื่น ให้ล้างการเชื่อมโยงในหน้าแก้ไขการ์ด",
+      "sessionCreateFailed": "ไม่สามารถยืนยันได้ว่ามีการสร้างเซสชันสำหรับการ์ดนี้แล้ว",
+      "stopSessionUnresolved": "ไม่พบเซสชันที่จะหยุด โปรดเปิดหน้าแก้ไขการ์ดเพื่อตรวจสอบการเชื่อมโยงเซสชัน",
+      "staleSessionReason": "เซสชันที่เชื่อมโยงไม่ได้รายงานกิจกรรมเมื่อเร็ว ๆ นี้"
     }
   },
   "vi": {
@@ -8156,7 +8348,19 @@
       "noKnownLabels": "Chưa có nhãn nào trong các thẻ đã tải.",
       "labelLengthLimit": "Nhãn có thể dài tối đa 40 ký tự.",
       "bulkLabelLimit": "Thao tác này sẽ khiến một thẻ được chọn có hơn 12 nhãn. Hãy chọn ít nhãn hơn.",
-      "labelLimit": "Đã chọn 12 nhãn. Hãy xóa một nhãn để thêm nhãn khác."
+      "labelLimit": "Đã chọn 12 nhãn. Hãy xóa một nhãn để thêm nhãn khác.",
+      "inactive": "Workboard hiện không hoạt động. Hãy tải lại trang này.",
+      "unknownError": "Không thể hoàn tất thao tác này trên Workboard.",
+      "gatewayUnavailable": "Không thể làm mới Workboard khi không có kết nối với Gateway.",
+      "cardResponseMissing": "Không thể xác nhận thay đổi của thẻ.",
+      "cardChanged": "Thẻ này đã thay đổi. Hãy làm mới Workboard để xem phiên bản mới nhất.",
+      "cardChangedBeforeEdit": "Trình chỉnh sửa này chưa có phiên bản mới nhất của thẻ. Hãy hủy và mở lại.",
+      "editConflict": "Thẻ đã thay đổi trong khi bạn chỉnh sửa. Hãy xem lại các giá trị mới nhất trước khi lưu nội dung chỉnh sửa.",
+      "scheduledStartBlocked": "Thẻ này đã được lên lịch. Hãy chờ đến thời gian đã lên lịch để bắt đầu.",
+      "alreadyStarted": "Thẻ này đã có phiên được liên kết. Để bắt đầu một phiên khác, hãy xóa liên kết trong Chỉnh sửa thẻ.",
+      "sessionCreateFailed": "Không thể xác nhận rằng phiên đã được tạo cho thẻ này.",
+      "stopSessionUnresolved": "Không tìm thấy phiên cần dừng. Hãy mở Chỉnh sửa thẻ để kiểm tra liên kết phiên.",
+      "staleSessionReason": "Phiên được liên kết chưa báo cáo hoạt động gần đây."
     }
   },
   "nl": {
@@ -8636,7 +8840,19 @@
       "noKnownLabels": "Nog geen labels in de geladen kaarten.",
       "labelLengthLimit": "Labels mogen maximaal 40 tekens bevatten.",
       "bulkLabelLimit": "Hierdoor zou een geselecteerde kaart meer dan 12 labels krijgen. Kies minder labels.",
-      "labelLimit": "12 labels geselecteerd. Verwijder er een om een ander toe te voegen."
+      "labelLimit": "12 labels geselecteerd. Verwijder er een om een ander toe te voegen.",
+      "inactive": "Workboard is niet actief. Laad deze pagina opnieuw.",
+      "unknownError": "Deze Workboard-actie kon niet worden voltooid.",
+      "gatewayUnavailable": "Workboard kon niet worden vernieuwd zonder verbinding met de Gateway.",
+      "cardResponseMissing": "De wijziging aan de kaart kon niet worden bevestigd.",
+      "cardChanged": "Deze kaart is gewijzigd. Vernieuw Workboard om de nieuwste versie te zien.",
+      "cardChangedBeforeEdit": "Deze editor heeft niet de nieuwste versie van de kaart. Annuleer en open de editor opnieuw.",
+      "editConflict": "De kaart is gewijzigd terwijl je deze bewerkte. Controleer de nieuwste waarden voordat je je wijzigingen opslaat.",
+      "scheduledStartBlocked": "Deze kaart is ingepland. Wacht tot het geplande tijdstip om deze te starten.",
+      "alreadyStarted": "Deze kaart heeft al een gekoppelde sessie. Verwijder de koppeling via Kaart bewerken om een andere sessie te starten.",
+      "sessionCreateFailed": "Er kon niet worden bevestigd dat er een sessie voor deze kaart is aangemaakt.",
+      "stopSessionUnresolved": "De te stoppen sessie kon niet worden gevonden. Open Kaart bewerken om de sessiekoppeling te controleren.",
+      "staleSessionReason": "De gekoppelde sessie heeft geen recente activiteit gemeld."
     }
   },
   "fa": {
@@ -9116,7 +9332,19 @@
       "noKnownLabels": "هنوز هیچ برچسبی در کارت‌های بارگذاری‌شده وجود ندارد.",
       "labelLengthLimit": "برچسب‌ها می‌توانند حداکثر ۴۰ نویسه داشته باشند.",
       "bulkLabelLimit": "با این کار، تعداد برچسب‌های یکی از کارت‌های انتخاب‌شده از ۱۲ بیشتر می‌شود. برچسب‌های کمتری انتخاب کنید.",
-      "labelLimit": "۱۲ برچسب انتخاب شده است. برای افزودن برچسب دیگر، یکی را حذف کنید."
+      "labelLimit": "۱۲ برچسب انتخاب شده است. برای افزودن برچسب دیگر، یکی را حذف کنید.",
+      "inactive": "Workboard فعال نیست. این صفحه را دوباره بارگذاری کنید.",
+      "unknownError": "این عملیات Workboard انجام نشد.",
+      "gatewayUnavailable": "Workboard بدون اتصال به Gateway نتوانست به‌روز شود.",
+      "cardResponseMissing": "تغییر کارت تأیید نشد.",
+      "cardChanged": "این کارت تغییر کرده است. Workboard را تازه‌سازی کنید تا آخرین نسخه را ببینید.",
+      "cardChangedBeforeEdit": "آخرین نسخهٔ کارت در این ویرایشگر موجود نیست. ویرایش را لغو کنید و دوباره آن را باز کنید.",
+      "editConflict": "کارت هنگام ویرایش شما تغییر کرده است. پیش از ذخیرهٔ ویرایش‌های خود، آخرین مقادیر را بررسی کنید.",
+      "scheduledStartBlocked": "این کارت زمان‌بندی شده است. برای شروع آن تا زمان تعیین‌شده صبر کنید.",
+      "alreadyStarted": "این کارت از قبل یک نشست پیوندشده دارد. برای شروع نشستی دیگر، پیوند را در «ویرایش کارت» پاک کنید.",
+      "sessionCreateFailed": "ایجاد نشست برای این کارت تأیید نشد.",
+      "stopSessionUnresolved": "نشست موردنظر برای توقف پیدا نشد. برای بررسی پیوند نشست، «ویرایش کارت» را باز کنید.",
+      "staleSessionReason": "نشست پیوندشده اخیراً فعالیتی گزارش نکرده است."
     }
   },
   "ru": {
@@ -9596,7 +9824,19 @@
       "noKnownLabels": "В загруженных карточках пока нет меток.",
       "labelLengthLimit": "Метка может содержать до 40 символов.",
       "bulkLabelLimit": "В результате в одной из выбранных карточек будет больше 12 меток. Выберите меньше меток.",
-      "labelLimit": "Выбрано 12 меток. Удалите одну, чтобы добавить другую."
+      "labelLimit": "Выбрано 12 меток. Удалите одну, чтобы добавить другую.",
+      "inactive": "Workboard неактивен. Перезагрузите страницу.",
+      "unknownError": "Не удалось выполнить это действие в Workboard.",
+      "gatewayUnavailable": "Не удалось обновить Workboard без подключения к Gateway.",
+      "cardResponseMissing": "Не удалось подтвердить изменение карточки.",
+      "cardChanged": "Карточка изменилась. Обновите Workboard, чтобы увидеть актуальную версию.",
+      "cardChangedBeforeEdit": "В редакторе открыта устаревшая версия карточки. Отмените редактирование и откройте её снова.",
+      "editConflict": "Карточка изменилась, пока вы её редактировали. Проверьте актуальные значения перед сохранением изменений.",
+      "scheduledStartBlocked": "Для этой карточки запланирован запуск. Дождитесь назначенного времени.",
+      "alreadyStarted": "К этой карточке уже привязана сессия. Чтобы запустить другую сессию, удалите привязку в разделе «Редактировать карточку».",
+      "sessionCreateFailed": "Не удалось подтвердить создание сессии для этой карточки.",
+      "stopSessionUnresolved": "Не удалось найти сессию для остановки. Откройте раздел «Редактировать карточку», чтобы проверить привязку сессии.",
+      "staleSessionReason": "Привязанная сессия давно не сообщала об активности."
     }
   },
   "sv": {
@@ -9690,7 +9930,9 @@
         "openBoard": "Öppna tavla",
         "statusCounts": "Kort per status",
         "cardCount": "{count} kort",
-        "noActiveCards": "Inga redo eller pågående kort."
+        "noActiveCards": "Inga redo eller pågående kort.",
+        "summaryLabel": "Workboard-sammanfattning",
+        "cardLabel": "Workboard-kort"
       },
       "status": {
         "triage": "Bedömning",
@@ -10015,7 +10257,19 @@
       "noKnownLabels": "Det finns inga etiketter på de inlästa korten ännu.",
       "labelLengthLimit": "Etiketter får innehålla högst 40 tecken.",
       "bulkLabelLimit": "Detta skulle ge ett markerat kort fler än 12 etiketter. Välj färre etiketter.",
-      "labelLimit": "12 etiketter valda. Ta bort en för att lägga till en annan."
+      "labelLimit": "12 etiketter valda. Ta bort en för att lägga till en annan.",
+      "inactive": "Workboard är inte aktivt. Ladda om sidan.",
+      "unknownError": "Det gick inte att slutföra den här åtgärden i Workboard.",
+      "gatewayUnavailable": "Det gick inte att uppdatera Workboard utan anslutning till Gateway.",
+      "cardResponseMissing": "Det gick inte att bekräfta ändringen av kortet.",
+      "cardChanged": "Kortet har ändrats. Uppdatera Workboard för att se den senaste versionen.",
+      "cardChangedBeforeEdit": "Den här redigeraren har inte den senaste versionen av kortet. Avbryt och öppna den igen.",
+      "editConflict": "Kortet ändrades medan du redigerade det. Granska de senaste värdena innan du sparar dina ändringar.",
+      "scheduledStartBlocked": "Kortet är schemalagt. Vänta till den schemalagda tiden innan du startar det.",
+      "alreadyStarted": "Kortet har redan en länkad session. Ta bort länken i Redigera kort för att starta en annan session.",
+      "sessionCreateFailed": "Det gick inte att bekräfta att en session skapades för kortet.",
+      "stopSessionUnresolved": "Det gick inte att hitta sessionen som ska stoppas. Öppna Redigera kort för att kontrollera sessionslänken.",
+      "staleSessionReason": "Den länkade sessionen har inte rapporterat någon aktivitet på sistone."
     }
   },
   "ca": {
@@ -10109,7 +10363,9 @@
         "openBoard": "Obre el tauler",
         "statusCounts": "Targetes per estat",
         "cardCount": "{count} targetes",
-        "noActiveCards": "No hi ha targetes preparades ni en execució."
+        "noActiveCards": "No hi ha targetes preparades ni en execució.",
+        "summaryLabel": "Resum de Workboard",
+        "cardLabel": "Targeta de Workboard"
       },
       "status": {
         "triage": "Triatge",
@@ -10434,7 +10690,19 @@
       "noKnownLabels": "Encara no hi ha etiquetes a les targetes carregades.",
       "labelLengthLimit": "Les etiquetes poden tenir fins a 40 caràcters.",
       "bulkLabelLimit": "Això faria que una de les targetes seleccionades tingués més de 12 etiquetes. Tria menys etiquetes.",
-      "labelLimit": "Has seleccionat 12 etiquetes. Elimina'n una per afegir-ne una altra."
+      "labelLimit": "Has seleccionat 12 etiquetes. Elimina'n una per afegir-ne una altra.",
+      "inactive": "Workboard no està actiu. Torna a carregar aquesta pàgina.",
+      "unknownError": "No s’ha pogut completar aquesta acció de Workboard.",
+      "gatewayUnavailable": "No s’ha pogut actualitzar Workboard sense una connexió al Gateway.",
+      "cardResponseMissing": "No s’ha pogut confirmar el canvi a la targeta.",
+      "cardChanged": "Aquesta targeta ha canviat. Actualitza Workboard per veure’n la versió més recent.",
+      "cardChangedBeforeEdit": "Aquest editor no té la versió més recent de la targeta. Cancel·la i torna a obrir-lo.",
+      "editConflict": "La targeta ha canviat mentre l’editaves. Revisa els valors més recents abans de desar els canvis.",
+      "scheduledStartBlocked": "Aquesta targeta està programada. Espera fins a l’hora programada per iniciar-la.",
+      "alreadyStarted": "Aquesta targeta ja té una sessió vinculada. Per iniciar una altra sessió, elimina l’enllaç a Edita la targeta.",
+      "sessionCreateFailed": "No s’ha pogut confirmar que s’hagi creat una sessió per a aquesta targeta.",
+      "stopSessionUnresolved": "No s’ha pogut trobar la sessió que cal aturar. Obre Edita la targeta per comprovar l’enllaç de la sessió.",
+      "staleSessionReason": "La sessió vinculada no ha notificat activitat recent."
     }
   }
 }

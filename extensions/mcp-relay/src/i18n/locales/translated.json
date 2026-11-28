@@ -1,1 +1,1520 @@
-{}
+{
+  "zh-CN": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "已连接的应用",
+        "subtitle": "管理通过 MCP 中继连接到你的 Gateway 的应用。",
+        "refresh": "刷新",
+        "loading": "正在加载已连接的应用",
+        "connectGateway": "连接到 Gateway 以管理已连接的应用。",
+        "readRequired": "你需要读取权限才能查看已连接的应用。",
+        "allApps": "所有已连接的应用",
+        "appsConnectedAs": "以 {principal} 身份连接的应用",
+        "emptyTitle": "暂无已连接的应用",
+        "emptyBody": "在应用中使用你的 Gateway 登录，或使用一次性代码进行配对。",
+        "emptyNoPair": "你的 Gateway 角色无权连接应用。请联系管理员获取权限。",
+        "gatewayOwner": "Gateway 所有者",
+        "anotherPerson": "其他人",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "上次使用时间：{time}",
+        "notUsedYet": "连接时间：{time} · 尚未使用",
+        "revoke": "撤销授权",
+        "revoked": "已撤销对 {app} 的授权。其 MCP 和嵌入式界面的访问权限已终止。",
+        "revokeHint": "撤销应用授权将终止其 MCP 和嵌入式界面的访问权限。重新连接应用可再次授予访问权限。"
+      },
+      "access": {
+        "legend": "应用访问权限",
+        "admin": "完全访问权限，包括管理权限",
+        "fullRole": "角色的全部访问权限",
+        "readWrite": "读写",
+        "readOnly": "只读",
+        "readWriteDetail": "在你的访问权限范围内查看会话、阅读聊天记录和发送消息。",
+        "readOnlyDetail": "在你的访问权限范围内查看会话和阅读聊天记录。",
+        "adminDetail": "包括 Gateway 管理和审批权限。仅向你信任的应用授予这些操作权限。",
+        "fullRoleDetail": "包括你的角色当前允许的所有权限。"
+      },
+      "consent": {
+        "connectionRequest": "连接请求",
+        "connectGateway": "连接另一个 Gateway",
+        "title": "连接 {app}？",
+        "approvingAs": "授权身份",
+        "returnsTo": "返回至",
+        "expires": "请求到期时间",
+        "hint": "应用只能在你授予的访问权限和你当前的 Gateway 权限范围内执行操作。中继服务可以查看传输中的内容。",
+        "allow": "允许",
+        "deny": "拒绝",
+        "notAllowed": "你当前的 Gateway 权限不允许连接应用。"
+      },
+      "pairing": {
+        "title": "使用配对码配对",
+        "description": "以 {principal} 的身份连接应用。",
+        "enterCode": "在应用的连接页面输入此一次性代码。",
+        "expires": "{time}过期。请勿泄露此代码。",
+        "mcpUrl": "MCP URL：",
+        "create": "创建配对码",
+        "creating": "正在创建代码",
+        "done": "完成",
+        "cancel": "取消"
+      },
+      "errors": {
+        "load": "无法加载已连接的应用。请选择“刷新”以更新列表。",
+        "loadRequest": "无法加载连接请求。请选择“刷新”以重试。",
+        "requestMissing": "此连接请求已失效。请从应用发起新的连接。",
+        "approve": "无法确认与{app}的连接。",
+        "deny": "无法确认是否已拒绝{app}的连接请求。",
+        "revoke": "无法确认是否已撤销{app}的访问权限。请选择“刷新”以查看其访问权限。",
+        "pair": "无法创建配对码。",
+        "returnToApp": "OpenClaw 无法将你带回{app}。"
+      }
+    }
+  },
+  "zh-TW": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "已連線的應用程式",
+        "subtitle": "管理透過 MCP 中繼連線至您 Gateway 的應用程式。",
+        "refresh": "重新整理",
+        "loading": "正在載入已連線的應用程式",
+        "connectGateway": "連線至 Gateway 以管理已連線的應用程式。",
+        "readRequired": "您需要讀取權限才能查看已連線的應用程式。",
+        "allApps": "所有已連線的應用程式",
+        "appsConnectedAs": "以 {principal} 身分連線的應用程式",
+        "emptyTitle": "尚無已連線的應用程式",
+        "emptyBody": "在應用程式中使用您的 Gateway 登入，或使用一次性代碼配對。",
+        "emptyNoPair": "您的 Gateway 角色無法連線應用程式。請向管理員申請權限。",
+        "gatewayOwner": "Gateway 擁有者",
+        "anotherPerson": "其他人",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "上次使用時間：{time}",
+        "notUsedYet": "連線時間：{time} · 尚未使用",
+        "revoke": "撤銷授權",
+        "revoked": "已撤銷 {app} 的授權。其 MCP 和內嵌式 UI 存取權限已終止。",
+        "revokeHint": "撤銷應用程式的授權會終止其 MCP 和內嵌式 UI 存取權限。重新連線該應用程式即可再次授予存取權限。"
+      },
+      "access": {
+        "legend": "應用程式存取權限",
+        "admin": "完整存取權限，包含管理權限",
+        "fullRole": "角色的完整存取權限",
+        "readWrite": "讀取與寫入",
+        "readOnly": "唯讀",
+        "readWriteDetail": "在您的存取權限範圍內檢視工作階段、讀取聊天記錄及傳送訊息。",
+        "readOnlyDetail": "在您的存取權限範圍內檢視工作階段及讀取聊天記錄。",
+        "adminDetail": "包含 Gateway 管理與核准權限。請僅允許您信任的應用程式執行這些操作。",
+        "fullRoleDetail": "包含您的角色目前允許的所有權限。"
+      },
+      "consent": {
+        "connectionRequest": "連線請求",
+        "connectGateway": "連接另一個 Gateway",
+        "title": "要連接 {app} 嗎？",
+        "approvingAs": "核准身分",
+        "returnsTo": "返回位置",
+        "expires": "請求到期時間",
+        "hint": "應用程式只能在您允許的存取範圍及目前的 Gateway 權限內執行操作。中繼服務可以查看傳輸中的內容。",
+        "allow": "允許",
+        "deny": "拒絕",
+        "notAllowed": "您目前的 Gateway 權限不允許連接應用程式。"
+      },
+      "pairing": {
+        "title": "使用代碼配對",
+        "description": "以 {principal} 的身分連接應用程式。",
+        "enterCode": "請在應用程式的連線頁面輸入此一次性代碼。",
+        "expires": "於 {time} 到期。請勿洩露此代碼。",
+        "mcpUrl": "MCP URL：",
+        "create": "建立配對碼",
+        "creating": "正在建立代碼",
+        "done": "完成",
+        "cancel": "取消"
+      },
+      "errors": {
+        "load": "無法載入已連線的應用程式。請選取「重新整理」以更新清單。",
+        "loadRequest": "無法載入連線請求。請選取「重新整理」以重試。",
+        "requestMissing": "此連線請求已失效。請從應用程式發起新的連線。",
+        "approve": "無法確認 {app} 的連線。",
+        "deny": "無法確認是否已拒絕 {app} 的連線請求。",
+        "revoke": "無法確認是否已撤銷 {app} 的存取權。請選取「重新整理」以查看其存取權狀態。",
+        "pair": "無法建立配對碼。",
+        "returnToApp": "OpenClaw 無法讓您返回 {app}。"
+      }
+    }
+  },
+  "pt-BR": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "Apps conectados",
+        "subtitle": "Gerencie os apps conectados ao seu Gateway por meio do relay MCP.",
+        "refresh": "Atualizar",
+        "loading": "Carregando apps conectados",
+        "connectGateway": "Conecte-se ao Gateway para gerenciar os apps conectados.",
+        "readRequired": "Você precisa de acesso de leitura para visualizar os apps conectados.",
+        "allApps": "Todos os apps conectados",
+        "appsConnectedAs": "Apps conectados como {principal}",
+        "emptyTitle": "Ainda não há apps conectados",
+        "emptyBody": "Entre com seu Gateway a partir de um app ou faça o pareamento com um código de uso único.",
+        "emptyNoPair": "Sua função no Gateway não permite conectar apps. Solicite acesso ao administrador.",
+        "gatewayOwner": "Proprietário do Gateway",
+        "anotherPerson": "Outra pessoa",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "Último uso: {time}",
+        "notUsedYet": "Conectado {time} · Ainda não utilizado",
+        "revoke": "Revogar",
+        "revoked": "Acesso de {app} revogado. O acesso ao MCP e à interface incorporada foi encerrado.",
+        "revokeHint": "Revogar um app encerra seu acesso ao MCP e à interface incorporada. Reconecte o app para conceder acesso novamente."
+      },
+      "access": {
+        "legend": "Acesso do app",
+        "admin": "Acesso completo, incluindo administração",
+        "fullRole": "Acesso completo da função",
+        "readWrite": "Leitura e escrita",
+        "readOnly": "Somente leitura",
+        "readWriteDetail": "Visualize sessões, leia o histórico de conversas e envie mensagens dentro dos limites do seu acesso.",
+        "readOnlyDetail": "Visualize sessões e leia o histórico de conversas dentro dos limites do seu acesso.",
+        "adminDetail": "Inclui administração do Gateway e aprovações. Permita essas ações apenas para um aplicativo em que você confia.",
+        "fullRoleDetail": "Inclui todas as permissões atualmente concedidas à sua função."
+      },
+      "consent": {
+        "connectionRequest": "Solicitação de conexão",
+        "connectGateway": "Conectar outro Gateway",
+        "title": "Conectar {app}?",
+        "approvingAs": "Aprovando como",
+        "returnsTo": "Retorna para",
+        "expires": "A solicitação expira",
+        "hint": "O aplicativo só pode agir dentro dos limites do acesso que você permitir e das suas permissões atuais do Gateway. O retransmissor pode ver o conteúdo em trânsito.",
+        "allow": "Permitir",
+        "deny": "Negar",
+        "notAllowed": "Suas permissões atuais do Gateway não permitem conectar um aplicativo."
+      },
+      "pairing": {
+        "title": "Parear com código",
+        "description": "Conecte um aplicativo como {principal}.",
+        "enterCode": "Insira este código de uso único na página de conexão do aplicativo.",
+        "expires": "Expira {time}. Mantenha este código em sigilo.",
+        "mcpUrl": "URL do MCP:",
+        "create": "Criar código de pareamento",
+        "creating": "Criando código",
+        "done": "Concluído",
+        "cancel": "Cancelar"
+      },
+      "errors": {
+        "load": "Não foi possível carregar os aplicativos conectados. Selecione Atualizar para atualizar a lista.",
+        "loadRequest": "Não foi possível carregar a solicitação de conexão. Selecione Atualizar para tentar novamente.",
+        "requestMissing": "Esta solicitação de conexão não está mais disponível. Inicie uma nova conexão pelo aplicativo.",
+        "approve": "Não foi possível confirmar a conexão de {app}.",
+        "deny": "Não foi possível confirmar a recusa para {app}.",
+        "revoke": "Não foi possível confirmar a revogação para {app}. Selecione Atualizar para verificar o acesso.",
+        "pair": "Não foi possível criar um código de pareamento.",
+        "returnToApp": "O OpenClaw não conseguiu levar você de volta a {app}."
+      }
+    }
+  },
+  "de": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "Verbundene Apps",
+        "subtitle": "Verwalten Sie Apps, die über das MCP-Relay mit Ihrem Gateway verbunden sind.",
+        "refresh": "Aktualisieren",
+        "loading": "Verbundene Apps werden geladen",
+        "connectGateway": "Verbinden Sie sich mit dem Gateway, um verbundene Apps zu verwalten.",
+        "readRequired": "Sie benötigen Lesezugriff, um verbundene Apps anzuzeigen.",
+        "allApps": "Alle verbundenen Apps",
+        "appsConnectedAs": "Als {principal} verbundene Apps",
+        "emptyTitle": "Noch keine verbundenen Apps",
+        "emptyBody": "Melden Sie sich in einer App mit Ihrem Gateway an oder koppeln Sie die App mit einem Einmalcode.",
+        "emptyNoPair": "Ihre Gateway-Rolle berechtigt Sie nicht zum Verbinden von Apps. Bitten Sie Ihren Administrator um Zugriff.",
+        "gatewayOwner": "Gateway-Inhaber",
+        "anotherPerson": "Andere Person",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "Zuletzt verwendet: {time}",
+        "notUsedYet": "Verbunden: {time} · Noch nicht verwendet",
+        "revoke": "Widerrufen",
+        "revoked": "Zugriff für {app} widerrufen. Der Zugriff auf MCP und die eingebettete Benutzeroberfläche wurde beendet.",
+        "revokeHint": "Wenn Sie den Zugriff einer App widerrufen, endet ihr Zugriff auf MCP und die eingebettete Benutzeroberfläche. Verbinden Sie die App erneut, um ihr wieder Zugriff zu gewähren."
+      },
+      "access": {
+        "legend": "App-Zugriff",
+        "admin": "Vollzugriff, einschließlich Verwaltung",
+        "fullRole": "Vollständiger Zugriff gemäß Rolle",
+        "readWrite": "Lesen und Schreiben",
+        "readOnly": "Nur Lesen",
+        "readWriteDetail": "Sitzungen anzeigen, Chatverläufe lesen und Nachrichten senden, soweit Ihre Zugriffsrechte dies erlauben.",
+        "readOnlyDetail": "Sitzungen anzeigen und Chatverläufe lesen, soweit Ihre Zugriffsrechte dies erlauben.",
+        "adminDetail": "Umfasst die Verwaltung des Gateways und Genehmigungen. Erlauben Sie dies nur einer App, der Sie diese Aktionen anvertrauen.",
+        "fullRoleDetail": "Umfasst alle Berechtigungen, die Ihre Rolle derzeit erlaubt."
+      },
+      "consent": {
+        "connectionRequest": "Verbindungsanfrage",
+        "connectGateway": "Weiteres Gateway verbinden",
+        "title": "{app} verbinden?",
+        "approvingAs": "Genehmigen als",
+        "returnsTo": "Rückkehr zu",
+        "expires": "Anfrage läuft ab",
+        "hint": "Die App kann nur im Rahmen des von Ihnen gewährten Zugriffs und Ihrer aktuellen Gateway-Berechtigungen handeln. Das Relay kann übertragene Inhalte einsehen.",
+        "allow": "Erlauben",
+        "deny": "Ablehnen",
+        "notAllowed": "Ihre aktuellen Gateway-Berechtigungen erlauben es nicht, eine App zu verbinden."
+      },
+      "pairing": {
+        "title": "Mit Code koppeln",
+        "description": "Eine App als {principal} verbinden.",
+        "enterCode": "Geben Sie diesen einmalig verwendbaren Code auf der Verbindungsseite der App ein.",
+        "expires": "Läuft {time} ab. Halten Sie diesen Code geheim.",
+        "mcpUrl": "MCP-URL:",
+        "create": "Kopplungscode erstellen",
+        "creating": "Code wird erstellt",
+        "done": "Fertig",
+        "cancel": "Abbrechen"
+      },
+      "errors": {
+        "load": "Verbundene Apps konnten nicht geladen werden. Wählen Sie „Aktualisieren“, um die Liste zu aktualisieren.",
+        "loadRequest": "Die Verbindungsanfrage konnte nicht geladen werden. Wählen Sie „Aktualisieren“, um es erneut zu versuchen.",
+        "requestMissing": "Diese Verbindungsanfrage ist nicht mehr verfügbar. Starten Sie eine neue Verbindung über die App.",
+        "approve": "Die Verbindung mit {app} konnte nicht bestätigt werden.",
+        "deny": "Die Ablehnung für {app} konnte nicht bestätigt werden.",
+        "revoke": "Der Widerruf für {app} konnte nicht bestätigt werden. Wählen Sie „Aktualisieren“, um die Zugriffsrechte zu prüfen.",
+        "pair": "Es konnte kein Kopplungscode erstellt werden.",
+        "returnToApp": "OpenClaw konnte Sie nicht zu {app} zurückführen."
+      }
+    }
+  },
+  "es": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "Aplicaciones conectadas",
+        "subtitle": "Gestiona las aplicaciones conectadas a tu Gateway a través del relé MCP.",
+        "refresh": "Actualizar",
+        "loading": "Cargando aplicaciones conectadas",
+        "connectGateway": "Conéctate al Gateway para gestionar las aplicaciones conectadas.",
+        "readRequired": "Necesitas permisos de lectura para ver las aplicaciones conectadas.",
+        "allApps": "Todas las aplicaciones conectadas",
+        "appsConnectedAs": "Aplicaciones conectadas como {principal}",
+        "emptyTitle": "Aún no hay aplicaciones conectadas",
+        "emptyBody": "Inicia sesión con tu Gateway desde una aplicación o vincúlala con un código de un solo uso.",
+        "emptyNoPair": "Tu rol en el Gateway no permite conectar aplicaciones. Solicita acceso a tu administrador.",
+        "gatewayOwner": "Propietario del Gateway",
+        "anotherPerson": "Otra persona",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "Último uso: {time}",
+        "notUsedYet": "Conexión: {time} · Aún no se ha usado",
+        "revoke": "Revocar",
+        "revoked": "Se ha revocado el acceso de {app}. Ya no tiene acceso a MCP ni a la interfaz integrada.",
+        "revokeHint": "Revocar una aplicación elimina su acceso a MCP y a la interfaz integrada. Vuelve a conectar la aplicación para concederle acceso de nuevo."
+      },
+      "access": {
+        "legend": "Acceso de la aplicación",
+        "admin": "Acceso completo, incluida la administración",
+        "fullRole": "Acceso completo según el rol",
+        "readWrite": "Lectura y escritura",
+        "readOnly": "Solo lectura",
+        "readWriteDetail": "Ver sesiones, leer el historial de chat y enviar mensajes dentro de tu nivel de acceso.",
+        "readOnlyDetail": "Ver sesiones y leer el historial de chat dentro de tu nivel de acceso.",
+        "adminDetail": "Incluye la administración de Gateway y las aprobaciones. Permite estas acciones solo a una aplicación en la que confíes.",
+        "fullRoleDetail": "Incluye todos los permisos que permite actualmente tu rol."
+      },
+      "consent": {
+        "connectionRequest": "Solicitud de conexión",
+        "connectGateway": "Conectar otro Gateway",
+        "title": "¿Conectar {app}?",
+        "approvingAs": "Aprobando como",
+        "returnsTo": "Vuelve a",
+        "expires": "La solicitud caduca",
+        "hint": "La aplicación solo puede actuar dentro del acceso que autorices y de tus permisos actuales de Gateway. El servicio de retransmisión puede ver el contenido en tránsito.",
+        "allow": "Permitir",
+        "deny": "Denegar",
+        "notAllowed": "Tus permisos actuales de Gateway no permiten conectar una aplicación."
+      },
+      "pairing": {
+        "title": "Vincular con código",
+        "description": "Conecta una aplicación como {principal}.",
+        "enterCode": "Introduce este código de un solo uso en la página de conexión de la aplicación.",
+        "expires": "Caduca {time}. Mantén este código en privado.",
+        "mcpUrl": "URL de MCP:",
+        "create": "Crear código de vinculación",
+        "creating": "Creando código",
+        "done": "Listo",
+        "cancel": "Cancelar"
+      },
+      "errors": {
+        "load": "No se pudieron cargar las aplicaciones conectadas. Selecciona Actualizar para actualizar la lista.",
+        "loadRequest": "No se pudo cargar la solicitud de conexión. Selecciona Actualizar para volver a intentarlo.",
+        "requestMissing": "Esta solicitud de conexión ya no está disponible. Inicia una nueva conexión desde la aplicación.",
+        "approve": "No se pudo confirmar la conexión de {app}.",
+        "deny": "No se pudo confirmar el rechazo de la solicitud de {app}.",
+        "revoke": "No se pudo confirmar la revocación del acceso de {app}. Selecciona Actualizar para comprobar su acceso.",
+        "pair": "No se pudo crear un código de vinculación.",
+        "returnToApp": "OpenClaw no pudo llevarte de vuelta a {app}."
+      }
+    }
+  },
+  "ja-JP": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "接続済みアプリ",
+        "subtitle": "MCPリレー経由でGatewayに接続されているアプリを管理します。",
+        "refresh": "更新",
+        "loading": "接続済みアプリを読み込み中",
+        "connectGateway": "接続済みアプリを管理するには、Gatewayに接続してください。",
+        "readRequired": "接続済みアプリを表示するには、読み取り権限が必要です。",
+        "allApps": "すべての接続済みアプリ",
+        "appsConnectedAs": "{principal}として接続されているアプリ",
+        "emptyTitle": "接続済みアプリはまだありません",
+        "emptyBody": "アプリからGatewayでサインインするか、使い捨てコードでペアリングしてください。",
+        "emptyNoPair": "現在のGatewayロールではアプリを接続できません。管理者に権限をリクエストしてください。",
+        "gatewayOwner": "Gatewayの所有者",
+        "anotherPerson": "別のユーザー",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "最終使用：{time}",
+        "notUsedYet": "接続：{time} · まだ使用されていません",
+        "revoke": "取り消す",
+        "revoked": "{app}のアクセス権を取り消しました。MCPおよび埋め込みUIへのアクセスは終了しました。",
+        "revokeHint": "アプリのアクセス権を取り消すと、MCPおよび埋め込みUIへのアクセスが終了します。再度アクセスを許可するには、アプリを再接続してください。"
+      },
+      "access": {
+        "legend": "アプリのアクセス権",
+        "admin": "管理を含むフルアクセス",
+        "fullRole": "ロールの全権限",
+        "readWrite": "読み取りと書き込み",
+        "readOnly": "読み取り専用",
+        "readWriteDetail": "アクセス権限の範囲内で、セッションの表示、チャット履歴の閲覧、メッセージの送信ができます。",
+        "readOnlyDetail": "アクセス権限の範囲内で、セッションの表示とチャット履歴の閲覧ができます。",
+        "adminDetail": "Gatewayの管理と承認が含まれます。これらの操作を任せられる、信頼できるアプリにのみ許可してください。",
+        "fullRoleDetail": "現在のロールで許可されているすべての権限が含まれます。"
+      },
+      "consent": {
+        "connectionRequest": "接続リクエスト",
+        "connectGateway": "別のGatewayを接続",
+        "title": "{app}を接続しますか？",
+        "approvingAs": "承認するアカウント",
+        "returnsTo": "戻り先",
+        "expires": "リクエストの有効期限",
+        "hint": "アプリは、許可されたアクセス権限と現在のGatewayの権限の範囲内でのみ操作できます。中継サービスは転送中のコンテンツを閲覧できます。",
+        "allow": "許可",
+        "deny": "拒否",
+        "notAllowed": "現在のGatewayの権限では、アプリの接続は許可されていません。"
+      },
+      "pairing": {
+        "title": "コードでペアリング",
+        "description": "{principal}としてアプリを接続します。",
+        "enterCode": "アプリの接続ページで、この使い捨てコードを入力してください。",
+        "expires": "有効期限：{time}。このコードを他の人と共有しないでください。",
+        "mcpUrl": "MCP URL：",
+        "create": "ペアリングコードを作成",
+        "creating": "コードを作成中",
+        "done": "完了",
+        "cancel": "キャンセル"
+      },
+      "errors": {
+        "load": "接続済みのアプリを読み込めませんでした。「更新」を選択してリストを更新してください。",
+        "loadRequest": "接続リクエストを読み込めませんでした。「更新」を選択して再試行してください。",
+        "requestMissing": "この接続リクエストはもう利用できません。アプリから新しい接続を開始してください。",
+        "approve": "{app}の接続を確認できませんでした。",
+        "deny": "{app}の接続拒否を確認できませんでした。",
+        "revoke": "{app}のアクセス権の取り消しを確認できませんでした。「更新」を選択してアクセス権を確認してください。",
+        "pair": "ペアリングコードを作成できませんでした。",
+        "returnToApp": "OpenClawから{app}に戻れませんでした。"
+      }
+    }
+  },
+  "ko": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "연결된 앱",
+        "subtitle": "MCP 릴레이를 통해 Gateway에 연결된 앱을 관리하세요.",
+        "refresh": "새로 고침",
+        "loading": "연결된 앱 불러오는 중",
+        "connectGateway": "연결된 앱을 관리하려면 Gateway에 연결하세요.",
+        "readRequired": "연결된 앱을 보려면 읽기 권한이 필요합니다.",
+        "allApps": "연결된 모든 앱",
+        "appsConnectedAs": "{principal}(으)로 연결된 앱",
+        "emptyTitle": "아직 연결된 앱이 없습니다",
+        "emptyBody": "앱에서 Gateway로 로그인하거나 일회용 코드로 페어링하세요.",
+        "emptyNoPair": "현재 Gateway 역할로는 앱을 연결할 수 없습니다. 관리자에게 권한을 요청하세요.",
+        "gatewayOwner": "Gateway 소유자",
+        "anotherPerson": "다른 사용자",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "마지막 사용: {time}",
+        "notUsedYet": "연결: {time} · 아직 사용하지 않음",
+        "revoke": "권한 취소",
+        "revoked": "{app}의 권한이 취소되었습니다. 해당 앱의 MCP 및 내장 UI 접근 권한이 종료되었습니다.",
+        "revokeHint": "앱의 권한을 취소하면 해당 앱의 MCP 및 내장 UI 접근 권한이 종료됩니다. 권한을 다시 부여하려면 앱을 다시 연결하세요."
+      },
+      "access": {
+        "legend": "앱 접근 권한",
+        "admin": "관리 권한을 포함한 전체 액세스",
+        "fullRole": "역할에 따른 전체 액세스",
+        "readWrite": "읽기 및 쓰기",
+        "readOnly": "읽기 전용",
+        "readWriteDetail": "허용된 액세스 범위 내에서 세션을 보고, 채팅 기록을 읽고, 메시지를 보낼 수 있습니다.",
+        "readOnlyDetail": "허용된 액세스 범위 내에서 세션을 보고 채팅 기록을 읽을 수 있습니다.",
+        "adminDetail": "Gateway 관리 및 승인 권한이 포함됩니다. 이러한 작업을 맡길 수 있는 신뢰할 만한 앱만 허용하세요.",
+        "fullRoleDetail": "현재 역할에서 허용하는 모든 권한이 포함됩니다."
+      },
+      "consent": {
+        "connectionRequest": "연결 요청",
+        "connectGateway": "다른 Gateway 연결",
+        "title": "{app} 앱을 연결하시겠습니까?",
+        "approvingAs": "승인 계정",
+        "returnsTo": "돌아갈 위치",
+        "expires": "요청 만료 시간",
+        "hint": "앱은 허용한 액세스 범위와 현재 Gateway 권한 내에서만 작업할 수 있습니다. 릴레이는 전송 중인 콘텐츠를 볼 수 있습니다.",
+        "allow": "허용",
+        "deny": "거부",
+        "notAllowed": "현재 Gateway 권한으로는 앱을 연결할 수 없습니다."
+      },
+      "pairing": {
+        "title": "코드로 페어링",
+        "description": "{principal} 계정으로 앱을 연결합니다.",
+        "enterCode": "앱의 연결 페이지에 이 일회용 코드를 입력하세요.",
+        "expires": "{time}에 만료됩니다. 이 코드를 다른 사람에게 공유하지 마세요.",
+        "mcpUrl": "MCP URL:",
+        "create": "페어링 코드 생성",
+        "creating": "코드 생성 중",
+        "done": "완료",
+        "cancel": "취소"
+      },
+      "errors": {
+        "load": "연결된 앱을 불러오지 못했습니다. 새로고침을 선택해 목록을 업데이트하세요.",
+        "loadRequest": "연결 요청을 불러오지 못했습니다. 새로고침을 선택해 다시 시도하세요.",
+        "requestMissing": "이 연결 요청은 더 이상 유효하지 않습니다. 앱에서 새 연결을 시작하세요.",
+        "approve": "{app}의 연결을 확인하지 못했습니다.",
+        "deny": "{app}의 연결 요청 거부를 확인하지 못했습니다.",
+        "revoke": "{app}의 접근 권한 취소를 확인하지 못했습니다. 새로고침을 선택해 접근 권한을 확인하세요.",
+        "pair": "페어링 코드를 생성하지 못했습니다.",
+        "returnToApp": "OpenClaw에서 {app}(으)로 돌아가지 못했습니다."
+      }
+    }
+  },
+  "fr": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "Applications connectées",
+        "subtitle": "Gérez les applications connectées à votre Gateway via le relais MCP.",
+        "refresh": "Actualiser",
+        "loading": "Chargement des applications connectées",
+        "connectGateway": "Connectez-vous à votre Gateway pour gérer les applications connectées.",
+        "readRequired": "Vous devez disposer d’un accès en lecture pour consulter les applications connectées.",
+        "allApps": "Toutes les applications connectées",
+        "appsConnectedAs": "Applications connectées en tant que {principal}",
+        "emptyTitle": "Aucune application connectée pour le moment",
+        "emptyBody": "Connectez-vous avec votre Gateway depuis une application, ou associez une application à l’aide d’un code à usage unique.",
+        "emptyNoPair": "Votre rôle Gateway ne vous permet pas de connecter des applications. Demandez un accès à votre administrateur.",
+        "gatewayOwner": "Propriétaire du Gateway",
+        "anotherPerson": "Autre personne",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "Dernière utilisation : {time}",
+        "notUsedYet": "Connexion : {time} · Aucune utilisation pour le moment",
+        "revoke": "Révoquer",
+        "revoked": "Accès de {app} révoqué. Ses accès MCP et à l’interface intégrée ont pris fin.",
+        "revokeHint": "La révocation d’une application met fin à ses accès MCP et à l’interface intégrée. Reconnectez l’application pour lui accorder à nouveau l’accès."
+      },
+      "access": {
+        "legend": "Accès de l’application",
+        "admin": "Accès complet, y compris à l’administration",
+        "fullRole": "Accès à toutes les autorisations du rôle",
+        "readWrite": "Lecture et écriture",
+        "readOnly": "Lecture seule",
+        "readWriteDetail": "Consultez les sessions, lisez l’historique des conversations et envoyez des messages dans les limites de vos droits d’accès.",
+        "readOnlyDetail": "Consultez les sessions et lisez l’historique des conversations dans les limites de vos droits d’accès.",
+        "adminDetail": "Inclut l’administration de Gateway et les approbations. N’autorisez qu’une application à laquelle vous faites confiance pour effectuer ces actions.",
+        "fullRoleDetail": "Inclut toutes les autorisations actuellement accordées à votre rôle."
+      },
+      "consent": {
+        "connectionRequest": "Demande de connexion",
+        "connectGateway": "Connecter un autre Gateway",
+        "title": "Connecter {app} ?",
+        "approvingAs": "Approbation en tant que",
+        "returnsTo": "Retour vers",
+        "expires": "Expiration de la demande",
+        "hint": "L’application ne peut agir que dans les limites de l’accès que vous lui accordez et de vos autorisations Gateway actuelles. Le relais peut voir le contenu en transit.",
+        "allow": "Autoriser",
+        "deny": "Refuser",
+        "notAllowed": "Vos autorisations Gateway actuelles ne permettent pas de connecter une application."
+      },
+      "pairing": {
+        "title": "Associer avec un code",
+        "description": "Connectez une application en tant que {principal}.",
+        "enterCode": "Saisissez ce code à usage unique sur la page de connexion de l’application.",
+        "expires": "Expire {time}. Gardez ce code confidentiel.",
+        "mcpUrl": "URL MCP :",
+        "create": "Créer un code d’association",
+        "creating": "Création du code",
+        "done": "Terminé",
+        "cancel": "Annuler"
+      },
+      "errors": {
+        "load": "Impossible de charger les applications connectées. Sélectionnez Actualiser pour mettre à jour la liste.",
+        "loadRequest": "Impossible de charger la demande de connexion. Sélectionnez Actualiser pour réessayer.",
+        "requestMissing": "Cette demande de connexion n’est plus disponible. Lancez une nouvelle connexion depuis l’application.",
+        "approve": "Impossible de confirmer la connexion de {app}.",
+        "deny": "Impossible de confirmer le refus pour {app}.",
+        "revoke": "Impossible de confirmer la révocation pour {app}. Sélectionnez Actualiser pour vérifier son accès.",
+        "pair": "Impossible de créer un code d’association.",
+        "returnToApp": "OpenClaw n’a pas pu vous rediriger vers {app}."
+      }
+    }
+  },
+  "hi": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "कनेक्ट किए गए ऐप",
+        "subtitle": "MCP रिले के ज़रिए आपके Gateway से कनेक्ट किए गए ऐप प्रबंधित करें।",
+        "refresh": "रीफ़्रेश करें",
+        "loading": "कनेक्ट किए गए ऐप लोड हो रहे हैं",
+        "connectGateway": "कनेक्ट किए गए ऐप प्रबंधित करने के लिए Gateway से कनेक्ट करें।",
+        "readRequired": "कनेक्ट किए गए ऐप देखने के लिए आपको पढ़ने की अनुमति चाहिए।",
+        "allApps": "सभी कनेक्ट किए गए ऐप",
+        "appsConnectedAs": "{principal} के रूप में कनेक्ट किए गए ऐप",
+        "emptyTitle": "अभी तक कोई ऐप कनेक्ट नहीं किया गया है",
+        "emptyBody": "किसी ऐप से अपने Gateway के ज़रिए साइन इन करें, या एक बार इस्तेमाल किए जा सकने वाले कोड से पेयर करें।",
+        "emptyNoPair": "आपकी Gateway भूमिका को ऐप कनेक्ट करने की अनुमति नहीं है। अनुमति के लिए अपने एडमिन से संपर्क करें।",
+        "gatewayOwner": "Gateway का स्वामी",
+        "anotherPerson": "कोई अन्य व्यक्ति",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "आखिरी बार इस्तेमाल किया गया: {time}",
+        "notUsedYet": "कनेक्ट किया गया: {time} · अभी तक इस्तेमाल नहीं किया गया",
+        "revoke": "अनुमति रद्द करें",
+        "revoked": "{app} की अनुमति रद्द कर दी गई है। इसकी MCP और एम्बेडेड UI की ऐक्सेस समाप्त हो गई है।",
+        "revokeHint": "किसी ऐप की अनुमति रद्द करने से उसकी MCP और एम्बेडेड UI की ऐक्सेस समाप्त हो जाती है। दोबारा अनुमति देने के लिए ऐप को फिर से कनेक्ट करें।"
+      },
+      "access": {
+        "legend": "ऐप की ऐक्सेस",
+        "admin": "प्रशासन सहित पूर्ण ऐक्सेस",
+        "fullRole": "भूमिका के अनुसार पूर्ण ऐक्सेस",
+        "readWrite": "पढ़ना और लिखना",
+        "readOnly": "केवल पढ़ना",
+        "readWriteDetail": "अपने ऐक्सेस के दायरे में सत्र देखें, चैट इतिहास पढ़ें और संदेश भेजें।",
+        "readOnlyDetail": "अपने ऐक्सेस के दायरे में सत्र देखें और चैट इतिहास पढ़ें।",
+        "adminDetail": "इसमें Gateway का प्रशासन और स्वीकृतियाँ शामिल हैं। इन कार्रवाइयों के लिए केवल उसी ऐप को अनुमति दें जिस पर आपको भरोसा हो।",
+        "fullRoleDetail": "इसमें आपकी भूमिका के तहत वर्तमान में अनुमत सभी अधिकार शामिल हैं।"
+      },
+      "consent": {
+        "connectionRequest": "कनेक्शन का अनुरोध",
+        "connectGateway": "दूसरा Gateway कनेक्ट करें",
+        "title": "{app} कनेक्ट करें?",
+        "approvingAs": "इस पहचान से स्वीकृति दे रहे हैं",
+        "returnsTo": "यहाँ वापस जाएँगे",
+        "expires": "अनुरोध की समय-सीमा",
+        "hint": "ऐप केवल आपके द्वारा दिए गए ऐक्सेस और आपकी वर्तमान Gateway अनुमतियों के दायरे में ही काम कर सकता है। रिले भेजी जा रही सामग्री देख सकता है।",
+        "allow": "अनुमति दें",
+        "deny": "अस्वीकार करें",
+        "notAllowed": "आपकी वर्तमान Gateway अनुमतियाँ किसी ऐप को कनेक्ट करने की अनुमति नहीं देती हैं।"
+      },
+      "pairing": {
+        "title": "कोड से पेयर करें",
+        "description": "{principal} के रूप में ऐप कनेक्ट करें।",
+        "enterCode": "ऐप के कनेक्शन पेज पर यह एक बार इस्तेमाल होने वाला कोड दर्ज करें।",
+        "expires": "{time} पर समाप्त होगा। इस कोड को गोपनीय रखें।",
+        "mcpUrl": "MCP URL:",
+        "create": "पेयरिंग कोड बनाएँ",
+        "creating": "कोड बनाया जा रहा है",
+        "done": "हो गया",
+        "cancel": "रद्द करें"
+      },
+      "errors": {
+        "load": "कनेक्ट किए गए ऐप लोड नहीं हो सके। सूची अपडेट करने के लिए रीफ़्रेश करें चुनें।",
+        "loadRequest": "कनेक्शन अनुरोध लोड नहीं हो सका। फिर से कोशिश करने के लिए रीफ़्रेश करें चुनें।",
+        "requestMissing": "यह कनेक्शन अनुरोध अब उपलब्ध नहीं है। ऐप से नया कनेक्शन शुरू करें।",
+        "approve": "{app} के कनेक्शन की पुष्टि नहीं हो सकी।",
+        "deny": "{app} का अनुरोध अस्वीकार किए जाने की पुष्टि नहीं हो सकी।",
+        "revoke": "{app} की पहुँच रद्द किए जाने की पुष्टि नहीं हो सकी। इसकी पहुँच जाँचने के लिए रीफ़्रेश करें चुनें।",
+        "pair": "पेयरिंग कोड नहीं बनाया जा सका।",
+        "returnToApp": "OpenClaw आपको वापस {app} पर नहीं ले जा सका।"
+      }
+    }
+  },
+  "ar": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "التطبيقات المتصلة",
+        "subtitle": "إدارة التطبيقات المتصلة بـ Gateway الخاص بك عبر وسيط MCP.",
+        "refresh": "تحديث",
+        "loading": "جارٍ تحميل التطبيقات المتصلة",
+        "connectGateway": "اتصل بـ Gateway لإدارة التطبيقات المتصلة.",
+        "readRequired": "تحتاج إلى صلاحية القراءة لعرض التطبيقات المتصلة.",
+        "allApps": "جميع التطبيقات المتصلة",
+        "appsConnectedAs": "التطبيقات المتصلة بهوية {principal}",
+        "emptyTitle": "لا توجد تطبيقات متصلة بعد",
+        "emptyBody": "سجّل الدخول باستخدام Gateway الخاص بك من أحد التطبيقات، أو أجرِ الاقتران باستخدام رمز يُستخدم لمرة واحدة.",
+        "emptyNoPair": "لا يسمح دورك في Gateway بتوصيل التطبيقات. اطلب من المسؤول منحك الصلاحية.",
+        "gatewayOwner": "مالك Gateway",
+        "anotherPerson": "شخص آخر",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "آخر استخدام {time}",
+        "notUsedYet": "تم الاتصال {time} · لم يُستخدم بعد",
+        "revoke": "إلغاء الوصول",
+        "revoked": "تم إلغاء وصول {app}. لم يعد بإمكانه الوصول إلى MCP وواجهة المستخدم المضمّنة.",
+        "revokeHint": "يؤدي إلغاء وصول التطبيق إلى إنهاء وصوله إلى MCP وواجهة المستخدم المضمّنة. أعد توصيل التطبيق لمنحه صلاحية الوصول مجددًا."
+      },
+      "access": {
+        "legend": "صلاحيات وصول التطبيق",
+        "admin": "وصول كامل، بما في ذلك الإدارة",
+        "fullRole": "وصول بجميع صلاحيات الدور",
+        "readWrite": "قراءة وكتابة",
+        "readOnly": "قراءة فقط",
+        "readWriteDetail": "عرض الجلسات وقراءة سجل المحادثات وإرسال الرسائل ضمن صلاحيات وصولك.",
+        "readOnlyDetail": "عرض الجلسات وقراءة سجل المحادثات ضمن صلاحيات وصولك.",
+        "adminDetail": "يشمل إدارة Gateway والموافقات. لا تسمح بهذه الإجراءات إلا لتطبيق تثق به.",
+        "fullRoleDetail": "يشمل جميع الصلاحيات التي يتيحها دورك حاليًا."
+      },
+      "consent": {
+        "connectionRequest": "طلب اتصال",
+        "connectGateway": "ربط Gateway آخر",
+        "title": "هل تريد ربط {app}؟",
+        "approvingAs": "الموافقة بصفتك",
+        "returnsTo": "العودة إلى",
+        "expires": "تنتهي صلاحية الطلب",
+        "hint": "لا يمكن للتطبيق التصرف إلا ضمن صلاحيات الوصول التي تمنحها وصلاحياتك الحالية في Gateway. يمكن للوسيط الاطلاع على المحتوى أثناء نقله.",
+        "allow": "سماح",
+        "deny": "رفض",
+        "notAllowed": "صلاحياتك الحالية في Gateway لا تسمح بربط تطبيق."
+      },
+      "pairing": {
+        "title": "الإقران باستخدام رمز",
+        "description": "اربط تطبيقًا بصفتك {principal}.",
+        "enterCode": "أدخل هذا الرمز المخصص للاستخدام مرة واحدة في صفحة الاتصال بالتطبيق.",
+        "expires": "تنتهي صلاحيته {time}. احتفظ بهذا الرمز سرًا.",
+        "mcpUrl": "عنوان URL لـ MCP:",
+        "create": "إنشاء رمز اقتران",
+        "creating": "جارٍ إنشاء الرمز",
+        "done": "تم",
+        "cancel": "إلغاء"
+      },
+      "errors": {
+        "load": "تعذّر تحميل التطبيقات المتصلة. اختر «تحديث» لتحديث القائمة.",
+        "loadRequest": "تعذّر تحميل طلب الاتصال. اختر «تحديث» للمحاولة مجددًا.",
+        "requestMissing": "لم يعد طلب الاتصال هذا متاحًا. ابدأ اتصالًا جديدًا من التطبيق.",
+        "approve": "تعذّر تأكيد اتصال {app}.",
+        "deny": "تعذّر تأكيد رفض طلب {app}.",
+        "revoke": "تعذّر تأكيد إلغاء صلاحية وصول {app}. اختر «تحديث» للتحقق من صلاحية وصوله.",
+        "pair": "تعذّر إنشاء رمز اقتران.",
+        "returnToApp": "تعذّر على OpenClaw إعادتك إلى {app}."
+      }
+    }
+  },
+  "it": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "App connesse",
+        "subtitle": "Gestisci le app connesse al tuo Gateway tramite il relay MCP.",
+        "refresh": "Aggiorna",
+        "loading": "Caricamento delle app connesse",
+        "connectGateway": "Connettiti al Gateway per gestire le app connesse.",
+        "readRequired": "È necessario l'accesso in lettura per visualizzare le app connesse.",
+        "allApps": "Tutte le app connesse",
+        "appsConnectedAs": "App connesse come {principal}",
+        "emptyTitle": "Nessuna app ancora connessa",
+        "emptyBody": "Accedi con il tuo Gateway da un'app oppure associala tramite un codice monouso.",
+        "emptyNoPair": "Il tuo ruolo nel Gateway non consente di connettere app. Chiedi l'accesso all'amministratore.",
+        "gatewayOwner": "Proprietario del Gateway",
+        "anotherPerson": "Un'altra persona",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "Ultimo utilizzo: {time}",
+        "notUsedYet": "Connessione: {time} · Non ancora utilizzata",
+        "revoke": "Revoca",
+        "revoked": "Accesso di {app} revocato. L'accesso a MCP e all'interfaccia integrata è terminato.",
+        "revokeHint": "La revoca di un'app interrompe il suo accesso a MCP e all'interfaccia integrata. Riconnetti l'app per concederle nuovamente l'accesso."
+      },
+      "access": {
+        "legend": "Accesso delle app",
+        "admin": "Accesso completo, inclusa l’amministrazione",
+        "fullRole": "Accesso completo previsto dal ruolo",
+        "readWrite": "Lettura e scrittura",
+        "readOnly": "Sola lettura",
+        "readWriteDetail": "Visualizza le sessioni, leggi la cronologia delle chat e invia messaggi nei limiti del tuo accesso.",
+        "readOnlyDetail": "Visualizza le sessioni e leggi la cronologia delle chat nei limiti del tuo accesso.",
+        "adminDetail": "Include l’amministrazione del Gateway e le approvazioni. Autorizza solo un’app a cui affideresti queste operazioni.",
+        "fullRoleDetail": "Include tutte le autorizzazioni attualmente previste dal tuo ruolo."
+      },
+      "consent": {
+        "connectionRequest": "Richiesta di connessione",
+        "connectGateway": "Connetti un altro Gateway",
+        "title": "Connettere {app}?",
+        "approvingAs": "Approvi come",
+        "returnsTo": "Ritorno a",
+        "expires": "Scadenza della richiesta",
+        "hint": "L’app può agire solo nei limiti dell’accesso che concedi e delle tue attuali autorizzazioni sul Gateway. Il relay può vedere i contenuti in transito.",
+        "allow": "Consenti",
+        "deny": "Nega",
+        "notAllowed": "Le tue attuali autorizzazioni sul Gateway non consentono di connettere un’app."
+      },
+      "pairing": {
+        "title": "Associa tramite codice",
+        "description": "Connetti un’app come {principal}.",
+        "enterCode": "Inserisci questo codice monouso nella pagina di connessione dell’app.",
+        "expires": "Scade {time}. Mantieni riservato questo codice.",
+        "mcpUrl": "URL MCP:",
+        "create": "Crea codice di abbinamento",
+        "creating": "Creazione del codice",
+        "done": "Fine",
+        "cancel": "Annulla"
+      },
+      "errors": {
+        "load": "Impossibile caricare le app connesse. Seleziona Aggiorna per aggiornare l’elenco.",
+        "loadRequest": "Impossibile caricare la richiesta di connessione. Seleziona Aggiorna per riprovare.",
+        "requestMissing": "Questa richiesta di connessione non è più disponibile. Avvia una nuova connessione dall’app.",
+        "approve": "Impossibile confermare la connessione di {app}.",
+        "deny": "Impossibile confermare il rifiuto per {app}.",
+        "revoke": "Impossibile confermare la revoca per {app}. Seleziona Aggiorna per verificarne l’accesso.",
+        "pair": "Impossibile creare un codice di abbinamento.",
+        "returnToApp": "OpenClaw non è riuscito a riportarti a {app}."
+      }
+    }
+  },
+  "tr": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "Bağlı uygulamalar",
+        "subtitle": "MCP rölesi üzerinden Gateway'inize bağlı uygulamaları yönetin.",
+        "refresh": "Yenile",
+        "loading": "Bağlı uygulamalar yükleniyor",
+        "connectGateway": "Bağlı uygulamaları yönetmek için Gateway'e bağlanın.",
+        "readRequired": "Bağlı uygulamaları görüntülemek için okuma erişiminiz olmalıdır.",
+        "allApps": "Tüm bağlı uygulamalar",
+        "appsConnectedAs": "{principal} olarak bağlanan uygulamalar",
+        "emptyTitle": "Henüz bağlı uygulama yok",
+        "emptyBody": "Bir uygulamadan Gateway'inizle oturum açın veya tek kullanımlık bir kodla eşleştirin.",
+        "emptyNoPair": "Gateway rolünüz uygulama bağlamanıza izin vermiyor. Yöneticinizden erişim isteyin.",
+        "gatewayOwner": "Gateway sahibi",
+        "anotherPerson": "Başka bir kişi",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "Son kullanım: {time}",
+        "notUsedYet": "Bağlanma zamanı: {time} · Henüz kullanılmadı",
+        "revoke": "Erişimi iptal et",
+        "revoked": "{app} erişimi iptal edildi. MCP ve gömülü kullanıcı arayüzü erişimi sona erdi.",
+        "revokeHint": "Bir uygulamanın erişimini iptal etmek, MCP ve gömülü kullanıcı arayüzü erişimini sonlandırır. Yeniden erişim vermek için uygulamayı tekrar bağlayın."
+      },
+      "access": {
+        "legend": "Uygulama erişimi",
+        "admin": "Yönetim dahil tam erişim",
+        "fullRole": "Rolün tüm erişim yetkileri",
+        "readWrite": "Okuma ve yazma",
+        "readOnly": "Salt okunur",
+        "readWriteDetail": "Erişim yetkileriniz kapsamında oturumları görüntüleyin, sohbet geçmişini okuyun ve mesaj gönderin.",
+        "readOnlyDetail": "Erişim yetkileriniz kapsamında oturumları görüntüleyin ve sohbet geçmişini okuyun.",
+        "adminDetail": "Gateway yönetimini ve onaylarını içerir. Bu işlemler için yalnızca güvendiğiniz bir uygulamaya izin verin.",
+        "fullRoleDetail": "Rolünüzün şu anda izin verdiği tüm yetkileri içerir."
+      },
+      "consent": {
+        "connectionRequest": "Bağlantı isteği",
+        "connectGateway": "Başka bir Gateway bağla",
+        "title": "{app} bağlansın mı?",
+        "approvingAs": "Onaylayan kimlik",
+        "returnsTo": "Dönüş adresi",
+        "expires": "İsteğin sona erme zamanı",
+        "hint": "Uygulama yalnızca izin verdiğiniz erişim ve mevcut Gateway yetkileriniz kapsamında işlem yapabilir. Aktarım hizmeti, iletilen içeriği görebilir.",
+        "allow": "İzin ver",
+        "deny": "Reddet",
+        "notAllowed": "Mevcut Gateway yetkileriniz bir uygulama bağlamanıza izin vermiyor."
+      },
+      "pairing": {
+        "title": "Kod ile eşleştir",
+        "description": "{principal} olarak bir uygulama bağlayın.",
+        "enterCode": "Bu tek kullanımlık kodu uygulamanın bağlantı sayfasına girin.",
+        "expires": "Son geçerlilik: {time}. Bu kodu gizli tutun.",
+        "mcpUrl": "MCP URL’si:",
+        "create": "Eşleştirme kodu oluştur",
+        "creating": "Kod oluşturuluyor",
+        "done": "Bitti",
+        "cancel": "İptal"
+      },
+      "errors": {
+        "load": "Bağlı uygulamalar yüklenemedi. Listeyi güncellemek için Yenile’yi seçin.",
+        "loadRequest": "Bağlantı isteği yüklenemedi. Tekrar denemek için Yenile’yi seçin.",
+        "requestMissing": "Bu bağlantı isteği artık kullanılamıyor. Uygulamadan yeni bir bağlantı başlatın.",
+        "approve": "{app} bağlantısı doğrulanamadı.",
+        "deny": "{app} için ret işlemi doğrulanamadı.",
+        "revoke": "{app} için erişimin kaldırıldığı doğrulanamadı. Erişimini kontrol etmek için Yenile’yi seçin.",
+        "pair": "Eşleştirme kodu oluşturulamadı.",
+        "returnToApp": "OpenClaw sizi {app} uygulamasına geri yönlendiremedi."
+      }
+    }
+  },
+  "uk": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "Підключені застосунки",
+        "subtitle": "Керуйте застосунками, підключеними до вашого Gateway через ретранслятор MCP.",
+        "refresh": "Оновити",
+        "loading": "Завантаження підключених застосунків",
+        "connectGateway": "Підключіться до Gateway, щоб керувати підключеними застосунками.",
+        "readRequired": "Для перегляду підключених застосунків потрібен доступ на читання.",
+        "allApps": "Усі підключені застосунки",
+        "appsConnectedAs": "Застосунки, підключені від імені {principal}",
+        "emptyTitle": "Підключених застосунків ще немає",
+        "emptyBody": "Увійдіть у застосунку через свій Gateway або створіть пару за допомогою одноразового коду.",
+        "emptyNoPair": "Ваша роль у Gateway не дозволяє підключати застосунки. Попросіть адміністратора надати доступ.",
+        "gatewayOwner": "Власник Gateway",
+        "anotherPerson": "Інша особа",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "Останнє використання: {time}",
+        "notUsedYet": "Підключено {time} · Ще не використовувався",
+        "revoke": "Відкликати доступ",
+        "revoked": "Доступ для {app} відкликано. Доступ до MCP та вбудованого інтерфейсу припинено.",
+        "revokeHint": "Відкликання доступу застосунку припиняє його доступ до MCP та вбудованого інтерфейсу. Підключіть застосунок повторно, щоб знову надати доступ."
+      },
+      "access": {
+        "legend": "Доступ застосунку",
+        "admin": "Повний доступ, включно з адмініструванням",
+        "fullRole": "Повний доступ відповідно до ролі",
+        "readWrite": "Читання та запис",
+        "readOnly": "Лише читання",
+        "readWriteDetail": "Переглядайте сеанси, читайте історію чату й надсилайте повідомлення в межах наданого вам доступу.",
+        "readOnlyDetail": "Переглядайте сеанси й читайте історію чату в межах наданого вам доступу.",
+        "adminDetail": "Включає адміністрування Gateway і надання схвалень. Надавайте цей доступ лише застосунку, якому довіряєте виконання таких дій.",
+        "fullRoleDetail": "Включає всі дозволи, які наразі надає ваша роль."
+      },
+      "consent": {
+        "connectionRequest": "Запит на підключення",
+        "connectGateway": "Підключити інший Gateway",
+        "title": "Підключити {app}?",
+        "approvingAs": "Схвалення від імені",
+        "returnsTo": "Повернення до",
+        "expires": "Термін дії запиту",
+        "hint": "Застосунок може діяти лише в межах доступу, який ви надасте, і ваших поточних дозволів у Gateway. Ретранслятор може бачити вміст під час передавання.",
+        "allow": "Дозволити",
+        "deny": "Відхилити",
+        "notAllowed": "Ваші поточні дозволи в Gateway не дозволяють підключити застосунок."
+      },
+      "pairing": {
+        "title": "Створити пару за кодом",
+        "description": "Підключіть застосунок від імені {principal}.",
+        "enterCode": "Введіть цей одноразовий код на сторінці підключення в застосунку.",
+        "expires": "Термін дії спливає {time}. Не розголошуйте цей код.",
+        "mcpUrl": "URL MCP:",
+        "create": "Створити код сполучення",
+        "creating": "Створення коду",
+        "done": "Готово",
+        "cancel": "Скасувати"
+      },
+      "errors": {
+        "load": "Не вдалося завантажити підключені застосунки. Натисніть «Оновити», щоб оновити список.",
+        "loadRequest": "Не вдалося завантажити запит на підключення. Натисніть «Оновити», щоб повторити спробу.",
+        "requestMissing": "Цей запит на підключення більше недоступний. Почніть нове підключення із застосунку.",
+        "approve": "Не вдалося підтвердити підключення {app}.",
+        "deny": "Не вдалося підтвердити відхилення запиту від {app}.",
+        "revoke": "Не вдалося підтвердити відкликання доступу для {app}. Натисніть «Оновити», щоб перевірити доступ.",
+        "pair": "Не вдалося створити код сполучення.",
+        "returnToApp": "OpenClaw не вдалося повернути вас до {app}."
+      }
+    }
+  },
+  "id": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "Aplikasi terhubung",
+        "subtitle": "Kelola aplikasi yang terhubung ke Gateway Anda melalui relai MCP.",
+        "refresh": "Muat ulang",
+        "loading": "Memuat aplikasi terhubung",
+        "connectGateway": "Hubungkan ke Gateway untuk mengelola aplikasi terhubung.",
+        "readRequired": "Anda memerlukan akses baca untuk melihat aplikasi terhubung.",
+        "allApps": "Semua aplikasi terhubung",
+        "appsConnectedAs": "Aplikasi yang terhubung sebagai {principal}",
+        "emptyTitle": "Belum ada aplikasi terhubung",
+        "emptyBody": "Masuk menggunakan Gateway Anda dari aplikasi, atau pasangkan dengan kode sekali pakai.",
+        "emptyNoPair": "Peran Gateway Anda tidak mengizinkan Anda menghubungkan aplikasi. Minta akses kepada administrator Anda.",
+        "gatewayOwner": "Pemilik Gateway",
+        "anotherPerson": "Orang lain",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "Terakhir digunakan {time}",
+        "notUsedYet": "Terhubung {time} · Belum digunakan",
+        "revoke": "Cabut akses",
+        "revoked": "Akses {app} dicabut. Akses MCP dan antarmuka tertanamnya telah berakhir.",
+        "revokeHint": "Mencabut akses aplikasi akan mengakhiri akses MCP dan antarmuka tertanamnya. Hubungkan kembali aplikasi untuk memberikan akses lagi."
+      },
+      "access": {
+        "legend": "Akses aplikasi",
+        "admin": "Akses penuh, termasuk administrasi",
+        "fullRole": "Akses penuh sesuai peran",
+        "readWrite": "Baca dan tulis",
+        "readOnly": "Hanya baca",
+        "readWriteDetail": "Lihat sesi, baca riwayat percakapan, dan kirim pesan sesuai akses Anda.",
+        "readOnlyDetail": "Lihat sesi dan baca riwayat percakapan sesuai akses Anda.",
+        "adminDetail": "Mencakup administrasi dan persetujuan Gateway. Hanya izinkan aplikasi yang Anda percayai untuk melakukan tindakan ini.",
+        "fullRoleDetail": "Mencakup semua izin yang saat ini diberikan oleh peran Anda."
+      },
+      "consent": {
+        "connectionRequest": "Permintaan koneksi",
+        "connectGateway": "Hubungkan Gateway lain",
+        "title": "Hubungkan {app}?",
+        "approvingAs": "Menyetujui sebagai",
+        "returnsTo": "Kembali ke",
+        "expires": "Permintaan kedaluwarsa",
+        "hint": "Aplikasi hanya dapat bertindak sesuai akses yang Anda izinkan dan izin Gateway Anda saat ini. Relai dapat melihat konten yang sedang dikirim.",
+        "allow": "Izinkan",
+        "deny": "Tolak",
+        "notAllowed": "Izin Gateway Anda saat ini tidak mengizinkan Anda menghubungkan aplikasi."
+      },
+      "pairing": {
+        "title": "Sandingkan dengan kode",
+        "description": "Hubungkan aplikasi sebagai {principal}.",
+        "enterCode": "Masukkan kode sekali pakai ini di halaman koneksi aplikasi.",
+        "expires": "Kedaluwarsa {time}. Jaga kerahasiaan kode ini.",
+        "mcpUrl": "URL MCP:",
+        "create": "Buat kode pemasangan",
+        "creating": "Membuat kode",
+        "done": "Selesai",
+        "cancel": "Batal"
+      },
+      "errors": {
+        "load": "Tidak dapat memuat aplikasi yang terhubung. Pilih Muat ulang untuk memperbarui daftar.",
+        "loadRequest": "Tidak dapat memuat permintaan koneksi. Pilih Muat ulang untuk mencoba lagi.",
+        "requestMissing": "Permintaan koneksi ini sudah tidak tersedia. Mulai koneksi baru dari aplikasi.",
+        "approve": "Tidak dapat mengonfirmasi koneksi {app}.",
+        "deny": "Tidak dapat mengonfirmasi penolakan untuk {app}.",
+        "revoke": "Tidak dapat mengonfirmasi pencabutan akses untuk {app}. Pilih Muat ulang untuk memeriksa aksesnya.",
+        "pair": "Tidak dapat membuat kode pemasangan.",
+        "returnToApp": "OpenClaw tidak dapat mengembalikan Anda ke {app}."
+      }
+    }
+  },
+  "pl": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "Połączone aplikacje",
+        "subtitle": "Zarządzaj aplikacjami połączonymi z Twoim Gateway przez przekaźnik MCP.",
+        "refresh": "Odśwież",
+        "loading": "Ładowanie połączonych aplikacji",
+        "connectGateway": "Połącz się z Gateway, aby zarządzać połączonymi aplikacjami.",
+        "readRequired": "Aby wyświetlić połączone aplikacje, potrzebujesz uprawnień do odczytu.",
+        "allApps": "Wszystkie połączone aplikacje",
+        "appsConnectedAs": "Aplikacje połączone jako {principal}",
+        "emptyTitle": "Nie ma jeszcze połączonych aplikacji",
+        "emptyBody": "Zaloguj się w aplikacji za pomocą swojego Gateway lub sparuj ją przy użyciu kodu jednorazowego.",
+        "emptyNoPair": "Twoja rola w Gateway nie pozwala na łączenie aplikacji. Poproś administratora o dostęp.",
+        "gatewayOwner": "Właściciel Gateway",
+        "anotherPerson": "Inna osoba",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "Ostatnie użycie: {time}",
+        "notUsedYet": "Połączono {time} · Jeszcze nie używano",
+        "revoke": "Cofnij dostęp",
+        "revoked": "Cofnięto dostęp aplikacji {app}. Jej dostęp do MCP i osadzonego interfejsu został zakończony.",
+        "revokeHint": "Cofnięcie dostępu aplikacji kończy jej dostęp do MCP i osadzonego interfejsu. Połącz aplikację ponownie, aby przywrócić dostęp."
+      },
+      "access": {
+        "legend": "Dostęp aplikacji",
+        "admin": "Pełny dostęp, w tym do administracji",
+        "fullRole": "Pełny dostęp w ramach roli",
+        "readWrite": "Odczyt i zapis",
+        "readOnly": "Tylko odczyt",
+        "readWriteDetail": "Przeglądanie sesji, odczytywanie historii czatu i wysyłanie wiadomości w zakresie przyznanego dostępu.",
+        "readOnlyDetail": "Przeglądanie sesji i odczytywanie historii czatu w zakresie przyznanego dostępu.",
+        "adminDetail": "Obejmuje administrowanie Gateway i zatwierdzanie żądań. Zezwalaj na te działania tylko zaufanym aplikacjom.",
+        "fullRoleDetail": "Obejmuje wszystkie uprawnienia obecnie dozwolone w ramach Twojej roli."
+      },
+      "consent": {
+        "connectionRequest": "Żądanie połączenia",
+        "connectGateway": "Połącz z innym Gateway",
+        "title": "Połączyć aplikację {app}?",
+        "approvingAs": "Zatwierdzasz jako",
+        "returnsTo": "Powrót do",
+        "expires": "Żądanie wygasa",
+        "hint": "Aplikacja może działać wyłącznie w zakresie przyznanego dostępu i Twoich bieżących uprawnień w Gateway. Serwer pośredniczący może odczytywać przesyłane treści.",
+        "allow": "Zezwól",
+        "deny": "Odmów",
+        "notAllowed": "Twoje bieżące uprawnienia w Gateway nie pozwalają na połączenie aplikacji."
+      },
+      "pairing": {
+        "title": "Sparuj za pomocą kodu",
+        "description": "Połącz aplikację jako {principal}.",
+        "enterCode": "Wpisz ten jednorazowy kod na stronie połączenia w aplikacji.",
+        "expires": "Wygasa {time}. Nie udostępniaj tego kodu.",
+        "mcpUrl": "Adres URL MCP:",
+        "create": "Utwórz kod parowania",
+        "creating": "Tworzenie kodu",
+        "done": "Gotowe",
+        "cancel": "Anuluj"
+      },
+      "errors": {
+        "load": "Nie udało się wczytać połączonych aplikacji. Wybierz Odśwież, aby zaktualizować listę.",
+        "loadRequest": "Nie udało się wczytać prośby o połączenie. Wybierz Odśwież, aby spróbować ponownie.",
+        "requestMissing": "Ta prośba o połączenie nie jest już dostępna. Rozpocznij nowe połączenie z poziomu aplikacji.",
+        "approve": "Nie udało się potwierdzić połączenia aplikacji {app}.",
+        "deny": "Nie udało się potwierdzić odrzucenia prośby aplikacji {app}.",
+        "revoke": "Nie udało się potwierdzić cofnięcia dostępu aplikacji {app}. Wybierz Odśwież, aby sprawdzić jej dostęp.",
+        "pair": "Nie udało się utworzyć kodu parowania.",
+        "returnToApp": "Nie udało się wrócić z OpenClaw do aplikacji {app}."
+      }
+    }
+  },
+  "th": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "แอปที่เชื่อมต่อ",
+        "subtitle": "จัดการแอปที่เชื่อมต่อกับ Gateway ของคุณผ่าน MCP relay",
+        "refresh": "รีเฟรช",
+        "loading": "กำลังโหลดแอปที่เชื่อมต่อ",
+        "connectGateway": "เชื่อมต่อกับ Gateway เพื่อจัดการแอปที่เชื่อมต่อ",
+        "readRequired": "คุณต้องมีสิทธิ์อ่านเพื่อดูแอปที่เชื่อมต่อ",
+        "allApps": "แอปที่เชื่อมต่อทั้งหมด",
+        "appsConnectedAs": "แอปที่เชื่อมต่อในนาม {principal}",
+        "emptyTitle": "ยังไม่มีแอปที่เชื่อมต่อ",
+        "emptyBody": "ลงชื่อเข้าใช้ด้วย Gateway ของคุณจากแอป หรือจับคู่ด้วยรหัสแบบใช้ครั้งเดียว",
+        "emptyNoPair": "บทบาทของคุณใน Gateway ไม่สามารถเชื่อมต่อแอปได้ โปรดขอสิทธิ์จากผู้ดูแลระบบ",
+        "gatewayOwner": "เจ้าของ Gateway",
+        "anotherPerson": "บุคคลอื่น",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "ใช้ล่าสุด {time}",
+        "notUsedYet": "เชื่อมต่อเมื่อ {time} · ยังไม่ได้ใช้งาน",
+        "revoke": "เพิกถอนสิทธิ์",
+        "revoked": "เพิกถอนสิทธิ์ของ {app} แล้ว การเข้าถึง MCP และ UI แบบฝังของแอปสิ้นสุดลงแล้ว",
+        "revokeHint": "การเพิกถอนสิทธิ์ของแอปจะยุติการเข้าถึง MCP และ UI แบบฝังของแอป เชื่อมต่อแอปอีกครั้งเพื่อให้สิทธิ์เข้าถึงใหม่"
+      },
+      "access": {
+        "legend": "สิทธิ์เข้าถึงของแอป",
+        "admin": "สิทธิ์เข้าถึงทั้งหมด รวมถึงการดูแลระบบ",
+        "fullRole": "สิทธิ์เข้าถึงทั้งหมดตามบทบาท",
+        "readWrite": "อ่านและเขียน",
+        "readOnly": "อ่านอย่างเดียว",
+        "readWriteDetail": "ดูเซสชัน อ่านประวัติแชต และส่งข้อความภายในขอบเขตสิทธิ์ของคุณ",
+        "readOnlyDetail": "ดูเซสชันและอ่านประวัติแชตภายในขอบเขตสิทธิ์ของคุณ",
+        "adminDetail": "รวมถึงการดูแลระบบ Gateway และการอนุมัติ อนุญาตเฉพาะแอปที่คุณไว้วางใจให้ดำเนินการเหล่านี้เท่านั้น",
+        "fullRoleDetail": "รวมสิทธิ์ทั้งหมดที่บทบาทของคุณอนุญาตในปัจจุบัน"
+      },
+      "consent": {
+        "connectionRequest": "คำขอเชื่อมต่อ",
+        "connectGateway": "เชื่อมต่อ Gateway อื่น",
+        "title": "เชื่อมต่อ {app} หรือไม่?",
+        "approvingAs": "อนุมัติในฐานะ",
+        "returnsTo": "กลับไปที่",
+        "expires": "คำขอหมดอายุ",
+        "hint": "แอปดำเนินการได้เฉพาะภายในขอบเขตสิทธิ์ที่คุณอนุญาตและสิทธิ์ Gateway ปัจจุบันของคุณเท่านั้น รีเลย์สามารถเห็นเนื้อหาระหว่างการรับส่งได้",
+        "allow": "อนุญาต",
+        "deny": "ปฏิเสธ",
+        "notAllowed": "สิทธิ์ Gateway ปัจจุบันของคุณไม่อนุญาตให้เชื่อมต่อแอป"
+      },
+      "pairing": {
+        "title": "จับคู่ด้วยรหัส",
+        "description": "เชื่อมต่อแอปในฐานะ {principal}",
+        "enterCode": "ป้อนรหัสแบบใช้ครั้งเดียวนี้ในหน้าการเชื่อมต่อของแอป",
+        "expires": "หมดอายุ {time} โปรดเก็บรหัสนี้ไว้เป็นความลับ",
+        "mcpUrl": "URL ของ MCP:",
+        "create": "สร้างรหัสจับคู่",
+        "creating": "กำลังสร้างรหัส",
+        "done": "เสร็จสิ้น",
+        "cancel": "ยกเลิก"
+      },
+      "errors": {
+        "load": "โหลดแอปที่เชื่อมต่อไม่ได้ เลือกรีเฟรชเพื่ออัปเดตรายการ",
+        "loadRequest": "โหลดคำขอเชื่อมต่อไม่ได้ เลือกรีเฟรชเพื่อลองอีกครั้ง",
+        "requestMissing": "คำขอเชื่อมต่อนี้ไม่พร้อมใช้งานแล้ว โปรดเริ่มการเชื่อมต่อใหม่จากแอป",
+        "approve": "ยืนยันการเชื่อมต่อของ {app} ไม่ได้",
+        "deny": "ยืนยันการปฏิเสธคำขอของ {app} ไม่ได้",
+        "revoke": "ยืนยันการเพิกถอนสิทธิ์ของ {app} ไม่ได้ เลือกรีเฟรชเพื่อตรวจสอบสิทธิ์การเข้าถึง",
+        "pair": "สร้างรหัสจับคู่ไม่ได้",
+        "returnToApp": "OpenClaw ไม่สามารถพาคุณกลับไปที่ {app} ได้"
+      }
+    }
+  },
+  "vi": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "Ứng dụng đã kết nối",
+        "subtitle": "Quản lý các ứng dụng đã kết nối với Gateway của bạn qua bộ chuyển tiếp MCP.",
+        "refresh": "Làm mới",
+        "loading": "Đang tải các ứng dụng đã kết nối",
+        "connectGateway": "Kết nối với Gateway để quản lý các ứng dụng đã kết nối.",
+        "readRequired": "Bạn cần quyền đọc để xem các ứng dụng đã kết nối.",
+        "allApps": "Tất cả ứng dụng đã kết nối",
+        "appsConnectedAs": "Ứng dụng đã kết nối với tư cách {principal}",
+        "emptyTitle": "Chưa có ứng dụng nào kết nối",
+        "emptyBody": "Đăng nhập bằng Gateway của bạn từ một ứng dụng hoặc ghép nối bằng mã dùng một lần.",
+        "emptyNoPair": "Vai trò của bạn trên Gateway không cho phép kết nối ứng dụng. Hãy yêu cầu quản trị viên cấp quyền truy cập.",
+        "gatewayOwner": "Chủ sở hữu Gateway",
+        "anotherPerson": "Người khác",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "Lần sử dụng gần nhất: {time}",
+        "notUsedYet": "Đã kết nối {time} · Chưa sử dụng",
+        "revoke": "Thu hồi",
+        "revoked": "Đã thu hồi quyền của {app}. Quyền truy cập MCP và giao diện nhúng của ứng dụng đã chấm dứt.",
+        "revokeHint": "Thu hồi quyền của ứng dụng sẽ chấm dứt quyền truy cập MCP và giao diện nhúng của ứng dụng đó. Kết nối lại ứng dụng để cấp lại quyền truy cập."
+      },
+      "access": {
+        "legend": "Quyền truy cập của ứng dụng",
+        "admin": "Toàn quyền truy cập, bao gồm quyền quản trị",
+        "fullRole": "Toàn bộ quyền truy cập của vai trò",
+        "readWrite": "Đọc và ghi",
+        "readOnly": "Chỉ đọc",
+        "readWriteDetail": "Xem phiên, đọc lịch sử trò chuyện và gửi tin nhắn trong phạm vi quyền truy cập của bạn.",
+        "readOnlyDetail": "Xem phiên và đọc lịch sử trò chuyện trong phạm vi quyền truy cập của bạn.",
+        "adminDetail": "Bao gồm quyền quản trị Gateway và phê duyệt. Chỉ cho phép ứng dụng bạn tin cậy thực hiện các thao tác này.",
+        "fullRoleDetail": "Bao gồm tất cả các quyền mà vai trò của bạn hiện cho phép."
+      },
+      "consent": {
+        "connectionRequest": "Yêu cầu kết nối",
+        "connectGateway": "Kết nối Gateway khác",
+        "title": "Kết nối {app}?",
+        "approvingAs": "Phê duyệt với tư cách",
+        "returnsTo": "Quay lại",
+        "expires": "Yêu cầu hết hạn",
+        "hint": "Ứng dụng chỉ có thể hoạt động trong phạm vi quyền truy cập bạn cho phép và các quyền Gateway hiện tại của bạn. Dịch vụ chuyển tiếp có thể xem nội dung đang được truyền.",
+        "allow": "Cho phép",
+        "deny": "Từ chối",
+        "notAllowed": "Các quyền Gateway hiện tại của bạn không cho phép kết nối ứng dụng."
+      },
+      "pairing": {
+        "title": "Ghép nối bằng mã",
+        "description": "Kết nối ứng dụng với tư cách {principal}.",
+        "enterCode": "Nhập mã dùng một lần này trên trang kết nối của ứng dụng.",
+        "expires": "Hết hạn {time}. Giữ kín mã này.",
+        "mcpUrl": "URL MCP:",
+        "create": "Tạo mã ghép nối",
+        "creating": "Đang tạo mã",
+        "done": "Xong",
+        "cancel": "Hủy"
+      },
+      "errors": {
+        "load": "Không thể tải các ứng dụng đã kết nối. Chọn Làm mới để cập nhật danh sách.",
+        "loadRequest": "Không thể tải yêu cầu kết nối. Chọn Làm mới để thử lại.",
+        "requestMissing": "Yêu cầu kết nối này không còn khả dụng. Hãy bắt đầu kết nối mới từ ứng dụng.",
+        "approve": "Không thể xác nhận kết nối của {app}.",
+        "deny": "Không thể xác nhận việc từ chối {app}.",
+        "revoke": "Không thể xác nhận việc thu hồi quyền truy cập của {app}. Chọn Làm mới để kiểm tra quyền truy cập của ứng dụng.",
+        "pair": "Không thể tạo mã ghép nối.",
+        "returnToApp": "OpenClaw không thể đưa bạn trở lại {app}."
+      }
+    }
+  },
+  "nl": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "Verbonden apps",
+        "subtitle": "Beheer apps die via de MCP-relay met je Gateway zijn verbonden.",
+        "refresh": "Vernieuwen",
+        "loading": "Verbonden apps laden",
+        "connectGateway": "Maak verbinding met de Gateway om verbonden apps te beheren.",
+        "readRequired": "Je hebt leestoegang nodig om verbonden apps te bekijken.",
+        "allApps": "Alle verbonden apps",
+        "appsConnectedAs": "Apps verbonden als {principal}",
+        "emptyTitle": "Nog geen verbonden apps",
+        "emptyBody": "Meld je vanuit een app aan met je Gateway of koppel de app met een eenmalige code.",
+        "emptyNoPair": "Met je Gateway-rol kun je geen apps verbinden. Vraag je beheerder om toegang.",
+        "gatewayOwner": "Gateway-eigenaar",
+        "anotherPerson": "Iemand anders",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "Laatst gebruikt {time}",
+        "notUsedYet": "Verbonden {time} · Nog niet gebruikt",
+        "revoke": "Intrekken",
+        "revoked": "Toegang voor {app} ingetrokken. De toegang tot MCP en de ingebedde UI is beëindigd.",
+        "revokeHint": "Als je de toegang voor een app intrekt, wordt de toegang tot MCP en de ingebedde UI beëindigd. Verbind de app opnieuw om weer toegang te verlenen."
+      },
+      "access": {
+        "legend": "App-toegang",
+        "admin": "Volledige toegang, inclusief beheer",
+        "fullRole": "Alle toegangsrechten van je rol",
+        "readWrite": "Lezen en schrijven",
+        "readOnly": "Alleen lezen",
+        "readWriteDetail": "Sessies bekijken, chatgeschiedenis lezen en berichten versturen binnen je toegangsrechten.",
+        "readOnlyDetail": "Sessies bekijken en chatgeschiedenis lezen binnen je toegangsrechten.",
+        "adminDetail": "Inclusief Gateway-beheer en goedkeuringen. Sta dit alleen toe voor een app die je met deze acties vertrouwt.",
+        "fullRoleDetail": "Inclusief alle rechten die je rol momenteel toestaat."
+      },
+      "consent": {
+        "connectionRequest": "Verbindingsverzoek",
+        "connectGateway": "Een andere Gateway verbinden",
+        "title": "{app} verbinden?",
+        "approvingAs": "Goedkeuren als",
+        "returnsTo": "Keert terug naar",
+        "expires": "Verzoek verloopt",
+        "hint": "De app kan alleen handelen binnen de toegang die je toestaat en je huidige Gateway-rechten. De relay kan de inhoud tijdens de overdracht zien.",
+        "allow": "Toestaan",
+        "deny": "Weigeren",
+        "notAllowed": "Je huidige Gateway-rechten staan het verbinden van een app niet toe."
+      },
+      "pairing": {
+        "title": "Koppelen met code",
+        "description": "Verbind een app als {principal}.",
+        "enterCode": "Voer deze eenmalige code in op de verbindingspagina van de app.",
+        "expires": "Verloopt {time}. Houd deze code geheim.",
+        "mcpUrl": "MCP-URL:",
+        "create": "Koppelingscode aanmaken",
+        "creating": "Code aanmaken",
+        "done": "Gereed",
+        "cancel": "Annuleren"
+      },
+      "errors": {
+        "load": "Kan verbonden apps niet laden. Selecteer Vernieuwen om de lijst bij te werken.",
+        "loadRequest": "Kan het verbindingsverzoek niet laden. Selecteer Vernieuwen om het opnieuw te proberen.",
+        "requestMissing": "Dit verbindingsverzoek is niet meer beschikbaar. Start een nieuwe verbinding vanuit de app.",
+        "approve": "Kan de verbinding van {app} niet bevestigen.",
+        "deny": "Kan de weigering voor {app} niet bevestigen.",
+        "revoke": "Kan het intrekken van de toegang voor {app} niet bevestigen. Selecteer Vernieuwen om de toegang te controleren.",
+        "pair": "Kan geen koppelingscode aanmaken.",
+        "returnToApp": "OpenClaw kan je niet terugbrengen naar {app}."
+      }
+    }
+  },
+  "fa": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "برنامه‌های متصل",
+        "subtitle": "برنامه‌های متصل به Gateway خود از طریق واسط MCP را مدیریت کنید.",
+        "refresh": "تازه‌سازی",
+        "loading": "در حال بارگذاری برنامه‌های متصل",
+        "connectGateway": "برای مدیریت برنامه‌های متصل، به Gateway متصل شوید.",
+        "readRequired": "برای مشاهدهٔ برنامه‌های متصل، به دسترسی خواندن نیاز دارید.",
+        "allApps": "همهٔ برنامه‌های متصل",
+        "appsConnectedAs": "برنامه‌های متصل با هویت {principal}",
+        "emptyTitle": "هنوز برنامه‌ای متصل نشده است",
+        "emptyBody": "از داخل یک برنامه با Gateway خود وارد شوید، یا با کد یک‌بارمصرف جفت‌سازی کنید.",
+        "emptyNoPair": "نقش شما در Gateway اجازهٔ اتصال برنامه‌ها را ندارد. از مدیر خود درخواست دسترسی کنید.",
+        "gatewayOwner": "مالک Gateway",
+        "anotherPerson": "شخص دیگر",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "آخرین استفاده: {time}",
+        "notUsedYet": "زمان اتصال: {time} · هنوز استفاده نشده است",
+        "revoke": "لغو دسترسی",
+        "revoked": "دسترسی {app} لغو شد. دسترسی آن به MCP و رابط کاربری تعبیه‌شده پایان یافت.",
+        "revokeHint": "لغو دسترسی یک برنامه، دسترسی آن به MCP و رابط کاربری تعبیه‌شده را پایان می‌دهد. برای اعطای مجدد دسترسی، برنامه را دوباره متصل کنید."
+      },
+      "access": {
+        "legend": "دسترسی برنامه",
+        "admin": "دسترسی کامل، شامل مدیریت",
+        "fullRole": "دسترسی کامل نقش",
+        "readWrite": "خواندن و نوشتن",
+        "readOnly": "فقط خواندن",
+        "readWriteDetail": "مشاهدهٔ نشست‌ها، خواندن تاریخچهٔ گفتگو و ارسال پیام در محدودهٔ دسترسی شما.",
+        "readOnlyDetail": "مشاهدهٔ نشست‌ها و خواندن تاریخچهٔ گفتگو در محدودهٔ دسترسی شما.",
+        "adminDetail": "شامل مدیریت Gateway و تأیید درخواست‌ها است. این اقدامات را فقط به برنامه‌ای اجازه دهید که به آن اعتماد دارید.",
+        "fullRoleDetail": "شامل همهٔ مجوزهایی است که نقش شما در حال حاضر اجازه می‌دهد."
+      },
+      "consent": {
+        "connectionRequest": "درخواست اتصال",
+        "connectGateway": "اتصال به Gateway دیگر",
+        "title": "{app} متصل شود؟",
+        "approvingAs": "تأیید با هویت",
+        "returnsTo": "بازگشت به",
+        "expires": "زمان انقضای درخواست",
+        "hint": "برنامه فقط در محدودهٔ دسترسی‌ای که اجازه می‌دهید و مجوزهای فعلی شما در Gateway می‌تواند عمل کند. واسط انتقال می‌تواند محتوای در حال انتقال را ببیند.",
+        "allow": "اجازه دادن",
+        "deny": "رد کردن",
+        "notAllowed": "مجوزهای فعلی شما در Gateway اجازهٔ اتصال برنامه را نمی‌دهند."
+      },
+      "pairing": {
+        "title": "جفت‌سازی با کد",
+        "description": "یک برنامه را با هویت {principal} متصل کنید.",
+        "enterCode": "این کد یک‌بارمصرف را در صفحهٔ اتصال برنامه وارد کنید.",
+        "expires": "انقضا: {time}. این کد را محرمانه نگه دارید.",
+        "mcpUrl": "نشانی MCP:",
+        "create": "ایجاد کد جفت‌سازی",
+        "creating": "در حال ایجاد کد",
+        "done": "تمام",
+        "cancel": "لغو"
+      },
+      "errors": {
+        "load": "بارگیری برنامه‌های متصل ممکن نشد. برای به‌روزرسانی فهرست، «تازه‌سازی» را انتخاب کنید.",
+        "loadRequest": "بارگیری درخواست اتصال ممکن نشد. برای تلاش دوباره، «تازه‌سازی» را انتخاب کنید.",
+        "requestMissing": "این درخواست اتصال دیگر در دسترس نیست. از داخل برنامه، اتصال جدیدی را آغاز کنید.",
+        "approve": "تأیید اتصال {app} ممکن نشد.",
+        "deny": "تأیید رد درخواست {app} ممکن نشد.",
+        "revoke": "تأیید لغو دسترسی {app} ممکن نشد. برای بررسی دسترسی آن، «تازه‌سازی» را انتخاب کنید.",
+        "pair": "ایجاد کد جفت‌سازی ممکن نشد.",
+        "returnToApp": "OpenClaw نتوانست شما را به {app} بازگرداند."
+      }
+    }
+  },
+  "ru": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "Подключённые приложения",
+        "subtitle": "Управляйте приложениями, подключёнными к вашему Gateway через ретранслятор MCP.",
+        "refresh": "Обновить",
+        "loading": "Загрузка подключённых приложений",
+        "connectGateway": "Подключитесь к Gateway, чтобы управлять подключёнными приложениями.",
+        "readRequired": "Для просмотра подключённых приложений необходим доступ на чтение.",
+        "allApps": "Все подключённые приложения",
+        "appsConnectedAs": "Приложения, подключённые от имени {principal}",
+        "emptyTitle": "Подключённых приложений пока нет",
+        "emptyBody": "Войдите через свой Gateway из приложения или выполните сопряжение с помощью одноразового кода.",
+        "emptyNoPair": "Ваша роль в Gateway не позволяет подключать приложения. Обратитесь к администратору за доступом.",
+        "gatewayOwner": "Владелец Gateway",
+        "anotherPerson": "Другой пользователь",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "Последнее использование: {time}",
+        "notUsedYet": "Подключено {time} · Ещё не использовалось",
+        "revoke": "Отозвать доступ",
+        "revoked": "Доступ для {app} отозван. Доступ приложения к MCP и встроенному интерфейсу прекращён.",
+        "revokeHint": "Отзыв доступа прекращает доступ приложения к MCP и встроенному интерфейсу. Подключите приложение заново, чтобы снова предоставить доступ."
+      },
+      "access": {
+        "legend": "Доступ приложения",
+        "admin": "Полный доступ, включая администрирование",
+        "fullRole": "Все права доступа роли",
+        "readWrite": "Чтение и запись",
+        "readOnly": "Только чтение",
+        "readWriteDetail": "Просмотр сеансов, чтение истории чата и отправка сообщений в пределах ваших прав доступа.",
+        "readOnlyDetail": "Просмотр сеансов и чтение истории чата в пределах ваших прав доступа.",
+        "adminDetail": "Включает администрирование Gateway и одобрение запросов. Предоставляйте эти права только приложению, которому доверяете.",
+        "fullRoleDetail": "Включает все разрешения, доступные вашей роли в данный момент."
+      },
+      "consent": {
+        "connectionRequest": "Запрос на подключение",
+        "connectGateway": "Подключить другой Gateway",
+        "title": "Подключить {app}?",
+        "approvingAs": "Одобрение от имени",
+        "returnsTo": "Возврат к",
+        "expires": "Срок действия запроса",
+        "hint": "Приложение может действовать только в пределах предоставленного вами доступа и ваших текущих разрешений Gateway. Ретранслятор может видеть передаваемые данные.",
+        "allow": "Разрешить",
+        "deny": "Отклонить",
+        "notAllowed": "Ваши текущие разрешения Gateway не позволяют подключать приложения."
+      },
+      "pairing": {
+        "title": "Сопряжение по коду",
+        "description": "Подключите приложение от имени {principal}.",
+        "enterCode": "Введите этот одноразовый код на странице подключения в приложении.",
+        "expires": "Срок действия истекает {time}. Никому не сообщайте этот код.",
+        "mcpUrl": "URL MCP:",
+        "create": "Создать код сопряжения",
+        "creating": "Создание кода",
+        "done": "Готово",
+        "cancel": "Отмена"
+      },
+      "errors": {
+        "load": "Не удалось загрузить подключённые приложения. Нажмите «Обновить», чтобы обновить список.",
+        "loadRequest": "Не удалось загрузить запрос на подключение. Нажмите «Обновить», чтобы повторить попытку.",
+        "requestMissing": "Этот запрос на подключение больше недоступен. Начните новое подключение из приложения.",
+        "approve": "Не удалось подтвердить подключение приложения {app}.",
+        "deny": "Не удалось подтвердить отклонение запроса приложения {app}.",
+        "revoke": "Не удалось подтвердить отзыв доступа для приложения {app}. Нажмите «Обновить», чтобы проверить его доступ.",
+        "pair": "Не удалось создать код сопряжения.",
+        "returnToApp": "OpenClaw не удалось вернуть вас в {app}."
+      }
+    }
+  },
+  "sv": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "Anslutna appar",
+        "subtitle": "Hantera appar som är anslutna till din Gateway via MCP-reläet.",
+        "refresh": "Uppdatera",
+        "loading": "Läser in anslutna appar",
+        "connectGateway": "Anslut till din Gateway för att hantera anslutna appar.",
+        "readRequired": "Du behöver läsbehörighet för att se anslutna appar.",
+        "allApps": "Alla anslutna appar",
+        "appsConnectedAs": "Appar anslutna som {principal}",
+        "emptyTitle": "Inga anslutna appar ännu",
+        "emptyBody": "Logga in med din Gateway från en app eller parkoppla med en engångskod.",
+        "emptyNoPair": "Din Gateway-roll tillåter inte att du ansluter appar. Be din administratör om behörighet.",
+        "gatewayOwner": "Gateway-ägare",
+        "anotherPerson": "En annan person",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "Senast använd {time}",
+        "notUsedYet": "Ansluten {time} · Inte använd ännu",
+        "revoke": "Återkalla",
+        "revoked": "Åtkomsten för {app} har återkallats. Appen har inte längre åtkomst till MCP eller det inbäddade användargränssnittet.",
+        "revokeHint": "Om du återkallar en apps åtkomst upphör dess åtkomst till MCP och det inbäddade användargränssnittet. Anslut appen på nytt för att ge den åtkomst igen."
+      },
+      "access": {
+        "legend": "Appåtkomst",
+        "admin": "Fullständig åtkomst, inklusive administration",
+        "fullRole": "Fullständig åtkomst enligt rollen",
+        "readWrite": "Läsa och skriva",
+        "readOnly": "Endast läsa",
+        "readWriteDetail": "Visa sessioner, läsa chatthistorik och skicka meddelanden inom ramen för din åtkomst.",
+        "readOnlyDetail": "Visa sessioner och läsa chatthistorik inom ramen för din åtkomst.",
+        "adminDetail": "Omfattar administration av Gateway och godkännanden. Tillåt endast en app som du litar på att utföra dessa åtgärder.",
+        "fullRoleDetail": "Omfattar alla behörigheter som din roll för närvarande tillåter."
+      },
+      "consent": {
+        "connectionRequest": "Anslutningsförfrågan",
+        "connectGateway": "Anslut en annan Gateway",
+        "title": "Anslut {app}?",
+        "approvingAs": "Godkänner som",
+        "returnsTo": "Återgår till",
+        "expires": "Förfrågan upphör att gälla",
+        "hint": "Appen kan endast agera inom ramen för den åtkomst du tillåter och dina nuvarande Gateway-behörigheter. Relät kan se innehåll under överföringen.",
+        "allow": "Tillåt",
+        "deny": "Neka",
+        "notAllowed": "Dina nuvarande Gateway-behörigheter tillåter inte att du ansluter en app."
+      },
+      "pairing": {
+        "title": "Parkoppla med kod",
+        "description": "Anslut en app som {principal}.",
+        "enterCode": "Ange den här engångskoden på appens anslutningssida.",
+        "expires": "Går ut {time}. Håll koden hemlig.",
+        "mcpUrl": "MCP-URL:",
+        "create": "Skapa parkopplingskod",
+        "creating": "Skapar kod",
+        "done": "Klart",
+        "cancel": "Avbryt"
+      },
+      "errors": {
+        "load": "Det gick inte att läsa in anslutna appar. Välj Uppdatera för att uppdatera listan.",
+        "loadRequest": "Det gick inte att läsa in anslutningsförfrågan. Välj Uppdatera för att försöka igen.",
+        "requestMissing": "Den här anslutningsförfrågan är inte längre tillgänglig. Starta en ny anslutning från appen.",
+        "approve": "Det gick inte att bekräfta anslutningen för {app}.",
+        "deny": "Det gick inte att bekräfta att anslutningen för {app} nekades.",
+        "revoke": "Det gick inte att bekräfta att åtkomsten för {app} återkallades. Välj Uppdatera för att kontrollera appens åtkomst.",
+        "pair": "Det gick inte att skapa en parkopplingskod.",
+        "returnToApp": "OpenClaw kunde inte ta dig tillbaka till {app}."
+      }
+    }
+  },
+  "ca": {
+    "mcpRelay": {
+      "connectedApps": {
+        "title": "Aplicacions connectades",
+        "subtitle": "Gestiona les aplicacions connectades al teu Gateway mitjançant el relé MCP.",
+        "refresh": "Actualitza",
+        "loading": "S'estan carregant les aplicacions connectades",
+        "connectGateway": "Connecta't al Gateway per gestionar les aplicacions connectades.",
+        "readRequired": "Necessites accés de lectura per veure les aplicacions connectades.",
+        "allApps": "Totes les aplicacions connectades",
+        "appsConnectedAs": "Aplicacions connectades com a {principal}",
+        "emptyTitle": "Encara no hi ha aplicacions connectades",
+        "emptyBody": "Inicia la sessió amb el teu Gateway des d'una aplicació o vincula-la amb un codi d'un sol ús.",
+        "emptyNoPair": "El teu rol al Gateway no permet connectar aplicacions. Demana accés a l'administrador.",
+        "gatewayOwner": "Propietari del Gateway",
+        "anotherPerson": "Una altra persona",
+        "grantSummary": "{principal} · {access}",
+        "lastUsed": "Últim ús: {time}",
+        "notUsedYet": "Connectada: {time} · Encara no s'ha utilitzat",
+        "revoke": "Revoca",
+        "revoked": "S'ha revocat l'accés de {app}. Ja no té accés a MCP ni a la interfície integrada.",
+        "revokeHint": "Revocar l'accés d'una aplicació posa fi al seu accés a MCP i a la interfície integrada. Torna a connectar l'aplicació per concedir-li accés de nou."
+      },
+      "access": {
+        "legend": "Accés de les aplicacions",
+        "admin": "Accés complet, inclosa l’administració",
+        "fullRole": "Accés complet del rol",
+        "readWrite": "Lectura i escriptura",
+        "readOnly": "Només lectura",
+        "readWriteDetail": "Consulta sessions, llegeix l’historial de xat i envia missatges dins dels límits del teu accés.",
+        "readOnlyDetail": "Consulta sessions i llegeix l’historial de xat dins dels límits del teu accés.",
+        "adminDetail": "Inclou l’administració de Gateway i les aprovacions. Autoritza només una aplicació en què confiïs per dur a terme aquestes accions.",
+        "fullRoleDetail": "Inclou tots els permisos que el teu rol permet actualment."
+      },
+      "consent": {
+        "connectionRequest": "Sol·licitud de connexió",
+        "connectGateway": "Connecta un altre Gateway",
+        "title": "Vols connectar {app}?",
+        "approvingAs": "Aprovació com a",
+        "returnsTo": "Torna a",
+        "expires": "La sol·licitud caduca",
+        "hint": "L’aplicació només pot actuar dins dels límits de l’accés que autoritzis i dels teus permisos actuals de Gateway. El servei de retransmissió pot veure el contingut en trànsit.",
+        "allow": "Permet",
+        "deny": "Denega",
+        "notAllowed": "Els teus permisos actuals de Gateway no permeten connectar cap aplicació."
+      },
+      "pairing": {
+        "title": "Vincula amb un codi",
+        "description": "Connecta una aplicació com a {principal}.",
+        "enterCode": "Introdueix aquest codi d’un sol ús a la pàgina de connexió de l’aplicació.",
+        "expires": "Caduca {time}. Mantén aquest codi en privat.",
+        "mcpUrl": "URL de MCP:",
+        "create": "Crea un codi d’aparellament",
+        "creating": "S’està creant el codi",
+        "done": "Fet",
+        "cancel": "Cancel·la"
+      },
+      "errors": {
+        "load": "No s’han pogut carregar les aplicacions connectades. Selecciona Actualitza per actualitzar la llista.",
+        "loadRequest": "No s’ha pogut carregar la sol·licitud de connexió. Selecciona Actualitza per tornar-ho a provar.",
+        "requestMissing": "Aquesta sol·licitud de connexió ja no està disponible. Inicia una connexió nova des de l’aplicació.",
+        "approve": "No s’ha pogut confirmar la connexió de {app}.",
+        "deny": "No s’ha pogut confirmar la denegació de {app}.",
+        "revoke": "No s’ha pogut confirmar la revocació de {app}. Selecciona Actualitza per comprovar-ne l’accés.",
+        "pair": "No s’ha pogut crear un codi d’aparellament.",
+        "returnToApp": "OpenClaw no t’ha pogut tornar a {app}."
+      }
+    }
+  }
+}

@@ -106,7 +106,11 @@
         "fileLoading": "正在加载完整的记忆文件…",
         "fileError": "无法加载此记忆文件: {message}",
         "fileUnsupported": "此记忆文件无法以文本形式显示。",
-        "resultOne": "{count} 条结果"
+        "resultOne": "{count} 条结果",
+        "searchFailed": "无法搜索记忆。",
+        "fileOpenFailed": "无法打开此记忆文件。",
+        "fileNotFound": "此记忆文件已不可用。",
+        "fileTooLarge": "此记忆文件过大，无法预览。"
       }
     }
   },
@@ -217,7 +221,11 @@
         "fileLoading": "正在載入完整記憶檔案…",
         "fileError": "無法載入此記憶檔案: {message}",
         "fileUnsupported": "此記憶檔案無法以文字顯示。",
-        "resultOne": "{count} 筆結果"
+        "resultOne": "{count} 筆結果",
+        "searchFailed": "無法搜尋記憶。",
+        "fileOpenFailed": "無法開啟此記憶檔案。",
+        "fileNotFound": "此記憶檔案已無法使用。",
+        "fileTooLarge": "此記憶檔案過大，無法預覽。"
       }
     }
   },
@@ -328,7 +336,11 @@
         "fileLoading": "Carregando o arquivo de memória completo…",
         "fileError": "Não foi possível carregar este arquivo de memória: {message}",
         "fileUnsupported": "Este arquivo de memória não pode ser exibido como texto.",
-        "resultOne": "{count} resultado"
+        "resultOne": "{count} resultado",
+        "searchFailed": "Não foi possível pesquisar as memórias.",
+        "fileOpenFailed": "Não foi possível abrir este arquivo de memória.",
+        "fileNotFound": "Este arquivo de memória não está mais disponível.",
+        "fileTooLarge": "Este arquivo de memória é grande demais para ser pré-visualizado."
       }
     }
   },
@@ -439,7 +451,11 @@
         "fileLoading": "Vollständige Gedächtnisdatei wird geladen…",
         "fileError": "Diese Gedächtnisdatei konnte nicht geladen werden: {message}",
         "fileUnsupported": "Diese Gedächtnisdatei kann nicht als Text angezeigt werden.",
-        "resultOne": "{count} Ergebnis"
+        "resultOne": "{count} Ergebnis",
+        "searchFailed": "Erinnerungen konnten nicht durchsucht werden.",
+        "fileOpenFailed": "Diese Erinnerungsdatei konnte nicht geöffnet werden.",
+        "fileNotFound": "Diese Erinnerungsdatei ist nicht mehr verfügbar.",
+        "fileTooLarge": "Diese Erinnerungsdatei ist zu groß für eine Vorschau."
       }
     }
   },
@@ -550,7 +566,11 @@
         "fileLoading": "Cargando el archivo de memoria completo…",
         "fileError": "No se pudo cargar este archivo de memoria: {message}",
         "fileUnsupported": "Este archivo de memoria no se puede mostrar como texto.",
-        "resultOne": "{count} resultado"
+        "resultOne": "{count} resultado",
+        "searchFailed": "No se pudieron buscar los recuerdos.",
+        "fileOpenFailed": "No se pudo abrir este archivo de memoria.",
+        "fileNotFound": "Este archivo de memoria ya no está disponible.",
+        "fileTooLarge": "Este archivo de memoria es demasiado grande para mostrar una vista previa."
       }
     }
   },
@@ -661,7 +681,11 @@
         "fileLoading": "メモリファイル全体を読み込み中…",
         "fileError": "このメモリファイルを読み込めませんでした: {message}",
         "fileUnsupported": "このメモリファイルはテキストとして表示できません。",
-        "resultOne": "{count}件の結果"
+        "resultOne": "{count}件の結果",
+        "searchFailed": "メモリを検索できませんでした。",
+        "fileOpenFailed": "このメモリファイルを開けませんでした。",
+        "fileNotFound": "このメモリファイルは利用できなくなりました。",
+        "fileTooLarge": "このメモリファイルはサイズが大きすぎるため、プレビューできません。"
       }
     }
   },
@@ -772,7 +796,11 @@
         "fileLoading": "전체 메모리 파일을 불러오는 중…",
         "fileError": "이 메모리 파일을 불러올 수 없습니다: {message}",
         "fileUnsupported": "이 메모리 파일은 텍스트로 표시할 수 없습니다.",
-        "resultOne": "결과 {count}개"
+        "resultOne": "결과 {count}개",
+        "searchFailed": "메모리를 검색하지 못했습니다.",
+        "fileOpenFailed": "이 메모리 파일을 열지 못했습니다.",
+        "fileNotFound": "이 메모리 파일은 더 이상 사용할 수 없습니다.",
+        "fileTooLarge": "이 메모리 파일은 너무 커서 미리 볼 수 없습니다."
       }
     }
   },
@@ -883,7 +911,11 @@
         "fileLoading": "Chargement du fichier mémoire complet…",
         "fileError": "Impossible de charger ce fichier mémoire : {message}",
         "fileUnsupported": "Ce fichier mémoire ne peut pas être affiché sous forme de texte.",
-        "resultOne": "{count} résultat"
+        "resultOne": "{count} résultat",
+        "searchFailed": "Impossible de rechercher dans les souvenirs.",
+        "fileOpenFailed": "Impossible d’ouvrir ce fichier de mémoire.",
+        "fileNotFound": "Ce fichier de mémoire n’est plus disponible.",
+        "fileTooLarge": "Ce fichier de mémoire est trop volumineux pour être prévisualisé."
       }
     }
   },
@@ -994,7 +1026,11 @@
         "fileLoading": "पूरी मेमोरी फ़ाइल लोड हो रही है…",
         "fileError": "यह मेमोरी फ़ाइल लोड नहीं हो सकी: {message}",
         "fileUnsupported": "यह मेमोरी फ़ाइल टेक्स्ट के रूप में नहीं दिखाई जा सकती.",
-        "resultOne": "{count} परिणाम"
+        "resultOne": "{count} परिणाम",
+        "searchFailed": "स्मृतियों में खोज नहीं हो सकी।",
+        "fileOpenFailed": "यह स्मृति फ़ाइल नहीं खोली जा सकी।",
+        "fileNotFound": "यह स्मृति फ़ाइल अब उपलब्ध नहीं है।",
+        "fileTooLarge": "यह स्मृति फ़ाइल पूर्वावलोकन के लिए बहुत बड़ी है।"
       }
     }
   },
@@ -1105,7 +1141,11 @@
         "fileLoading": "جارٍ تحميل ملف الذاكرة بالكامل…",
         "fileError": "تعذّر تحميل ملف الذاكرة هذا: {message}",
         "fileUnsupported": "لا يمكن عرض ملف الذاكرة هذا كنص.",
-        "resultOne": "{count} نتيجة"
+        "resultOne": "{count} نتيجة",
+        "searchFailed": "تعذّر البحث في الذكريات.",
+        "fileOpenFailed": "تعذّر فتح ملف الذاكرة هذا.",
+        "fileNotFound": "لم يعد ملف الذاكرة هذا متاحًا.",
+        "fileTooLarge": "حجم ملف الذاكرة هذا أكبر من أن تتم معاينته."
       }
     }
   },
@@ -1216,7 +1256,11 @@
         "fileLoading": "Caricamento del file di memoria completo…",
         "fileError": "Impossibile caricare questo file di memoria: {message}",
         "fileUnsupported": "Questo file di memoria non può essere visualizzato come testo.",
-        "resultOne": "{count} risultato"
+        "resultOne": "{count} risultato",
+        "searchFailed": "Impossibile cercare nelle memorie.",
+        "fileOpenFailed": "Impossibile aprire questo file di memoria.",
+        "fileNotFound": "Questo file di memoria non è più disponibile.",
+        "fileTooLarge": "Questo file di memoria è troppo grande per visualizzarne l'anteprima."
       }
     }
   },
@@ -1327,7 +1371,11 @@
         "fileLoading": "Bellek dosyasının tamamı yükleniyor…",
         "fileError": "Bu bellek dosyası yüklenemedi: {message}",
         "fileUnsupported": "Bu bellek dosyası metin olarak gösterilemiyor.",
-        "resultOne": "{count} sonuç"
+        "resultOne": "{count} sonuç",
+        "searchFailed": "Anılarda arama yapılamadı.",
+        "fileOpenFailed": "Bu anı dosyası açılamadı.",
+        "fileNotFound": "Bu anı dosyası artık mevcut değil.",
+        "fileTooLarge": "Bu anı dosyası önizleme için çok büyük."
       }
     }
   },
@@ -1438,7 +1486,11 @@
         "fileLoading": "Завантаження повного файлу пам’яті…",
         "fileError": "Не вдалося завантажити цей файл пам’яті: {message}",
         "fileUnsupported": "Цей файл пам’яті неможливо відобразити як текст.",
-        "resultOne": "{count} результат"
+        "resultOne": "{count} результат",
+        "searchFailed": "Не вдалося виконати пошук у спогадах.",
+        "fileOpenFailed": "Не вдалося відкрити цей файл спогадів.",
+        "fileNotFound": "Цей файл спогадів більше недоступний.",
+        "fileTooLarge": "Цей файл спогадів завеликий для попереднього перегляду."
       }
     }
   },
@@ -1549,7 +1601,11 @@
         "fileLoading": "Memuat seluruh file memori…",
         "fileError": "Tidak dapat memuat file memori ini: {message}",
         "fileUnsupported": "File memori ini tidak dapat ditampilkan sebagai teks.",
-        "resultOne": "{count} hasil"
+        "resultOne": "{count} hasil",
+        "searchFailed": "Tidak dapat mencari memori.",
+        "fileOpenFailed": "Tidak dapat membuka file memori ini.",
+        "fileNotFound": "File memori ini tidak lagi tersedia.",
+        "fileTooLarge": "File memori ini terlalu besar untuk dipratinjau."
       }
     }
   },
@@ -1660,7 +1716,11 @@
         "fileLoading": "Ładowanie pełnego pliku pamięci…",
         "fileError": "Nie udało się załadować tego pliku pamięci: {message}",
         "fileUnsupported": "Tego pliku pamięci nie można wyświetlić jako tekstu.",
-        "resultOne": "{count} wynik"
+        "resultOne": "{count} wynik",
+        "searchFailed": "Nie udało się przeszukać wspomnień.",
+        "fileOpenFailed": "Nie udało się otworzyć tego pliku wspomnień.",
+        "fileNotFound": "Ten plik wspomnień nie jest już dostępny.",
+        "fileTooLarge": "Ten plik wspomnień jest zbyt duży, aby wyświetlić jego podgląd."
       }
     }
   },
@@ -1771,7 +1831,11 @@
         "fileLoading": "กำลังโหลดไฟล์ความจำฉบับเต็ม…",
         "fileError": "ไม่สามารถโหลดไฟล์ความจำนี้ได้: {message}",
         "fileUnsupported": "ไม่สามารถแสดงไฟล์ความจำนี้เป็นข้อความได้",
-        "resultOne": "{count} ผลลัพธ์"
+        "resultOne": "{count} ผลลัพธ์",
+        "searchFailed": "ไม่สามารถค้นหาความทรงจำได้",
+        "fileOpenFailed": "ไม่สามารถเปิดไฟล์ความทรงจำนี้ได้",
+        "fileNotFound": "ไฟล์ความทรงจำนี้ไม่พร้อมใช้งานอีกต่อไป",
+        "fileTooLarge": "ไฟล์ความทรงจำนี้มีขนาดใหญ่เกินกว่าจะแสดงตัวอย่างได้"
       }
     }
   },
@@ -1882,7 +1946,11 @@
         "fileLoading": "Đang tải toàn bộ tệp bộ nhớ…",
         "fileError": "Không thể tải tệp bộ nhớ này: {message}",
         "fileUnsupported": "Không thể hiển thị tệp bộ nhớ này dưới dạng văn bản.",
-        "resultOne": "{count} kết quả"
+        "resultOne": "{count} kết quả",
+        "searchFailed": "Không thể tìm kiếm các mục ghi nhớ.",
+        "fileOpenFailed": "Không thể mở tệp ghi nhớ này.",
+        "fileNotFound": "Tệp ghi nhớ này không còn khả dụng.",
+        "fileTooLarge": "Tệp ghi nhớ này quá lớn để xem trước."
       }
     }
   },
@@ -1993,7 +2061,11 @@
         "fileLoading": "Het volledige geheugenbestand wordt geladen…",
         "fileError": "Dit geheugenbestand kon niet worden geladen: {message}",
         "fileUnsupported": "Dit geheugenbestand kan niet als tekst worden weergegeven.",
-        "resultOne": "{count} resultaat"
+        "resultOne": "{count} resultaat",
+        "searchFailed": "De herinneringen konden niet worden doorzocht.",
+        "fileOpenFailed": "Dit herinneringsbestand kon niet worden geopend.",
+        "fileNotFound": "Dit herinneringsbestand is niet meer beschikbaar.",
+        "fileTooLarge": "Dit herinneringsbestand is te groot om een voorbeeld weer te geven."
       }
     }
   },
@@ -2104,7 +2176,11 @@
         "fileLoading": "در حال بارگذاری فایل کامل حافظه…",
         "fileError": "بارگذاری این فایل حافظه ممکن نشد: {message}",
         "fileUnsupported": "این فایل حافظه را نمی‌توان به‌صورت متن نمایش داد.",
-        "resultOne": "{count} نتیجه"
+        "resultOne": "{count} نتیجه",
+        "searchFailed": "جستجوی خاطرات ممکن نشد.",
+        "fileOpenFailed": "باز کردن این فایل خاطره ممکن نشد.",
+        "fileNotFound": "این فایل خاطره دیگر در دسترس نیست.",
+        "fileTooLarge": "حجم این فایل خاطره برای پیش‌نمایش بیش از حد زیاد است."
       }
     }
   },
@@ -2215,7 +2291,11 @@
         "fileLoading": "Загрузка полного файла памяти…",
         "fileError": "Не удалось загрузить этот файл памяти: {message}",
         "fileUnsupported": "Этот файл памяти нельзя отобразить как текст.",
-        "resultOne": "{count} результат"
+        "resultOne": "{count} результат",
+        "searchFailed": "Не удалось выполнить поиск по воспоминаниям.",
+        "fileOpenFailed": "Не удалось открыть этот файл воспоминаний.",
+        "fileNotFound": "Этот файл воспоминаний больше недоступен.",
+        "fileTooLarge": "Этот файл воспоминаний слишком велик для предварительного просмотра."
       }
     }
   },
@@ -2248,7 +2328,11 @@
         "fileLoading": "Läser in hela minnesfilen…",
         "fileError": "Kunde inte läsa in den här minnesfilen: {message}",
         "fileUnsupported": "Den här minnesfilen kan inte visas som text.",
-        "resultOne": "{count} resultat"
+        "resultOne": "{count} resultat",
+        "searchFailed": "Det gick inte att söka bland minnen.",
+        "fileOpenFailed": "Det gick inte att öppna den här minnesfilen.",
+        "fileNotFound": "Den här minnesfilen är inte längre tillgänglig.",
+        "fileTooLarge": "Den här minnesfilen är för stor för att förhandsvisas."
       },
       "overview": {
         "hero": {
@@ -2359,7 +2443,11 @@
         "fileLoading": "S'està carregant el fitxer de memòria complet…",
         "fileError": "No s'ha pogut carregar aquest fitxer de memòria: {message}",
         "fileUnsupported": "Aquest fitxer de memòria no es pot mostrar com a text.",
-        "resultOne": "{count} resultat"
+        "resultOne": "{count} resultat",
+        "searchFailed": "No s'han pogut cercar els records.",
+        "fileOpenFailed": "No s'ha pogut obrir aquest fitxer de memòria.",
+        "fileNotFound": "Aquest fitxer de memòria ja no està disponible.",
+        "fileTooLarge": "Aquest fitxer de memòria és massa gran per previsualitzar-lo."
       },
       "overview": {
         "hero": {

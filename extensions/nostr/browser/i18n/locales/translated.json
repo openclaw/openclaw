@@ -67,10 +67,20 @@
           "published": "个人资料已发布到中继。",
           "importFailed": "个人资料导入失败",
           "importedFromRelays": "已从中继导入个人资料。 请检查并发布。",
-          "imported": "个人资料已导入。 请检查并发布。"
+          "imported": "个人资料已导入。 请检查并发布。",
+          "saveTimedOut": "无法确认 OpenClaw 是否已保存个人资料。",
+          "importTimedOut": "无法确认 OpenClaw 是否已导入个人资料。",
+          "validationFailed": "无法保存个人资料。请检查个人资料字段。",
+          "rateLimited": "个人资料更新过于频繁。请稍等一分钟后重试。"
         },
         "setupProfile": "设置 Nostr 以添加或编辑个人资料。",
-        "readOnlyProfile": "您需要管理员权限才能编辑此个人资料。"
+        "readOnlyProfile": "您需要管理员权限才能编辑此个人资料。",
+        "publicKey": "公钥",
+        "saveAndPublish": "保存并发布",
+        "importFromRelays": "从中继服务器导入",
+        "showAdvanced": "显示高级选项",
+        "hideAdvanced": "隐藏高级选项",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -142,10 +152,20 @@
           "published": "個人檔案已發布至中繼伺服器。",
           "importFailed": "個人檔案匯入失敗",
           "importedFromRelays": "已從中繼伺服器匯入個人檔案。 請檢查後發布。",
-          "imported": "個人檔案已匯入。 請檢查後發布。"
+          "imported": "個人檔案已匯入。 請檢查後發布。",
+          "saveTimedOut": "無法確認 OpenClaw 是否已儲存個人檔案。",
+          "importTimedOut": "無法確認 OpenClaw 是否已匯入個人檔案。",
+          "validationFailed": "無法儲存個人檔案。請檢查個人檔案欄位。",
+          "rateLimited": "個人檔案更新過於頻繁。請稍候一分鐘再試。"
         },
         "setupProfile": "設定 Nostr 以新增或編輯個人檔案。",
-        "readOnlyProfile": "您需要管理員權限才能編輯此個人檔案。"
+        "readOnlyProfile": "您需要管理員權限才能編輯此個人檔案。",
+        "publicKey": "公開金鑰",
+        "saveAndPublish": "儲存並發布",
+        "importFromRelays": "從中繼伺服器匯入",
+        "showAdvanced": "顯示進階選項",
+        "hideAdvanced": "隱藏進階選項",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -217,10 +237,20 @@
           "published": "Perfil publicado nos relays.",
           "importFailed": "Falha ao importar o perfil",
           "importedFromRelays": "Perfil importado dos relays. Revise e publique.",
-          "imported": "Perfil importado. Revise e publique."
+          "imported": "Perfil importado. Revise e publique.",
+          "saveTimedOut": "Não foi possível confirmar se o OpenClaw salvou o perfil.",
+          "importTimedOut": "Não foi possível confirmar se o OpenClaw importou o perfil.",
+          "validationFailed": "Não foi possível salvar o perfil. Verifique os campos do perfil.",
+          "rateLimited": "Muitas atualizações de perfil. Aguarde um minuto antes de tentar novamente."
         },
         "setupProfile": "Configure o Nostr para adicionar ou editar um perfil.",
-        "readOnlyProfile": "Você precisa de acesso de administrador para editar este perfil."
+        "readOnlyProfile": "Você precisa de acesso de administrador para editar este perfil.",
+        "publicKey": "Chave pública",
+        "saveAndPublish": "Salvar e publicar",
+        "importFromRelays": "Importar de relays",
+        "showAdvanced": "Mostrar opções avançadas",
+        "hideAdvanced": "Ocultar opções avançadas",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -292,10 +322,20 @@
           "published": "Profil auf Relays veröffentlicht.",
           "importFailed": "Profilimport fehlgeschlagen",
           "importedFromRelays": "Profil von Relays importiert. Prüfen und veröffentlichen.",
-          "imported": "Profil importiert. Prüfen und veröffentlichen."
+          "imported": "Profil importiert. Prüfen und veröffentlichen.",
+          "saveTimedOut": "Es konnte nicht bestätigt werden, ob OpenClaw das Profil gespeichert hat.",
+          "importTimedOut": "Es konnte nicht bestätigt werden, ob OpenClaw das Profil importiert hat.",
+          "validationFailed": "Das Profil konnte nicht gespeichert werden. Überprüfen Sie die Profilfelder.",
+          "rateLimited": "Zu viele Profilaktualisierungen. Warten Sie eine Minute, bevor Sie es erneut versuchen."
         },
         "setupProfile": "Richten Sie Nostr ein, um ein Profil hinzuzufügen oder zu bearbeiten.",
-        "readOnlyProfile": "Sie benötigen Administratorrechte, um dieses Profil zu bearbeiten."
+        "readOnlyProfile": "Sie benötigen Administratorrechte, um dieses Profil zu bearbeiten.",
+        "publicKey": "Öffentlicher Schlüssel",
+        "saveAndPublish": "Speichern und veröffentlichen",
+        "importFromRelays": "Von Relays importieren",
+        "showAdvanced": "Erweiterte Einstellungen anzeigen",
+        "hideAdvanced": "Erweiterte Einstellungen ausblenden",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -367,10 +407,20 @@
           "published": "Perfil publicado en los servidores de retransmisión.",
           "importFailed": "No se pudo importar el perfil",
           "importedFromRelays": "Perfil importado de los servidores de retransmisión. Revisa y publica.",
-          "imported": "Perfil importado. Revisa y publica."
+          "imported": "Perfil importado. Revisa y publica.",
+          "saveTimedOut": "No se pudo confirmar si OpenClaw guardó el perfil.",
+          "importTimedOut": "No se pudo confirmar si OpenClaw importó el perfil.",
+          "validationFailed": "No se pudo guardar el perfil. Revisa los campos del perfil.",
+          "rateLimited": "Demasiadas actualizaciones del perfil. Espera un minuto antes de volver a intentarlo."
         },
         "setupProfile": "Configura Nostr para añadir o editar un perfil.",
-        "readOnlyProfile": "Necesitas acceso de administrador para editar este perfil."
+        "readOnlyProfile": "Necesitas acceso de administrador para editar este perfil.",
+        "publicKey": "Clave pública",
+        "saveAndPublish": "Guardar y publicar",
+        "importFromRelays": "Importar desde relés",
+        "showAdvanced": "Mostrar opciones avanzadas",
+        "hideAdvanced": "Ocultar opciones avanzadas",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -442,10 +492,20 @@
           "published": "プロフィールをリレーに公開しました。",
           "importFailed": "プロフィールのインポートに失敗しました",
           "importedFromRelays": "リレーからプロフィールをインポートしました。 内容を確認して公開してください。",
-          "imported": "プロフィールをインポートしました。 内容を確認して公開してください。"
+          "imported": "プロフィールをインポートしました。 内容を確認して公開してください。",
+          "saveTimedOut": "OpenClawがプロフィールを保存したかどうか確認できませんでした。",
+          "importTimedOut": "OpenClawがプロフィールをインポートしたかどうか確認できませんでした。",
+          "validationFailed": "プロフィールを保存できませんでした。プロフィールの入力項目を確認してください。",
+          "rateLimited": "プロフィールの更新回数が多すぎます。1分待ってからもう一度お試しください。"
         },
         "setupProfile": "プロフィールを追加または編集するには、Nostrを設定してください。",
-        "readOnlyProfile": "このプロフィールを編集するには、管理者権限が必要です。"
+        "readOnlyProfile": "このプロフィールを編集するには、管理者権限が必要です。",
+        "publicKey": "公開鍵",
+        "saveAndPublish": "保存して公開",
+        "importFromRelays": "リレーからインポート",
+        "showAdvanced": "詳細設定を表示",
+        "hideAdvanced": "詳細設定を非表示",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -517,10 +577,20 @@
           "published": "프로필이 릴레이에 게시되었습니다.",
           "importFailed": "프로필 가져오기 실패",
           "importedFromRelays": "릴레이에서 프로필을 가져왔습니다. 검토 후 게시하세요.",
-          "imported": "프로필을 가져왔습니다. 검토 후 게시하세요."
+          "imported": "프로필을 가져왔습니다. 검토 후 게시하세요.",
+          "saveTimedOut": "OpenClaw가 프로필을 저장했는지 확인할 수 없습니다.",
+          "importTimedOut": "OpenClaw가 프로필을 가져왔는지 확인할 수 없습니다.",
+          "validationFailed": "프로필을 저장할 수 없습니다. 프로필 항목을 확인하세요.",
+          "rateLimited": "프로필 업데이트가 너무 많습니다. 1분 후에 다시 시도하세요."
         },
         "setupProfile": "프로필을 추가하거나 수정하려면 Nostr를 설정하세요.",
-        "readOnlyProfile": "이 프로필을 수정하려면 관리자 권한이 필요합니다."
+        "readOnlyProfile": "이 프로필을 수정하려면 관리자 권한이 필요합니다.",
+        "publicKey": "공개 키",
+        "saveAndPublish": "저장 및 게시",
+        "importFromRelays": "릴레이에서 가져오기",
+        "showAdvanced": "고급 설정 표시",
+        "hideAdvanced": "고급 설정 숨기기",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -592,10 +662,20 @@
           "published": "Profil publié sur les relais.",
           "importFailed": "Échec de l’importation du profil",
           "importedFromRelays": "Profil importé depuis les relais. Vérifiez-le et publiez-le.",
-          "imported": "Profil importé. Vérifiez-le et publiez-le."
+          "imported": "Profil importé. Vérifiez-le et publiez-le.",
+          "saveTimedOut": "Impossible de confirmer si OpenClaw a enregistré le profil.",
+          "importTimedOut": "Impossible de confirmer si OpenClaw a importé le profil.",
+          "validationFailed": "Impossible d’enregistrer le profil. Vérifiez les champs du profil.",
+          "rateLimited": "Trop de mises à jour du profil. Attendez une minute avant de réessayer."
         },
         "setupProfile": "Configurez Nostr pour ajouter ou modifier un profil.",
-        "readOnlyProfile": "Vous devez disposer de droits d’administration pour modifier ce profil."
+        "readOnlyProfile": "Vous devez disposer de droits d’administration pour modifier ce profil.",
+        "publicKey": "Clé publique",
+        "saveAndPublish": "Enregistrer et publier",
+        "importFromRelays": "Importer depuis les relais",
+        "showAdvanced": "Afficher les options avancées",
+        "hideAdvanced": "Masquer les options avancées",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -667,10 +747,20 @@
           "published": "प्रोफ़ाइल रिले पर प्रकाशित हो गई.",
           "importFailed": "प्रोफ़ाइल आयात विफल रहा",
           "importedFromRelays": "प्रोफ़ाइल रिले से आयात हो गई. समीक्षा करें और प्रकाशित करें.",
-          "imported": "प्रोफ़ाइल आयात हो गई. समीक्षा करें और प्रकाशित करें."
+          "imported": "प्रोफ़ाइल आयात हो गई. समीक्षा करें और प्रकाशित करें.",
+          "saveTimedOut": "पुष्टि नहीं हो सकी कि OpenClaw ने प्रोफ़ाइल सहेजी है या नहीं।",
+          "importTimedOut": "पुष्टि नहीं हो सकी कि OpenClaw ने प्रोफ़ाइल आयात की है या नहीं।",
+          "validationFailed": "प्रोफ़ाइल सहेजी नहीं जा सकी। प्रोफ़ाइल के फ़ील्ड जाँचें।",
+          "rateLimited": "प्रोफ़ाइल में बहुत अधिक अपडेट किए गए हैं। दोबारा कोशिश करने से पहले एक मिनट प्रतीक्षा करें।"
         },
         "setupProfile": "प्रोफ़ाइल जोड़ने या संपादित करने के लिए Nostr सेट अप करें।",
-        "readOnlyProfile": "इस प्रोफ़ाइल को संपादित करने के लिए आपको व्यवस्थापक अधिकार चाहिए।"
+        "readOnlyProfile": "इस प्रोफ़ाइल को संपादित करने के लिए आपको व्यवस्थापक अधिकार चाहिए।",
+        "publicKey": "सार्वजनिक कुंजी",
+        "saveAndPublish": "सहेजें और प्रकाशित करें",
+        "importFromRelays": "रिले से आयात करें",
+        "showAdvanced": "उन्नत विकल्प दिखाएँ",
+        "hideAdvanced": "उन्नत विकल्प छिपाएँ",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -742,10 +832,20 @@
           "published": "تم نشر الملف الشخصي على خوادم الترحيل.",
           "importFailed": "فشل استيراد الملف الشخصي",
           "importedFromRelays": "تم استيراد الملف الشخصي من خوادم الترحيل. راجعه وانشره.",
-          "imported": "تم استيراد الملف الشخصي. راجعه وانشره."
+          "imported": "تم استيراد الملف الشخصي. راجعه وانشره.",
+          "saveTimedOut": "تعذّر التأكد مما إذا كان OpenClaw قد حفظ الملف الشخصي.",
+          "importTimedOut": "تعذّر التأكد مما إذا كان OpenClaw قد استورد الملف الشخصي.",
+          "validationFailed": "تعذّر حفظ الملف الشخصي. تحقّق من حقول الملف الشخصي.",
+          "rateLimited": "تحديثات الملف الشخصي كثيرة جدًا. انتظر دقيقة قبل المحاولة مرة أخرى."
         },
         "setupProfile": "قم بإعداد Nostr لإضافة ملف شخصي أو تعديله.",
-        "readOnlyProfile": "تحتاج إلى صلاحيات المسؤول لتعديل هذا الملف الشخصي."
+        "readOnlyProfile": "تحتاج إلى صلاحيات المسؤول لتعديل هذا الملف الشخصي.",
+        "publicKey": "المفتاح العام",
+        "saveAndPublish": "حفظ ونشر",
+        "importFromRelays": "استيراد من خوادم الترحيل",
+        "showAdvanced": "إظهار الخيارات المتقدمة",
+        "hideAdvanced": "إخفاء الخيارات المتقدمة",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -817,10 +917,20 @@
           "published": "Profilo pubblicato sui relay.",
           "importFailed": "Importazione del profilo non riuscita",
           "importedFromRelays": "Profilo importato dai relay. Verifica e pubblica.",
-          "imported": "Profilo importato. Verifica e pubblica."
+          "imported": "Profilo importato. Verifica e pubblica.",
+          "saveTimedOut": "Impossibile confermare se OpenClaw ha salvato il profilo.",
+          "importTimedOut": "Impossibile confermare se OpenClaw ha importato il profilo.",
+          "validationFailed": "Impossibile salvare il profilo. Controlla i campi del profilo.",
+          "rateLimited": "Troppi aggiornamenti del profilo. Attendi un minuto prima di riprovare."
         },
         "setupProfile": "Configura Nostr per aggiungere o modificare un profilo.",
-        "readOnlyProfile": "Per modificare questo profilo sono necessari i privilegi di amministratore."
+        "readOnlyProfile": "Per modificare questo profilo sono necessari i privilegi di amministratore.",
+        "publicKey": "Chiave pubblica",
+        "saveAndPublish": "Salva e pubblica",
+        "importFromRelays": "Importa dai relay",
+        "showAdvanced": "Mostra opzioni avanzate",
+        "hideAdvanced": "Nascondi opzioni avanzate",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -892,10 +1002,20 @@
           "published": "Profil aktarıcılarda yayımlandı.",
           "importFailed": "Profil içe aktarılamadı",
           "importedFromRelays": "Profil aktarıcılardan içe aktarıldı. Gözden geçirip yayımlayın.",
-          "imported": "Profil içe aktarıldı. Gözden geçirip yayımlayın."
+          "imported": "Profil içe aktarıldı. Gözden geçirip yayımlayın.",
+          "saveTimedOut": "OpenClaw'ın profili kaydedip kaydetmediği doğrulanamadı.",
+          "importTimedOut": "OpenClaw'ın profili içe aktarıp aktarmadığı doğrulanamadı.",
+          "validationFailed": "Profil kaydedilemedi. Profil alanlarını kontrol edin.",
+          "rateLimited": "Çok fazla profil güncellemesi yapıldı. Tekrar denemeden önce bir dakika bekleyin."
         },
         "setupProfile": "Profil eklemek veya düzenlemek için Nostr'ı yapılandırın.",
-        "readOnlyProfile": "Bu profili düzenlemek için yönetici erişimine ihtiyacınız var."
+        "readOnlyProfile": "Bu profili düzenlemek için yönetici erişimine ihtiyacınız var.",
+        "publicKey": "Açık anahtar",
+        "saveAndPublish": "Kaydet ve yayınla",
+        "importFromRelays": "Aktarıcılardan içe aktar",
+        "showAdvanced": "Gelişmiş seçenekleri göster",
+        "hideAdvanced": "Gelişmiş seçenekleri gizle",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -967,10 +1087,20 @@
           "published": "Профіль опубліковано на ретрансляторах.",
           "importFailed": "Не вдалося імпортувати профіль",
           "importedFromRelays": "Профіль імпортовано з ретрансляторів. Перегляньте та опублікуйте.",
-          "imported": "Профіль імпортовано. Перегляньте та опублікуйте."
+          "imported": "Профіль імпортовано. Перегляньте та опублікуйте.",
+          "saveTimedOut": "Не вдалося підтвердити, чи OpenClaw зберіг профіль.",
+          "importTimedOut": "Не вдалося підтвердити, чи OpenClaw імпортував профіль.",
+          "validationFailed": "Не вдалося зберегти профіль. Перевірте поля профілю.",
+          "rateLimited": "Забагато оновлень профілю. Зачекайте хвилину, перш ніж спробувати ще раз."
         },
         "setupProfile": "Налаштуйте Nostr, щоб додати або змінити профіль.",
-        "readOnlyProfile": "Щоб змінити цей профіль, потрібні права адміністратора."
+        "readOnlyProfile": "Щоб змінити цей профіль, потрібні права адміністратора.",
+        "publicKey": "Публічний ключ",
+        "saveAndPublish": "Зберегти й опублікувати",
+        "importFromRelays": "Імпортувати з ретрансляторів",
+        "showAdvanced": "Показати розширені налаштування",
+        "hideAdvanced": "Приховати розширені налаштування",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -1042,10 +1172,20 @@
           "published": "Profil dipublikasikan ke relai.",
           "importFailed": "Impor profil gagal",
           "importedFromRelays": "Profil diimpor dari relai. Tinjau dan publikasikan.",
-          "imported": "Profil diimpor. Tinjau dan publikasikan."
+          "imported": "Profil diimpor. Tinjau dan publikasikan.",
+          "saveTimedOut": "Tidak dapat memastikan apakah OpenClaw telah menyimpan profil.",
+          "importTimedOut": "Tidak dapat memastikan apakah OpenClaw telah mengimpor profil.",
+          "validationFailed": "Tidak dapat menyimpan profil. Periksa kolom profil.",
+          "rateLimited": "Terlalu banyak pembaruan profil. Tunggu sebentar sebelum mencoba lagi."
         },
         "setupProfile": "Siapkan Nostr untuk menambahkan atau mengedit profil.",
-        "readOnlyProfile": "Anda memerlukan akses administrator untuk mengedit profil ini."
+        "readOnlyProfile": "Anda memerlukan akses administrator untuk mengedit profil ini.",
+        "publicKey": "Kunci publik",
+        "saveAndPublish": "Simpan dan publikasikan",
+        "importFromRelays": "Impor dari relai",
+        "showAdvanced": "Tampilkan opsi lanjutan",
+        "hideAdvanced": "Sembunyikan opsi lanjutan",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -1117,10 +1257,20 @@
           "published": "Profil opublikowano na serwerach przekaźnikowych.",
           "importFailed": "Import profilu nie powiódł się",
           "importedFromRelays": "Zaimportowano profil z serwerów przekaźnikowych. Sprawdź i opublikuj.",
-          "imported": "Zaimportowano profil. Sprawdź i opublikuj."
+          "imported": "Zaimportowano profil. Sprawdź i opublikuj.",
+          "saveTimedOut": "Nie udało się potwierdzić, czy OpenClaw zapisał profil.",
+          "importTimedOut": "Nie udało się potwierdzić, czy OpenClaw zaimportował profil.",
+          "validationFailed": "Nie udało się zapisać profilu. Sprawdź pola profilu.",
+          "rateLimited": "Zbyt wiele aktualizacji profilu. Odczekaj minutę przed ponowną próbą."
         },
         "setupProfile": "Skonfiguruj Nostr, aby dodać lub edytować profil.",
-        "readOnlyProfile": "Aby edytować ten profil, potrzebujesz uprawnień administratora."
+        "readOnlyProfile": "Aby edytować ten profil, potrzebujesz uprawnień administratora.",
+        "publicKey": "Klucz publiczny",
+        "saveAndPublish": "Zapisz i opublikuj",
+        "importFromRelays": "Importuj z serwerów przekaźnikowych",
+        "showAdvanced": "Pokaż opcje zaawansowane",
+        "hideAdvanced": "Ukryj opcje zaawansowane",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -1192,10 +1342,20 @@
           "published": "เผยแพร่โปรไฟล์ไปยังรีเลย์แล้ว.",
           "importFailed": "นำเข้าโปรไฟล์ไม่สำเร็จ",
           "importedFromRelays": "นำเข้าโปรไฟล์จากรีเลย์แล้ว. ตรวจสอบและเผยแพร่.",
-          "imported": "นำเข้าโปรไฟล์แล้ว. ตรวจสอบและเผยแพร่."
+          "imported": "นำเข้าโปรไฟล์แล้ว. ตรวจสอบและเผยแพร่.",
+          "saveTimedOut": "ไม่สามารถยืนยันได้ว่า OpenClaw บันทึกโปรไฟล์แล้วหรือไม่",
+          "importTimedOut": "ไม่สามารถยืนยันได้ว่า OpenClaw นำเข้าโปรไฟล์แล้วหรือไม่",
+          "validationFailed": "ไม่สามารถบันทึกโปรไฟล์ได้ โปรดตรวจสอบช่องข้อมูลในโปรไฟล์",
+          "rateLimited": "มีการอัปเดตโปรไฟล์มากเกินไป โปรดรอสักครู่ก่อนลองอีกครั้ง"
         },
         "setupProfile": "ตั้งค่า Nostr เพื่อเพิ่มหรือแก้ไขโปรไฟล์",
-        "readOnlyProfile": "คุณต้องมีสิทธิ์ผู้ดูแลระบบเพื่อแก้ไขโปรไฟล์นี้"
+        "readOnlyProfile": "คุณต้องมีสิทธิ์ผู้ดูแลระบบเพื่อแก้ไขโปรไฟล์นี้",
+        "publicKey": "กุญแจสาธารณะ",
+        "saveAndPublish": "บันทึกและเผยแพร่",
+        "importFromRelays": "นำเข้าจากรีเลย์",
+        "showAdvanced": "แสดงตัวเลือกขั้นสูง",
+        "hideAdvanced": "ซ่อนตัวเลือกขั้นสูง",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -1267,10 +1427,20 @@
           "published": "Đã xuất bản hồ sơ lên các máy chủ chuyển tiếp.",
           "importFailed": "Nhập hồ sơ thất bại",
           "importedFromRelays": "Đã nhập hồ sơ từ các máy chủ chuyển tiếp. Hãy xem lại và xuất bản.",
-          "imported": "Đã nhập hồ sơ. Hãy xem lại và xuất bản."
+          "imported": "Đã nhập hồ sơ. Hãy xem lại và xuất bản.",
+          "saveTimedOut": "Không thể xác nhận OpenClaw đã lưu hồ sơ hay chưa.",
+          "importTimedOut": "Không thể xác nhận OpenClaw đã nhập hồ sơ hay chưa.",
+          "validationFailed": "Không thể lưu hồ sơ. Hãy kiểm tra các trường trong hồ sơ.",
+          "rateLimited": "Có quá nhiều lần cập nhật hồ sơ. Hãy đợi một phút rồi thử lại."
         },
         "setupProfile": "Thiết lập Nostr để thêm hoặc chỉnh sửa hồ sơ.",
-        "readOnlyProfile": "Bạn cần quyền quản trị viên để chỉnh sửa hồ sơ này."
+        "readOnlyProfile": "Bạn cần quyền quản trị viên để chỉnh sửa hồ sơ này.",
+        "publicKey": "Khóa công khai",
+        "saveAndPublish": "Lưu và công bố",
+        "importFromRelays": "Nhập từ các máy chủ chuyển tiếp",
+        "showAdvanced": "Hiện tùy chọn nâng cao",
+        "hideAdvanced": "Ẩn tùy chọn nâng cao",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -1342,10 +1512,20 @@
           "published": "Profiel gepubliceerd op relays.",
           "importFailed": "Profiel importeren mislukt",
           "importedFromRelays": "Profiel geïmporteerd van relays. Controleer en publiceer.",
-          "imported": "Profiel geïmporteerd. Controleer en publiceer."
+          "imported": "Profiel geïmporteerd. Controleer en publiceer.",
+          "saveTimedOut": "Er kon niet worden bevestigd of OpenClaw het profiel heeft opgeslagen.",
+          "importTimedOut": "Er kon niet worden bevestigd of OpenClaw het profiel heeft geïmporteerd.",
+          "validationFailed": "Het profiel kon niet worden opgeslagen. Controleer de profielvelden.",
+          "rateLimited": "Te veel profielupdates. Wacht een minuut voordat je het opnieuw probeert."
         },
         "setupProfile": "Stel Nostr in om een profiel toe te voegen of te bewerken.",
-        "readOnlyProfile": "Je hebt beheerdersrechten nodig om dit profiel te bewerken."
+        "readOnlyProfile": "Je hebt beheerdersrechten nodig om dit profiel te bewerken.",
+        "publicKey": "Openbare sleutel",
+        "saveAndPublish": "Opslaan en publiceren",
+        "importFromRelays": "Importeren uit relays",
+        "showAdvanced": "Geavanceerde opties tonen",
+        "hideAdvanced": "Geavanceerde opties verbergen",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -1417,10 +1597,20 @@
           "published": "نمایه در رله‌ها منتشر شد.",
           "importFailed": "وارد کردن نمایه ناموفق بود",
           "importedFromRelays": "نمایه از رله‌ها وارد شد. بررسی و منتشر کنید.",
-          "imported": "نمایه وارد شد. بررسی و منتشر کنید."
+          "imported": "نمایه وارد شد. بررسی و منتشر کنید.",
+          "saveTimedOut": "امکان تأیید ذخیره شدن نمایه توسط OpenClaw وجود نداشت.",
+          "importTimedOut": "امکان تأیید وارد شدن نمایه توسط OpenClaw وجود نداشت.",
+          "validationFailed": "ذخیرهٔ نمایه ممکن نشد. فیلدهای نمایه را بررسی کنید.",
+          "rateLimited": "تعداد به‌روزرسانی‌های نمایه بیش از حد مجاز است. پیش از تلاش دوباره، یک دقیقه صبر کنید."
         },
         "setupProfile": "برای افزودن یا ویرایش نمایه، Nostr را راه‌اندازی کنید.",
-        "readOnlyProfile": "برای ویرایش این نمایه به دسترسی مدیر نیاز دارید."
+        "readOnlyProfile": "برای ویرایش این نمایه به دسترسی مدیر نیاز دارید.",
+        "publicKey": "کلید عمومی",
+        "saveAndPublish": "ذخیره و انتشار",
+        "importFromRelays": "وارد کردن از رله‌ها",
+        "showAdvanced": "نمایش تنظیمات پیشرفته",
+        "hideAdvanced": "پنهان کردن تنظیمات پیشرفته",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -1492,10 +1682,20 @@
           "published": "Профиль опубликован на ретрансляторах.",
           "importFailed": "Не удалось импортировать профиль",
           "importedFromRelays": "Профиль импортирован с ретрансляторов. Проверьте и опубликуйте.",
-          "imported": "Профиль импортирован. Проверьте и опубликуйте."
+          "imported": "Профиль импортирован. Проверьте и опубликуйте.",
+          "saveTimedOut": "Не удалось подтвердить, сохранил ли OpenClaw профиль.",
+          "importTimedOut": "Не удалось подтвердить, импортировал ли OpenClaw профиль.",
+          "validationFailed": "Не удалось сохранить профиль. Проверьте поля профиля.",
+          "rateLimited": "Слишком много обновлений профиля. Подождите минуту перед повторной попыткой."
         },
         "setupProfile": "Настройте Nostr, чтобы добавить или изменить профиль.",
-        "readOnlyProfile": "Для редактирования этого профиля необходимы права администратора."
+        "readOnlyProfile": "Для редактирования этого профиля необходимы права администратора.",
+        "publicKey": "Открытый ключ",
+        "saveAndPublish": "Сохранить и опубликовать",
+        "importFromRelays": "Импортировать с ретрансляторов",
+        "showAdvanced": "Показать дополнительные настройки",
+        "hideAdvanced": "Скрыть дополнительные настройки",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -1567,10 +1767,20 @@
           "published": "Profilen har publicerats på reläerna.",
           "importFailed": "Profilimporten misslyckades",
           "importedFromRelays": "Profilen har importerats från reläerna. Granska och publicera.",
-          "imported": "Profilen har importerats. Granska och publicera."
+          "imported": "Profilen har importerats. Granska och publicera.",
+          "saveTimedOut": "Det gick inte att bekräfta om OpenClaw sparade profilen.",
+          "importTimedOut": "Det gick inte att bekräfta om OpenClaw importerade profilen.",
+          "validationFailed": "Det gick inte att spara profilen. Kontrollera profilfälten.",
+          "rateLimited": "För många profiluppdateringar. Vänta en minut innan du försöker igen."
         },
         "setupProfile": "Konfigurera Nostr för att lägga till eller redigera en profil.",
-        "readOnlyProfile": "Du behöver administratörsbehörighet för att redigera den här profilen."
+        "readOnlyProfile": "Du behöver administratörsbehörighet för att redigera den här profilen.",
+        "publicKey": "Publik nyckel",
+        "saveAndPublish": "Spara och publicera",
+        "importFromRelays": "Importera från reläer",
+        "showAdvanced": "Visa avancerade inställningar",
+        "hideAdvanced": "Dölj avancerade inställningar",
+        "nip05": "NIP-05"
       }
     }
   },
@@ -1642,10 +1852,20 @@
           "published": "Perfil publicat als servidors de retransmissió.",
           "importFailed": "No s'ha pogut importar el perfil",
           "importedFromRelays": "Perfil importat dels servidors de retransmissió. Reviseu-lo i publiqueu-lo.",
-          "imported": "S'ha importat el perfil. Revisa'l i publica'l."
+          "imported": "S'ha importat el perfil. Revisa'l i publica'l.",
+          "saveTimedOut": "No s’ha pogut confirmar si OpenClaw ha desat el perfil.",
+          "importTimedOut": "No s’ha pogut confirmar si OpenClaw ha importat el perfil.",
+          "validationFailed": "No s’ha pogut desar el perfil. Comprova els camps del perfil.",
+          "rateLimited": "Massa actualitzacions del perfil. Espera un minut abans de tornar-ho a provar."
         },
         "setupProfile": "Configura Nostr per afegir o editar un perfil.",
-        "readOnlyProfile": "Necessites accés d'administrador per editar aquest perfil."
+        "readOnlyProfile": "Necessites accés d'administrador per editar aquest perfil.",
+        "publicKey": "Clau pública",
+        "saveAndPublish": "Desa i publica",
+        "importFromRelays": "Importa des dels relés",
+        "showAdvanced": "Mostra les opcions avançades",
+        "hideAdvanced": "Amaga les opcions avançades",
+        "nip05": "NIP-05"
       }
     }
   }
