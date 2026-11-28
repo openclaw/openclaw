@@ -410,9 +410,9 @@ function disposeSession(session: LspSession): Promise<void> {
         `bundle-lsp:${session.serverName}: process cleanup could not confirm descendant shutdown; inspect this server before retrying automatic recovery.`,
       );
       throw error;
-    } finally {
-      activeBundleLspSessions.delete(session);
     }
+    // A failed close keeps its cached rejection visible to later global cleanup scopes.
+    activeBundleLspSessions.delete(session);
   })();
   return session.disposal;
 }
