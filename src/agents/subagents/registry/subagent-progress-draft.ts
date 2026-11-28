@@ -1,5 +1,7 @@
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ProgressContinuationDraft } from "../../../channels/progress-continuation.js";
+import { normalizeAgentPlanSteps } from "../../../channels/streaming.js";
 import { onAgentEventForRun, type AgentEventPayload } from "../../../infra/agent-events.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { formatSubagentProgressReference } from "../../agent-activity-presentation.js";
@@ -106,8 +108,23 @@ function projectChild(entry: SubagentRunRecord): ProgressItem {
   };
 }
 
-function follow(live: LiveDraft, runId: string, itemId: string): () => void {
+function follow(
+  live: LiveDraft,
+  runId: string,
+  itemId: string,
+  audience: "child" | "requester",
+): () => void {
   return onAgentEventForRun(runId, (event) => {
+    // A private child's plan must never replace the requester's public checklist.
+    if (audience === "requester" && event.stream === "plan") {
+      if (event.data.phase === "update") {
+        live.draft.updatePlan?.(normalizeAgentPlanSteps(event.data.steps), {
+          explanation: readStringValue(event.data.explanation),
+          ...(event.data.explanationFormat === "plain" ? { explanationFormat: "plain" } : {}),
+        });
+      }
+      return;
+    }
     const item = projectActivity(event, itemId);
     if (item) {
       live.draft.push(item);
@@ -125,7 +142,7 @@ function track(live: LiveDraft, entries: readonly SubagentRunRecord[]): void {
       childSessionKey: entry.childSessionKey,
       childAgentId: entry.childAgentId,
       row: entry,
-      stopEvents: follow(live, entry.runId, `${id}:tool`),
+      stopEvents: follow(live, entry.runId, `${id}:tool`, "child"),
     });
     liveByTask.set(id, live);
     live.draft.push(projectChild(entry));
@@ -162,7 +179,7 @@ function reconcile(live: LiveDraft): void {
     }
     if (row.runId !== member.row.runId) {
       member.stopEvents();
-      member.stopEvents = follow(live, row.runId, `${id}:tool`);
+      member.stopEvents = follow(live, row.runId, `${id}:tool`, "child");
     }
     member.row = row;
     live.draft.push(projectChild(row));
@@ -203,7 +220,7 @@ export function adoptSubagentProgressDraft(
   return true;
 }
 
-/** Show the resumed requester's work on the same draft while its settle wake runs. */
+/** Show the resumed requester's work and checklist on the same draft while its settle wake runs. */
 export async function withSubagentProgressDraft<T>(
   batch: readonly SubagentRunRecord[],
   wakeRunId: string,
@@ -214,7 +231,7 @@ export async function withSubagentProgressDraft<T>(
     return await run();
   }
   liveByWake.set(wakeRunId, live);
-  const stopEvents = follow(live, wakeRunId, "requester:tool");
+  const stopEvents = follow(live, wakeRunId, "requester:tool", "requester");
   try {
     return await run();
   } finally {

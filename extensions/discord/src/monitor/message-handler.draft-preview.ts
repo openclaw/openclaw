@@ -338,19 +338,22 @@ export function createDiscordDraftPreviewController(params: {
         );
       };
       let started = false;
+      const render = (work: () => Promise<unknown>) =>
+        enqueue(async () => {
+          if (retired) {
+            return;
+          }
+          if (!started) {
+            started = true;
+            await retainedCompositor.start();
+          }
+          await work();
+        });
       if (
         !adopt({
-          push: (item) =>
-            enqueue(async () => {
-              if (retired) {
-                return;
-              }
-              if (!started) {
-                started = true;
-                await retainedCompositor.start();
-              }
-              await retainedCompositor.pushItemEvent(item);
-            }),
+          push: (item) => render(() => retainedCompositor.pushItemEvent(item)),
+          updatePlan: (steps, options) =>
+            render(() => retainedCompositor.pushPlanProgress(steps, options)),
           retire: () => {
             if (retired) {
               return;
