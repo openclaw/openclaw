@@ -52,8 +52,8 @@ import {
   deniesDeviceTokenRoleManagement,
   pairedDeviceHasNonOperatorRole,
   requestsNonOperatorDeviceRole,
-  resolveDeviceManagementAuthz,
-  resolveDeviceSessionAuthz,
+  resolveDeviceManagementAuthzWithTokenGrants,
+  resolveDeviceSessionAuthzWithTokenGrants,
 } from "./device-management-authz.js";
 import type { DeviceManagementAuthz, DeviceSessionAuthz } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
@@ -140,7 +140,7 @@ function createDeviceTokenHandler(operation: "rotate" | "revoke"): GatewayReques
       return;
     }
     const { deviceId, role } = params;
-    const authz = resolveDeviceManagementAuthz(client, deviceId);
+    const authz = await resolveDeviceManagementAuthzWithTokenGrants(client, deviceId);
     const deny = (
       reason:
         | RotateDeviceTokenDenyReason
@@ -301,7 +301,7 @@ async function runDevicePairingMutation(params: {
   deviceId: string;
   run: (authz: DeviceManagementAuthz) => Promise<void>;
 }): Promise<void> {
-  const authz = resolveDeviceManagementAuthz(params.client, params.deviceId);
+  const authz = await resolveDeviceManagementAuthzWithTokenGrants(params.client, params.deviceId);
   let reason: string | undefined;
   if (deniesCrossDeviceManagement(authz)) {
     reason = "device-ownership-mismatch";
@@ -426,7 +426,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const list = await listDevicePairing();
-    const authz = resolveDeviceSessionAuthz(client);
+    const authz = await resolveDeviceSessionAuthzWithTokenGrants(client);
     let visibleList = list;
     if (authz.callerDeviceId && !authz.isAdminCaller) {
       visibleList = {
@@ -458,7 +458,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestId = params.requestId.trim();
-    const authz = resolveDeviceSessionAuthz(client);
+    const authz = await resolveDeviceSessionAuthzWithTokenGrants(client);
     if (!authz.isAdminCaller) {
       const pending = await getPendingDevicePairing(requestId);
       if (!authorizePairingDecision("approve", requestId, pending, authz, { respond, context })) {
@@ -532,7 +532,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestId = params.requestId.trim();
-    const authz = resolveDeviceSessionAuthz(client);
+    const authz = await resolveDeviceSessionAuthzWithTokenGrants(client);
     if (authz.callerDeviceId && !authz.isAdminCaller) {
       const pending = await getPendingDevicePairing(requestId);
       if (!authorizePairingDecision("reject", requestId, pending, authz, { respond, context })) {

@@ -1,3 +1,4 @@
+import { getPairedDevice } from "../../infra/device-pairing.js";
 import type { DeviceAuthToken } from "../../infra/device-pairing.js";
 import type { GatewayClient } from "./types.js";
 
@@ -23,12 +24,46 @@ export function resolveDeviceSessionAuthz(client: GatewayClient | null): DeviceS
   };
 }
 
+/**
+ * Elevates admin recognition to the caller's durable operator-token grants.
+ *
+ * Clients declare least-privilege scopes per call, so an admin-capable device token
+ * presenting only `operator.pairing` (for example, the devices CLI inventory read)
+ * was classified as self-only and could not see other devices' pending pairing
+ * requests. A token that grants admin could always declare admin, so keying the
+ * classification on durable grants adds no authority; it just stops the declared
+ * subset from hiding inventory the token already authorizes.
+ */
+export async function resolveDeviceSessionAuthzWithTokenGrants(
+  client: GatewayClient | null,
+): Promise<DeviceSessionAuthz> {
+  const authz = resolveDeviceSessionAuthz(client);
+  if (authz.isAdminCaller || !authz.callerDeviceId) {
+    return authz;
+  }
+  const caller = await getPairedDevice(authz.callerDeviceId);
+  if (!caller?.tokens?.operator?.scopes.includes("operator.admin")) {
+    return authz;
+  }
+  return { ...authz, isAdminCaller: true };
+}
+
 export function resolveDeviceManagementAuthz(
   client: GatewayClient | null,
   targetDeviceId: string,
 ): DeviceManagementAuthz {
   return {
     ...resolveDeviceSessionAuthz(client),
+    normalizedTargetDeviceId: targetDeviceId.trim(),
+  };
+}
+
+export async function resolveDeviceManagementAuthzWithTokenGrants(
+  client: GatewayClient | null,
+  targetDeviceId: string,
+): Promise<DeviceManagementAuthz> {
+  return {
+    ...(await resolveDeviceSessionAuthzWithTokenGrants(client)),
     normalizedTargetDeviceId: targetDeviceId.trim(),
   };
 }

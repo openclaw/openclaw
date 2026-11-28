@@ -10,6 +10,7 @@ import { deviceHandlers } from "../gateway/server-methods/devices.js";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
+import { loadOrCreateDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import {
   revokeDeviceToken,
@@ -189,7 +190,7 @@ const admin = ["operator.admin"];
 it.each<[string, string, string[], string[] | undefined, string[]]>([
   ["rotate", "self", pairingWrite, undefined, [...pairingRead, "operator.write"]],
   ["revoke", "self", pairingRead, undefined, pairingRead],
-  ["rotate", "admin-cross-device", admin, ["operator.read"], admin],
+  ["rotate", "admin-cross-device", admin, ["operator.read"], ["operator.pairing", "operator.read"]],
   ["rotate", "shared", pairingWrite, admin, admin],
 ])(
   "%s with %s authority preserves the approval ceiling",
@@ -349,3 +350,35 @@ it.each(["live", "offline", "uncertain"] as const)(
     }
   },
 );
+
+it("surfaces another device's pending request to an admin-grant caller without declared admin scopes", async () => {
+  const identity = await loadOrCreateDeviceIdentityAsync();
+  await pairOperator(identity.deviceId, ["operator.admin"]);
+  const pending = await requestDevicePairing({
+    deviceId: "device-2",
+    publicKey: "public-device-2",
+    role: "operator",
+    scopes: ["operator.read"],
+  });
+  await installTransport(identity.deviceId);
+
+  await run("list", "--json");
+  expect(transport.request.mock.calls[0]?.[0]).toEqual(["operator.pairing"]);
+  const [list] = expectDefined(transport.runtime.writeJson.mock.calls[0], "CLI list output");
+  expect((list.pending as Array<{ requestId: string }>).map((req) => req.requestId)).toContain(
+    pending.request.requestId,
+  );
+
+  await run("approve", "--latest", "--json");
+  const [selected] = expectDefined(
+    transport.runtime.writeJson.mock.calls[1],
+    "approve --latest output",
+  );
+  expect((selected as { selected: { requestId: string } }).selected.requestId).toBe(
+    pending.request.requestId,
+  );
+
+  await run("approve", pending.request.requestId, "--json");
+  expect(await getPendingDevicePairing(pending.request.requestId)).toBeNull();
+  expect(await getPairedDevice("device-2")).toMatchObject({ deviceId: "device-2" });
+});
