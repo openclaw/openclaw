@@ -87,13 +87,18 @@ export function probeSqliteDatabaseHeaders(pathnames: Iterable<string>): Map<str
       typeof failure?.path === "string"
         ? ` Backup source ${shortenHomePath(failure.path)} could not be read (${typeof failure.code === "string" ? failure.code : "unknown error"}). Check read permissions or close the program using it, then retry the backup or update.`
         : " Check that the backup worker can run and the source files are readable, then retry the backup.";
-    throw new Error(
-      hasErrnoCode(cause, "ETIMEDOUT")
-        ? `SQLite header probe timed out after ${SQLITE_HEADER_PROBE_TIMEOUT_MS} ms while checking ${paths.length} backup paths. ` +
-            "For a blocked update, preserve a verified backup and follow the manual package-manager hop: " +
-            "https://docs.openclaw.ai/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun"
-        : `Could not determine whether backup files are SQLite databases.${hint}`,
-      { cause },
+    const timedOut = hasErrnoCode(cause, "ETIMEDOUT");
+    // The message can name a backup path; public reports use the fixed sentence for this code.
+    throw Object.assign(
+      new Error(
+        timedOut
+          ? `SQLite header probe timed out after ${SQLITE_HEADER_PROBE_TIMEOUT_MS} ms while checking ${paths.length} backup paths. ` +
+              "For a blocked update, preserve a verified backup and follow the manual package-manager hop: " +
+              "https://docs.openclaw.ai/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun"
+          : `Could not determine whether backup files are SQLite databases.${hint}`,
+        { cause },
+      ),
+      { code: timedOut ? "backup-sqlite-probe-timeout" : "backup-sqlite-probe-failed" },
     );
   }
 }

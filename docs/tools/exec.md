@@ -16,7 +16,7 @@ Workdir errors and failed foreground process results on the Gateway or in its sa
 
 Headless node-host commands terminated by an operating-system signal include the signal name in the result, even when no numeric exit code is available. Output printed before termination does not mean the command succeeded.
 
-If the Gateway restarts during a managed turn, it checks for saved shell results before resuming the task. If a result is missing, the agent checks the expected effect using existing evidence and authorized read-only tools, then continues any remaining work that does not depend on an unverified effect. It does not rerun the interrupted command or replay the request. The reply distinguishes verified work from anything still unknown. A message already queued separately keeps its own turn.
+After a Gateway restart, the agent keeps working on your request using saved results. It reports unknown outcomes without replaying commands or requests. Queued messages keep separate turns.
 
 ## Host memory protection
 

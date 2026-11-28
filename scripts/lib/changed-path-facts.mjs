@@ -21,7 +21,7 @@ const SURFACE_PATTERNS = [
   // Match reviewed skill owners so other hidden executables still fail safe.
   [
     "rootTooling",
-    /^\.agents\/skills\/(?:openclaw-pr-maintainer\/scripts\/github-activity\.sh|openclaw-changelog-update\/scripts\/verify-release-notes\.mjs|update-team-server\/controller\/[^/]+)$/u,
+    /^\.agents\/skills\/(?:openclaw-pr-maintainer\/scripts\/github-activity\.sh|openclaw-changelog-update\/scripts\/verify-release-notes\.mjs)$/u,
   ],
   [
     "rootTooling",

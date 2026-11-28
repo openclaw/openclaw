@@ -26,8 +26,8 @@ import { prepareManagedHandoffLeaseStore } from "../../infra/update-managed-serv
 import { resolveLegacyGatewayManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-legacy-store.js";
 import { ManagedHandoffCustodyRetainedError } from "../../infra/update-managed-service-handoff-reclamation.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
+import { inspectUpdateRepairDriverAdmission } from "../../infra/update-repair-driver-admission.js";
 import {
-  inspectUpdateRepairDriverAdmission,
   inspectNewerRecoveryHistory,
   needsPostCoreRepair,
   isFreshUnacknowledgedAbandonedUpdateRun,

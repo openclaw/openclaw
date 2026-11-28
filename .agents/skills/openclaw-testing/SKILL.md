@@ -59,7 +59,7 @@ description: Choose proportional OpenClaw tests/checks, diagnose failures, route
 - Docs only: relevant docs/link/format checks + `git diff --check`; no runtime tests.
 
 - Read on demand: [local commands](../../../docs/reference/test.md),
-  [Crabbox](../crabbox/SKILL.md), [OpenClaw remote setup](../../../docs/reference/test/remote-proof.md),
+  [Crabbox](https://github.com/openclaw/agent-skills/blob/main/skills/crabbox/SKILL.md), [OpenClaw remote setup](../../../docs/reference/test/remote-proof.md),
   [package/Docker proof](references/package-and-docker.md),
   [release CI](../release-openclaw-ci/SKILL.md),
   [plugin release matrix](../release-openclaw-plugin-testing/SKILL.md),
