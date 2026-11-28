@@ -210,6 +210,12 @@ internal fun OpenClawWearApp(
   val modelSearchTitle = stringResource(R.string.search_models_title)
   val searchLabel = stringResource(R.string.search)
 
+  fun speakReply(reply: WearChatMessage) {
+    if (!lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) return
+    val text = if (reply.textTruncated == true) view.context.getString(R.string.spoken_reply_preview, reply.text) else reply.text
+    speaker.speak(text)
+  }
+
   fun submitMessage(rawMessage: String) {
     val message = rawMessage.trim()
     // System input can return after the composition that registered its callback.
@@ -347,7 +353,7 @@ internal fun OpenClawWearApp(
     interaction = WearInteractionState.READY
     if (reply != null) {
       view.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-      if (autoSpeak && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) speaker.speak(reply.text)
+      if (autoSpeak) speakReply(reply)
     }
   }
 
@@ -509,11 +515,7 @@ internal fun OpenClawWearApp(
             }
           }
         },
-        onSpeakLatest = {
-          if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-            snapshot.latestAssistantMessage()?.text?.let(speaker::speak)
-          }
-        },
+        onSpeakLatest = { snapshot.latestAssistantMessage()?.let(::speakReply) },
         onStopSpeaking = speaker::stop,
       )
     }

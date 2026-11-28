@@ -124,6 +124,7 @@
     <string name="pulse_phase_counts" tools:ignore="MissingTranslation">Queued %1$d, Running %2$d, Done %3$d, Failed %4$d, Hidden %5$d</string>
     <string name="pulse_more_phases" tools:ignore="MissingTranslation">More phases not shown</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation">Unknown</string>
+    <string name="spoken_reply_preview" tools:ignore="MissingTranslation">Here’s the start of the reply. %1$s</string>
     <string name="read_full_reply" tools:ignore="MissingTranslation">Read full reply</string>
     <string name="reply_stream_preview" tools:ignore="MissingTranslation">Live preview. Read the full reply when it finishes.</string>
     <string name="reply_previous_page" tools:ignore="MissingTranslation">Previous part</string>
