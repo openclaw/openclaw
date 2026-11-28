@@ -17,6 +17,7 @@ import {
   quoteSqliteIdentifier as quoteIdentifier,
 } from "../infra/sqlite-schema-sql.js";
 import { publishVerifiedSqliteFile } from "../infra/sqlite-snapshot.js";
+import { configureSqliteSnapshotPragmas } from "../infra/sqlite-wal.js";
 import { decodeUtf8Chunks } from "../infra/utf8-input.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -625,7 +626,9 @@ export async function restoreGitBackupDirectory(params: {
     const stagedHandle = await fs.open(stagedPath, "wx", 0o600);
     await stagedHandle.close();
     database = openNodeSqliteDatabase(stagedPath);
-    database.exec("PRAGMA foreign_keys = OFF; PRAGMA journal_mode = DELETE;");
+    // Configure the private restore connection before applying caller-supplied schema.
+    configureSqliteSnapshotPragmas(database);
+    database.exec("PRAGMA foreign_keys = OFF;");
     for (const statement of [...plainTables, ...indexes]) {
       database.exec(statement);
     }
