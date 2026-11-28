@@ -40,7 +40,6 @@ export async function refreshCodexPluginAppInventory(
   appCache: CodexAppInventoryCache,
   options: {
     forceRefetch?: boolean;
-    reuseRecentForcedRefresh?: boolean;
     reason?: string;
     targetAppIds?: readonly string[];
   } = {},
@@ -55,7 +54,6 @@ export async function refreshCodexPluginAppInventory(
       request,
       nowMs: params.nowMs,
       forceRefetch: options.forceRefetch,
-      reuseRecentForcedRefresh: options.reuseRecentForcedRefresh,
       targetAppIds: options.targetAppIds,
     });
   } catch (error) {

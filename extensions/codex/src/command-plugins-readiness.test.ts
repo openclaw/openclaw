@@ -358,6 +358,8 @@ describe("Codex hosted app refresh", () => {
     expect((await build()).policyContext.apps).toHaveProperty("app-0");
     expect((await build(appCacheKey, "thread-a")).policyContext.apps).toHaveProperty("app-0");
     const recoveredBoundary = test.request.mock.calls.length;
+    options.runtime = [];
+    options.refreshedRuntime = [];
     expect((await build(otherAccountKey)).policyContext.apps).toEqual({});
     expect((await build(otherRuntimeKey)).policyContext.apps).toEqual({});
     options.appDenied = true;
@@ -366,7 +368,10 @@ describe("Codex hosted app refresh", () => {
       test.request.mock.calls
         .slice(recoveredBoundary)
         .filter(([method]) => method === "app/installed"),
-    ).toEqual([]);
+    ).toEqual([
+      ["app/installed", { forceRefresh: true, threadId }],
+      ["app/installed", { forceRefresh: true, threadId }],
+    ]);
     expect(
       test.request.mock.calls
         .slice(recoveredBoundary)

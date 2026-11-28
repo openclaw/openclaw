@@ -1724,7 +1724,7 @@ describe("Codex plugin thread config", () => {
   );
 
   it.each(["missing", "inaccessible", "ready"] as const)(
-    "bounds readiness repair for an initially %s app without relaxing policy",
+    "force-refreshes readiness repair for an initially %s app without relaxing policy",
     async (unavailable) => {
       const appCache = new CodexAppInventoryCache();
       const metadataCache = new CodexPluginMetadataCache();
@@ -1755,6 +1755,8 @@ describe("Codex plugin thread config", () => {
       });
       const threadId = "same-native-thread";
       const appCacheKey = "same-account";
+      const installedCalls = () =>
+        request.mock.calls.filter(([method]) => method === "app/installed");
       const key = resolveCodexPluginThreadAppCacheKey({ appCacheKey, threadId });
       await appCache.refreshNow({
         key,
@@ -1783,9 +1785,7 @@ describe("Codex plugin thread config", () => {
           expect(config.configPatch).toEqual(disabledAppsConfig);
         }
       }
-      expect(request.mock.calls.filter(([method]) => method === "app/installed")).toEqual(
-        initiallyReady ? [] : [["app/installed", { forceRefresh: true, threadId }]],
-      );
+      expect(installedCalls()).toHaveLength(initiallyReady ? 0 : 3);
       if (initiallyReady) {
         return;
       }
@@ -1794,12 +1794,12 @@ describe("Codex plugin thread config", () => {
       const recovered = await build(60_001);
       expect(recovered.policyContext.apps).toHaveProperty("google-calendar-app");
       expect(recovered.provisionalAppIds).toEqual(["google-calendar-app"]);
-      expect(request.mock.calls.filter(([method]) => method === "app/installed")).toHaveLength(2);
+      expect(installedCalls()).toHaveLength(4);
       denied = true;
       const revoked = await build(60_002);
       expect(revoked.policyContext.apps).toEqual({});
       expect(revoked.configPatch).toEqual(disabledAppsConfig);
-      expect(request.mock.calls.filter(([method]) => method === "app/installed")).toHaveLength(2);
+      expect(installedCalls()).toHaveLength(4);
       expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(2);
     },
   );
