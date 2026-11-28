@@ -1,18 +1,14 @@
 import { homedir } from "node:os";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { listAgentEntries, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
+import { tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
 import { readRecentConfigAuditRecords } from "../config/io.audit.js";
-import { hashConfigRaw } from "../config/io.read-helpers.js";
 import {
   retainLegacyDefaultAgentId,
   tryGetLegacyDefaultAgentId,
 } from "../config/legacy.default-agent-owner.js";
 import { resolveLegacyAgentRosterOwner } from "../config/legacy.roster.js";
-import { findLegacyConfigRuleIssues } from "../config/legacy.shared.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -35,6 +31,7 @@ import { createDoctorChangesPanelSink } from "./doctor/changes-panel-sink.js";
 import { cronCodexRuntimePolicyTargetKey } from "./doctor/cron/store-migration.js";
 import * as notes from "./doctor/emit-notes.js";
 import { doctorConfigRevision, finalizeDoctorConfigFlow } from "./doctor/finalize-config-flow.js";
+import { needsCanonicalAgentRosterPersistence } from "./doctor/shared/agent-roster-persistence.js";
 import {
   applyLegacyCompatibilityStep,
   applyRetiredConfigStep,
@@ -49,9 +46,8 @@ import {
   type DoctorConfigMutationResult,
   type DoctorConfigMutationState,
 } from "./doctor/shared/config-mutation-state.js";
+import type { DoctorConfigFlowTransformId } from "./doctor/shared/config-transforms.js";
 import { listDoctorConfiguredChannelIds } from "./doctor/shared/configured-channel-ids.js";
-import { normalizeCompatibilityConfigValues } from "./doctor/shared/legacy-config-core-migrate.js";
-import { LEGACY_AGENT_ROSTER_RULES } from "./doctor/shared/legacy-config-migrations.runtime.entries.js";
 import type { DoctorPluginMetadataSnapshotState } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
 import { planProviderRenames } from "./doctor/shared/provider-rename.js";
 import { canWriteDoctorInclude } from "./doctor/shared/roster-include-write.js";
@@ -175,10 +171,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   );
 
   const sourceRosterConfig = snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig;
-  const rosterMigrationNeeded =
-    findLegacyConfigRuleIssues(sourceRosterConfig, LEGACY_AGENT_ROSTER_RULES).length > 0 ||
-    listAgentEntries(sourceRosterConfig).length === 0 ||
-    (baseCfg.agents?.ownership === undefined && listAgentEntries(baseCfg).length > 1);
+  const persistCanonicalAgentRoster = needsCanonicalAgentRosterPersistence(snapshot, baseCfg);
   const legacyStep = runWithCurrentPluginMetadata(state.candidate, () =>
     applyLegacyCompatibilityStep({
       snapshot,
@@ -196,8 +189,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     retainLegacyDefaultAgentId(state.cfg, legacyDefaultAgentId);
     retainLegacyDefaultAgentId(state.candidate, legacyDefaultAgentId);
   }
-  const persistCanonicalAgentRoster =
-    snapshot.exists && rosterMigrationNeeded && !configIncludeOwnsAgentRoster(snapshot);
   if (persistCanonicalAgentRoster) {
     applyConfigMutation(
       {
@@ -284,20 +275,20 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
   changesPanelSink.emit(legacyStep.changeLines);
 
-  const { repairGeneratedModelMetadataCorruption } =
-    await import("./doctor/shared/model-metadata-corruption-repair.js");
-  const modelMetadataRepair = runWithCurrentPluginMetadata(state.candidate, () =>
-    repairGeneratedModelMetadataCorruption({
-      config: state.candidate,
-      authoredRoot: snapshot.parsed,
-      configPath: snapshot.path,
-      currentHash: hashConfigRaw(snapshot.raw),
-      loadAuditRecords: () =>
-        readRecentConfigAuditRecords({ env: process.env, homedir, limit: 2048 }),
-    }),
-  );
+  const { runDoctorConfigFlowTransform } = await import("./doctor/shared/config-transforms.js");
+  const transformContext = {
+    env: process.env,
+    snapshot,
+    blockedCodexProviderPlan,
+    loadAuditRecords: () =>
+      readRecentConfigAuditRecords({ env: process.env, homedir, limit: 2048 }),
+  };
+  const runTransform = (id: DoctorConfigFlowTransformId) =>
+    runWithCurrentPluginMetadata(state.candidate, () =>
+      runDoctorConfigFlowTransform(id, state.candidate, transformContext),
+    );
   applyConfigMutation(
-    modelMetadataRepair,
+    await runTransform("model-metadata"),
     `Run "${doctorFixCommand}" to remove audit-proven generated model metadata.`,
   );
 
@@ -305,32 +296,17 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
 
   // Parsed config supplies invalid-key evidence only; migrations still mutate the
   // include/env-resolved candidate so doctor never writes unresolved source values.
-  const normalized = await runWithCurrentPluginMetadata(state.candidate, () =>
-    normalizeCompatibilityConfigValues(state.candidate, {
-      blockedModelIdentities: blockedCodexModelIdentities,
-      sourceRaw: snapshot.parsed,
-    }),
-  );
-  applyConfigMutation(normalized, `Run "${doctorFixCommand}" to apply these changes.`);
-
-  const { recoverCommandOwnerTargetKinds } = await import("./doctor-command-owner-recovery.js");
   applyConfigMutation(
-    runWithCurrentPluginMetadata(state.candidate, () =>
-      recoverCommandOwnerTargetKinds({ config: state.candidate, snapshot }),
-    ),
+    await runTransform("compatibility-values"),
+    `Run "${doctorFixCommand}" to apply these changes.`,
+  );
+  applyConfigMutation(
+    await runTransform("command-owner-targets"),
     `Run "${doctorFixCommand}" to restore recorded command-owner target kinds.`,
     { sanitize: true },
   );
-
-  const { repairUnownedChannelAccountBindings } =
-    await import("./doctor/shared/legacy-config-binding-repair.js");
   applyConfigMutation(
-    runWithCurrentPluginMetadata(state.candidate, () =>
-      repairUnownedChannelAccountBindings({
-        config: state.candidate,
-        sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
-      }),
-    ),
+    await runTransform("channel-account-bindings"),
     `Run "${doctorFixCommand}" to preserve channel account ownership.`,
   );
 
@@ -384,14 +360,8 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     note,
     warningNotes: collectCodexPluginActivationWarnings(pluginActivationSourceConfig),
   });
-  const { applyPluginAutoEnableAsync } = await import("../config/plugin-auto-enable.js");
   applyConfigMutation(
-    await runWithCurrentPluginMetadata(state.candidate, () =>
-      applyPluginAutoEnableAsync({
-        config: state.candidate,
-        env: process.env,
-      }),
-    ),
+    await runTransform("plugin-auto-enable"),
     `Run "${doctorFixCommand}" to apply these changes.`,
     { emitWarnings: false },
   );
@@ -471,28 +441,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }
   }
 
-  const { repairHooksTokenReuseGatewayAuth } =
-    await import("./doctor/shared/hooks-token-reuse-repair.js");
   applyConfigMutation(
-    await repairHooksTokenReuseGatewayAuth(state.candidate, process.env),
+    await runDoctorConfigFlowTransform("hooks-token-reuse", state.candidate, transformContext),
     `Run "${doctorFixCommand}" to rotate hooks.token away from Gateway auth.`,
     { emitWarnings: false },
   );
 
-  const { repairSystemAgentWorkspacePin } =
+  const { repairSystemAgentWorkspacePin, resolveSystemAgentWorkspaceRepairOptions } =
     await import("./doctor/shared/system-agent-workspace-repair.js");
-  // authoredConfig keeps include-resolved authored values (env refs intact); parsed only has the
-  // root file, so an agents.defaults $include would otherwise freeze the resolved absolute path.
-  const parsedAgents = isRecord(snapshot.parsed) ? snapshot.parsed.agents : undefined;
-  const parsedDefaults = isRecord(parsedAgents) ? parsedAgents.defaults : undefined;
-  const authoredDefaultWorkspace =
-    snapshot.authoredConfig?.agents?.defaults?.workspace ??
-    (isRecord(parsedDefaults) ? parsedDefaults.workspace : undefined);
-  const systemAgentWorkspaceOptions = {
-    includeOwnsRoster: configIncludeOwnsAgentRoster(snapshot),
-    authoredDefaultWorkspace:
-      typeof authoredDefaultWorkspace === "string" ? authoredDefaultWorkspace : undefined,
-  };
+  const systemAgentWorkspaceOptions = resolveSystemAgentWorkspaceRepairOptions(snapshot);
   const systemAgentWorkspace = await repairSystemAgentWorkspacePin(state.candidate, process.env, {
     ...systemAgentWorkspaceOptions,
     applyFiles: shouldRepair,

@@ -114,8 +114,12 @@ describe("doctor config-flow pending", () => {
       await traceAll({ env, integrityCheck: "quick", agentDatabaseMigrationDiscovery }),
     );
 
-    // One trace per owner, in the order the flow reaches them, then the step.
-    expect([...traced.keys()]).toEqual([
+    // One trace per owner, in the order the flow reaches them, then the config repair stages
+    // (their order is covered beside their checks) and the step.
+    const steps = [...traced.keys()];
+    const repairs = steps.filter((step) => step.startsWith("config-flow.config-repairs."));
+    expect(repairs.length).toBeGreaterThan(0);
+    expect(steps).toEqual([
       ...[
         "state-write-admission",
         "legacy-state-dir",
@@ -132,12 +136,12 @@ describe("doctor config-flow pending", () => {
         "a2ui-widgets",
         "relative-session-stores",
         "update-history",
-        "config-repairs",
       ].map((id) => `config-flow.${id}`),
+      ...repairs,
       "config-flow",
     ]);
     // An input without a read-only predicate is work, so the step cannot answer none.
-    expect(traced.get("config-flow.config-repairs")).toBe("work");
+    expect(traced.get("config-flow.config-repairs.heartbeat-retirement")).toBe("work");
     expect(traced.get("config-flow.agent-databases")).toBe("none");
     expect(traced.get("config-flow.update-history")).toBe("none");
     expect(traced.get("config-flow")).toBe("work");
