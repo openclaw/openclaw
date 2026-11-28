@@ -49,9 +49,13 @@ export async function fetchZaiUsage(
     const suffix = WINDOW_UNITS[parseFiniteNumber(limit.unit) ?? 0];
     const windowLabel = suffix && number !== undefined ? `${number}${suffix}` : "Limit";
 
-    if (type === "TOKENS_LIMIT" || type === "TIME_LIMIT") {
+    // Credit-metered Coding Plans report CREDIT_LIMIT pools in place of TOKENS_LIMIT.
+    if (type === "TOKENS_LIMIT" || type === "CREDIT_LIMIT" || type === "TIME_LIMIT") {
       windows.push({
-        label: type === "TOKENS_LIMIT" ? `Tokens (${windowLabel})` : "Monthly",
+        label:
+          type === "TIME_LIMIT"
+            ? "Monthly"
+            : `${type === "CREDIT_LIMIT" ? "Credits" : "Tokens"} (${windowLabel})`,
         usedPercent: clampPercent(parseFiniteNumber(limit.percentage) ?? 0),
         resetAt:
           asDateTimestampMs(limit.nextResetTime) ??

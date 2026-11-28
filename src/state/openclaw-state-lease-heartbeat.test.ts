@@ -33,7 +33,6 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { holdStateDatabaseWriteTransaction } from "../test-utils/state-database-contention.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -292,19 +291,29 @@ describe("maintenance lease heartbeat", () => {
   });
 
   it("renews through transient contention before expiry", async ({ state }) => {
-    const database = openOpenClawStateDatabase({ env: state.env });
+    using writer = new DatabaseSync(openOpenClawStateDatabase({ env: state.env }).path);
+    let progress: BigInt64Array;
+    heartbeatWorkers.onCreate = (_worker, { workerData }) => {
+      progress = new BigInt64Array(workerData.renewalProgress);
+    };
     await withOpenClawStateLease({ ...options(state.env), leaseMs: 1_500 }, async (lease) => {
-      const holder = holdStateDatabaseWriteTransaction(database.path, 1_200);
+      let expiry: number;
+      writer.exec("BEGIN IMMEDIATE");
       try {
-        await holder.ready;
-        await holder.joined;
-        block(400);
-        expect(() => lease.assertOwned()).not.toThrow();
-        expect(lease.signal.aborted).toBe(false);
+        expiry = Number(readLease(state.env)?.expires_at);
+        // Wait for an automatic renewal to start and finish under the writer lock.
+        let observed = Atomics.load(progress, 0);
+        const target = observed + 2n;
+        while (observed < target || observed % 2n !== 0n) {
+          expect(Atomics.wait(progress, 0, observed, expiry - Date.now())).not.toBe("timed-out");
+          observed = Atomics.load(progress, 0);
+        }
       } finally {
-        holder.release();
-        await holder.joined;
+        writer.exec("ROLLBACK");
       }
+      await expect.poll(() => Number(readLease(state.env)?.expires_at)).toBeGreaterThan(expiry);
+      expect(() => lease.assertOwned()).not.toThrow();
+      expect(lease.signal.aborted).toBe(false);
     });
   });
 

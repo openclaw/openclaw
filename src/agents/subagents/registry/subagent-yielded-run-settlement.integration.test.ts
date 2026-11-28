@@ -198,7 +198,7 @@ describe("yielded run settlement", () => {
   };
   const settleCollector = async (
     outcome: SubagentRunRecord["execution"]["outcome"],
-    transcript: Parameters<typeof writeYieldedTranscript> = [],
+    transcript: Parameters<typeof writeYieldedTranscript>,
   ) => {
     freezeTime();
     await writeYieldedTranscript(...transcript);

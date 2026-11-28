@@ -1,36 +1,36 @@
 ---
-summary: "Knowledge scribes: conversations Knowledge starts for you that keep a store up to date, once or on a schedule"
+summary: "Knowledge scribes: sessions Knowledge starts for you that keep a store up to date, once or on a schedule"
 read_when:
-  - You want Knowledge to learn from your conversations or from Memory without asking each time
+  - You want Knowledge to learn from your chat history or from Memory without asking each time
   - You are turning on the scheduled consolidation of unlinked claims
   - You want Granola meetings ingested into Knowledge automatically
   - You want Knowledge to learn from your Slack channels
-  - A scribe shows Failing or Conversation not found on the Scribes tab
+  - A scribe shows Failing or Session not found on the Scribes tab
   - A scribe shows New run instructions after you update OpenClaw
   - A scheduled Learn from Slack run fails because the automation has no recorded creator origin
 title: "Knowledge scribes"
 sidebarTitle: "Scribes"
 ---
 
-A scribe is a conversation you own that Knowledge starts for you. It follows a
+A scribe is a session you own that Knowledge starts for you. It follows a
 skill that ships with Knowledge, once or on a schedule, and saves what it finds
 to the viewed agent's store. Part of the [Knowledge plugin](/plugins/knowledge)
 guide.
 
 Open **Knowledge** in the Control UI and select the **Scribes** tab. Scribes
-that are starting, on, disabled, failing, or whose conversation is not found are listed under
+that are starting, on, disabled, failing, or whose session is not found are listed under
 **On**. The rest are under **Available**, including a once scribe that is done,
 which can be started again.
 
 ## The scribes
 
-| Scribe                   | Runs            | Options                                                                          | Skill                           |
-| ------------------------ | --------------- | -------------------------------------------------------------------------------- | ------------------------------- |
-| Knowledge Consolidation  | Ongoing         | Weekly or nightly                                                                | `knowledge-claim-consolidation` |
-| Learn from conversations | Once or ongoing | Active only, or active and archived; starting 30 days, 90 days, all, or today    | `knowledge-ingest`              |
-| Learn from Granola       | Once or ongoing | Your meetings, or every meeting you can read; starting 7 days, 30 days, or today | `knowledge-meeting-ingest`      |
-| Learn from Memory        | Once            | `MEMORY.md`, daily notes, and the Dreaming diary (`DREAMS.md`)                   | `knowledge-ingest`              |
-| Learn from Slack         | Once or ongoing | Starting 7 days, 30 days, or today; Slack user token; direct messages            | `knowledge-source-ingest`       |
+| Scribe                  | Runs            | Options                                                                          | Skill                           |
+| ----------------------- | --------------- | -------------------------------------------------------------------------------- | ------------------------------- |
+| Knowledge Consolidation | Ongoing         | Weekly or nightly                                                                | `knowledge-claim-consolidation` |
+| Learn from chat history | Once or ongoing | Active only, or active and archived; starting 30 days, 90 days, all, or today    | `knowledge-ingest`              |
+| Learn from Granola      | Once or ongoing | Your meetings, or every meeting you can read; starting 7 days, 30 days, or today | `knowledge-meeting-ingest`      |
+| Learn from Memory       | Once            | `MEMORY.md`, daily notes, and the Dreaming diary (`DREAMS.md`)                   | `knowledge-ingest`              |
+| Learn from Slack        | Once or ongoing | Starting 7 days, 30 days, or today; Slack user token; direct messages            | `knowledge-source-ingest`       |
 
 - **Knowledge Consolidation** files claims that
   [maintenance](/plugins/knowledge/maintenance) left unlinked, creates pages for
@@ -40,14 +40,14 @@ which can be started again.
   on Sundays at 3:45 AM in your time zone by default, or nightly at 3:45 AM,
   after maintenance links what it can. A weekly run works toward retiring 15
   written Timelines and reviewing 6 pages; a nightly run, 10 and 5. Each run is
-  an agent turn over every unlinked claim, so nightly uses more tokens.
+  one agent reply that reviews every unlinked claim, so nightly uses more tokens.
   Maintenance itself never starts it.
-- **Learn from conversations** saves the decisions, preferences, commitments,
-  and lessons from conversations belonging to the agent running the scribe.
+- **Learn from chat history** saves the decisions, preferences, commitments,
+  and lessons from sessions belonging to the agent running the scribe.
   This applies even when session tools normally allow cross-agent reads.
   Ongoing runs check for newly finished
-  conversations daily at 4:00 AM in your time zone. Conversations already
-  learned from are skipped. Defaults are active conversations from the last 30
+  sessions daily at 4:00 AM in your time zone. Sessions already
+  learned from are skipped. Defaults are active sessions from the last 30
   days.
 - **Learn from Granola** turns each Granola meeting into a meeting page, updates
   the people, companies, and projects it discusses, and saves its decisions and
@@ -61,7 +61,7 @@ which can be started again.
 - **Learn from Memory** brings `memory-core` notes into Knowledge once and
   saves progress as each file finishes. After a Gateway restart,
   [restart recovery](/gateway/restart-recovery#automatic-resume) continues
-  eligible runs in the same conversation. The import skips unchanged files
+  eligible runs in the same session. The import skips unchanged files
   it already finished and checks any unfinished or changed files. You can also
   start it again with the same files selected. Your original Memory files stay intact.
 - **Learn from Slack** reads Slack channels through the
@@ -162,21 +162,21 @@ Once you edit it by hand, changing a choice no longer regenerates it (the dialog
 says which it is), and **Use generated prompt** discards your edits. Switching
 between once and ongoing also discards them. Start uses the text shown.
 
-1. Knowledge creates a conversation titled `Scribe · <title>` for the viewed
-   agent, or reuses the scribe's existing conversation (restoring it if it was
+1. Knowledge creates a session titled `Scribe · <title>` for the viewed
+   agent, or reuses the scribe's existing session (restoring it if it was
    archived).
-2. A once scribe gets the prompt in that conversation, does its work, and
+2. A once scribe gets the prompt in that session, does its work, and
    reports back. Nothing is scheduled. No vault content is included.
 3. For an ongoing scribe, the page creates its automation, named
    `Knowledge scribe · <title>`, with your administrator access, and requests
    its first run. The request can wait for scheduler capacity. Because the
-   automation is yours rather than an agent turn's, its scheduled runs can read
+   automation is yours rather than one an agent created, its scheduled runs can read
    channel plugins such as Slack.
 
 On a shared Gateway, visible scribes may belong to another person. Viewing a
 scribe does not transfer its ownership or private access. Each run of an
-ongoing scribe starts in a fresh session of its conversation (the automation's
-`current` session target): it keeps the conversation's private access,
+ongoing scribe starts in a new session under the scribe’s session (the automation's
+`current` session target): it keeps the scribe session’s private access,
 workspace and model settings, but not earlier runs' history, so it reads the
 skills that ship with the installed Knowledge rather than copies from earlier
 runs. Open a run from **Recent runs** to read what it did. Ongoing scribes also
@@ -201,25 +201,25 @@ Steps:
 ```
 
 To change when it runs, use **Change…** next to **Schedule** in the scribe's
-detail. Learn from conversations, Learn from Granola and Learn from Slack also
+detail. Learn from chat history, Learn from Granola and Learn from Slack also
 have **Change…** next to **Settings**, which changes what they read. To change
 anything else later runs do, edit the run message on the Automations page.
 
 ## After updating OpenClaw
 
 A newer Knowledge can generate a different run message. Earlier versions also
-had the scribe's conversation create its automation in an agent turn; such an
+let the agent create its own automation; such an
 automation runs with that turn's account authority, which cannot read channel
 plugins such as Slack on a schedule.
 
 ### Upgrade an earlier automation
 
-A scribe still on an automation an agent turn created shows **Upgrade
+A scribe still on an automation an agent created shows **Upgrade
 available**, and its detail explains why and offers **Upgrade automation…**.
 The page never upgrades one on its own: the replacement can't carry over the
 model account recorded on the old automation, so after an upgrade, runs use the
 model account of the administrator who upgraded it. Confirming removes the old
-automation and creates one you own in the same conversation, keeping its
+automation and creates one you own in the same session, keeping its
 schedule, run message (an unchanged earlier message becomes the new one), on or
 off state and saved options: a model or thinking override, an explicit tool
 list, active hours, pacing, idle-only, a trigger, delivery and the failure
@@ -235,7 +235,7 @@ that already runs on an administrator's automation up to date, in place:
 
 - More than one automation of this agent with the scribe's declaration key is
   reduced to one.
-- An automation that runs in its conversation's own session moves to the
+- An automation that runs in the scribe’s session moves to the
   `current` session target, so later runs start fresh.
 - A run message that an earlier Knowledge generated, unchanged, is replaced
   with the new one for the same settings.
@@ -245,7 +245,7 @@ that already runs on an administrator's automation up to date, in place:
 
 Each update is tried once per automation revision: if one fails, the tab says
 so and doesn't repeat it on every refresh. A scribe that is running or whose
-conversation is not found is updated on a later load. Without an administrator,
+session is not found is updated on a later load. Without an administrator,
 the page changes nothing.
 
 A saved run message that differs from what this version generates is never
@@ -256,9 +256,11 @@ lists the lines that change, for the settings the saved message names, and
 confirming saves the new message on the automation. A differing message that
 carries no replaced wording shows nothing.
 
-### Review earlier conversation learning
+<a id="review-earlier-conversation-learning" />
 
-If an earlier run learned from another agent's conversations, later runs ignore
+### Review earlier chat history imports
+
+If an earlier run learned from another agent's sessions, later runs ignore
 those checkpoint entries. Open the affected agent's vault and use the
 `Knowledge scribe checkpoint · Learn from conversations` note and claim citations to
 identify records that need review. Withdraw out-of-scope claims or correct
@@ -268,19 +270,19 @@ See [Corrections](/plugins/knowledge/corrections) for what withdrawal retains.
 
 ## States
 
-| State                  | Meaning                                                                                                                                     |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| Available              | No scribe conversation, a conversation that never received its prompt, or an ongoing scribe that was turned off.                            |
-| Starting               | A once scribe's conversation received its prompt but has not reported its status yet.                                                       |
-| On                     | Its automation is enabled and the last run did not fail.                                                                                    |
-| Needs attention        | Its last run reported `needs attention`: it finished without doing its work, and nothing outside the run held it back.                      |
-| Disabled               | Its automation is disabled.                                                                                                                 |
-| Failing                | The last run failed, the scheduler disabled it after repeated failures, a turn reported a failure, or a once turn stopped without a status. |
-| Done                   | A once scribe finished.                                                                                                                     |
-| Conversation not found | The automation exists but its conversation was archived or deleted. Repair restores an archived one or starts a new one.                    |
+| State             | Meaning                                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Available         | No scribe session, a session that never received its prompt, or an ongoing scribe that was turned off.                                      |
+| Starting          | A once scribe's session received its prompt but has not reported its status yet.                                                            |
+| On                | Its automation is enabled and the last run did not fail.                                                                                    |
+| Needs attention   | Its last run reported `needs attention`: it finished without doing its work, and nothing outside the run held it back.                      |
+| Disabled          | Its automation is disabled.                                                                                                                 |
+| Failing           | The last run failed, the scheduler disabled it after repeated failures, a turn reported a failure, or a once turn stopped without a status. |
+| Done              | A once scribe finished.                                                                                                                     |
+| Session not found | The automation exists but its session was archived or deleted. Repair restores an archived one or starts a new one.                         |
 
 The Scribes tab derives an ongoing scribe's state from its automation: whether
-it exists and targets the scribe's conversation, whether it is enabled, and its
+it exists and targets the scribe's session, whether it is enabled, and its
 last run. Each scribe turn also ends its reply with a plain status line, such as
 `Scribe status: done — read 3 files, saved 12 items`. The states are `on`,
 `done`, `failed`, and `needs attention`. The tab uses that line where the
@@ -308,18 +310,18 @@ Open a scribe for its schedule, settings, next and last run, model, failure
 alert, and recent runs. Learn from Granola and Learn from Slack also show their plugin's
 state as their source; for Slack, it also says whether the account has a bot token and a user token.
 
-| Control            | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Run now            | Requests a run of the automation. It can wait for scheduler capacity; acceptance is not a running-state report. If a run is already in progress, it does not start another.                                                                                                                                                                                                                                                                                                                                           |
-| Disable / Enable   | Disables or enables scheduled runs. While an enabled automation is running, **Stop and disable** also requests cancellation. Enable schedules future runs; it does not resume a cancelled run. **Run now** remains an explicit override.                                                                                                                                                                                                                                                                              |
-| Change…            | Next to **Schedule**: picks a schedule the start dialog offers, or a custom one (every day, weekdays or once a week, at one time), and a time zone. Saving changes the automation's schedule. It keeps the run message and other saved options, except that an unedited Knowledge Consolidation message takes the run amounts of the new schedule. A scribe still on an automation a chat turn created shows no **Change…** until it is upgraded.                                                                     |
-| Change… (Settings) | Next to **Settings**, for Learn from conversations, Learn from Granola and Learn from Slack: changes which conversations, meetings or Slack channels and direct messages later runs read. Saving generates the run message from the new settings on the same automation. When the run message was edited by hand, its settings can't be read: **Reset…** instead replaces it with the generated one for the default settings, after listing the lines that change.                                                    |
-| Remove automation… | Removes the automation and requests cancellation of any active run. The conversation is kept.                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Open conversation  | Opens the scribe's conversation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Open run           | In **Recent runs**: opens a run of an ongoing scribe on the Automations page, which keeps its transcript.                                                                                                                                                                                                                                                                                                                                                                                                             |
-| Replace with new…  | For a scribe whose saved run message differs and carries replaced wording: lists the lines that change and saves the new message on the automation when you confirm.                                                                                                                                                                                                                                                                                                                                                  |
-| Repair             | Gets the automation running again. For an archived conversation it restores the conversation and turns the automation back on. Otherwise it declares the automation again as yours in the scribe's conversation (a new one when the old one was deleted), keeping its schedule, run message (an unchanged earlier message becomes the new one) and options, and turns it on. Repairing an automation a chat turn created replaces it, so **Repair…** first asks for the same confirmation as **Upgrade automation…**. |
-| Start again…       | For a failing scribe without an automation: opens the start dialog and sends a new prompt in the same conversation.                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Control            | Effect                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Run now            | Requests a run of the automation. It can wait for scheduler capacity; acceptance is not a running-state report. If a run is already in progress, it does not start another.                                                                                                                                                                                                                                                                                                                          |
+| Disable / Enable   | Disables or enables scheduled runs. While an enabled automation is running, **Stop and disable** also requests cancellation. Enable schedules future runs; it does not resume a cancelled run. **Run now** remains an explicit override.                                                                                                                                                                                                                                                             |
+| Change…            | Next to **Schedule**: picks a schedule the start dialog offers, or a custom one (every day, weekdays or once a week, at one time), and a time zone. Saving changes the automation's schedule. It keeps the run message and other saved options, except that an unedited Knowledge Consolidation message takes the run amounts of the new schedule. A scribe still on an automation the agent created shows no **Change…** until it is upgraded.                                                      |
+| Change… (Settings) | Next to **Settings**, for Learn from chat history, Learn from Granola and Learn from Slack: changes which sessions, meetings or Slack channels and direct messages later runs read. Saving generates the run message from the new settings on the same automation. When the run message was edited by hand, its settings can't be read: **Reset…** instead replaces it with the generated one for the default settings, after listing the lines that change.                                         |
+| Remove automation… | Removes the automation and requests cancellation of any active run. The session is kept.                                                                                                                                                                                                                                                                                                                                                                                                             |
+| Open session       | Opens the scribe's session.                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Open run           | In **Recent runs**: opens a run of an ongoing scribe on the Automations page, which keeps its chat history.                                                                                                                                                                                                                                                                                                                                                                                          |
+| Replace with new…  | For a scribe whose saved run message differs and carries replaced wording: lists the lines that change and saves the new message on the automation when you confirm.                                                                                                                                                                                                                                                                                                                                 |
+| Repair             | Gets the automation running again. For an archived session it restores the session and turns the automation back on. Otherwise it declares the automation again as yours in the scribe's session (a new one when the old one was deleted), keeping its schedule, run message (an unchanged earlier message becomes the new one) and options, and turns it on. Repairing an automation the agent created replaces it, so **Repair…** first asks for the same confirmation as **Upgrade automation…**. |
+| Start again…       | For a failing scribe without an automation: opens the start dialog and sends a new prompt in the same session.                                                                                                                                                                                                                                                                                                                                                                                       |
 
 Controls that change an automation need a Gateway administrator. Writes are
 rejected if the automation changed since the page read it; the page shows the
@@ -331,12 +333,12 @@ error, and reopening the scribe shows its current state.
   so a once result or a finished run can take that long to appear.
 - Conversation counts and the `MEMORY.md` size come from Gateway reads. A count
   the Gateway cannot provide is left out rather than estimated.
-- The tab reads status lines from the conversation's last 100 messages, and
-  for an ongoing scribe from the last 20 messages of its latest run's transcript.
-- An ongoing scribe's conversation is the one its automation belongs to (the
+- The tab reads status lines from the session's last 100 messages, and
+  for an ongoing scribe from the last 20 messages of its latest run’s chat history.
+- An ongoing scribe's session is the one its automation belongs to (the
   `current` job's session key, or the session an earlier `session:<key>` job
   targets), read by session key, so renaming it is safe. A scribe without an automation is found by
-  its `Scribe · <title>` name; renaming that conversation means the scribe starts a
+  its `Scribe · <title>` name; renaming that session means the scribe starts a
   new one next time.
 
 ## Related

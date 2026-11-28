@@ -163,8 +163,13 @@ export function createSessionActorMemoryPending(
       );
       const total =
         query.id === undefined && query.includeTotal !== false ? rows.length : undefined;
+      const entry = state.hot.entry;
+      const runState =
+        query.includeQueueObservation && entry?.sessionId === query.sessionId
+          ? { status: entry.status, lastRunId: entry.lastRunId }
+          : undefined;
       if (total === 0) {
-        return { rows: [], total };
+        return { rows: [], total, ...(runState && { runState }) };
       }
       const limit = resolvePendingInputHistoryLimit(query.limit);
       const page = rows
@@ -185,6 +190,10 @@ export function createSessionActorMemoryPending(
       return {
         rows: structuredClone(page.slice(0, selected.length)),
         total,
+        ...(query.includeQueueObservation && {
+          hasQueuedInput: rows.some((row) => row.state === "queued"),
+          runState,
+        }),
         currentSessionId:
           page.length && query.sessionKey === state.hot.target.sessionKey
             ? state.hot.entry?.sessionId

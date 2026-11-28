@@ -51,10 +51,6 @@ enum OpenClawType {
         scaledVariable(.display, weight: Display.opticalSemiBold, size: 15, relativeTo: .subheadline)
     }
 
-    static var subheadBold: Font {
-        scaledVariable(.display, weight: Display.opticalBold, size: 15, relativeTo: .subheadline)
-    }
-
     static var footnote: Font {
         scaledVariable(.body, weight: Body.regular, size: 13, relativeTo: .footnote)
     }
