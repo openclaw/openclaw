@@ -153,7 +153,7 @@ describe("ManagedWorktreeService", () => {
     await expect(fs.stat(created.path)).resolves.toBeDefined();
   });
 
-  it("creates a worktree from a remote-only branch ref returned by the picker", async () => {
+  it("creates a worktree from the origin branch when only remotes share its name", async () => {
     await addRemote(root, repo);
     await git(repo, "checkout", "-b", "remote-only");
     await fs.writeFile(path.join(repo, "remote-only.txt"), "remote\n");
@@ -164,13 +164,14 @@ describe("ManagedWorktreeService", () => {
     await git(repo, "checkout", "main");
     await git(repo, "branch", "-D", "remote-only");
 
+    await git(repo, "update-ref", "refs/remotes/upstream/remote-only", "main");
     const listed = await service.listRepositoryBranches(repo);
-    const remoteRef = listed.branches.find((branch) => branch.kind === "remote")?.name;
-    expect(remoteRef).toBe("origin/remote-only");
+    const remoteRefs = listed.branches.filter((branch) => branch.kind === "remote");
+    expect(remoteRefs).toEqual([{ name: "origin/remote-only", kind: "remote" }]);
     const created = await service.create({
       repoRoot: repo,
       name: "from-remote",
-      baseRef: remoteRef,
+      baseRef: remoteRefs[0]?.name,
     });
     expect(await git(created.path, "rev-parse", "HEAD")).toBe(remoteCommit);
     expect(
