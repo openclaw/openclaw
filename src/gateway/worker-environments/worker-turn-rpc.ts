@@ -600,6 +600,8 @@ export function createWorkerTurnRpc(options: rpc.WorkerTurnRpcOptions) {
         return { ok: false, reason: "invalid-context" };
       }
     }
+    const { runEpoch, sessionId, runId, turnId } = request;
+    const bindingInput = { runEpoch, sessionId, runId, turnId };
     return inference.start({
       identity,
       request,
@@ -608,7 +610,7 @@ export function createWorkerTurnRpc(options: rpc.WorkerTurnRpcOptions) {
       assertSourceCurrent: source.receiptAuthority,
       revalidate: () => {
         assertWorkerTurnInputAdmitted(identity);
-        return revalidateInference(identity, request);
+        return revalidateInference(identity, bindingInput);
       },
     });
   };

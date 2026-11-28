@@ -419,6 +419,72 @@ describe("worker inference manager", () => {
     await instance.stop();
   });
 
+  it("keeps execution-owned mutations out of the retry and terminal identity", async () => {
+    const entered = createDeferred();
+    const result = createDeferred<WorkerInferenceTerminalOutcome>();
+    const { instance, begin, execute } = setup(({ request }) => {
+      request.turnId = "executor-local-turn";
+      request.context.messages.length = 0;
+      entered.resolve();
+      return result.promise;
+    });
+    const wire = JSON.stringify({
+      ...REQUEST,
+      context: { messages: [{ role: "user", content: "original", timestamp: 1 }] },
+    });
+    const retry = createSink("retry");
+    try {
+      await accept(instance, { request: JSON.parse(wire) });
+      await entered.promise;
+      expect(
+        (await accept(instance, { request: JSON.parse(wire), sink: retry.sink })).result,
+      ).toEqual({ status: "accepted" });
+      result.resolve(DONE);
+      expect((await retry.terminal).payload).toMatchObject({
+        turnId: REQUEST.turnId,
+        outcome: DONE,
+      });
+      expect(begin).toHaveBeenCalledOnce();
+      expect(execute).toHaveBeenCalledOnce();
+    } finally {
+      result.resolve(DONE);
+      await instance.stop();
+    }
+  });
+
+  it("uses the exact JSON UTF-8 limit, including escaped characters", async () => {
+    const request = {
+      ...REQUEST,
+      context: {
+        systemPrompt: '🐚é\0\n\t\\"\ud800',
+        messages: [{ role: "user" as const, content: "synthetic", timestamp: 1 }],
+      },
+      options: { temperature: 1e-7 },
+    };
+    const size = Buffer.byteLength(JSON.stringify(request));
+    for (const requestMaxBytes of [size, size - 1]) {
+      const store = createMemoryStore();
+      const begin = vi.spyOn(store, "begin");
+      const instance = createWorkerInferenceManager({
+        execute: async () => DONE,
+        store,
+        requestMaxBytes,
+      });
+      try {
+        const response = await start(instance, { request });
+        if (requestMaxBytes === size) {
+          expect(response).toMatchObject({ ok: true, result: { status: "accepted" } });
+          expect(begin).toHaveBeenCalledOnce();
+        } else {
+          expect(response).toEqual({ ok: false, reason: "invalid-context" });
+          expect(begin).not.toHaveBeenCalled();
+        }
+      } finally {
+        await instance.stop();
+      }
+    }
+  });
+
   it("rejects oversized and concurrent turns", async () => {
     const store = createMemoryStore();
     const execute = vi.fn<WorkerInferenceExecutor>(async () => ERROR);
