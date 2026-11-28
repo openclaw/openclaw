@@ -48,10 +48,14 @@ function surface(
   mode: "tools" | "directory",
   executed: string[] = [],
   members: readonly string[] = delegationFamily,
+  include?: Array<{ name: string }>,
 ) {
   const catalogRef = createToolSearchCatalogRef();
   refs.push(catalogRef);
-  const ctx = { config: { tools: { toolSearch: { mode } } }, catalogRef };
+  const ctx = {
+    config: { tools: { toolSearch: { mode, ...(include ? { include } : {}) } } },
+    catalogRef,
+  };
   const record = (name: string) => async () => {
     executed.push(name);
     return { content: [{ type: "text" as const, text: `${name} ok` }], details: {} };
@@ -88,13 +92,18 @@ it.each(["tools", "directory"] as const)(
   "%s: the delegation family always has one visibility",
   (mode) => {
     expect(Object.keys(familyFactories).toSorted()).toEqual(delegationFamily.toSorted());
-    // Every non-empty subset a tool policy can leave enabled.
+    // Every non-empty subset a tool policy can leave enabled, with and without a selector
+    // that keeps the other members outside the catalog.
     const subsets = Array.from({ length: 2 ** delegationFamily.length - 1 }, (_, index) =>
       delegationFamily.filter((_name, bit) => ((index + 1) >> bit) & 1),
     );
-    for (const members of subsets) {
-      const sent = surface(mode, [], members).sent.filter((name) => members.includes(name));
-      expect([0, members.length]).toContain(sent.length);
+    for (const include of [undefined, ...delegationFamily.map((name) => [{ name }])]) {
+      for (const members of subsets) {
+        const sent = surface(mode, [], members, include).sent.filter((name) =>
+          members.includes(name),
+        );
+        expect([0, members.length]).toContain(sent.length);
+      }
     }
     // With no polling member left, the spawner stays deferred.
     expect(surface(mode, [], ["sessions_spawn"]).sent).not.toContain("sessions_spawn");

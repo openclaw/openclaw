@@ -678,7 +678,8 @@ export function applyToolCatalogCompaction(
   for (const tool of tools) {
     nameCounts.set(tool.name, (nameCounts.get(tool.name) ?? 0) + 1);
     const family = coreFamily(tool);
-    if (family && catalogsTool(tool) && params.isVisibleCatalogTool?.(tool) === true) {
+    // A member outside the catalog (selector-kept, for example) is sent directly too.
+    if (family && (!catalogsTool(tool) || params.isVisibleCatalogTool?.(tool) === true)) {
       visibleFamilies.add(family);
     }
   }
