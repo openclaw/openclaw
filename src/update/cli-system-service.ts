@@ -170,7 +170,12 @@ export async function updateSystemServicePackage(
         ...(typeof options === "number" ? {} : options),
         timeoutMs: Math.min(remaining(), typeof options === "number" ? options : options.timeoutMs),
       }),
-    runStep: (step) => runUpdateStep({ ...step, timeoutMs: Math.min(step.timeoutMs, remaining()) }),
+    runStep: (step) =>
+      runUpdateStep({
+        ...step,
+        timeoutMs:
+          step.timeoutMs === undefined ? remaining() : Math.min(step.timeoutMs, remaining()),
+      }),
     timeoutMs: remaining(),
     workTimeoutMs: remaining(),
     env,
