@@ -20,6 +20,10 @@ import {
 } from "../../gateway/operator-run-recovery.test-support.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "../../gateway/server-plugin-runtime-client.js";
+import {
+  resolveEventSessionKeyForPolicy,
+  resolveEventSessionRoutingPolicy,
+} from "../../infra/event-session-routing.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -203,32 +207,47 @@ describe("CLI preparation for a scheduled account", () => {
 
   it.each([
     { name: "the delivery channel", configured: true, messageProvider: undefined, refused: false },
+    {
+      name: "cross-channel delivery",
+      configured: true,
+      messageProvider: undefined,
+      messageChannel: "discord",
+      sessionKey: "agent:main:telegram:direct:123",
+      refused: false,
+    },
     { name: "a removed account", configured: false, messageProvider: undefined, refused: true },
-    { name: "an explicit provider", configured: true, messageProvider: "discord", refused: true },
+    { name: "an explicit provider", configured: true, messageProvider: "slack", refused: true },
   ])(
     "resolves scheduled CLI accounts with $name",
-    async ({ configured, messageProvider, refused }) => {
+    async ({
+      configured,
+      messageProvider,
+      refused,
+      messageChannel = "telegram",
+      sessionKey = "agent:main:cron:scheduled-account",
+    }) => {
       const config: OpenClawConfig = {
+        session: { dmScope: "main" },
         channels: {
+          discord: { accounts: { scheduled: {} } },
           telegram: {
+            allowFrom: ["123"],
             accounts: { default: {}, ...(configured ? { scheduled: {} } : {}) },
           },
         },
       };
       setActivePluginRegistry(
         createTestRegistry(
-          [
-            {
-              pluginId: "telegram",
-              plugin: createChannelTestPluginBase({
-                id: "telegram",
-                config: {
-                  listAccountIds: (cfg) => Object.keys(cfg.channels?.telegram?.accounts ?? {}),
-                },
-              }),
-              source: "test",
-            },
-          ],
+          (["telegram", "discord"] as const).map((id) => ({
+            pluginId: id,
+            plugin: createChannelTestPluginBase({
+              id,
+              config: {
+                listAccountIds: (cfg) => Object.keys(cfg.channels?.[id]?.accounts ?? {}),
+              },
+            }),
+            source: "test",
+          })),
           { config },
         ),
       );
@@ -256,8 +275,8 @@ describe("CLI preparation for a scheduled account", () => {
       const run = fixture.prepare({
         config,
         provider: "selectable-cli",
-        sessionKey: "agent:main:cron:scheduled-account",
-        messageChannel: "telegram",
+        sessionKey,
+        messageChannel,
         messageProvider,
         toolsAllow: ["read"],
         scheduledToolPolicy,
@@ -273,6 +292,19 @@ describe("CLI preparation for a scheduled account", () => {
       );
       expect(context.params.scheduledToolPolicy).toEqual(scheduledToolPolicy);
       expect(context.params.senderId).toBeUndefined();
+      if (messageChannel === "discord") {
+        expect(
+          resolveEventSessionKeyForPolicy(
+            sessionKey,
+            resolveEventSessionRoutingPolicy({
+              cfg: context.params.config,
+              sessionKey,
+              channel: context.params.messageProvider,
+              accountId: context.params.agentAccountId,
+            }),
+          ),
+        ).toBe("agent:main:main");
+      }
       await context.preparedBackend.cleanup?.();
     },
   );

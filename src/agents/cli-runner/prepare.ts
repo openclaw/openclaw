@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -149,11 +150,7 @@ import {
   prepareCliSystemPrompt,
   prepareCliTurnPromptContext,
 } from "./prompt-context.js";
-import {
-  admitCliRunParams,
-  normalizeCliRunParams,
-  prepareCliRunModelAuthority,
-} from "./run-admission.js";
+import { admitCliRunParams, prepareCliRunModelAuthority } from "./run-admission.js";
 import {
   buildCliSessionHistoryPrompt,
   hasCliSessionTranscript,
@@ -198,7 +195,24 @@ export async function prepareCliRunContext(
 async function prepareCliRunContextWithinReadFence(
   inputParams: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
-  let params = normalizeCliRunParams(inputParams);
+  let params = inputParams.config ? inputParams : { ...inputParams, config: getRuntimeConfig() };
+  if (params.sessionManager) {
+    // Caller-owned memory is authoritative even when empty. Correlation and native
+    // bindings survive; borrowed durable paths, writers, and turn leases do not.
+    params = {
+      ...params,
+      sessionFile: `in-memory:${params.sessionManager.getSessionId()}`,
+      sessionTarget: undefined,
+      storePath: undefined,
+      expectedLifecycleRevision: undefined,
+      expectedWriterRunId: undefined,
+      userTurnTranscriptRecorder: undefined,
+      persistAssistantTranscript: undefined,
+      prepareAssistantTranscriptMessage: undefined,
+      contextEngineLogicalTurnLease: undefined,
+      onContextEngineTurnCandidate: undefined,
+    };
+  }
   const runConfig = params.config!;
   const sessionOwner = normalizeAgentId(
     parseAgentSessionKey(params.sessionKey)?.agentId ||
