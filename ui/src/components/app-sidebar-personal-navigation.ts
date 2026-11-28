@@ -2,9 +2,16 @@ import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { parseSidebarEntry } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
+import {
+  childSessionListQuery,
+  fetchChildSessionRows,
+} from "../lib/sessions/child-session-data.ts";
 import type { SessionConnectionScope } from "../lib/sessions/session-capability.ts";
 import { areUiSessionKeysEquivalent, isPinnableUiSessionRow } from "../lib/sessions/session-key.ts";
-import { readSessionChangedEvent } from "../lib/sessions/session-row-reconcile.ts";
+import {
+  isPersistedSessionRow,
+  readSessionChangedEvent,
+} from "../lib/sessions/session-row-reconcile.ts";
 import { projectSidebarSessionReference } from "./app-sidebar-agent-session-rows.ts";
 import {
   buildReconciledSidebarZone,
@@ -51,25 +58,53 @@ type PersonalNavigationHost = {
   sessionNavigationAgentId(row: Pick<GatewaySessionRow, "key" | "agentId">): string;
   getRouteSessionKey(): string;
   getSessionNavigationState(): SidebarSessionNavigationState;
-  findSidebarSessionByKey(
-    key: string,
-    navigationState?: SidebarSessionNavigationState,
-  ): SidebarRecentSession | undefined;
   pluginNavigation(): Parameters<typeof buildReconciledSidebarZone>[0]["pluginNavigation"];
 };
+
+/** One reference per key; a sidebar pin wins over a rail-only shortcut. */
+function savedSessionReferences(entries: readonly string[]): Map<string, boolean> {
+  const pins = new Map<string, boolean>();
+  for (const value of entries) {
+    const entry = parseSidebarEntry(value);
+    if (entry?.type === "session") {
+      pins.set(entry.key, !entry.rail || pins.get(entry.key) === true);
+    }
+  }
+  return pins;
+}
+
+function pinBackingRow(
+  host: {
+    getSessionNavigationState(): SidebarSessionNavigationState;
+    sessionData: Pick<SessionDataOwner, "sessionResultsByAgent">;
+  },
+  key: string,
+  navigationState = host.getSessionNavigationState(),
+) {
+  return findSidebarSessionRow({
+    sessionKey: key,
+    navigationState,
+    sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
+    backingOnly: true,
+  });
+}
 
 /** Personal references observe the session owner; seeds only bridge presentation. */
 export function createSidebarPinnedSessions(
   host: Pick<
     PersonalNavigationHost,
     | "sessionDataContext"
-    | "findSidebarSessionByKey"
+    | "getSessionNavigationState"
     | "sidebarEntries"
     | "sessionNavigationAgentId"
     | "getRouteSessionKey"
+    | "sessionInvolvingMeFilterActive"
   > & {
     readonly isConnected: boolean;
-    readonly sessionData: Pick<SessionDataOwner, "requestSessionDataUpdate">;
+    readonly sessionData: Pick<
+      SessionDataOwner,
+      "requestSessionDataUpdate" | "sessionResultsByAgent"
+    >;
   },
 ) {
   let source: ApplicationContext["sessions"] | undefined;
@@ -79,6 +114,8 @@ export function createSidebarPinnedSessions(
     settled: boolean;
   };
   const reads = new Map<string, Read | "invalidated">();
+  type ChildRead = { observation?: ReturnType<ApplicationContext["sessions"]["observeList"]> };
+  const childReads = new Map<string, ChildRead>();
   const seeds = new Map<string, () => SidebarRecentSession>();
   function retire(key: string, keepSeed = false) {
     const read = reads.get(key);
@@ -94,6 +131,10 @@ export function createSidebarPinnedSessions(
     for (const key of reads.keys()) {
       retire(key);
     }
+    for (const read of childReads.values()) {
+      read.observation?.dispose();
+    }
+    childReads.clear();
     seeds.clear();
     source = undefined;
     scope = null;
@@ -109,20 +150,21 @@ export function createSidebarPinnedSessions(
   }
   function synchronize() {
     synchronizeSource();
-    const keys = new Set(
-      host.sidebarEntries.flatMap((value) => {
-        const entry = parseSidebarEntry(value);
-        return entry?.type === "session" ? [entry.key] : [];
-      }),
-    );
+    const pins = savedSessionReferences(host.sidebarEntries);
     for (const key of reads.keys()) {
-      if (!keys.has(key)) {
+      if (!pins.has(key)) {
         retire(key);
       }
     }
     for (const key of seeds.keys()) {
-      if (!keys.has(key)) {
+      if (!pins.has(key)) {
         seeds.delete(key);
+      }
+    }
+    for (const [key, read] of childReads) {
+      if (!host.sessionInvolvingMeFilterActive || !pins.get(key)) {
+        read.observation?.dispose();
+        childReads.delete(key);
       }
     }
     return source;
@@ -190,7 +232,7 @@ export function createSidebarPinnedSessions(
         if (!current()) {
           return;
         }
-        if (!host.isConnected || host.findSidebarSessionByKey(key)) {
+        if (!host.isConnected || pinBackingRow(host, key)) {
           if (refresh) {
             reads.set(key, "invalidated");
           } else {
@@ -249,40 +291,127 @@ export function createSidebarPinnedSessions(
       return undefined;
     }
     const row = read.observation?.row;
-    return row ? project(row) : read.settled ? undefined : seeds.get(key)?.();
+    if (row) {
+      return project(row);
+    }
+    const retained = read.settled ? undefined : seeds.get(key)?.();
+    // The seed can come from a different owner filter or the boot snapshot.
+    return retained && host.sessionInvolvingMeFilterActive
+      ? { ...retained, children: [], childSessionKeys: [], childLoadParentKeys: [] }
+      : retained;
   }
-  return { synchronize, seed, get, dispose };
+
+  function involvedChildren(
+    parent: GatewaySessionRow,
+    result: SessionsListResult | null,
+  ): readonly GatewaySessionRow[] {
+    const context = host.sessionDataContext;
+    const sessions = synchronizeSource();
+    const connection = scope;
+    if (!host.isConnected || !context || !sessions || !connection) {
+      return [];
+    }
+    const parentKey = parent.key;
+    const query = { ...childSessionListQuery(parentKey), involvingMe: true } as const;
+    const existing = childReads.get(parentKey);
+    if (existing) {
+      return existing.observation ? (sessions.listSnapshot(query).result?.sessions ?? []) : [];
+    }
+    const knownChildren = parent.childSessions ?? [];
+    // Route-only placeholders can be missing links even when the parent has children.
+    if (
+      (knownChildren.length > 0 || isPersistedSessionRow(parent)) &&
+      knownChildren.every((key) => result?.sessions.some((row) => row.key === key))
+    ) {
+      return [];
+    }
+    const read: ChildRead = {};
+    childReads.set(parentKey, read);
+    const isCurrent = () =>
+      host.isConnected &&
+      host.sessionInvolvingMeFilterActive &&
+      host.sessionDataContext === context &&
+      sessions.isConnectionScopeCurrent(connection) &&
+      childReads.get(parentKey) === read;
+    void context.connectionBootstrap.run(
+      read,
+      async () => {
+        await Promise.resolve(); // A held observation can publish synchronously.
+        if (!isCurrent()) {
+          return;
+        }
+        let paging = false;
+        read.observation = sessions.observeList(query, (snapshot) => {
+          if (!isCurrent() || snapshot.loading) {
+            return;
+          }
+          host.sessionData.requestSessionDataUpdate();
+          if (snapshot.result && snapshot.pagination?.hasMore && !paging) {
+            paging = true;
+            void fetchChildSessionRows({
+              sessions,
+              parentKey,
+              involvingMe: true,
+              isCurrent,
+              initialResult: snapshot.result,
+            })
+              .catch(() => undefined)
+              .finally(() => {
+                paging = false;
+              });
+          }
+        });
+        await read.observation.refresh().catch(() => undefined);
+      },
+      { background: true },
+    );
+    return [];
+  }
+  return { synchronize, seed, get, involvedChildren, dispose };
 }
 
 function resolvePinnedSession(
   host: PersonalNavigationHost,
   key: string,
   navigationState: SidebarSessionNavigationState,
+  sidebarPin: boolean,
+  rosterResult: SessionsListResult | null | undefined,
 ) {
+  const involvingMe = host.sessionInvolvingMeFilterActive;
+  const scopedResultFor = (agentId: string) =>
+    rosterResult === undefined ? host.sessionData.resultForAgent(agentId) : rosterResult;
   const project = (row: GatewaySessionRow) => {
     const agentId = host.sessionNavigationAgentId(row);
     if (
       !isPinnableUiSessionRow(row) ||
       areUiSessionKeysEquivalent(key, host.selectedAgentMainSessionKey(agentId))
     ) {
-      return navigationState.toSidebarSession(row);
+      return navigationState.toSidebarSession(involvingMe ? { ...row, childSessions: [] } : row);
     }
+    // Root metadata can come from a descriptor; only scoped lists own child membership.
+    const result = scopedResultFor(agentId);
     const { session } = projectSidebarSessionReference({
       host,
       row,
       agentId,
       navigationState,
       resolveAttention: host.resolveSessionAttention,
-      involvingMe: host.sessionInvolvingMeFilterActive,
+      involvingMe,
+      result,
+      involvedChildren:
+        sidebarPin && involvingMe && row.archived !== true && personalSessionMatchesAgent(host, key)
+          ? host.pinnedSessions.involvedChildren(row, result)
+          : undefined,
     });
     return filterPinnedSessionChildrenByOwner(session, host.sessionOwnerFilterId);
   };
-  const row = findSidebarSessionRow({
-    sessionKey: key,
-    navigationState,
-    sessionResultsByAgent: host.sessionData.sessionResultsByAgent,
-  });
-  return row ? project(row) : host.pinnedSessions.get(key, project);
+  const resolved =
+    (involvingMe
+      ? scopedResultFor(host.sessionNavigationAgentId({ key }))?.sessions.find(
+          (candidate) => candidate.key === key,
+        )
+      : undefined) ?? pinBackingRow(host, key, navigationState);
+  return resolved ? project(resolved) : host.pinnedSessions.get(key, project);
 }
 
 function personalSessionMatchesAgent(host: PersonalNavigationHost, key: string): boolean {
@@ -292,24 +421,25 @@ function personalSessionMatchesAgent(host: PersonalNavigationHost, key: string):
   );
 }
 
-export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarRecentSession[]) {
+export function personalSidebarZone(
+  host: PersonalNavigationHost,
+  rows: SidebarRecentSession[],
+  rosterResult: SessionsListResult | null | undefined,
+) {
   let navigationState: SidebarSessionNavigationState | undefined;
-  const keys = host.sidebarSnapshot
-    ? []
-    : host.sidebarEntries.flatMap((value) => {
-        const entry = parseSidebarEntry(value);
-        return entry?.type === "session" ? [entry.key] : [];
-      });
   const canonical = new Map(rows.map((row) => [row.key, row]));
-  const pins = [...new Set(keys)].flatMap((key) => {
+  const pins = [...savedSessionReferences(host.sidebarEntries)].flatMap(([key, sidebarPin]) => {
     // Query replacement may retain a descriptor; a known deletion may not.
     if (host.sessionDataContext?.sessions.deletionState(key)) {
       return [];
     }
-    const projected = canonical.get(key);
+    navigationState ??= host.getSessionNavigationState();
+    const projected =
+      host.sessionInvolvingMeFilterActive || navigationState.routeOnlyRow?.key === key
+        ? undefined
+        : canonical.get(key);
     const row =
-      projected ??
-      resolvePinnedSession(host, key, (navigationState ??= host.getSessionNavigationState()));
+      projected ?? resolvePinnedSession(host, key, navigationState, sidebarPin, rosterResult);
     return row ? [row] : [];
   });
   if (pins.length) {
@@ -318,7 +448,7 @@ export function personalSidebarZone(host: PersonalNavigationHost, rows: SidebarR
   }
   const zone = buildReconciledSidebarZone({
     sidebarEntries: host.sidebarEntries,
-    rows: [...pins, ...rows],
+    rows: [...rows, ...pins],
     pluginNavigation: host.pluginNavigation(),
     pluginTabs: host.sessionDataContext?.gateway.snapshot.hello?.controlUiTabs,
     pendingPlugins:

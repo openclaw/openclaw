@@ -21,12 +21,14 @@ export async function fetchChildSessionRows(params: {
   sessions: Pick<SessionCapability, "refreshList" | "listSnapshot">;
   parentKey: string;
   agentId?: string;
+  involvingMe?: true;
   isCurrent: () => boolean;
   initialResult?: SessionsListResult;
 }): Promise<GatewaySessionRow[] | null> {
   const query = {
     ...childSessionListQuery(params.parentKey),
     ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.involvingMe ? { involvingMe: params.involvingMe } : {}),
   };
   let pagination: SessionListSnapshot["pagination"];
   const readResult = () => {
