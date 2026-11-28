@@ -4,7 +4,7 @@ import { projectRuntimeContextFragments } from "../../internal-runtime-context.j
 import { McpOAuthDiagnosticError } from "../../mcp-oauth-identity.js";
 import { buildMcpDiagnosticPromptFragments } from "./mcp-diagnostic-prompt.js";
 
-function diagnostic(serverName: string, message = "listing failed"): McpToolCatalogDiagnostic {
+function diagnostic(serverName: string, message: string): McpToolCatalogDiagnostic {
   return { serverName, safeServerName: serverName, launchSummary: "synthetic", message };
 }
 

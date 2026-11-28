@@ -10,6 +10,7 @@ import {
   isExecCompletionInputProvenance,
   type InputProvenance,
 } from "../sessions/input-provenance.js";
+import { POSSIBLE_TOOL_SIDE_EFFECTS_NOTE } from "../shared/assistant-error-format.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalNonDeliveryChannel,
@@ -41,7 +42,7 @@ export type ReplyDeliveryFactsObserver = (minimumAssistantMessageIndex?: number)
 }>;
 
 export const MISSING_REPLY_NOTICE_TEXT = "No answer was returned. Ask again if you still need one.";
-export const MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT = `${MISSING_REPLY_NOTICE_TEXT} Note: some tool actions may have already been executed — please verify before retrying.`;
+export const MISSING_REPLY_SIDE_EFFECT_NOTICE_TEXT = `${MISSING_REPLY_NOTICE_TEXT} ${POSSIBLE_TOOL_SIDE_EFFECTS_NOTE}`;
 
 /** Only host-authored missing-reply copy may cross the terminal error egress boundary. */
 export function isHostMissingReplyNoticeText(text: string | undefined): boolean {

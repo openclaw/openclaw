@@ -7,6 +7,7 @@ import type {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   CLAUDE_CLI_BACKEND_ID,
+  CLAUDE_CLI_COMMAND,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
   CLAUDE_CLI_CLEAR_ENV,
   CLAUDE_CLI_MODEL_ALIASES,
@@ -265,7 +266,7 @@ export function buildAnthropicCliBackend(
     // backend on plan limits instead.
     subscriptionAuthDispatch: true,
     config: {
-      command: "claude",
+      command: CLAUDE_CLI_COMMAND,
       args: [...CLAUDE_CLI_DEFAULT_ARGS],
       resumeArgs: [...CLAUDE_CLI_DEFAULT_ARGS, "--resume", "{sessionId}"],
       forkArg: "--fork-session",

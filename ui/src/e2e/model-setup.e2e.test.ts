@@ -374,7 +374,7 @@ suite.define(() => {
         featureMethods: [rpc.detect],
         methodResponses: {
           [rpc.detect]: {
-            candidates: Array.from({ length: 8 }, (_, index) =>
+            candidates: Array.from({ length: 12 }, (_, index) =>
               candidate("saved-auth:fixture", "Saved provider " + index, "fixture/model-" + index, {
                 detail: "An existing connection available for this agent",
               }),

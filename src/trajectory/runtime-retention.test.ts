@@ -55,6 +55,7 @@ vi.mock("../state/openclaw-state-worker-context.js", () => ({
       databasePath: pathname,
       coordinationKey: pathname,
       identity: { key: `path:${pathname}`, canonicalPath: pathname },
+      isCurrent: () => true,
       assertCurrent() {},
     },
     assertPublicationCurrent() {},

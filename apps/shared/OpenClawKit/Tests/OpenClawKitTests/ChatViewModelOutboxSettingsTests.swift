@@ -341,7 +341,7 @@ struct ChatViewModelOutboxSettingsTests {
         await vm.waitForPendingSessionSettings(for: target)
         #expect(await MainActor.run {
             !vm.composerCapabilityMutationDisabled &&
-                vm.errorText == "Could not secure queued messages before changing session settings."
+                vm.errorText == "Couldn’t update this chat’s settings."
         })
 
         #expect(await patchCalls.current() == 0)

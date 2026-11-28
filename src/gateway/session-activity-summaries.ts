@@ -353,10 +353,11 @@ export function createSessionActivitySummaries(deps: {
         text = text.slice(0, -OMISSION_NOTICE.length).trimEnd();
       }
       const work = notes.length > 0 || Boolean(restyle && text);
-      // The owner's role gates model work before "updating" or a timer; execution's
+      // The owner's authority gates model work before "updating" or a timer; execution's
       // fallback runner still picks the allowed model from this run's chain.
-      const { operatorAuthority, roleRefusesUtility } = work ? await recapAuthority.prepare() : {};
-      if (roleRefusesUtility) {
+      const admission = work ? await recapAuthority.prepare() : {};
+      if (admission.refused) {
+        // A refusal is published, never retried; the next activity asks again.
         publish(state, "unavailable");
         return;
       }
@@ -400,7 +401,7 @@ export function createSessionActivitySummaries(deps: {
             state.calls += 1;
             const result = await defaultCompleteModel({
               ...prepared,
-              operatorAuthority,
+              operatorAuthority: admission.operatorAuthority,
               purpose: "session-activity-summary",
               sessionId: state.sessionId,
               sessionKey: state.key,

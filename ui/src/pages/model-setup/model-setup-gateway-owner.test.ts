@@ -111,6 +111,7 @@ it.each(ownerChanges)(
     const context = { ...fixture.context, gateway, runtimeConfig };
     const page = createPage(context);
     page.routeData = { firstRun: true };
+    page.discoveryOpen = true;
     document.body.append(page);
     mountModelSetupPage(page);
     try {
@@ -183,7 +184,9 @@ it.each(ownerChanges)(
         expect(sent("wizard.next").map(([, params]) => params)).toEqual([{ sessionId }]);
         expect(callsFor(original.request, "wizard.cancel")).toHaveLength(0);
       } else {
-        await waitForFast(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
+        await waitForFast(() =>
+          expect(page.querySelector(".model-setup__dialogs openclaw-modal-dialog")).toBeNull(),
+        );
         expect(sent(/^wizard\./u)).toHaveLength(0);
         expect(pendingReceipt()).toBe(replacementReceipt);
         if (authorityLost) {
@@ -201,7 +204,7 @@ it.each(ownerChanges)(
         // Reauthorization must not revive a discarded wizard or replay its answer.
         replacement.testOptions.onHello?.(hello());
         await waitForElement(page, ".model-setup__recovery");
-        expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+        expect(page.querySelector(".model-setup__dialogs openclaw-modal-dialog")).toBeNull();
         expect(sent(/^wizard\./u)).toHaveLength(0);
       }
       if (change !== "same target") {

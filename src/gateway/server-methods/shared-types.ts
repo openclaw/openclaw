@@ -464,6 +464,17 @@ export type GatewayRequestContext = GatewayKernelContext &
     trackExecution: typeof import("../../shared/async-work-scope.js").trackAsyncWork;
     /** Local commands can dispatch methods without owning a Gateway server. */
     localEmbedded?: true;
+    /** Agent-turn admission facts; a host without a Gateway publication supplies its own. */
+    loadReplyDispatchRuntime?: (params: {
+      agentId: string;
+      abortSignal?: AbortSignal;
+      onRuntimeLease: (
+        lease: import("../../agents/prepared-model-runtime.types.js").PreparedModelRuntimeLease,
+      ) => void;
+    }) => Promise<
+      | import("../../agents/prepared-model-runtime.types.js").PreparedReplyDispatchRuntime
+      | undefined
+    >;
     /** Live instance routing only; never authorization or wire state. */
     resolveGatewayContext?: GatewayContextResolver;
     hostLifecycle?: import("../server-public.js").GatewayHostLifecycle;

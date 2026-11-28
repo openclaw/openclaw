@@ -1,10 +1,10 @@
 import { isResponsesCompactRequest } from "@openclaw/ai/internal/openai";
 import { sanitizeSurrogates } from "@openclaw/ai/internal/shared";
+import { getRuntimeContextDataRanges, getRuntimeContextDataText } from "@openclaw/llm-core/types";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type { PluginHookModelRequestKind } from "../../plugins/hook-model.types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
-import { getRuntimeContextDataRanges } from "../runtime-context-data-ranges.js";
 import type { StreamFn } from "../runtime/index.js";
 import { wrapStreamFnWithProviderPromptState } from "./provider-prompt-state.js";
 import { buildEmbeddedAgentHookContext } from "./run/agent-hook-context.js";
@@ -45,12 +45,12 @@ function readProtectedFields(payload: unknown): string {
 /** Preserve the producer's ranges through provider text sanitization. */
 function collectContextSpans(messages: Context["messages"]) {
   return messages.flatMap((message) => {
-    if (message.role !== "user" || typeof message.content !== "string") {
+    if (message.role !== "user") {
       return [];
     }
-    const { content } = message;
+    const content = getRuntimeContextDataText(message);
     const ranges = getRuntimeContextDataRanges(message);
-    if (!ranges?.length) {
+    if (content === undefined || !ranges?.length) {
       return [];
     }
     const containerText = sanitizeSurrogates(content);

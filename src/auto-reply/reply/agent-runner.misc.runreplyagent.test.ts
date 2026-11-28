@@ -19,7 +19,6 @@ import {
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { createUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
-import type { NormalizedUsage } from "../../agents/usage.js";
 import { setRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
@@ -912,69 +911,6 @@ it.each([false, true])("enforces fallback <final> tags (memory flush=%s)", async
   ).toHaveLength(1);
 });
 
-describe("runReplyAgent response usage footer", () => {
-  async function usageFooter(
-    responseUsage: "tokens" | "full",
-    usage: NormalizedUsage | undefined,
-    bedrock = true,
-    text = "ok",
-  ) {
-    const provider = bedrock ? "amazon-bedrock" : "anthropic";
-    const model = bedrock ? "us.anthropic.claude-sonnet-4-6" : "claude";
-    runEmbeddedAgentMock.mockResolvedValueOnce(
-      replyResult(text, { agentMeta: { provider, model, usage } }),
-    );
-    const sessionKey = "agent:main:whatsapp:dm:+1000";
-    const result = await createBaseRun({
-      run: {
-        agentId: "main",
-        agentDir: path.join(rootDir, "agent"),
-        sessionKey,
-        provider,
-        model,
-        thinkLevel: "low",
-        config: providerConfig(provider, {
-          baseUrl: "https://example.test",
-          ...(bedrock ? { auth: "aws-sdk" as const } : {}),
-          models: [
-            modelDefinition(model, {
-              reasoning: false,
-              cost: bedrock
-                ? { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }
-                : { input: 3, output: 15, cacheRead: 0, cacheWrite: 0 },
-            }),
-          ],
-        }),
-      },
-      reply: { queueKey: sessionKey, sessionKey, sessionEntry: sessionFixture({ responseUsage }) },
-    }).run();
-    return (Array.isArray(result) ? result[0] : result)?.text ?? "";
-  }
-
-  it("omits aggregate-only token totals in the built-in full footer", async () => {
-    const text = await usageFooter("full", { total: 1250 }, false);
-    expect(text).toContain("anthropic🤖claude");
-    expect(text).not.toContain("↕️");
-    expect(text).not.toContain("💰");
-    expect(text).not.toContain("Usage:");
-  });
-
-  it("shows configured costs for aws-sdk providers when responseUsage=full", async () => {
-    const text = await usageFooter("full", {
-      input: 1_000,
-      output: 2_000,
-      cacheRead: 500,
-      cacheWrite: 2_000,
-    });
-    expect(text).toContain("amazon-bedrock🤖us.anthropic.claude-sonnet-4-6🌘🐌");
-    expect(text).not.toContain("↕️");
-    expect(text).not.toContain("🗄");
-    expect(text).toContain("💰0.0406");
-    expect(text).not.toContain("Usage:");
-    expect(text).not.toContain("· session ");
-  });
-});
-
 describe("runReplyAgent provider failures", () => {
   function createRun(defaultModel?: string) {
     return createBaseRun({
@@ -1027,8 +963,6 @@ describe("runReplyAgent provider failures", () => {
     }
   });
 });
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
 it.each(["completed", "failed", "hidden"] as const)(
   "reports accepted visible work before final dispatch for a %s run",

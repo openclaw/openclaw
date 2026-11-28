@@ -124,7 +124,7 @@ it("keeps catalog first-output readiness at its source until output arrives", as
   expect(gateway.calls("terminal.close")).toEqual([]);
 });
 
-it("retains unsent text and uploaded attachments across tabs and a native docking handoff", async () => {
+it("retains unsent text and a pasted image upload across tabs and a native docking handoff", async () => {
   const gateway = gatewayFixture(true);
   const source = await mount(gateway.client);
   const first = source.activeHostedTabId!;
@@ -133,13 +133,16 @@ it("retains unsent text and uploaded attachments across tabs and a native dockin
   const input = composerInput(source);
   input.value = "cat";
   input.dispatchEvent(new Event("input", { bubbles: true }));
-  const file = new File(["test"], "synthetic-file.txt");
+  const file = new File(["test"], "synthetic-file.txt", { type: "image/png" });
   Object.defineProperty(file, "arrayBuffer", {
     value: async () => new TextEncoder().encode("test").buffer,
   });
-  const fileInput = source.querySelector<HTMLInputElement>(".tp-file-input")!;
-  Object.defineProperty(fileInput, "files", { value: [file] });
-  fileInput.dispatchEvent(new Event("change"));
+  // WebKit screenshot paste: the image is only in items, never in files.
+  const paste = new Event("paste", { bubbles: true, cancelable: true });
+  const item = { kind: "file", type: file.type, getAsFile: () => file };
+  Object.defineProperty(paste, "clipboardData", { value: { items: [item], files: [] } });
+  input.dispatchEvent(paste);
+  expect(paste.defaultPrevented).toBe(true);
   await vi.waitFor(() =>
     expect(source.querySelector(".tp-attachment")?.textContent).toContain("synthetic-file.txt"),
   );

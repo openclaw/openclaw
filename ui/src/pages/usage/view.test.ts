@@ -66,14 +66,14 @@ function insightCard(container: ParentNode, title: string): Element | undefined 
   );
 }
 
-function averageCostSummary(container: ParentNode) {
-  const hint = container.querySelector("#usage-summary-hint-average-cost");
+function costSummary(container: ParentNode) {
+  const hint = container.querySelector("#usage-summary-hint-cost");
+  const badge = [...container.querySelectorAll(".usage-metric-badge")].find((entry) =>
+    entry.querySelector("small")?.textContent?.startsWith("Cost"),
+  );
   return {
     hint: hint?.parentElement?.querySelector('[slot="content"]')?.textContent?.trim(),
-    value: hint
-      ?.closest(".usage-summary-card")
-      ?.querySelector(".usage-summary-value")
-      ?.textContent?.trim(),
+    value: badge?.querySelector("strong")?.textContent?.trim(),
   };
 }
 
@@ -239,12 +239,12 @@ describe("renderUsage", () => {
       );
       const clearedFilters = { ...props.filters };
       const { container, setFilters, setData } = mountReactiveUsage(props);
-      for (const [index, missing, value, cost] of [
-        [-1, true, "$0.03", "$0.20"],
-        [0, false, "$0.00", "$0.00"],
-        [-1, true, "$0.03", "$0.20"],
-        [1, false, "$0.10", "$0.20"],
-        [2, true, "$0.00", "Unpriced"],
+      for (const [index, missing, cost] of [
+        [-1, true, "$0.20"],
+        [0, false, "$0.00"],
+        [-1, true, "$0.20"],
+        [1, false, "$0.20"],
+        [2, true, "Unpriced"],
       ] as const) {
         const session = fixture.sessions[index];
         const selected: Partial<UsageProps["filters"]> = !session
@@ -256,16 +256,24 @@ describe("renderUsage", () => {
         setFilters(filters);
         setData({ ...props.data, ...projectUsageData(fixture.sessions, filters) });
         flush();
-        expect(averageCostSummary(container)).toEqual({
-          hint: missing
-            ? "Known cost, including estimates, divided by all user and agent messages. Some usage has no cost data."
-            : "Known cost, including estimates, divided by all user and agent messages.",
-          value,
+        expect(costSummary(container)).toEqual({
+          hint: missing ? "Some usage has no cost data." : undefined,
+          value: cost,
         });
-        expect(texts(container, ".usage-metric-badge strong", false)[1]).toBe(cost);
       }
     },
   );
+
+  it("retains the cost hint button when a refresh changes the total but not the warning", () => {
+    const fixture = createRecordedCostUsage();
+    const { container, setData } = mountReactiveUsage(usageFixture(fixture));
+    const hint = container.querySelector("#usage-summary-hint-cost");
+    expect(hint).not.toBeNull();
+    setData((data) => ({ ...data, totals: { ...fixture.totals, totalCost: 5 } }));
+    flush();
+    expect(costSummary(container).value).toBe("$5.00");
+    expect(container.querySelector("#usage-summary-hint-cost")).toBe(hint);
+  });
 
   it("surfaces a provider-usage failure instead of hiding the panel", () => {
     const container = mountFixture({ providerUsageUnavailable: true });
@@ -545,7 +553,6 @@ describe("renderUsage", () => {
     expect(firstDay?.getAttribute("aria-label")).toContain("May 1, 2026");
     expect(firstDay?.getAttribute("aria-label")).toContain("990 tokens, $9.90");
     expect(firstDay?.querySelector(".daily-bar--empty")).toBeNull();
-    expect(textAt(container, ".cost-window--range .cost-window__value")).toBe("$10.00");
   });
 
   it("shows throughput from timed turns on the selected day", () => {

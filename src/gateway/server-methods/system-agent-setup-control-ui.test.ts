@@ -6,7 +6,7 @@ import {
   createFirstRunContext,
   useFirstRunFixtures,
 } from "../../../ui/src/pages/model-setup/model-setup-first-run.test-support.ts";
-import { page as modelSetupRoute } from "../../../ui/src/pages/model-setup/route.ts";
+import { FirstRunModelSetup } from "../../../ui/src/pages/model-setup/model-setup-page.tsx";
 import { createApplicationContextProvider } from "../../../ui/src/test-helpers/application-context.ts";
 import { cleanupSolid, mountSolid } from "../../../ui/src/test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../ui/src/test-helpers/solid-application-context.tsx";
@@ -97,9 +97,8 @@ it("uses server-owned inference providers without requesting a history choice", 
   });
   const provider = createApplicationContextProvider(context);
   document.body.append(provider);
-  const route = await modelSetupRoute.component();
-  const props = { data: { firstRun: true }, loaderPending: false, presented: true };
-  const { container: page } = mountSolid(() => route.renderSolid(props), {
+  // First-run Models opens this setup's local discovery dialog from "Find local models".
+  const { container: page } = mountSolid(() => FirstRunModelSetup({ discoveryOpen: true }), {
     container: provider,
     wrapper: createSolidApplicationContextProvider(context).wrapper,
   });

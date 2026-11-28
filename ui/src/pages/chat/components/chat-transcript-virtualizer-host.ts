@@ -539,13 +539,13 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         this.#acceptedRows = rows;
         this.#messageRowKeysById = messageRows;
         this.layout.rows = rows;
-        this.prependAnchor.committedMessageRows = renderKeyRows;
         this.#renderPreviousRows = () => this.#renderCommittedRows(snapshot, false);
         // Capture only after the unmount gate permits the projection to commit.
         if (capturePrepend) {
           // A peer append can add attribution above a bubble inside an
           // existing run row. Row-height compensation alone cannot hold it.
-          this.preserveReaderPosition(rowModelChanged && !this.canFollowEnd);
+          const toolsChanged = this.prependAnchor.commitRows(renderKeyRows);
+          this.preserveReaderPosition(!this.canFollowEnd && (rowModelChanged || toolsChanged));
         }
         // Structural changes can alter the end without a virtualizer notification.
         if (rowModelChanged || this.headerHeight !== (header?.height ?? 0)) {
@@ -615,14 +615,17 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     return isTranscriptProgrammaticScroll(this.offsetState, this.scrollElement);
   }
 
+  get hasMessageRows(): boolean {
+    return this.#acceptedRows?.some((row) => row.kind === "item") ?? false;
+  }
+
   get isPositionSettled(): boolean {
     return this.layout.ready && !this.initialRange.pending && !this.offsetState.pendingScrollOffset;
   }
 
-  preserveReaderPosition(includeAppends = true): void {
-    const commanded =
-      this.offsetState.hasPendingAnchor || this.callbacks.hasPendingScrollCommand?.();
-    this.prependAnchor.capture(this.scrollElement, Boolean(commanded), includeAppends);
+  preserveReaderPosition(projectionChanged = true): void {
+    const pending = this.offsetState.hasPendingAnchor || this.callbacks.hasPendingScrollCommand?.();
+    this.prependAnchor.capture(this.scrollElement, Boolean(pending), projectionChanged);
   }
 
   get canFollowEnd(): boolean {

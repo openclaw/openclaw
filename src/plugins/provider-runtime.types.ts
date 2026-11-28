@@ -152,6 +152,8 @@ export type ProviderResolveUsageAuthContext = {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   provider: string;
+  /** This plugin's CLI backend ids that config routes agent turns through. */
+  configuredCliBackends?: readonly string[];
   /** @deprecated Await resolveApiKeyCandidatesFromConfigAndStore instead. Removal follows an announced ordinary stable release window. */
   resolveApiKeyFromConfigAndStore: (params?: {
     providerIds?: string[];

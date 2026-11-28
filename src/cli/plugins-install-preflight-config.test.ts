@@ -43,28 +43,18 @@ describe("selected bundled install config recovery", () => {
 
   it.each(
     ["fixture-recovery", "@fixture/recovery", "@fixture/recovery@1.2.3"].flatMap((raw) =>
-      [true, false].flatMap((allowInvalidConfigRecovery) =>
-        [false, true].map((sourceCheckout) => ({
-          raw,
-          allowInvalidConfigRecovery,
-          sourceCheckout,
-        })),
-      ),
+      [true, false].map((allowInvalidConfigRecovery) => ({
+        raw,
+        allowInvalidConfigRecovery,
+      })),
     ),
   )(
-    "uses selected metadata for $raw (recovery=$allowInvalidConfigRecovery, checkout=$sourceCheckout)",
-    async ({ raw, allowInvalidConfigRecovery, sourceCheckout }) => {
+    "uses selected metadata for $raw (recovery=$allowInvalidConfigRecovery)",
+    async ({ raw, allowInvalidConfigRecovery }) => {
       const root = tempDirs.make("plugin-preflight-config-");
       const pluginId = "fixture-recovery";
-      const localPath = path.join(root, sourceCheckout ? "dist/extensions" : "bundled", pluginId);
+      const localPath = path.join(root, "bundled", pluginId);
       fs.mkdirSync(localPath, { recursive: true });
-      if (sourceCheckout) {
-        for (const name of [".git", "src", "extensions"]) {
-          fs.mkdirSync(path.join(root, name));
-        }
-        writeFixtureJsonSync(path.join(root, "package.json"), { name: "openclaw" });
-        fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
-      }
       writeFixtureJsonSync(path.join(localPath, "package.json"), {
         name: "@fixture/recovery",
         openclaw: { install: { allowInvalidConfigRecovery } },

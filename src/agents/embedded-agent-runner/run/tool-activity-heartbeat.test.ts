@@ -109,5 +109,5 @@ it("applies heartbeat ownership to private preparation and execution", async () 
   }
 
   expect(body).toHaveBeenCalledOnce();
-  expect(getLastToolActivityMs(RUN)).toBeTypeOf("number");
+  expect(getLastToolActivityMs(RUN)).toBeGreaterThan(0);
 });

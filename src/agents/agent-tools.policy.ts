@@ -9,11 +9,13 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
+import { getLoadedChannelPluginEntryById } from "../channels/plugins/registry-loaded.js";
 import { resolveSessionConversation } from "../channels/plugins/session-conversation.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { logWarn } from "../logger.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/account-id.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import {
@@ -476,12 +478,23 @@ export function resolveEffectiveToolPolicy(params: {
   return { ...effectivePolicy, gatewayManagementActionsAllowed };
 }
 
-function throwUnavailableScheduledAccount(accountId: string, missingCreatorChannel = false): never {
-  throw new Error(
-    missingCreatorChannel
-      ? `Scheduled account "${accountId}" is unavailable: the job has no recorded creator channel, so its scheduled authority cannot be resolved. Re-save the job's tool cap from the creator's authenticated turn to record it, or recreate the automation from the intended account.`
-      : `Scheduled account "${accountId}" is unavailable. Re-add it to the channel configuration, or recreate this automation from the intended account.`,
-  );
+function scheduledAccountStatus(
+  plugin: ReturnType<typeof getLoadedChannelPlugin> | null,
+  config: OpenClawConfig,
+  accountId: string,
+) {
+  if (plugin === null) {
+    return "lookup failed";
+  }
+  try {
+    const matchesAccount = (id: string) => normalizeAccountId(id) === accountId;
+    if (plugin?.config.listAccountIds(config).some(matchesAccount) === true) {
+      return "account listed";
+    }
+    return plugin ? "account not listed" : "plugin not loaded";
+  } catch {
+    return "account list unreadable";
+  }
 }
 
 /** Tool-building callers must stop before exposing a surface with unavailable authority. */
@@ -525,30 +538,39 @@ export function resolveGroupToolPolicy(params: {
   ]);
   const accountId = normalizeAccountId(params.accountId);
   if (!channel) {
-    return params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID
-      ? throwUnavailableScheduledAccount(accountId, true)
-      : undefined;
+    if (params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID) {
+      throw new Error(
+        `Scheduled account "${accountId}" is unavailable: the job has no recorded creator channel, so its scheduled authority cannot be resolved. Re-save the job's tool cap from the creator's authenticated turn to record it, or recreate the automation from the intended account.`,
+      );
+    }
+    return undefined;
   }
   let plugin;
   try {
     plugin = getLoadedChannelPlugin(channel);
   } catch {
     // Plugin lookup failure leaves the canonical config policy fallback in charge.
-    plugin = undefined;
+    plugin = null;
   }
   if (params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID) {
-    let configured: boolean;
-    try {
-      configured =
-        plugin?.config
-          .listAccountIds(params.config)
-          .some((candidate) => normalizeAccountId(candidate) === accountId) === true;
-    } catch {
-      // An unreadable account roster cannot authorize a scheduled named account.
-      configured = false;
-    }
-    if (!configured) {
-      throwUnavailableScheduledAccount(accountId);
+    const processStatus = scheduledAccountStatus(plugin, params.config, accountId);
+    if (processStatus !== "account listed") {
+      let scopedStatus = "no scope";
+      try {
+        const scope = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+        if (scope) {
+          const scopedPlugin = getLoadedChannelPluginEntryById(channel, scope)?.plugin;
+          scopedStatus =
+            scopedPlugin === plugin
+              ? processStatus
+              : scheduledAccountStatus(scopedPlugin, params.config, accountId);
+        }
+      } catch {
+        scopedStatus = "lookup failed";
+      }
+      throw new Error(
+        `Scheduled account "${accountId}" is unavailable on channel "${channel}". Process registry: ${processStatus}; scoped registry: ${scopedStatus}. Check that the channel plugin is loaded and the account is configured on that channel.`,
+      );
     }
   }
   if (groupIds.length === 0) {

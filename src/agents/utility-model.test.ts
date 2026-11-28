@@ -2,6 +2,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveStatusUtilityModel } from "../commands/models/list.status-utility.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata.test-support.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
@@ -16,20 +18,26 @@ import {
 } from "./utility-model.js";
 
 /** A string declares the provider's small model; a map declares a router's per-vendor models. */
-function snapshotWithDefaults(defaults: Record<string, string | Record<string, string>>) {
-  return createPluginMetadataSnapshotFixture({
-    plugins: Object.entries(defaults).map(([provider, utility], index) => ({
-      id: `plugin-${index}`,
-      modelCatalog: {
-        providers: {
-          [provider]:
-            typeof utility === "string"
-              ? { defaultUtilityModel: utility, models: [{ id: utility }] }
-              : { defaultUtilityModels: utility, models: [] },
+function snapshotWithDefaults(
+  defaults: Record<string, string | Record<string, string>>,
+  policyHash?: string,
+) {
+  return createPluginMetadataSnapshotFixture(
+    {
+      plugins: Object.entries(defaults).map(([provider, utility], index) => ({
+        id: `plugin-${index}`,
+        modelCatalog: {
+          providers: {
+            [provider]:
+              typeof utility === "string"
+                ? { defaultUtilityModel: utility, models: [{ id: utility }] }
+                : { defaultUtilityModels: utility, models: [] },
+          },
         },
-      },
-    })),
-  });
+      })),
+    },
+    policyHash,
+  );
 }
 
 describe("resolveConfiguredSetupModelForAgent", () => {
@@ -335,6 +343,41 @@ it.each([
     expect(resolveUtilityModelRefForAgent({ cfg, agentId: "main", catalog })).toBe(
       "fixture/missing@explicit",
     );
+  },
+);
+
+it.each([
+  { name: "primary substituted", declared: "small", ref: "fixture/primary", notOffered: true },
+  { name: "declared small model", declared: "small", ref: "fixture/small", notOffered: false },
+  // A provider whose declared small model is the primary was offered; no note.
+  {
+    name: "declared model is the primary",
+    declared: "primary",
+    ref: "fixture/primary",
+    notOffered: false,
+  },
+])(
+  "status names the main-model fallback only when it runs: $name",
+  ({ declared, ref, notOffered }) => {
+    const cfg: OpenClawConfig = { agents: { defaults: { model: "fixture/primary" } } };
+    setCurrentPluginMetadataSnapshot(
+      snapshotWithDefaults({ fixture: declared }, resolveInstalledPluginIndexPolicyHash(cfg)),
+      { config: cfg },
+    );
+    try {
+      expect(
+        resolveStatusUtilityModel({
+          cfg,
+          agentId: "main",
+          gatewayCatalog: {
+            models: [],
+            utilityModel: { modelRef: ref, source: "provider-default" },
+          },
+        }),
+      ).toMatchObject({ ref, notOffered });
+    } finally {
+      setCurrentPluginMetadataSnapshot(undefined);
+    }
   },
 );
 

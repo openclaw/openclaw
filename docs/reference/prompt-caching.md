@@ -93,6 +93,9 @@ they do not require replacing the earlier system prompt.
 
 CLI continuations retain the conversation's recorded presentation capabilities,
 including Control UI formatting, without borrowing its delivery route or authority.
+This holds for every turn source: `sessions_send` turns and subagent completions
+run on the internal channel, yet their system prompt still describes the
+session's own conversation, and the turn's routing arrives in its runtime context.
 Scheduled turns inside an existing conversation retain its full automations
 definition; job-scoped execution still rejects actions outside the current job.
 
@@ -140,9 +143,16 @@ conversation. Reaction
 execution still requires the current prompt's live authority; an advertised
 action does not grant permission to execute it.
 
-Isolated settled-turn finalization uses a separate cache key scoped to the run.
-Its tool-free prompt and full transcript differ from the conversation request,
-so it does not replace the conversation's cache or history-diagnostic baseline.
+Settled-turn finalization (the request that asks for a final answer after a
+turn ends with only `NO_REPLY`) is one more request of that turn. On protocols
+where `tool_choice` is outside the cache key (OpenAI Responses and Anthropic
+Messages), it sends the turn's last request (system prompt, tools, parameters,
+cache key and history) unchanged, followed by its own new items and
+`tool_choice: none`, so it reads the turn's cached prefix and cannot call a
+tool. It falls back to a tool-free prompt under a run-scoped cache key on other
+protocols, when the provider rejected the turn's context, when the turn's
+prepared request was a `previous_response_id` delta, or when its last item is
+missing from the recovery's history.
 
 Inter-session messages steered into an active turn carry their source envelope
 on the first model request. Reopening the session replays the same envelope,
@@ -427,6 +437,7 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 
 - Prompt caching is automatic on supported recent models; OpenClaw does not inject block-level cache markers.
 - OpenClaw sends a stable `prompt_cache_key` across turns. On models before GPT-5.6 this helps cache routing; on GPT-5.6 and later it separates cache accounting, while OpenAI handles routing automatically. Responses and Chat Completions requests to direct `api.openai.com` hosts get this automatically when a session or explicit cache key is available; `compat.supportsPromptCacheKey: false` disables it. OpenAI-compatible proxies (oMLX, llama.cpp, custom endpoints) need `compat.supportsPromptCacheKey: true` in model config to opt in - this is never auto-detected for a proxy.
+- `/status` shows `cache key: not sent` after the endpoint when the session's last completed request to an OpenAI-style route had no `prompt_cache_key`. It reflects that request, so it is not shown while a turn runs and updates only after the next completed request. A key is not sent when the route has not opted in, when `cacheRetention` is `"none"`, or when `compat.supportsPromptCacheKey` is `false`. Many providers still cache automatically or through other markers. To opt in, set `compat.supportsPromptCacheKey: true` on that model only if the endpoint accepts `prompt_cache_key`; remove it again if requests are rejected (HTTP 400 or 422).
 - `cacheRetention: "long"` requests `prompt_cache_options: { ttl: "30m" }` for GPT-5.6 and later on both APIs. Earlier native models receive `prompt_cache_retention: "24h"` only for OpenAI's documented extended-retention models: GPT-5.5 / GPT-5.5 Pro, GPT-5.4, GPT-5.2, GPT-5.1 / Codex / Codex Max / Codex Mini / Chat Latest, GPT-5 / Codex, and GPT-4.1 (including dated snapshots). Other earlier native models receive no lifetime field. See [OpenAI cache lifetime](https://developers.openai.com/api/docs/guides/prompt-caching#cache-lifetime).
 - Lifetime fields require both cache-key support and `compat.supportsLongCacheRetention` (true by default; Together AI and Cloudflare profiles disable it). Opted-in proxies use the same GPT-5.6+ TTL mapping and otherwise receive `"24h"`; disable long-retention support if the proxy rejects lifetime fields.
 - `cacheRetention: "short"` sends the key without lifetime fields, leaving the provider's default lifetime in effect. `cacheRetention: "none"` suppresses the key and both lifetime fields; it does not disable OpenAI's automatic prompt caching.

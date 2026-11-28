@@ -421,6 +421,30 @@ describe("discordPlugin outbound", () => {
     }
   });
 
+  it("sends DM typing to the user's resolved DM channel", async () => {
+    const fetch = vi.fn(async (url: string, _init?: RequestInit) =>
+      url.endsWith("/users/@me/channels")
+        ? Response.json({ id: "dm-789" })
+        : new Response(null, { status: 204 }),
+    );
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await discordPlugin.heartbeat!.sendTypingGuarded!({
+        cfg: createCfg(),
+        to: "user:123",
+        signal: new AbortController().signal,
+        assertPlatformSendAuthorized: () => {},
+      });
+      expect(fetch.mock.calls.map(([url, init]) => [url, init?.method])).toEqual([
+        ["https://discord.com/api/v10/users/@me/channels", "POST"],
+        ["https://discord.com/api/v10/channels/dm-789/typing", "POST"],
+      ]);
+      expect(fetch.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ recipient_id: "123" }));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each(["cancelled", "revoked"] as const)(
     "does not send queued typing after its owner is %s",
     async (reason) => {

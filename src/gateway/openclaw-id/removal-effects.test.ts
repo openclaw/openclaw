@@ -61,7 +61,6 @@ function relayed(connId: string, peerKey: string, closed: boolean) {
   if (closed) {
     controller.abort();
   }
-  return controller;
 }
 
 function effectsOver(clients: unknown[]) {

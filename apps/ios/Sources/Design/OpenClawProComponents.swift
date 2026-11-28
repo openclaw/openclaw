@@ -6,12 +6,12 @@ enum OpenClawProMetric {
     static let cardRadius: CGFloat = 16
     static let controlRadius: CGFloat = 12
     static let compactControlSize: CGFloat = 36
+    // periphery:ignore - DESIGN.md specifies this shared inset for clearance above persistent navigation.
     static let bottomScrollInset: CGFloat = 96
 }
 
 enum OpenClawRadius {
     static let xs: CGFloat = 8
-    static let sm: CGFloat = 10
     static let md: CGFloat = 12
 }
 
@@ -107,10 +107,6 @@ extension View {
                 .buttonStyle(.glass)
                 .tint(tint)
         }
-    }
-
-    func openClawGlassSurface() -> some View {
-        self.glassEffect(.regular, in: .rect(cornerRadius: OpenClawProMetric.controlRadius))
     }
 }
 
@@ -228,6 +224,19 @@ struct OpenClawSidebarRevealToolbarVisibility: ViewModifier {
     }
 }
 
+struct OpenClawRoundNavigationButton<Glyph: View>: View {
+    let action: () -> Void
+    @ViewBuilder let glyph: () -> Glyph
+
+    var body: some View {
+        Button(action: self.action) {
+            self.glyph().openClawToolbarHitTarget().contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+    }
+}
+
 struct OpenClawSidebarControlButton: View {
     let action: OpenClawSidebarHeaderAction
 
@@ -255,6 +264,9 @@ struct OpenClawSidebarControlButton: View {
         .openClawToolbarHitTarget()
         .contentShape(Rectangle())
         .accessibilityLabel(self.action.accessibilityLabel.text)
+        .accessibilityValue(self.action.hasApprovalAttention
+            ? String(localized: "Needs approval")
+            : "")
     }
 
     private var icon: some View {
@@ -551,33 +563,5 @@ struct OpenClawProMark: View {
             .frame(width: self.size, height: self.size)
             .shadow(color: OpenClawBrand.accent.opacity(0.18), radius: self.shadowRadius, y: self.shadowRadius / 3)
             .accessibilityLabel("OpenClaw")
-    }
-}
-
-struct OpenClawGatewayCompactPill: View {
-    @Environment(NodeAppModel.self) private var appModel
-
-    var body: some View {
-        let presentation = GatewayStatusBuilder.build(appModel: self.appModel).statusPresentation
-        OpenClawStatusBadge(label: .verbatim(presentation.title), tone: presentation.tone)
-            .accessibilityLabel(
-                String(
-                    format: String(localized: "Gateway %@"),
-                    presentation.title))
-    }
-}
-
-extension GatewayDisplayState {
-    var statusPresentation: (title: String, tone: OpenClawStatusTone) {
-        switch self {
-        case .connected:
-            (String(localized: "Online"), .ok)
-        case .connecting:
-            (String(localized: "Connecting"), .accent)
-        case .error:
-            (String(localized: "Attention"), .warn)
-        case .disconnected:
-            (String(localized: "Offline"), .muted)
-        }
     }
 }
