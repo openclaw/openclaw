@@ -27,7 +27,8 @@ const normalize = (props: object) => {
 };
 const normalizer: Parameters<typeof connect>[1] = {
   element: normalize,
-  button: normalize,
+  // The native trigger defers focus on mousedown without canceling WebKit's touch click.
+  button: ({ onPointerDown: _focus, ...props }) => normalize(props),
   input: normalize,
   label: normalize,
   circle: normalize,

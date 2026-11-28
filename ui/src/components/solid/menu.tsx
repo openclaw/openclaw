@@ -646,6 +646,17 @@ export function Menu(props: BranchProps): JSX.Element {
       <button
         {...binding.trigger(initialIdentity.binding, props.disabled)}
         {...props.triggerAttributes}
+        onMouseDown={(event) => {
+          if (
+            props.disabled ||
+            event.button === 2 ||
+            (event.button === 0 && event.ctrlKey && /^Mac/i.test(navigator.platform))
+          ) {
+            return;
+          }
+          // Focusing during the press can move an animated trigger before the click lands.
+          event.preventDefault();
+        }}
         ref={(node) => {
           trigger = node;
           overlay.bindTrigger(node);
