@@ -21,6 +21,8 @@ describe("resolveGoogleVertexConfigApiKey", () => {
         GOOGLE_CLOUD_PROJECT: "my-project",
         GOOGLE_CLOUD_LOCATION: "global",
         GCE_METADATA_HOST: "metadata.google.internal",
+        HOME: "/nonexistent",
+        CLOUDSDK_CONFIG: "/nonexistent",
       }),
     ).toBe("gcp-vertex-credentials");
   });
