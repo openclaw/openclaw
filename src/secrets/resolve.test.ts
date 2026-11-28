@@ -438,6 +438,29 @@ describe("secret ref resolver", () => {
     }
   });
 
+  itPosix("recovers from a transient file read timeout on the next attempt", async () => {
+    const root = await createCaseDir("file-timeout-retry");
+    const filePath = path.join(root, "secrets.json");
+    await writeSecureFile(filePath, filePayload);
+
+    const sampleHandle = await fs.open(filePath, "r");
+    const fileHandlePrototype = Object.getPrototypeOf(sampleHandle) as {
+      read: typeof sampleHandle.read;
+    };
+    await sampleHandle.close();
+    // Only the first read hangs (transient disk contention); later reads run for real.
+    const readSpy = vi
+      .spyOn(fileHandlePrototype, "read")
+      .mockImplementationOnce(() => new Promise(() => {}) as never);
+
+    try {
+      await expect(resolveFileSecret(filePath, { timeoutMs: 5 })).resolves.toBe("sk-file-value");
+      expect(readSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      readSpy.mockRestore();
+    }
+  });
+
   it("rejects misconfigured provider source mismatches", async () => {
     await expect(
       resolveSecretRefValue(
