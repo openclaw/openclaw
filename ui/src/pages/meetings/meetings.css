@@ -45,11 +45,6 @@
   margin-block-start: var(--space-3);
 }
 
-.transcripts-source-details {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-}
-
 .transcripts-filters input,
 .transcripts-search input {
   width: 100%;
@@ -268,6 +263,8 @@
 
 .transcripts-source-details {
   margin-block: var(--space-3);
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
 }
 
 .transcripts-reader__header h1 {
