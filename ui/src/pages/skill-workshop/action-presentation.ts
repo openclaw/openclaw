@@ -8,15 +8,17 @@ import {
 } from "solid-js";
 import type { SkillWorkshopMode } from "./mode.ts";
 
+type WorkshopActionScope = { readonly retired: Promise<void> } | null;
+type WorkshopActionKind = "mutation" | "mode" | "learning";
+type WorkshopActionOwner = {
+  readonly scope: WorkshopActionScope;
+  presentationFailed(kind: WorkshopActionKind, error: unknown): void;
+};
+
 /** Scoped pending feedback for actions whose result is not a predictable library move. */
-export function createWorkshopActionPresentation<
-  Scope extends { retired: Promise<unknown> } | null,
->(
-  owner: {
-    readonly scope: Scope;
-    presentationFailed(kind: "mutation" | "mode" | "learning", error: unknown): void;
-  },
-  scope: () => Scope,
+export function createWorkshopActionPresentation(
+  owner: WorkshopActionOwner,
+  scope: () => WorkshopActionScope,
   list: SourceAccessor<unknown>,
   mode: SourceAccessor<SkillWorkshopMode | null>,
 ) {
@@ -41,7 +43,7 @@ export function createWorkshopActionPresentation<
   const present = action(function* (
     captured: ReturnType<typeof presentation>,
     result: Promise<void>,
-    kind: "mutation" | "mode" | "learning",
+    kind: WorkshopActionKind,
     expected?: string,
   ) {
     if (owner.scope === captured.currentScope) {
@@ -66,7 +68,7 @@ export function createWorkshopActionPresentation<
     }
   });
   const run = async (
-    kind: "mutation" | "mode" | "learning",
+    kind: WorkshopActionKind,
     operation: () => Promise<void>,
     expected?: string,
   ) => {
