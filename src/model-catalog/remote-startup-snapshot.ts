@@ -72,9 +72,9 @@ export function publishRemoteModelCatalogStartupPublication(
 ): void {
   let bytes: Publication["bytes"] = null;
   if (catalog !== null) {
-    const encoded = Buffer.from(JSON.stringify(catalog));
-    bytes = new Uint8Array(new SharedArrayBuffer(encoded.byteLength));
-    bytes.set(encoded);
+    const json = JSON.stringify(catalog);
+    bytes = new Uint8Array(new SharedArrayBuffer(Buffer.byteLength(json)));
+    new TextEncoder().encodeInto(json, bytes);
   }
   const publication = { bytes, sourceUrl: catalog?.sourceUrl, revision: catalog?.revision };
   // Preserve the publisher's identity for compare-and-publish and scoped readers.

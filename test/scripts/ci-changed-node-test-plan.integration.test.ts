@@ -327,7 +327,7 @@ it("selects the exec completion tests when the owed-result owner changes", () =>
 it("keeps reset-fork coverage when the parent-fork transcript owner changes", () => {
   const source = "src/config/sessions/session-accessor.sqlite-parent-fork.ts";
   const ownerTest = "src/config/sessions/session-accessor.parent-fork.test.ts";
-  const resetFork = "src/gateway/server.sessions.create.reset-fork.test.ts";
+  const resetFork = "src/gateway/server.sessions.create.fork-search.test.ts";
   const options = {
     selectionMode: "aggressive" as const,
     includePrExemptRuntimeTests: false,
