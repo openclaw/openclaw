@@ -35,6 +35,7 @@ import {
   pickCliSessionId,
   preferGeminiCliStreamJsonError,
   readClaudeAttributedSubagentProgressId,
+  readClaudeStreamEventUsage,
   preferStreamedClaudeTextOverResult,
   readCliUsage,
   readGeminiCliStreamJsonError,
@@ -74,6 +75,7 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
   let resumeCheckpointId: string | undefined;
   let usage: CliUsage | undefined;
   let diagnosticUsage: CliUsage | undefined;
+  let claudeCallUsage: CliUsage | undefined;
   let output: CliOutput | null = null;
   let parseErrorText = "";
   let rawChars = 0;
@@ -344,7 +346,11 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       sawTerminalResult = true;
     }
     observeSessionId(parsed);
-    const nextUsage = readCliUsage(parsed);
+    const streamEventUsage = claudeStreamJson
+      ? readClaudeStreamEventUsage(parsed, claudeCallUsage)
+      : undefined;
+    claudeCallUsage = streamEventUsage ?? claudeCallUsage;
+    const nextUsage = streamEventUsage ?? readCliUsage(parsed);
     const isClaudeTerminalResult = claudeStreamJson && parsed.type === "result";
     if (isClaudeTerminalResult && nextUsage && usage) {
       diagnosticUsage = nextUsage;
