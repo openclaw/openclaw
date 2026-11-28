@@ -30,6 +30,7 @@ describe("heartbeat events", () => {
     ["ok", "succeeded", true, "sent", `${"s".repeat(1999)}😀tail`, "s".repeat(1999)],
     ["ok", "succeeded", false, "ok-empty", `${"s".repeat(1998)}😀`, `${"s".repeat(1998)}😀`],
     ["error", "failed", false, "failed", "result", "result"],
+    ["ok", "failed", false, "failed", "result", "result"],
     ["ok", "unknown", false, "skipped", "result", "result"],
   ] as const)(
     "projects receipt settlement (%s, %s, delivered: %s) into %s",
