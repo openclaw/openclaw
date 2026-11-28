@@ -92,6 +92,7 @@ export async function maybeRepairCronInferenceBindings(params: {
       let authorization: AuthProfileAuthorization | undefined;
       try {
         if (ownerTransferPending !== undefined) {
+          pausedDefinition = { ...definition, ownerReauthorizationRequired: true };
           throw new CronInferenceMigrationPause(
             "its owner changed and the new owner needs to choose the account",
           );

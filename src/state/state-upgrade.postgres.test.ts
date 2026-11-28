@@ -210,6 +210,7 @@ describe.skipIf(!connection)("PostgreSQL canonical startup migration", () => {
       expect(await readJob(namespace)).toEqual({
         ...definition,
         enabled: false,
+        ownerReauthorizationRequired: true,
         inferenceAccountPauseReason:
           "Paused because its owner changed and the new owner needs to choose the account. Review its model and account before enabling it.",
       });

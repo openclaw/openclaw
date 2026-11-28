@@ -323,6 +323,13 @@ export function planCronJobMutation(
     } else if (options.modelAuthProfileAuthorizationId !== undefined) {
       nextJob.modelAuthProfileAuthorizationId = options.modelAuthProfileAuthorizationId;
     }
+    // The transfer below retires even authority freshly captured by the outgoing owner.
+    if (
+      mutation.kind === "update" &&
+      (options.runtimeAuthority || options.modelAuthProfileAuthorizationId)
+    ) {
+      delete nextJob.ownerReauthorizationRequired;
+    }
     reconcileCronChannelRequesterAuthority({
       job: nextJob,
       // Bind only records the parent link; the authenticated requester stays bound to an

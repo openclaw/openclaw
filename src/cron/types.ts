@@ -473,6 +473,8 @@ export type CronToolsAllowProvenance =
 
 /** Persisted row shape; public Gateway and wire contracts use CronJob. */
 export type CronStoredJob = Omit<CronJob, "streamExecutionHost" | "payloadSource"> & {
+  /** Only a newly authorized model profile or native runtime can resume a transferred job. */
+  ownerReauthorizationRequired?: true;
   /** Credential lifetime saved when the model's explicitly selected stored profile was authorized. */
   modelAuthProfileAuthorizationId?: string;
   /** Immutable host-captured scheduled command invocation; never public create/patch input. */

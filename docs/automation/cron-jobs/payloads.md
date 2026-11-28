@@ -281,6 +281,11 @@ A temporary fallback error keeps the job on its retry schedule.
 To use a replacement credential, sign in again, re-save the job's model with
 the intended `@<profileId>`, and run `openclaw automations enable <jobId>`.
 
+Transferring an automation to another owner pauses it and clears the previous
+owner’s account pin. The new owner can authorize a model run by saving their
+own explicit profile or reauthorizing the automation from an authenticated
+owner turn. The same requirement applies to a manual run.
+
 When upgrading from a version that saved accounts privately, Gateway startup
 backs up cron state and converts each compatible saved account to an explicit
 model pin before loading schedules. This also happens when a replacement

@@ -95,7 +95,7 @@ describe("ordinary session agent turns", () => {
         "openai:old": { type: "api_key", provider: "openai", key: "synthetic-old-account-key" },
       },
     });
-    const { cron } = await service();
+    const { cron, run } = await service();
     const job = await cron.add(
       {
         name: "Report",
@@ -119,6 +119,11 @@ describe("ordinary session agent turns", () => {
       payload: { model: "openai/gpt-4.1" },
     });
     expect(cron.getJob(job.id)?.payload).not.toHaveProperty("modelRuntime");
+    await cron.update(job.id, {
+      payload: { kind: "agentTurn", model: "openai/gpt-4.1@openai:old" },
+    });
+    await cron.run(job.id, "force");
+    expect(run).toHaveBeenCalledOnce();
   });
 
   it.each(

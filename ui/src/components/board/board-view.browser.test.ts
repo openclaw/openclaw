@@ -69,7 +69,7 @@ async function updateSnapshot(view: OpenClawBoardView, overrides: Partial<BoardS
 }
 
 async function mount(
-  applyOps = vi.fn(async () => undefined),
+  applyOps = vi.fn(async (): Promise<void> => undefined),
   parent: HTMLElement = document.body,
 ): Promise<OpenClawBoardView> {
   const view = document.createElement("openclaw-board-view");
@@ -275,7 +275,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
   );
 
   it("holds a narrow card at its drop target until a newer snapshot arrives", async () => {
-    const saving = createDeferred<void>();
+    const saving = createDeferred();
     const applyOps = vi.fn(() => saving.promise);
     const view = await mount(applyOps);
     view.style.width = "354px";

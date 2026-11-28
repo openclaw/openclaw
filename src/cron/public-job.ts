@@ -6,6 +6,7 @@ export function toPublicCronJob(job: CronStoredJob): CronJob {
     pluginCommand: _pluginCommand,
     operatorSource: _operatorSource,
     modelAuthProfileAuthorizationId: _modelAuthProfileAuthorizationId,
+    ownerReauthorizationRequired: _ownerReauthorizationRequired,
     sourceConversation: _sourceConversation,
     streamSandbox: _streamSandbox,
     streamOperatorSource: _streamOperatorSource,

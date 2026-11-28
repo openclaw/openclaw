@@ -85,6 +85,7 @@ export function resolveCronRequesterExecutionRevision(
     displayName: _displayName,
     createdActor: _createdActor,
     ownerProfileId: _ownerProfileId,
+    ownerReauthorizationRequired: _ownerReauthorizationRequired,
     toolsAllowProvenance: _toolsAllowProvenance,
     ...executableJob
   } = job;
