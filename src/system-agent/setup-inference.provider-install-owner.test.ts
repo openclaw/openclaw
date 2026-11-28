@@ -3,6 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { resolveAgentDir } from "../agents/agent-scope.js";
+import * as setupAccess from "../agents/auth-profiles/setup-access.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-binding.js";
 import * as modelAuth from "../agents/model-auth.js";
@@ -36,7 +39,8 @@ const prepareProvider = vi.hoisted(() =>
 const providerId = "fixture-provider";
 const modelRef = `${providerId}/fixture-model`;
 const writeJson = (file: string, value: unknown) => fs.writeFile(file, JSON.stringify(value));
-vi.mock("../plugins/provider-auth-choice.js", () => ({
+vi.mock("../plugins/provider-auth-choice.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-auth-choice.js")>()),
   prepareAuthChoiceLoadedPluginProvider: prepareProvider,
 }));
 
@@ -46,14 +50,30 @@ afterEach(() => {
   resetPluginLoaderTestStateForTest();
 });
 
-it.each([false, true])(
-  "binds a newly installed provider to its real artifact (replace during probe: %s)",
-  (replaceDuringProbe) =>
+it.each([
+  ["none", false, false],
+  ["plugin during probe", true, false],
+  ["connection after commit", false, true],
+] as const)(
+  "binds a newly installed provider to its real artifact (change: %s)",
+  (_change, replaceDuringProbe, restoreAfterCommit) =>
     withOpenClawTestState(
       { label: "provider-install-owner", env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
         await state.writeConfig({
-          gateway: { mode: "local" },
+          gateway: {
+            mode: "local",
+            // Keep rollback size checks from masking the route-drift assertion.
+            controlUi: {
+              enabled: false,
+              allowedOrigins: [
+                "https://setup-fixture-1.example.test",
+                "https://setup-fixture-2.example.test",
+                "https://setup-fixture-3.example.test",
+                "https://setup-fixture-4.example.test",
+              ],
+            },
+          },
           agents: {
             defaults: { workspace: state.workspaceDir },
             entries: { main: { workspace: state.workspaceDir } },
@@ -62,6 +82,19 @@ it.each([false, true])(
         });
         const originalBytes = await fs.readFile(state.configPath, "utf8");
         const original = await readConfigFileSnapshot();
+        let committing = false;
+        let edited = false;
+        const withSetupCredentialAccess = setupAccess.withSetupCredentialAccess;
+        vi.spyOn(setupAccess, "withSetupCredentialAccess").mockImplementation(
+          async (params, run) => {
+            if (restoreAfterCommit && committing && !edited) {
+              // Like the probe artifact replacement, mutate the real fixture at the ownership boundary.
+              await fs.writeFile(state.configPath, originalBytes, "utf8");
+              edited = true;
+            }
+            return await withSetupCredentialAccess(params, run);
+          },
+        );
         const runningMetadata = resolvePluginMetadataSnapshot({
           config: original.runtimeConfig,
           workspaceDir: state.workspaceDir,
@@ -141,7 +174,16 @@ it.each([false, true])(
             {
               config,
               agentModelOverride: modelRef,
-              authProfiles: [],
+              authProfiles: [
+                {
+                  profileId: "fixture-provider:default",
+                  credential: {
+                    type: "api_key",
+                    provider: providerId,
+                    key: "synthetic-owner-key",
+                  },
+                },
+              ],
               pendingPluginInstalls: { [providerId]: trustedRecord },
               persistAuthProfiles: async () => {},
             },
@@ -152,6 +194,7 @@ it.each([false, true])(
         const runEmbeddedAgent = vi.fn<typeof embeddedAgent.runEmbeddedAgent>(async (params) => {
           phases.push("probe");
           params.onSuccessfulAuthBinding?.({
+            authProfileId: params.authProfileId,
             authFingerprint,
             agentHarnessId: "openclaw",
             modelId: "fixture-model",
@@ -178,7 +221,9 @@ it.each([false, true])(
             pluginRegistry: runningRegistry,
           },
           async () => {
-            vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockResolvedValue(resolvedAuth);
+            vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockImplementation(
+              async (params) => ({ ...resolvedAuth, profileId: params.profileId }),
+            );
             vi.spyOn(providerChoices, "resolveManifestProviderAuthChoice").mockReturnValue({
               pluginId: providerId,
               providerId,
@@ -196,10 +241,29 @@ it.each([false, true])(
               recordSetupAudit: false,
               runtime: createNonExitingRuntime(),
               onPreparationComplete: () => phases.push("prepared"),
+              onCommitStarted: () => {
+                committing = true;
+              },
               prompter: createWizardPrompter(),
             });
-            expect(phases).toEqual(["prepared", "probe"]);
-            if (replaceDuringProbe) {
+            if (restoreAfterCommit) {
+              expect(edited).toBe(true);
+              expect(result).toEqual({
+                ok: false,
+                status: "auth",
+                error:
+                  "The connection changed before credential activation. Test the saved sign-in again.",
+              });
+              expect(await fs.readFile(state.configPath, "utf8")).toBe(originalBytes);
+              const profiles = (
+                await loadAuthProfileStoreWithoutExternalProfilesAsync(
+                  resolveAgentDir(original.runtimeConfig, "main"),
+                )
+              ).profiles;
+              expect(
+                Object.values(profiles).find((profile) => profile.provider === providerId)?.setup,
+              ).toEqual(expect.any(Object));
+            } else if (replaceDuringProbe) {
               expect(result).toMatchObject({
                 ok: false,
                 status: "auth",
@@ -220,7 +284,20 @@ it.each([false, true])(
                 throw new Error("Installer did not prepare a trusted record");
               }
               expect(records?.[providerId]).toMatchObject(trustedRecord);
+              const committed = await readConfigFileSnapshot();
+              expect(committed.sourceConfig.plugins?.installs).toBeUndefined();
+              const profiles = (
+                await loadAuthProfileStoreWithoutExternalProfilesAsync(
+                  resolveAgentDir(committed.config, "main"),
+                )
+              ).profiles;
+              const credential = Object.values(profiles).find(
+                (profile) => profile.provider === providerId,
+              );
+              expect(credential).toBeDefined();
+              expect(credential?.setup).toBeUndefined();
             }
+            expect(phases).toEqual(["prepared", "probe"]);
             expect(getActivePluginRegistry()).toBe(runningRegistry);
             expect(getCurrentPluginMetadataSnapshot({ config: original.runtimeConfig })).toBe(
               runningMetadata,

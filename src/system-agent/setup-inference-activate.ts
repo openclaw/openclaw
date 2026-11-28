@@ -409,6 +409,8 @@ async function verifyAndActivateCandidate(
       routeDeps,
       sourceConfig,
     );
+  const projectRoute = (config: OpenClawConfig, sourceConfig: OpenClawConfig) =>
+    project(candidateRouteConfig(config), candidateRouteConfig(sourceConfig));
   const resolveRoute = (config: OpenClawConfig, currentSnapshot = snapshot) =>
     resolveSystemAgentConfiguredRouteFromConfig(
       candidateRouteConfig(config),
@@ -430,10 +432,7 @@ async function verifyAndActivateCandidate(
     });
   }
   const baselineRoute = await project(cfg, source);
-  const verifiedRoute = await project(
-    candidateRouteConfig(candidate),
-    candidateRouteConfig(sourceCandidate),
-  );
+  const verifiedRoute = await projectRoute(candidate, sourceCandidate);
   const withGeneration = <T>(run: () => T): T =>
     generation ? withPluginRuntimeGenerationScope(generation, run) : run();
   const artifacts = withGeneration(() =>
@@ -590,6 +589,11 @@ async function verifyAndActivateCandidate(
     if (!staged.authProfileId || !savedCredential?.setup) {
       return undefined;
     }
+    // Commit moves pending installs into the plugin index; access-only sides use the verification model.
+    const committedRoute = await projectRoute(
+      candidate,
+      stripPendingPluginInstallRecords(sourceCandidate),
+    );
     const profileId = staged.authProfileId;
     return await activatePreparedSetupCredential(
       ctx,
@@ -599,7 +603,7 @@ async function verifyAndActivateCandidate(
       async () => {
         const latest = await readSnapshot();
         const current = latest.runtimeConfig ?? latest.config;
-        if (!isDeepStrictEqual(await project(current, latest.sourceConfig), verifiedRoute)) {
+        if (!isDeepStrictEqual(await projectRoute(current, latest.sourceConfig), committedRoute)) {
           throw new SetupInferenceOwnerDriftError(
             "The connection changed before credential activation. Test the saved sign-in again.",
           );

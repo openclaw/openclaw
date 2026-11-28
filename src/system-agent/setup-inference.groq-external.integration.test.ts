@@ -3,8 +3,11 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
-import { afterEach, expect, it, onTestFinished } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as setupAccess from "../agents/auth-profiles/setup-access.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -22,15 +25,26 @@ import { groqSetupSdkEntrypoints } from "./setup-inference-groq-sdk.test-support
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const error = "The connection changed before credential activation. Test the saved sign-in again.";
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   configureAiTransportHost({});
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
   await waitForPluginCacheRetirement();
 });
 
-it("resolves a Groq manifest model from a global external install during setup", async () => {
+it.each([
+  ["model selection", undefined, false],
+  ["access only", false, false],
+  ["access-only drift", false, true],
+] as const)(
+  "resolves a Groq manifest model from a global external install during setup (%s)",
+  (_mode, selectModel, drift) => runGroqSetup(selectModel, drift),
+);
+
+async function runGroqSetup(selectModel: false | undefined, drift: boolean) {
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
   clearLoadInstalledPluginIndexInstallRecordsCache();
@@ -104,6 +118,23 @@ export default defineSingleProviderPluginEntry({
       );
       clearLoadInstalledPluginIndexInstallRecordsCache();
 
+      let committing = false;
+      let edited = false;
+      const withSetupCredentialAccess = setupAccess.withSetupCredentialAccess;
+      vi.spyOn(setupAccess, "withSetupCredentialAccess").mockImplementation(async (params, run) => {
+        if (drift && committing && !edited) {
+          const committed = await readConfigFileSnapshot();
+          committed.sourceConfig.models = {
+            providers: {
+              groq: { baseUrl: "https://changed.test/v1", api: "openai-completions", models: [] },
+            },
+          };
+          await state.writeConfig(committed.sourceConfig);
+          edited = true;
+        }
+        return await withSetupCredentialAccess(params, run);
+      });
+
       const requests: Array<{ method?: string; url?: string }> = [];
       const { runtime, lines: runtimeErrors } = createSystemAgentTestRuntime();
       const server = http.createServer((request, response) => {
@@ -149,16 +180,30 @@ export default defineSingleProviderPluginEntry({
           authChoice: "groq-api-key",
           apiKey: "test-placeholder",
           modelRef: "groq/openai/gpt-oss-120b",
+          ...(selectModel === false ? { selectModel } : {}),
           workspace: state.workspaceDir,
           surface: "gateway",
           runtime,
+          onCommitStarted: () => {
+            committing = true;
+          },
         });
 
-        expect(result, JSON.stringify({ result, runtimeErrors, requests })).toMatchObject({
-          ok: true,
-          modelRef: "groq/openai/gpt-oss-120b",
-        });
+        expect(result, JSON.stringify({ result, runtimeErrors, requests })).toMatchObject(
+          drift ? { ok: false, error } : { ok: true, modelRef: "groq/openai/gpt-oss-120b" },
+        );
+        expect(edited).toBe(drift);
         expect(requests).toEqual([{ method: "POST", url: "/openai/v1/chat/completions" }]);
+        if (selectModel === false) {
+          const committed = await readConfigFileSnapshot();
+          expect(committed.sourceConfig.agents?.defaults?.model).toBeUndefined();
+          const profiles = (
+            await loadAuthProfileStoreWithoutExternalProfilesAsync(state.agentDir())
+          ).profiles;
+          const credential = Object.values(profiles).find((profile) => profile.provider === "groq");
+          expect(credential).toBeDefined();
+          expect(credential?.setup).toEqual(drift ? expect.any(Object) : undefined);
+        }
       } finally {
         configureAiTransportHost(originalHost);
         server.close();
@@ -166,4 +211,4 @@ export default defineSingleProviderPluginEntry({
       }
     },
   );
-});
+}
