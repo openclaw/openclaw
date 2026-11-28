@@ -19,7 +19,11 @@ import { runSqliteMutationWorkerRequest } from "./session-accessor.sqlite-worker
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-type CommitOptions = { holdAfterApproval?: boolean; outcome?: "rollback" | "exit-before-commit" };
+type CommitOptions = {
+  holdAfterApproval?: boolean;
+  holdBeforeApprovalMs?: number;
+  outcome?: "rollback" | "exit-before-commit";
+};
 function createCommitFixture(options: CommitOptions = {}) {
   const directory = fs.realpathSync(tempDirs.make("openclaw-reclamation-commit-"));
   const databasePath = path.join(directory, "proof.sqlite");
@@ -61,6 +65,15 @@ function createCommitFixture(options: CommitOptions = {}) {
           completion: "exit",
           dispatch: () => worker.postMessage("start", []),
           onCommitRequest: () => {
+            if (options.holdBeforeApprovalMs) {
+              // Reproduce a cold-start owner blocked beyond the old five-second decision window.
+              Atomics.wait(
+                new Int32Array(new SharedArrayBuffer(4)),
+                0,
+                0,
+                options.holdBeforeApprovalMs,
+              );
+            }
             authorize();
             accepted.resolve();
           },
@@ -101,6 +114,12 @@ test("serves queued work during an accepted commit while retaining writer admiss
   await expect(operation).resolves.toBe(true);
   await Promise.all(queued);
   expect({ value: fixture.value(), writes }).toEqual({ value: 2, writes: [1, 2] });
+});
+
+test("waits for a current owner delayed beyond five seconds before committing", async () => {
+  await using fixture = createCommitFixture({ holdBeforeApprovalMs: 6_000 });
+  await expect(fixture.run()).resolves.toBe(true);
+  expect(fixture.value()).toBe(2);
 });
 
 test.each([
