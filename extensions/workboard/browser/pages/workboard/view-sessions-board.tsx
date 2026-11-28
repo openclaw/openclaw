@@ -2,7 +2,7 @@
 import type { WorkboardBoardSummary, WorkboardSessionFacts } from "@openclaw/workboard-contract";
 import { dynamic, type JSX } from "@solidjs/web";
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
-import { createMemo, For } from "solid-js";
+import { createMemo, createSignal, createUniqueId, For } from "solid-js";
 import { AgentAvatar, SelectPicker } from "../../components/host-components.tsx";
 import { icons } from "../../components/icons.tsx";
 import { t } from "../../i18n/index.ts";
@@ -12,6 +12,7 @@ import { workboardBoardName } from "../../lib/workboard/board-presentation.ts";
 import { agentDisplayName } from "./agent-filter.ts";
 import type { SessionsBoardController } from "./sessions-board-controller.ts";
 import { RelativeTime } from "./view-card-time.tsx";
+import { closeWorkboardPopoverOnAction, workboardPopoverRef } from "./view-popover.ts";
 import { boardScrollEdgesRef } from "./view-scroll-fade.ts";
 import { SessionStatusBadge, type SessionStatusPresentation } from "./view-session-status.tsx";
 
@@ -144,6 +145,22 @@ export function SessionsBoard(props: SessionsBoardProps) {
       })),
     };
   });
+
+  // One shared action menu serves every tile, like the Cards board.
+  const menuId = `workboard-session-menu-${createUniqueId()}`;
+  const [menuKey, setMenuKey] = createSignal<string>();
+  let menuPanel!: HTMLDivElement;
+  let menuTrigger: HTMLButtonElement | undefined;
+  const menuPopover = workboardPopoverRef("end", false, () => menuTrigger);
+  const prepareMenu = (sessionKey: string, trigger: HTMLButtonElement) => {
+    if (menuTrigger === trigger) {
+      return;
+    }
+    menuPanel.hidePopover();
+    menuTrigger?.setAttribute("aria-expanded", "false");
+    menuTrigger = trigger;
+    setMenuKey(sessionKey);
+  };
 
   const startDrag = (event: DragEvent, sessionKey: string) => {
     if (!state().writable) {
@@ -295,9 +312,28 @@ export function SessionsBoard(props: SessionsBoardProps) {
                           onDragStart={(event: DragEvent) => startDrag(event, session().key)}
                           onDragEnd={() => props.controller.drag()}
                         >
-                          <button class="workboard-session-tile__title" type="button">
-                            {session().title}
-                          </button>
+                          <span class="workboard-session-tile__header">
+                            <button class="workboard-session-tile__title" type="button">
+                              {session().title}
+                            </button>
+                            {state().canWrite ? (
+                              <button
+                                type="button"
+                                class="workboard-card__menu-trigger workboard-session-tile__menu-trigger"
+                                aria-label={t("workboard.sessionsBoard.sessionActions")}
+                                aria-haspopup="dialog"
+                                aria-expanded="false"
+                                popovertarget={menuId}
+                                draggable="false"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  prepareMenu(session().key, event.currentTarget);
+                                }}
+                              >
+                                {icons.moreHorizontal}
+                              </button>
+                            ) : null}
+                          </span>
                           {session().headline ? (
                             <span class="workboard-session-tile__headline">
                               {session().headline}
@@ -367,6 +403,38 @@ export function SessionsBoard(props: SessionsBoardProps) {
             </button>
           </div>
         ) : null}
+        <div
+          id={menuId}
+          popover="auto"
+          role="dialog"
+          aria-label={t("workboard.sessionsBoard.sessionActions")}
+          class="workboard-card__action-menu-panel"
+          ref={[
+            menuPopover,
+            (element) => {
+              menuPanel = element;
+            },
+          ]}
+          onClick={closeWorkboardPopoverOnAction}
+        >
+          <div class="workboard-card__menu-group">
+            <button
+              class="btn"
+              type="button"
+              autofocus
+              disabled={!state().writable}
+              onClick={() => {
+                const sessionKey = menuKey();
+                if (sessionKey) {
+                  void props.controller.hide(sessionKey);
+                }
+              }}
+            >
+              {icons.eyeOff}
+              <span>{t("workboard.sessionsBoard.hide")}</span>
+            </button>
+          </div>
+        </div>
       </div>
     </section>
   );

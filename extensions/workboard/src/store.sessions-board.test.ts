@@ -59,22 +59,44 @@ describe("Sessions board storage", () => {
         "kind cannot be changed",
       );
     }
-    await store.updateSessionsBoard("sessions", { scope: { maxAgeHours: 24 } });
+    const scope = {
+      maxAgeHours: 24,
+      includeSubagents: false,
+      hiddenSessionKeys: ["agent:main:example"],
+    };
+    await store.updateSessionsBoard("sessions", { scope });
     expect(await store.upsertBoard({ id: "sessions", name: "Renamed" })).toMatchObject({
       kind: "sessions",
       name: "Renamed",
-      sessions: { scope: { maxAgeHours: 24 } },
+      sessions: { scope },
     });
     expect(
       (await store.listBoards()).boards.find((entry) => entry.id === "sessions"),
     ).toMatchObject({
       kind: "sessions",
-      sessions: { scope: { maxAgeHours: 24 } },
+      sessions: { scope },
       total: 0,
     });
     expect(
       (await store.listBoards()).boards.find((entry) => entry.id === "cards"),
     ).not.toHaveProperty("kind");
+  });
+
+  it("preserves both members' hides and a filter edit on the shared board", async () => {
+    const { store } = await sessionBoard();
+    await store.updateSessionsBoard("sessions", { scope: { maxAgeHours: 24 } });
+    await store.updateSessionsBoard("sessions", {
+      scopeChanges: { hideSessionKey: "agent:main:first" },
+    });
+    await store.updateSessionsBoard("sessions", { scopeChanges: { includeSubagents: false } });
+    await store.updateSessionsBoard("sessions", {
+      scopeChanges: { hideSessionKey: "agent:main:second" },
+    });
+    expect((await store.getSessionsBoard("sessions")).sessions.scope).toEqual({
+      maxAgeHours: 24,
+      hiddenSessionKeys: ["agent:main:first", "agent:main:second"],
+      includeSubagents: false,
+    });
   });
 
   it("rejects card create, capture, transfer, and dispatch without modifying cards", async () => {

@@ -226,6 +226,30 @@ it("excludes each agent's configured Home session from reads and moves", async (
   expect((await board.read()).sessions.map(({ key }) => key)).toEqual([work.key]);
 });
 
+it("keeps subagent sessions unless the scope opts out", async () => {
+  const board = await createFixture();
+  await board.update({ scope: { includeSubagents: false } });
+  await board.read();
+  expect(board.selectFacts.mock.lastCall?.[0]).toHaveProperty("excludeSubagents", true);
+  await board.update({ scope: { includeSubagents: true } });
+  await board.read();
+  expect(board.selectFacts.mock.lastCall?.[0]).not.toHaveProperty("excludeSubagents");
+});
+
+it("keeps hidden sessions off reads and moves until the scope shows them again", async () => {
+  const board = await createFixture(["one", "two"]);
+  const [one, two] = [facts("one"), facts("two")];
+  await board.move(one.key, "focus");
+  await board.update({ scope: { hiddenSessionKeys: [one.key] } });
+  expect((await board.read()).sessions.map(({ key }) => key)).toEqual([two.key]);
+  await expect(board.move(one.key, "other")).rejects.toThrow("not available in this board's scope");
+  await board.update({ scope: {} });
+  expect((await board.read()).sessions.map(({ key, columnId }) => [key, columnId])).toEqual([
+    [one.key, "focus"],
+    [two.key, "other"],
+  ]);
+});
+
 it("rejects a move when caller authority ends during the facts read", async () => {
   const board = await createFixture(["one"]);
   const entered = Promise.withResolvers<void>();

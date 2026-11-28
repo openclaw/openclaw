@@ -138,9 +138,16 @@ describe("workboard tools", () => {
         board: { id: "sessions", kind: "sessions" },
         sessions: [],
       });
-      const scope = { includeArchived: true, includeAutomation: true, includeHome: true };
+      const scope = {
+        includeArchived: true,
+        includeAutomation: true,
+        includeHome: true,
+        includeSubagents: false,
+        hiddenSessionKeys: ["agent:main:dashboard:long-running"],
+      };
       expect(Value.Check(update.parameters, { scope })).toBe(true);
-      for (const field of ["includeAutomation", "includeHome"]) {
+      expect(Value.Check(update.parameters, { scope: { hiddenSessionKeys: [""] } })).toBe(false);
+      for (const field of ["includeAutomation", "includeHome", "includeSubagents"]) {
         expect(Value.Check(update.parameters, { scope: { [field]: false } })).toBe(true);
         expect(Value.Check(update.parameters, { scope: { [field]: "true" } })).toBe(false);
       }

@@ -117,6 +117,39 @@ function peoplePicker(page: ReturnType<typeof mountPage>) {
   );
 }
 
+it("hides a tile immediately and restores it if the shared board rejects the change", async () => {
+  const page = sessionsPage();
+  const request = expectDefined(page.request.getMockImplementation(), "request");
+  const pending = createDeferred<never>();
+  page.request.mockImplementation((method, params) =>
+    method === "workboard.sessionsBoard.update" ? pending.promise : request(method, params),
+  );
+  await page.connect();
+  const toolbar = expectDefined(page.container.querySelector(".workboard-toolbar"), "toolbar");
+  const initialToolbarButtons = Array.from(toolbar.querySelectorAll("button"));
+  const tile = () => page.container.querySelector('[data-session-key="agent:main:working"]');
+  expectDefined(tile()?.querySelector<HTMLButtonElement>("[popovertarget]"), "tile menu").click();
+  await vi.advanceTimersByTimeAsync(0);
+  expectDefined(
+    page.container.querySelector<HTMLButtonElement>(".workboard-card__action-menu-panel button"),
+    "hide action",
+  ).click();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(tile()).toBeNull();
+  expect(page.request).toHaveBeenCalledWith("workboard.sessionsBoard.update", {
+    boardId: "sessions",
+    patch: { scopeChanges: { hideSessionKey: "agent:main:working" } },
+  });
+  expect(Array.from(toolbar.querySelectorAll("button"))).toEqual(initialToolbarButtons);
+  pending.reject(new Error("Board update failed"));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(tile()).not.toBeNull();
+  expect(page.container.querySelector('[role="alert"]')?.textContent).toContain(
+    "Board update failed",
+  );
+  page.dispose();
+});
+
 it("keeps unaccepted session results unknown and retains accepted empty results during refresh", async () => {
   const page = sessionsPage();
   const request = expectDefined(page.request.getMockImplementation(), "request");

@@ -99,10 +99,12 @@ create another board to use the other kind. Existing boards remain Cards boards.
 
 Use **Edit board** to change a board's name, icon, and color. **Reset to default**
 clears the icon and color when you save; canceling leaves the saved board unchanged.
-For Sessions boards, the same dialog also edits column labels, colors,
-descriptions, column order, and the fallback column. Ask the Board agent to edit
-column rules. Saving only the name, icon, or color leaves the saved columns unchanged,
-including column edits made by another operator while the dialog was open.
+For Sessions boards, this dialog also lets you choose which session types to
+show and edit column labels, colors, descriptions, order, and the fallback
+column. Ask the Board agent to edit column rules, included agents, or the
+activity window. Saving only the name, icon, or color leaves the saved columns
+and scope unchanged, including edits made by another operator while the dialog
+was open.
 
 For `workboard.boards.upsert`, omitting `icon` or `color`, passing `null`, or passing
 an empty string preserves the existing value, including for older clients. To clear
@@ -142,11 +144,18 @@ advance the event sequence without invalidating unchanged cards.
 Use a Sessions board to see where your conversations stand without creating
 cards. By default, it includes sessions from all configured agents with activity
 in the last 72 hours and excludes archived sessions, automation (cron) sessions,
-system sessions, dock conversations, and each agent's home session. Subagent sessions remain included.
-Set `scope.includeAutomation: true` to include automation and system sessions, or
-`scope.includeHome: true` to include home sessions. The Board agent can set these
-options. Existing boards use the same defaults without a migration. Each session appears in
-exactly one column. Open a tile to continue its conversation; the tile also shows
+system sessions, dock conversations, and each agent's home session. Subagent
+sessions are included by default. Under **Edit board**, choose which optional
+session types to show. These settings apply to this board for everyone and do
+not change other boards.
+
+To hide one conversation, open its tile menu and choose **Hide from this board**.
+Hiding changes this board for everyone, but does not delete or archive the
+session, remove its column pin, or change other boards. To show a hidden session
+again, ask the Board agent. It reappears only if it still matches the board's
+scope and active filters.
+
+Each session appears in exactly one column. Open a tile to continue its conversation; the tile also shows
 its agent, run state, observer headline when available, pull requests, and recent
 activity. Message previews are plain text: Markdown formatting and HTML are removed,
 link labels are retained, and whitespace is collapsed before the 400-character limit.
@@ -274,8 +283,13 @@ id from that context or from `workboard_boards`.
 Specs allow 2–12 columns with unique lowercase slug ids (1–48 characters), labels
 (1–60), and descriptions (1–400). Exactly one column must have `fallback: true`.
 Optional colors use the board palette. `scope` accepts `agentIds`,
-`includeArchived`, `includeAutomation`, `includeHome`, and a positive `maxAgeHours`.
-The include options default to false. Rules can match `health`, `run`
+`hiddenSessionKeys`, `includeArchived`, `includeAutomation`, `includeHome`,
+`includeSubagents`, and a positive `maxAgeHours` (default: 72).
+`includeSubagents` defaults to `true`; the other `include*` options default to
+`false`. A scope update replaces the whole scope: read the board first and keep
+the fields you are not changing. To hide sessions, add their exact keys to
+`hiddenSessionKeys` (up to 500). Remove a key to show that session again or send
+an empty list to clear all exclusions. Rules can match `health`, `run`
 (`active`, `idle`, `failed`), `pullRequest` (`none`, `open`, `draft`, `merged`,
 `closed`), and `archived`. Unknown pull-request state does not count as `none`.
 

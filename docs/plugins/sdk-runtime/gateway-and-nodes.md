@@ -370,8 +370,8 @@ applicable policy also requires fresh publication admission.
 
     `api.runtime.gateway.withSessionFacts(select, async (snapshot) => result)`
     selects immutable facts through the same session-list filtering owner,
-    without pagination. Selection supports agent, archive, automation, activity,
-    and person filters, including the people facet. Unchanged session facts retain
+    without pagination. Selection supports agent, archive, automation, subagent,
+    activity, and person filters, including the people facet. Unchanged session facts retain
     object identity across reads; `revision` changes with the selected content or
     its activity or retry deadline. Eligible human readers receive a stable opaque
     `scope` for their query and current viewer, profile, access, and configuration

@@ -37,6 +37,21 @@ const originals = new WeakMap<
   Pick<BoardDraft, "name" | "icon" | "color" | "sessions">
 >();
 
+const SCOPE_OPTIONS = [
+  ["includeSubagents", "subagents"],
+  ["includeHome", "home"],
+  ["includeAutomation", "automation"],
+  ["includeArchived", "archived"],
+] as const;
+type ScopeOption = (typeof SCOPE_OPTIONS)[number][0];
+
+function scopeIncludes(spec: WorkboardSessionsBoardSpec | undefined, option: ScopeOption): boolean {
+  // Subagents stay on a board unless its scope opts out; the other sessions opt in.
+  return option === "includeSubagents"
+    ? spec?.scope?.includeSubagents !== false
+    : spec?.scope?.[option] === true;
+}
+
 function sessionColumnsKey(spec: WorkboardSessionsBoardSpec): string {
   // The fallback radio treats an omitted flag and an explicit false alike.
   return JSON.stringify(
@@ -115,13 +130,18 @@ export function BoardModal(props: {
       }
       const clearAppearance: string[] = [];
       const original = originals.get(initialDraft);
-      const openingColumnsKey = original?.sessions
-        ? sessionColumnsKey(normalizeWorkboardSessionsBoardSpec(original.sessions))
+      const opening = original?.sessions
+        ? normalizeWorkboardSessionsBoardSpec(original.sessions)
         : undefined;
-      const columnsToSave =
-        sessions && sessionColumnsKey(sessions) !== openingColumnsKey
+      const columns =
+        sessions && (!opening || sessionColumnsKey(sessions) !== sessionColumnsKey(opening))
           ? sessions.columns
           : undefined;
+      const changedOptions = sessions
+        ? SCOPE_OPTIONS.filter(
+            ([option]) => scopeIncludes(sessions, option) !== scopeIncludes(opening, option),
+          )
+        : [];
       for (const field of ["name", "icon", "color"] as const) {
         const value = initialDraft[field].trim();
         if (value !== original?.[field]) {
@@ -142,13 +162,19 @@ export function BoardModal(props: {
       if (!isCurrent()) {
         return;
       }
-      if (columnsToSave) {
+      if (columns || changedOptions.length) {
         if (!props.canWrite) {
           throw new Error(t("workboard.sessionsBoard.writeUnavailable"));
         }
+        const scopeChanges = Object.fromEntries(
+          changedOptions.map(([option]) => [option, scopeIncludes(sessions, option)]),
+        );
         await client.request("workboard.sessionsBoard.update", {
           boardId: initialDraft.id,
-          patch: { columns: columnsToSave },
+          patch: {
+            ...(columns ? { columns } : {}),
+            ...(changedOptions.length ? { scopeChanges } : {}),
+          },
         });
       }
       if (isCurrent()) {
@@ -363,142 +389,164 @@ function SessionsEditor(props: {
     return props.saving || !props.canWrite;
   };
   return (
-    <fieldset class="workboard-sessions-editor" disabled={disabled()}>
-      <legend>{t("workboard.sessionsBoard.columns")}</legend>
-      <For each={[...spec().columns]} keyed={(column) => column.id}>
-        {(column, index) => {
-          const current = () => {
-            void props.revision;
-            return column();
-          };
-          const labelValue = liveInputValue(() => current().label);
-          const descriptionValue = liveInputValue(() => current().description);
-          const colorValue = liveInputValue(() => current().color ?? "");
-          return (
-            <div class="workboard-sessions-editor__column" data-column-id={current().id}>
-              <label>
-                <span>{t("workboard.sessionsBoard.columnLabel")}</span>
-                <input
-                  class="settings-input"
-                  required
-                  aria-label={t("workboard.sessionsBoard.columnLabel")}
-                  ref={labelValue}
-                  onInput={(event) => {
-                    current().label = event.currentTarget.value;
-                    props.onChange();
-                  }}
-                />
-              </label>
-              <label>
-                <span>{t("workboard.boardColor")}</span>
-                <select
-                  class="settings-input"
-                  aria-label={t("workboard.boardColor")}
-                  ref={colorValue}
-                  onChange={(event) => {
-                    current().color = event.currentTarget.value || undefined;
-                    props.onChange();
-                  }}
-                >
-                  <option value="">{t("workboard.sessionsBoard.defaultColor")}</option>
-                  <For
-                    each={["red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"]}
-                    keyed={(color) => color}
+    <>
+      <fieldset class="workboard-sessions-editor workboard-sessions-scope" disabled={disabled()}>
+        <legend>{t("workboard.sessionsBoard.scope.legend")}</legend>
+        <For each={SCOPE_OPTIONS} keyed={([option]) => option}>
+          {(entry) => (
+            <label class="workboard-sessions-scope__option">
+              <input
+                type="checkbox"
+                checked={scopeIncludes(spec(), entry()[0])}
+                onChange={(event) => {
+                  const scope = { ...spec().scope };
+                  scope[entry()[0]] = event.currentTarget.checked;
+                  spec().scope = scope;
+                  props.onChange();
+                }}
+              />
+              {t(`workboard.sessionsBoard.scope.${entry()[1]}`)}
+            </label>
+          )}
+        </For>
+      </fieldset>
+      <fieldset class="workboard-sessions-editor" disabled={disabled()}>
+        <legend>{t("workboard.sessionsBoard.columns")}</legend>
+        <For each={[...spec().columns]} keyed={(column) => column.id}>
+          {(column, index) => {
+            const current = () => {
+              void props.revision;
+              return column();
+            };
+            const labelValue = liveInputValue(() => current().label);
+            const descriptionValue = liveInputValue(() => current().description);
+            const colorValue = liveInputValue(() => current().color ?? "");
+            return (
+              <div class="workboard-sessions-editor__column" data-column-id={current().id}>
+                <label>
+                  <span>{t("workboard.sessionsBoard.columnLabel")}</span>
+                  <input
+                    class="settings-input"
+                    required
+                    aria-label={t("workboard.sessionsBoard.columnLabel")}
+                    ref={labelValue}
+                    onInput={(event) => {
+                      current().label = event.currentTarget.value;
+                      props.onChange();
+                    }}
+                  />
+                </label>
+                <label>
+                  <span>{t("workboard.boardColor")}</span>
+                  <select
+                    class="settings-input"
+                    aria-label={t("workboard.boardColor")}
+                    ref={colorValue}
+                    onChange={(event) => {
+                      current().color = event.currentTarget.value || undefined;
+                      props.onChange();
+                    }}
                   >
-                    {(color) => (
-                      <option value={color()}>
-                        {t(`workboard.sessionsBoard.color.${color()}`)}
-                      </option>
+                    <option value="">{t("workboard.sessionsBoard.defaultColor")}</option>
+                    <For
+                      each={["red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"]}
+                      keyed={(color) => color}
+                    >
+                      {(color) => (
+                        <option value={color()}>
+                          {t(`workboard.sessionsBoard.color.${color()}`)}
+                        </option>
+                      )}
+                    </For>
+                  </select>
+                </label>
+                <label class="workboard-sessions-editor__description">
+                  <span>{t("workboard.sessionsBoard.description")}</span>
+                  <textarea
+                    class="settings-input"
+                    required
+                    rows="2"
+                    aria-label={t("workboard.sessionsBoard.description")}
+                    ref={descriptionValue}
+                    onInput={(event) => {
+                      current().description = event.currentTarget.value;
+                      props.onChange();
+                    }}
+                  />
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="sessions-fallback"
+                    checked={Boolean(current().fallback)}
+                    onChange={() => {
+                      for (const entry of spec().columns) {
+                        entry.fallback = entry.id === current().id;
+                      }
+                      props.onChange();
+                    }}
+                  />
+                  {t("workboard.sessionsBoard.fallback")}
+                </label>
+                <div class="workboard-sessions-editor__actions">
+                  <For each={[-1, 1]} keyed={(offset) => offset}>
+                    {(offset) => (
+                      <button
+                        class="btn"
+                        type="button"
+                        disabled={
+                          disabled() ||
+                          index() + offset() < 0 ||
+                          index() + offset() >= spec().columns.length
+                        }
+                        onClick={() => {
+                          spec().columns.splice(index(), 1);
+                          spec().columns.splice(index() + offset(), 0, current());
+                          props.onChange();
+                        }}
+                      >
+                        {t(
+                          offset() < 0
+                            ? "workboard.sessionsBoard.moveUp"
+                            : "workboard.sessionsBoard.moveDown",
+                        )}
+                      </button>
                     )}
                   </For>
-                </select>
-              </label>
-              <label class="workboard-sessions-editor__description">
-                <span>{t("workboard.sessionsBoard.description")}</span>
-                <textarea
-                  class="settings-input"
-                  required
-                  rows="2"
-                  aria-label={t("workboard.sessionsBoard.description")}
-                  ref={descriptionValue}
-                  onInput={(event) => {
-                    current().description = event.currentTarget.value;
-                    props.onChange();
-                  }}
-                />
-              </label>
-              <label>
-                <input
-                  type="radio"
-                  name="sessions-fallback"
-                  checked={Boolean(current().fallback)}
-                  onChange={() => {
-                    for (const entry of spec().columns) {
-                      entry.fallback = entry.id === current().id;
-                    }
-                    props.onChange();
-                  }}
-                />
-                {t("workboard.sessionsBoard.fallback")}
-              </label>
-              <div class="workboard-sessions-editor__actions">
-                <For each={[-1, 1]} keyed={(offset) => offset}>
-                  {(offset) => (
-                    <button
-                      class="btn"
-                      type="button"
-                      disabled={
-                        disabled() ||
-                        index() + offset() < 0 ||
-                        index() + offset() >= spec().columns.length
-                      }
-                      onClick={() => {
-                        spec().columns.splice(index(), 1);
-                        spec().columns.splice(index() + offset(), 0, current());
-                        props.onChange();
-                      }}
-                    >
-                      {t(
-                        offset() < 0
-                          ? "workboard.sessionsBoard.moveUp"
-                          : "workboard.sessionsBoard.moveDown",
-                      )}
-                    </button>
-                  )}
-                </For>
-                <button
-                  class="btn"
-                  type="button"
-                  disabled={disabled() || spec().columns.length <= 2}
-                  onClick={() => {
-                    spec().columns.splice(index(), 1);
-                    props.onChange();
-                  }}
-                >
-                  {t("workboard.sessionsBoard.removeColumn")}
-                </button>
+                  <button
+                    class="btn"
+                    type="button"
+                    disabled={disabled() || spec().columns.length <= 2}
+                    onClick={() => {
+                      spec().columns.splice(index(), 1);
+                      props.onChange();
+                    }}
+                  >
+                    {t("workboard.sessionsBoard.removeColumn")}
+                  </button>
+                </div>
               </div>
-            </div>
-          );
-        }}
-      </For>
-      <button
-        class="btn"
-        type="button"
-        disabled={disabled() || spec().columns.length >= 12}
-        onClick={() => {
-          spec().columns.push({
-            id: `column-${crypto.randomUUID().slice(0, 8)}`,
-            label: t("workboard.sessionsBoard.newColumn"),
-            description: "",
-          });
-          props.onChange();
-        }}
-      >
-        {icons.plus}
-        {t("workboard.sessionsBoard.addColumn")}
-      </button>
-      <p class="workboard-sessions-editor__help">{t("workboard.sessionsBoard.rulesHelp")}</p>
-    </fieldset>
+            );
+          }}
+        </For>
+        <button
+          class="btn"
+          type="button"
+          disabled={disabled() || spec().columns.length >= 12}
+          onClick={() => {
+            spec().columns.push({
+              id: `column-${crypto.randomUUID().slice(0, 8)}`,
+              label: t("workboard.sessionsBoard.newColumn"),
+              description: "",
+            });
+            props.onChange();
+          }}
+        >
+          {icons.plus}
+          {t("workboard.sessionsBoard.addColumn")}
+        </button>
+        <p class="workboard-sessions-editor__help">{t("workboard.sessionsBoard.rulesHelp")}</p>
+      </fieldset>
+    </>
   );
 }

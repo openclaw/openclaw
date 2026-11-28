@@ -1,6 +1,7 @@
 import type { UsersSelfResult } from "@openclaw/gateway-protocol";
 import type {
   WorkboardBoardSummary,
+  WorkboardSessionsBoard,
   WorkboardSessionsBoardRead,
   WorkboardSessionsBoardRevision,
   WorkboardSessionsBoardView,
@@ -324,6 +325,39 @@ export function createSessionsBoardController(host: BoardDockHost, notify: () =>
     move: (sessionKey: string, columnId: string) =>
       write(async (id) => {
         await host.request("workboard.sessionsBoard.move", { boardId: id, sessionKey, columnId });
+      }),
+    hide: (sessionKey: string) =>
+      write(async (id, receipt) => {
+        const previous = snapshot;
+        if (!previous) {
+          return;
+        }
+        const scope = previous.board.sessions.scope ?? {};
+        const nextScope = {
+          ...scope,
+          hiddenSessionKeys: [...new Set([...(scope.hiddenSessionKeys ?? []), sessionKey])],
+        };
+        // Hiding takes effect at once; the read that follows the write reconciles the board.
+        snapshot = {
+          ...previous,
+          board: { ...previous.board, sessions: { ...previous.board.sessions, scope: nextScope } },
+          sessions: previous.sessions.filter((row) => row.key !== sessionKey),
+        };
+        notify();
+        try {
+          const { board } = await host.request<{ board: WorkboardSessionsBoard }>(
+            "workboard.sessionsBoard.update",
+            { boardId: id, patch: { scopeChanges: { hideSessionKey: sessionKey } } },
+          );
+          if (current(id, receipt) && snapshot) {
+            snapshot = { ...snapshot, board };
+          }
+        } catch (cause) {
+          if (current(id, receipt) && snapshot !== previous) {
+            snapshot = previous;
+          }
+          throw cause;
+        }
       }),
     drag(sessionKey?: string, columnId?: string) {
       draggedKey = sessionKey;
