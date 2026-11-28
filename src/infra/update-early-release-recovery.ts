@@ -327,7 +327,7 @@ export async function runEarlyGitReleaseRecovery(
     await removeRelease();
     return false;
   };
-  let heldRun: Awaited<ReturnType<typeof holdUpdateLock>> = null;
+  let heldRun: Awaited<ReturnType<typeof holdUpdateLock>> | undefined;
   const fail = async (reason: string, detail: string, nextAction: string, always = false) => {
     log(`${detail} Next step: ${nextAction}`);
     await keepEnablement();
