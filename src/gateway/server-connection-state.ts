@@ -5,8 +5,9 @@ import {
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 // This state is transport-fed but can be constructed without HTTP or WebSocket servers.
-import { createEventWebPushDelivery } from "./event-web-push.js";
+import { createWebPushNotificationDestination } from "./event-web-push.js";
 import { createMentionInbox } from "./mention-inbox.js";
+import { createNotificationDelivery } from "./notification-delivery.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
@@ -89,14 +90,16 @@ export function createGatewayConnectionState(params: {
   );
   // Lifecycle owns viewer declarations; agent-finished pushes fail open until it attaches them.
   let sessionViewers: SessionViewerPresenceDeclarations | undefined;
-  const eventWebPush = createEventWebPushDelivery(
-    loadRuntimeConfig,
-    {
-      isViewedOnDevice: (deviceId, sessionKey) =>
-        sessionViewers?.isViewedOnDevice(deviceId, sessionKey) === true,
-    },
-    () => sessionRowProjection,
-  );
+  const notifications = createNotificationDelivery([
+    createWebPushNotificationDestination(
+      loadRuntimeConfig,
+      {
+        isViewedOnDevice: (deviceId, sessionKey) =>
+          sessionViewers?.isViewedOnDevice(deviceId, sessionKey) === true,
+      },
+      () => sessionRowProjection,
+    ),
+  ]);
   const gatewayBroadcaster = createGatewayBroadcaster({
     clients,
     preparePresenceProjection: (presence) =>
@@ -187,7 +190,7 @@ export function createGatewayConnectionState(params: {
       );
     },
     onBroadcast: (event, payload, opts) =>
-      eventWebPush.handleEvent(
+      notifications.handleEvent(
         event,
         payload,
         opts ? { agentId: opts.agentId, sessionKeys: opts.sessionKeys } : undefined,
@@ -211,7 +214,7 @@ export function createGatewayConnectionState(params: {
     },
     broadcastToConnIds: gatewayBroadcaster.broadcastToConnIds,
     // Targeted websocket invalidations do not enter the global Web Push event hook.
-    onMentionCreated: eventWebPush.deliverMention,
+    onMentionCreated: notifications.deliverMention,
   });
   const agentRunSeq = new Map<string, number>();
   const dedupe = new Map<string, import("./server-shared.js").DedupeEntry>();

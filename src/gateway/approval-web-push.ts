@@ -6,7 +6,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isWebPushQuietHours,
-  normalizeWebPushDisplayLabel,
   webPushAgentAllowed,
   webPushCategoryEnabled,
 } from "../infra/push-web-preferences.js";
@@ -22,10 +21,14 @@ import {
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { resolveControlUiWebPushUrl } from "./control-ui-shared.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
-import { APPROVALS_SCOPE } from "./method-scopes.js";
+import { canNotificationRecipientReceive } from "./notification-authority.js";
+import {
+  approvalNotificationIntent,
+  renderNotificationCopy,
+  type NotificationIntent,
+} from "./notification-intent.js";
 import { canAccessOperatorApproval } from "./operator-approval-authorization.js";
 import { getOperatorApprovalDetailed } from "./operator-approval-store.js";
-import { READ_SCOPE } from "./operator-scopes.js";
 import {
   canAccessApprovalSession,
   isApprovalRecordVisibleToClient,
@@ -34,7 +37,6 @@ import {
 import {
   listCurrentWebPushTargets,
   webPushTargetClient,
-  webPushSessionAccess,
   withCurrentWebPushAuthority,
   type CurrentWebPushTarget,
   type WebPushAuthority,
@@ -54,29 +56,17 @@ type ApprovalRequestWebPushDelivery = {
 };
 
 function approvalNotificationCopy(params: {
-  terminal: boolean;
+  intent: NotificationIntent;
   preferences: CurrentWebPushTarget["preferences"];
-  agentLabel?: string;
   icon?: string;
 }) {
   const label = params.preferences.label ? `${params.preferences.label} · ` : "";
-  const agent = params.agentLabel ? ` for ${params.agentLabel}` : "";
-  const privateCopy = params.preferences.detailLevel === "private";
+  const copy = renderNotificationCopy(params.intent, params.preferences.detailLevel);
   return {
-    ...(!privateCopy && params.icon ? { icon: params.icon } : {}),
-    title: `${label}OpenClaw approval ${params.terminal ? "updated" : "requested"}`,
-    body: params.terminal
-      ? privateCopy
-        ? "This approval is no longer pending."
-        : `Approval${agent} is no longer pending.`
-      : privateCopy
-        ? "Open OpenClaw to review this request."
-        : `Open OpenClaw to review an approval${agent}.`,
+    ...(params.preferences.detailLevel !== "private" && params.icon ? { icon: params.icon } : {}),
+    title: `${label}${copy.title}`,
+    body: copy.body,
   };
-}
-
-function approvalWebPushTag(approvalId: string): string {
-  return `openclaw-approval-${approvalId}`;
 }
 
 function approvalWebPushTopic(approvalId: string): string {
@@ -95,6 +85,7 @@ function sendApprovalNotificationGroups(params: {
   sender: PreparedWebPushNotificationSender;
   cfg: OpenClawConfig;
   approvalId: string;
+  intent: ReturnType<typeof approvalNotificationIntent>;
   ttlSeconds: number;
   groups: Iterable<ApprovalNotificationGroup>;
 }) {
@@ -105,15 +96,12 @@ function sendApprovalNotificationGroups(params: {
         payload: {
           ...copy,
           renotify: false,
-          tag: approvalWebPushTag(params.approvalId),
-          url: resolveControlUiWebPushUrl(
-            params.cfg,
-            `approve/${encodeURIComponent(params.approvalId)}`,
-          ),
+          tag: params.intent.tag,
+          url: resolveControlUiWebPushUrl(params.cfg, params.intent.path),
         },
         deliveryOptions: {
           TTL: params.ttlSeconds,
-          urgency: "high",
+          urgency: params.intent.urgency,
           timeout: WEB_PUSH_APPROVAL_TIMEOUT_MS,
           topic: approvalWebPushTopic(params.approvalId),
         },
@@ -136,24 +124,32 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
   const source = isRecord(params.record.request) ? params.record.request : undefined;
   const agentId = normalizeOptionalString(source?.agentId);
   const sessionKey = normalizeOptionalString(source?.sessionKey);
-  const preparation = { ...params, agentId, sessionKeys: sessionKey ? [sessionKey] : [] };
+  const intent = approvalNotificationIntent({
+    approvalId: params.record.id,
+    terminal: false,
+    ...(agentId ? { agentId } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
+    canReceive: ({ cfg, client, sessionAccess }) =>
+      isApprovalRecordVisibleToClient({
+        record: params.record,
+        client,
+        cfg,
+        prepared: sessionAccess(),
+      }),
+  });
+  const preparation = { ...params, agentId, sessionKeys: intent.sessionKeys };
   const eligibleTargets = (authority: WebPushAuthority) =>
     listCurrentWebPushTargets({
       ...authority,
-      requiredScopes: [APPROVALS_SCOPE, READ_SCOPE],
+      requiredScopes: intent.requiredScopes,
     }).filter((target) => {
       const { preferences } = target;
       const client = webPushTargetClient(target);
       return (
-        webPushCategoryEnabled(preferences, "approval-requested") &&
+        webPushCategoryEnabled(preferences, intent.category) &&
         !isWebPushQuietHours(preferences) &&
         webPushAgentAllowed(preferences, agentId) &&
-        isApprovalRecordVisibleToClient({
-          record: params.record,
-          client,
-          cfg: authority.cfg,
-          prepared: webPushSessionAccess(authority, client),
-        })
+        canNotificationRecipientReceive(intent, authority, client)
       );
     });
   const subscriptions = await withCurrentWebPushAuthority(preparation, (authority) => ({
@@ -202,13 +198,11 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
       return undefined;
     }
     const ttlSeconds = Math.ceil((params.record.expiresAtMs - now) / 1_000);
-    const agentLabel = normalizeWebPushDisplayLabel(agentId);
     const requestGroups = new Map<string, ApprovalNotificationGroup>();
     for (const { subscription, preferences } of currentEligibleTargets) {
       const copy = approvalNotificationCopy({
-        terminal: false,
+        intent,
         preferences,
-        agentLabel,
         icon: currentWebPushAgentIcon(cfg, preparedIcon),
       });
       const key = JSON.stringify(copy);
@@ -222,6 +216,7 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
           sender: sendWebPushNotifications,
           cfg,
           approvalId: params.record.id,
+          intent,
           ttlSeconds,
           groups: requestGroups.values(),
         }),
@@ -279,18 +274,45 @@ export function createApprovalWebPushDelivery(params: {
             : durableRecord?.source;
         const sessionKey = normalizeOptionalString(source?.sessionKey);
         const agentId = normalizeOptionalString(source?.agentId);
+        const intent = approvalNotificationIntent({
+          approvalId: approval.id,
+          terminal: true,
+          ...(agentId ? { agentId } : {}),
+          ...(sessionKey ? { sessionKey } : {}),
+          canReceive: ({ cfg, client, sessionAccess }) =>
+            requestDelivery
+              ? isApprovalRecordVisibleToClient({
+                  record: requestDelivery.record,
+                  client,
+                  cfg,
+                  prepared: sessionAccess(),
+                })
+              : Boolean(
+                  durableRecord &&
+                  canAccessOperatorApproval({
+                    client,
+                    binding: { reviewerDeviceIds: durableRecord.reviewerDeviceIds },
+                  }) &&
+                  canAccessApprovalSession({
+                    cfg,
+                    client,
+                    ...readOperatorApprovalRequestSource(durableRecord),
+                    prepared: sessionAccess(),
+                  }),
+                ),
+        });
         const preparedIcon = await prepareWebPushAgentIcon(params.getRuntimeConfig(), agentId);
         const groupedResults = await withCurrentWebPushAuthority(
           {
             ...params,
-            sessionKeys: sessionKey ? [sessionKey] : [],
+            sessionKeys: intent.sessionKeys,
             agentId,
           },
           (authority) => {
             const { cfg } = authority;
             const currentTargets = listCurrentWebPushTargets({
               ...authority,
-              requiredScopes: [APPROVALS_SCOPE, READ_SCOPE],
+              requiredScopes: intent.requiredScopes,
             });
             const currentTargetsBySubscriptionId = new Map(
               currentTargets.map((target) => [target.subscription.subscriptionId, target]),
@@ -303,37 +325,15 @@ export function createApprovalWebPushDelivery(params: {
                 current.subscription.userProfileId === subscription.userProfileId
                   ? current
                   : undefined;
-              const client = target ? webPushTargetClient(target) : null;
-              const visible = requestDelivery
-                ? Boolean(
-                    client &&
-                    isApprovalRecordVisibleToClient({
-                      record: requestDelivery.record,
-                      client,
-                      cfg,
-                      prepared: webPushSessionAccess(authority, client),
-                    }),
-                  )
-                : Boolean(
-                    client &&
-                    durableRecord &&
-                    canAccessOperatorApproval({
-                      client,
-                      binding: { reviewerDeviceIds: durableRecord.reviewerDeviceIds },
-                    }) &&
-                    canAccessApprovalSession({
-                      cfg,
-                      client,
-                      ...readOperatorApprovalRequestSource(durableRecord),
-                      prepared: webPushSessionAccess(authority, client),
-                    }),
-                  );
-              if (!target || !visible) {
+              if (
+                !target ||
+                !canNotificationRecipientReceive(intent, authority, webPushTargetClient(target))
+              ) {
                 suppressedSubscriptionIds.push(subscription.subscriptionId);
                 continue;
               }
               const copy = approvalNotificationCopy({
-                terminal: true,
+                intent,
                 preferences: target.preferences,
                 icon: currentWebPushAgentIcon(cfg, preparedIcon),
               });
@@ -348,6 +348,7 @@ export function createApprovalWebPushDelivery(params: {
                   sender,
                   cfg,
                   approvalId: approval.id,
+                  intent,
                   ttlSeconds: WEB_PUSH_TERMINAL_TTL_SECONDS,
                   groups: terminalGroups.values(),
                 }),

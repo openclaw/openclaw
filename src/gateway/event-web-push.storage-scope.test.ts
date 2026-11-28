@@ -24,7 +24,8 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
 } from "../state/openclaw-state-db-cache.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import { createEventWebPushDelivery } from "./event-web-push.js";
+import { createWebPushNotificationDestination } from "./event-web-push.js";
+import { createNotificationDelivery } from "./notification-delivery.js";
 import { withCurrentWebPushAuthority } from "./web-push-authority.js";
 
 type PreparedSender = Awaited<ReturnType<typeof prepareWebPushNotificationSender>>;
@@ -230,7 +231,7 @@ it("orders binding and pairing reads before rebinding without retaining provider
   order.length = 0;
   const warnings = createWarnLogCapture("web-push-storage-scope");
   onTestFinished(() => warnings.cleanup());
-  const delivery = createEventWebPushDelivery(() => ({}));
+  const delivery = createNotificationDelivery([createWebPushNotificationDestination(() => ({}))]);
   delivery.handleEvent("chat", { state: "final", runId: "scope-run" });
   await selected.promise;
   const mutation = upsertBinding(stateDir, "profile-b", 2);

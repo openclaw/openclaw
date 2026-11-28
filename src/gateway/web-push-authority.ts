@@ -13,6 +13,10 @@ import { withBoundWebPushSubscriptions, type BoundWebPushSubscription } from "..
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { getUserPreferenceValues } from "../state/user-preferences.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import {
+  withNotificationSessionFacts,
+  type NotificationAuthoritySnapshot,
+} from "./notification-authority.js";
 import { prepareDeviceTokenBindingLookup } from "./openclaw-id/device-token-binding.js";
 import {
   openclawIdSubjectRolePolicy,
@@ -26,13 +30,6 @@ import {
 } from "./operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
 import type { GatewayClient } from "./server-methods/types.js";
-import type { PreparedSessionMutationFacts } from "./session-sharing-policy.js";
-import {
-  prepareSessionMutationFacts,
-  type SessionFactsRead,
-} from "./session-sharing-preparation.js";
-import { prepareProjectedSessionSharing } from "./session-sharing-read.js";
-import { resolveSessionStoreIdentity } from "./session-store-key.js";
 
 const OPERATOR_ROLE = "operator";
 
@@ -45,13 +42,11 @@ export type CurrentWebPushTarget = {
   preferences: ReturnType<typeof resolveEffectiveWebPushPreferences>;
 };
 
-export type WebPushAuthority = {
-  cfg: OpenClawConfig;
+export type WebPushAuthority = NotificationAuthoritySnapshot & {
   subscriptions: readonly BoundWebPushSubscription[];
   pairedDevices: readonly PairedDevice[];
   profile: Awaited<ReturnType<typeof prepareUserProfileCatalog>> | undefined;
   preferences: Map<string, unknown>;
-  sessions: Map<string, PreparedSessionMutationFacts>;
   devicePeer: Awaited<ReturnType<typeof prepareDeviceTokenBindingLookup>>;
   principal: Awaited<ReturnType<typeof prepareOpenClawIdTunnelPrincipalLookup>>;
 };
@@ -169,130 +164,83 @@ export async function withCurrentWebPushAuthority<T>(
   },
   prepare: (authority: WebPushAuthority) => { start: () => T | Promise<T> } | undefined,
 ): Promise<T | undefined> {
-  const sessions = new Map<string, SessionFactsRead<PreparedSessionMutationFacts>>();
-  try {
-    const [devicePeer, principal] = await Promise.all([
-      prepareDeviceTokenBindingLookup(),
-      prepareOpenClawIdTunnelPrincipalLookup(),
-    ]);
-    // Session discovery can wait on another store; keep browser registration outside that wait.
-    for (const sessionKey of new Set(params.sessionKeys)) {
-      const cfg = params.getRuntimeConfig();
-      const { agentId } = resolveSessionStoreIdentity({
-        cfg,
-        sessionKey,
-        agentId: params.agentId,
-      });
-      sessions.set(
-        sessionKey,
-        await prepareSessionMutationFacts({ cfg, sessionKey, agentId, allowMissing: true }),
-      );
-    }
-    const delivery = await withBoundWebPushSubscriptions(
-      params.stateDir,
-      async (subscriptions, assertCurrent) => {
-        const options = params.stateDir
-          ? { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } }
-          : {};
-        const profile = subscriptions.some((subscription) => subscription.userProfileId)
-          ? await prepareUserProfileCatalog(options)
-          : undefined;
-        try {
-          // Pairing preparation can yield after a profile merge or preference mutation.
-          for (;;) {
-            const profileIds = new Set(
-              subscriptions.flatMap((subscription) => {
-                const id =
-                  subscription.userProfileId &&
-                  profile?.readCurrentIdentity(subscription.userProfileId)?.profileId;
-                return id ? [id] : [];
-              }),
-            );
-            const preferences = await getUserPreferenceValues(
-              [...profileIds],
-              WEB_PUSH_USER_PREFERENCES_KEY,
-              options,
-            );
-            let changed = false;
-            const begun = await withCurrentDevicePairingSnapshot(
-              params.stateDir,
-              (pairedDevices) => {
-                assertCurrent();
-                changed =
-                  !preferences.isCurrent() ||
-                  subscriptions.some((subscription) => {
-                    const id =
-                      subscription.userProfileId &&
-                      profile?.readCurrentIdentity(subscription.userProfileId)?.profileId;
-                    return id && !profileIds.has(id);
-                  });
-                if (changed) {
-                  return undefined;
-                }
-                const cfg = params.getRuntimeConfig();
-                const action = prepare({
-                  cfg,
-                  devicePeer,
-                  principal,
-                  subscriptions,
-                  pairedDevices,
-                  profile,
-                  preferences: preferences.values,
-                  sessions: new Map(
-                    [...sessions].map(([key, facts]) => [key, facts.readCurrent(cfg)]),
-                  ),
+  const [devicePeer, principal] = await Promise.all([
+    prepareDeviceTokenBindingLookup(),
+    prepareOpenClawIdTunnelPrincipalLookup(),
+  ]);
+  // Session discovery can wait on another store; keep browser registration outside that wait.
+  const delivery = await withNotificationSessionFacts(params, (sessions) =>
+    withBoundWebPushSubscriptions(params.stateDir, async (subscriptions, assertCurrent) => {
+      const options = params.stateDir
+        ? { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } }
+        : {};
+      const profile = subscriptions.some((subscription) => subscription.userProfileId)
+        ? await prepareUserProfileCatalog(options)
+        : undefined;
+      try {
+        // Pairing preparation can yield after a profile merge or preference mutation.
+        for (;;) {
+          const profileIds = new Set(
+            subscriptions.flatMap((subscription) => {
+              const id =
+                subscription.userProfileId &&
+                profile?.readCurrentIdentity(subscription.userProfileId)?.profileId;
+              return id ? [id] : [];
+            }),
+          );
+          const preferences = await getUserPreferenceValues(
+            [...profileIds],
+            WEB_PUSH_USER_PREFERENCES_KEY,
+            options,
+          );
+          let changed = false;
+          const begun = await withCurrentDevicePairingSnapshot(
+            params.stateDir,
+            (pairedDevices) => {
+              assertCurrent();
+              changed =
+                !preferences.isCurrent() ||
+                subscriptions.some((subscription) => {
+                  const id =
+                    subscription.userProfileId &&
+                    profile?.readCurrentIdentity(subscription.userProfileId)?.profileId;
+                  return id && !profileIds.has(id);
                 });
-                return {
-                  start: () => {
-                    assertCurrent();
-                    // Boxing releases storage and profile leases without retaining provider I/O.
-                    return { value: action?.start() };
-                  },
-                };
-              },
-              sessions.size > 0
-                ? async () => {
-                    if (params.preparePublication) {
-                      await params.preparePublication();
-                    }
-                    // Session writes can begin while pairing loads; join their publication before
-                    // the final synchronous access check, without retaining facts through provider I/O.
-                    await Promise.all(
-                      [...sessions.values()].flatMap((facts) => facts.prepareRead() ?? []),
-                    );
-                  }
-                : params.preparePublication,
-            );
-            if (!changed) {
-              return begun ? { start: () => begun } : undefined;
-            }
+              if (changed) {
+                return undefined;
+              }
+              const cfg = params.getRuntimeConfig();
+              const action = prepare({
+                cfg,
+                devicePeer,
+                principal,
+                subscriptions,
+                pairedDevices,
+                profile,
+                preferences: preferences.values,
+                sessions: sessions.read(cfg),
+              });
+              return {
+                start: () => {
+                  assertCurrent();
+                  // Boxing releases storage and profile leases without retaining provider I/O.
+                  return { value: action?.start() };
+                },
+              };
+            },
+            sessions.publication(params.preparePublication),
+          );
+          if (!changed) {
+            return begun ? { start: () => begun } : undefined;
           }
-        } finally {
-          profile?.release();
         }
-      },
-    );
-    // Release session facts before awaiting provider completion.
-    return delivery?.value;
-  } finally {
-    for (const facts of sessions.values()) {
-      facts.release();
-    }
-  }
-}
-
-export function webPushSessionAccess(authority: WebPushAuthority, client: GatewayClient) {
-  return {
-    sharing: prepareProjectedSessionSharing({
-      cfg: authority.cfg,
-      client,
-      isMember: (target, identity) =>
-        [...authority.sessions.values()].some(
-          (facts) => facts.target === target && facts.membership.has(identity),
-        ),
+      } finally {
+        profile?.release();
+      }
     }),
-    target: (sessionKey: string) => authority.sessions.get(sessionKey)?.target ?? null,
-  };
+  );
+  // Session facts are released; provider completion is awaited by the caller.
+  return delivery?.value;
 }
 
 export function webPushTargetClient(target: CurrentWebPushTarget): GatewayClient {

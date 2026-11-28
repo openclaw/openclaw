@@ -8,7 +8,8 @@ import { linkOpenClawIdUserProfile } from "../state/user-profile-openclaw-id.wor
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createEventWebPushDelivery } from "./event-web-push.js";
+import { createWebPushNotificationDestination } from "./event-web-push.js";
+import { createNotificationDelivery } from "./notification-delivery.js";
 import { setDeviceTokenBindingOwner } from "./openclaw-id/device-token-binding.js";
 import {
   setOpenClawIdMemberAccountLookup,
@@ -184,7 +185,7 @@ describe("Web Push ID canonical profile policy", () => {
             ? undefined
             : () => (membership === "removed" ? undefined : principal),
         );
-        createEventWebPushDelivery(() => cfg).handleEvent(
+        createNotificationDelivery([createWebPushNotificationDestination(() => cfg)]).handleEvent(
           "chat",
           { state: "final", runId: "membership-run" },
           { agentId: "main", sessionKeys: [sessionKey] },
