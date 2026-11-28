@@ -32,7 +32,7 @@ it.each([true, false])(
           cleanupHandled: false,
           cleanupCompletedAt: undefined,
           completion: { required: true },
-          delivery: { status: "pending", disposition: "intentional_non_delivery" },
+          delivery: { status: "pending" },
         });
         input.subagent.execution.outcome = undefined;
         Object.assign(input.subagent.requesterSettleWake!, {

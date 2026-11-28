@@ -223,6 +223,9 @@ describe("GitHub publication transcript reporting", () => {
         });
         const reports = reportMessages(events, result.requestId);
         expect(reports).toHaveLength(1);
+        expect(reports[0]).toMatchObject({
+          message: { openclawGitHubPublicationStatus: "published" },
+        });
         expect(JSON.stringify(reports[0])).toContain(publishedResult.url);
         // The account source reads the same as Settings → Profile → GitHub accounts.
         expect(JSON.stringify(reports[0])).toContain("Using @agent-bot (Own account).");

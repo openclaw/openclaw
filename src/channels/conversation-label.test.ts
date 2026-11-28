@@ -40,7 +40,7 @@ describe("resolveConversationLabel", () => {
       ctx: {
         ChatType: "channel",
         GroupSubject: "#general",
-        From: "slack:channel:C123",
+        From: "slack:channel:123",
       },
       expected: "#general",
     },
@@ -48,10 +48,10 @@ describe("resolveConversationLabel", () => {
       name: "does not append ids when the base already contains the id",
       ctx: {
         ChatType: "group",
-        GroupSubject: "Family id:room-123@example",
+        GroupSubject: "Family room-123@example",
         From: "demo-channel:group:room-123@example",
       },
-      expected: "Family id:room-123@example",
+      expected: "Family room-123@example",
     },
     {
       name: "appends opaque address-like ids when a subject exists",

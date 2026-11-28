@@ -184,7 +184,6 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
             [boardAuthority.assertActive],
             (assertSources) => {
               assertSources();
-              requester?.authority.assertCurrent();
               canvasRead?.read.assertCurrent();
             },
           ),

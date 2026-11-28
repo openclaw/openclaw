@@ -8,6 +8,9 @@ const enChatToolWidgets = {
       showRawDetails: "Show raw details",
       hideRawDetails: "Hide raw details",
       widgetActions: "Widget actions",
+      annotateWidget: "Annotate widget",
+      widgetInspectUnavailable:
+        "Element comments aren’t available yet. Try again once the widget loads, or ask the agent to render this widget again.",
       copyAsImage: "Copy as image",
       downloadAsImage: "Download as image",
       widgetExportRerender: "Render this widget again to export it as an image.",

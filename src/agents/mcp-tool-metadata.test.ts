@@ -136,3 +136,29 @@ it("filters excluded tools before compiling their output schemas", () => {
   expect(normalized.metadata.validatorForCall("healthy")).toBeTypeOf("function");
   expect(normalized.metadata.validatorForCall("excluded")).toBeUndefined();
 });
+
+it("compiles output schemas on first call, except shared $id resources (#199327)", () => {
+  const schemaValidator = createMcpJsonSchemaValidator();
+  const getValidator = vi.spyOn(schemaValidator, "getValidator");
+  const normalized = normalizeMcpToolCatalog(
+    [
+      tool("base", {
+        outputSchema: { $id: "https://example.test/base", type: "object", required: ["ok"] },
+      }),
+      tool("derived", {
+        outputSchema: { type: "object", allOf: [{ $ref: "https://example.test/base" }] },
+      }),
+      tool("unused", { outputSchema: { type: "object" } }),
+    ],
+    schemaValidator,
+  );
+  expect(getValidator).toHaveBeenCalledTimes(1);
+
+  const validate = normalized.metadata.validatorForCall("derived")!;
+  expect(normalized.metadata.validatorForCall("derived")).toBe(validate);
+  expect(getValidator).toHaveBeenCalledTimes(2);
+  expect(() => validate({ content: [], structuredContent: { ok: true } })).not.toThrow();
+  expect(() => validate({ content: [], structuredContent: {} })).toThrow(
+    "Structured content does not match the tool's output schema",
+  );
+});

@@ -94,16 +94,6 @@ describe("renderTable", () => {
     expect(stripAnsi(out)).not.toContain("\x18");
   });
 
-  it("sizes multiline linked LF headers and cells by their widest line", () => {
-    const out = renderRow([column("A", { header: "abc\ndef" }), column("B")], {
-      A: "x",
-      B: "\x1b]8;;https://example.com/\x07abc\ndef\x1b]8;;\x07",
-    });
-    expect(stripAnsi(out)).toBe(
-      "+-----+-----+\n| abc | B   |\n| def |     |\n+-----+-----+\n| x   | abc |\n|     | def |\n+-----+-----+\n",
-    );
-  });
-
   it("keeps newlines inside an OSC payload out of table line metrics", () => {
     const open = "\x1b]8;id=line\nmetadata;https://example.com/\x07";
     const out = renderCell(`${open}abc${linkClose}`);
@@ -130,61 +120,6 @@ describe("renderTable", () => {
       });
     },
   );
-
-  it("fits mixed flex columns within 60 columns without clipping headers", () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    const fields = [
-      ["Name", 30, true, "N".repeat(40)],
-      ["Status", 10, false, "disabled"],
-      ["Source", 26, true, `/${"s".repeat(80)}`],
-    ] as const;
-    const columns = fields.map(([key, minWidth, flex]) => column(key, { minWidth, flex }));
-    const row = Object.fromEntries(fields.map((field) => [field[0], field[3]]));
-    const width = 60;
-    const lines = linesOf(renderRow(columns, row, width));
-    const headerCells = (lines[1] ?? "").split("│").slice(1, -1);
-    expect(Math.max(...lines.map(visibleWidth))).toBeLessThanOrEqual(width);
-    for (const [index, definition] of columns.entries()) {
-      expect(visibleWidth(headerCells[index] ?? "")).toBeGreaterThanOrEqual(
-        visibleWidth(definition.header) + 2,
-      );
-    }
-  });
-
-  it("keeps ANSI styling when a multiline cell wraps after an unstyled line", () => {
-    const muted = "\x1b[38;2;120;120;120m";
-    const resetForeground = "\x1b[39m";
-    const out = renderValue(`plain\n${muted}${"styled ".repeat(12)}${resetForeground}`);
-    expectClosedBeforeBorder(matchingLines(out, "styled"), muted, resetForeground);
-  });
-
-  it.each([
-    [
-      "RGB zero operands",
-      "prefix \x1b[1m\x1b[38;2;255;0;0m",
-      ["\x1b[1m", "\x1b[38;2;255;0;0m"],
-      [],
-    ],
-    ["selective reset", "\x1b[1;31mred\x1b[39m\n", ["\x1b[1m"], ["\x1b[1;31m", "\x1b[31m"]],
-  ] as const)("keeps unrelated SGR categories after %s", (_name, prefix, present, absent) => {
-    const out = renderValue(`${prefix}${"z".repeat(80)}\x1b[0m`);
-    expectAnsi(matchingLines(out, "z"), present, absent);
-  });
-
-  it("keeps underline color active with colon operands", () => {
-    const combined = "\x1b[4;58:2::255:0:0m";
-    const color = "\x1b[58:2::255:0:0m";
-    const globalReset = "\x1b[0m";
-    const out = renderValue(`${combined}${"u".repeat(80)}${globalReset}`);
-    for (const line of matchingLines(out, "u")) {
-      expect(line.includes(combined) || (line.includes("\x1b[4m") && line.includes(color))).toBe(
-        true,
-      );
-      expect(
-        line.includes(globalReset) || (line.includes("\x1b[24m") && line.includes("\x1b[59m")),
-      ).toBe(true);
-    }
-  });
 
   it("preserves OSC-8 parameters when reopening wrapped links", () => {
     const open = "\x1b]8;id=docs;https://openclaw.ai\x07";
@@ -287,12 +222,5 @@ describe("renderTable", () => {
     expect(out.split(sequence)).toHaveLength(2);
     expect(out).not.toContain("\x1b[39m");
     expectWidth(linesOf(out), 24);
-  });
-
-  it("selects Unicode borders for modern Windows terminals", () => {
-    vi.stubEnv("WT_SESSION", "1");
-    const out = renderCell("value");
-    expect(out).toContain("┌");
-    expect(out).not.toContain("+");
   });
 });

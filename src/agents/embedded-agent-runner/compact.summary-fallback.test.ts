@@ -249,6 +249,7 @@ async function compactSession(
   abortSignal?: AbortSignal,
   trigger: "manual" | "budget" = "budget",
   preflight = false,
+  identity: { runId?: string; diagId?: string } = {},
 ) {
   let preparedSession:
     | import("./run/compaction-accounting-bridge.js").PreparedCompactionSession
@@ -283,6 +284,7 @@ async function compactSession(
       model: "model",
       trigger,
       force: true,
+      ...identity,
       abortSignal,
       enqueue: async (task) => await task(),
     },
@@ -433,6 +435,27 @@ it.each([
   }
   expectFallbackSummary(fixture);
 });
+
+// Both prepared callers announce progress under the runId and diagId they pass in:
+// recovery emits `compaction` events, Gateway `sessions.compact` its operation id.
+it.each([
+  { caller: "recovery", trigger: "budget", preflight: false, diagId: "ovf-progress" },
+  { caller: "sessions.compact", trigger: "manual", preflight: true, diagId: undefined },
+] as const)(
+  "persists the $caller compaction under its progress identity",
+  async ({ trigger, preflight, diagId }) => {
+    const fixture = await createFixture();
+    summaryMode = "ok";
+    const runId = "progress-run";
+
+    expect(
+      await compactSession(fixture, undefined, trigger, preflight, { runId, diagId }),
+    ).toMatchObject({ ok: true, compacted: true });
+    expect(getCompactions(fixture).map((entry) => entry["__openclaw"])).toEqual([
+      { runId, itemId: diagId ?? expect.stringMatching(/^cmp-/) },
+    ]);
+  },
+);
 
 it.each([false, true])(
   "uses the fallback model's runtime only for unlocked native sessions (locked=%s)",
@@ -589,6 +612,32 @@ it("constructs raised manual summary budgets after native sent-tool checkpoint s
     compacted: true,
   });
   expect(observed).toBe(true);
+});
+
+it("gives every compaction preparation read the configured compaction timeout", async () => {
+  summaryMode = "ok";
+  const fixture = await createFixture();
+  fixture.config.agents!.defaults!.compaction!.timeoutSeconds = 600;
+  await fixture.state.writeConfig(fixture.config);
+  const reader = await import("../../config/sessions/session-compaction-prepared.js");
+  const read = reader.readPreparedSessionCompactionInWorker;
+  const deadlines: [string, number | undefined][] = [];
+  const spy = vi
+    .spyOn(reader, "readPreparedSessionCompactionInWorker")
+    .mockImplementation(async (target, operation, signal, timeoutMs) => {
+      deadlines.push([operation.kind, timeoutMs]);
+      return read(target, operation, signal, timeoutMs);
+    });
+  onTestFinished(() => spy.mockRestore());
+  expect(await compactSession(fixture, undefined, "manual", true)).toMatchObject({
+    ok: true,
+    compacted: true,
+  });
+  // Preflight runs in the Gateway runner; plan and finalize run in the embedded owner.
+  expect(deadlines.map(([kind]) => kind)).toEqual(
+    expect.arrayContaining(["preflight", "plan", "finalize"]),
+  );
+  expect(deadlines.filter(([, timeoutMs]) => timeoutMs !== 600_000)).toEqual([]);
 });
 
 it("keeps required cancellation-settlement floors outside the hook anti-loop boundary", async () => {

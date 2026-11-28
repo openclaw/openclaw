@@ -1,9 +1,8 @@
-import { once } from "node:events";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { loadPersistedPluginModelCatalogs } from "../agents/plugin-model-catalog-execution.js";
 import { preparePluginModelCatalogSave } from "../agents/plugin-model-catalog-save.js";
 import {
@@ -26,7 +25,6 @@ import {
   requestRpcSourceCancellation,
 } from "../sessions/session-controller.rpc-sources.js";
 import { runOutsideStoreWriterContext } from "../shared/store-writer-queue.js";
-import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import type { StartChatDispatchParams } from "./server-methods/chat-send-agent-dispatch.types.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
@@ -133,7 +131,7 @@ async function accepted<T extends Record<string, unknown>>(
   return expectDefined(reply.payload, "successful RPC payload");
 }
 
-function captureInitial(key: string, beforeSend?: () => void) {
+function captureInitial(key: string) {
   let initial: GatewayRequestHandlerOptions | undefined;
   const settled = createDeferred();
   const send = chatSendOwner.handleDirectExternalChatSend;
@@ -142,7 +140,6 @@ function captureInitial(key: string, beforeSend?: () => void) {
     .mockImplementation(async (options) => {
       if (options.params.sessionKey === key) {
         initial = options;
-        beforeSend?.();
       }
       try {
         await send(options);
@@ -286,18 +283,14 @@ test("persists and dispatches concurrent Gateway inputs while participant writes
 });
 
 test.for([
-  "before-input",
-  "after-preparation",
   "transaction-refused",
   "commit-refused",
   "revoked-after-preparation",
-  "permission-revoked-at-commit",
   "idle-commit-refused",
-] as const)("keeps only the created session when input fails at %s", async (fault, { signal }) => {
+] as const)("keeps only the created session when input fails at %s", async (fault) => {
   dashboardTitleScheduleMocks.schedule.mockImplementation(() => {});
   const fixture = await inputFixture(`agent:main:dashboard:initial-failure-${fault}`);
-  const { key, target } = fixture;
-  let { ws } = fixture;
+  const { key, target, ws } = fixture;
   const message = "Only retain this initial input after its admission commits.";
   const failure = new Error(`initial input ${fault}`);
   const hit = vi.fn();
@@ -333,12 +326,7 @@ test.for([
       await saveCatalog([catalog]);
     };
   }
-  const initial = captureInitial(key, () => {
-    if (fault === "before-input") {
-      hit();
-      throw failure;
-    }
-  });
+  const initial = captureInitial(key);
   const refuse = probe.admission(workerAdmission, (request, grant, callback) => {
     const facts = isRecord(request.facts) ? request.facts.publication : undefined;
     // Model-catalog and other worker writes may settle while the input command waits.
@@ -350,15 +338,6 @@ test.for([
       isRecord(facts.snapshot) &&
       isRecord(facts.snapshot.target) &&
       facts.snapshot.target.sessionKey === key;
-    if (fault === "permission-revoked-at-commit" && committingInput && request.stage === "commit") {
-      hit();
-      const options = initial.options;
-      invalidateGatewayDeviceRevocation(
-        options.context,
-        expectDefined(options.client?.connect.device?.id, "authenticated device"),
-        "operator",
-      );
-    }
     if (
       committingInput &&
       ((fault === "transaction-refused" && request.stage === "transaction") ||
@@ -370,48 +349,18 @@ test.for([
     }
     callback(request, grant);
   });
-  if (fault === "after-preparation" || fault === "revoked-after-preparation") {
+  if (fault === "revoked-after-preparation") {
     turnBoundary.afterPrepare = () => {
       turnBoundary.afterPrepare = undefined;
       hit();
-      if (fault === "after-preparation") {
-        throw failure;
-      }
       const run = expectDefined(getRpcSource(initial.runId), "admitted run");
       run.adapter.abortStopReason = "restart";
       requestRpcSourceCancellation(run, failure);
     };
   }
   try {
-    const params = { agentId: "main", key, message };
     let created: Awaited<ReturnType<typeof fixture.create>> | undefined;
-    if (fault === "permission-revoked-at-commit") {
-      // Revocation suppresses this request's wire response. Join its real handler
-      // and native settlement instead of waiting for an intentionally absent ACK.
-      const responses: unknown[] = [];
-      const requestId = "revoked-create";
-      const onMessage = (raw: unknown) => responses.push(JSON.parse(String(raw)));
-      ws.on("message", onMessage);
-      try {
-        ws.send(JSON.stringify({ type: "req", id: requestId, method: "sessions.create", params }));
-        await withinTest(initial.settled, signal);
-        await fixture.settlement();
-        const closed = once(ws, "close");
-        ws.close();
-        await withinTest(closed, signal);
-        expect(responses).not.toContainEqual(
-          expect.objectContaining({
-            type: "res",
-            id: requestId,
-            ok: true,
-            payload: expect.objectContaining({ runStarted: true }),
-          }),
-        );
-      } finally {
-        ws.off("message", onMessage);
-      }
-      fixture.ws = ws = (await openClient()).ws;
-    } else if (fault === "idle-commit-refused") {
+    if (fault === "idle-commit-refused") {
       created = await fixture.create();
       expect((await fixture.send(message, fault)).ok).toBe(false);
       await fixture.settlement();

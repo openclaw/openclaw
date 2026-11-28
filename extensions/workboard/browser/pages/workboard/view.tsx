@@ -6,6 +6,7 @@ import { WorkboardToast } from "../../components/toast.tsx";
 import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { createElementRefs } from "../../lib/element-refs.ts";
+import { cardsWithPendingDrops } from "../../lib/workboard/card-state.ts";
 import {
   groupWorkboardCardsByStatus,
   workboardCardMatchesHealthKey,
@@ -83,6 +84,7 @@ function AgentControl(props: { workboard: WorkboardProps; options: WorkboardSele
 function WorkboardColumns(props: {
   workboard: WorkboardProps;
   statuses: WorkboardStatus[];
+  unfilteredCards: WorkboardCard[];
   byStatus: Map<WorkboardStatus, WorkboardCard[]>;
   cardRefs: ReturnType<typeof createElementRefs<HTMLElement>>;
   menuCardId?: string;
@@ -122,6 +124,7 @@ function WorkboardColumns(props: {
               workboard={props.workboard}
               status={status()}
               cards={props.byStatus.get(status()) ?? []}
+              unfilteredCards={props.unfilteredCards}
               cardRefs={props.cardRefs}
               menuCardId={props.menuCardId}
               options={{ surface: state().viewMode === "list" ? "list" : "page" }}
@@ -150,7 +153,8 @@ export function WorkboardView(
     );
     // A deleted board keeps its route filter instead of exposing every board.
     const activeBoardFilter = current.boardFilter;
-    const scopedCards = current.cards
+    const unfilteredCards = cardsWithPendingDrops(current);
+    const scopedCards = unfilteredCards
       .filter((card) => current.showArchived || !card.metadata?.archivedAt)
       .filter((card) => matchesWorkboardCardScope(props, card))
       .filter((card) => matchesCardQuery(card, current.query));
@@ -312,6 +316,7 @@ export function WorkboardView(
     }
     return {
       boardOptions,
+      unfilteredCards,
       activeBoardFilter,
       filtered,
       cardsKnown,
@@ -637,6 +642,7 @@ export function WorkboardView(
                 <WorkboardColumns
                   workboard={props}
                   statuses={view().visibleStatuses}
+                  unfilteredCards={view().unfilteredCards}
                   byStatus={view().byStatus}
                   cardRefs={cardRefs}
                   menuCardId={selectedMenuCardId()}

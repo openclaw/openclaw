@@ -16,7 +16,7 @@ import {
 import {
   getUpdateDoctorConfigWriteAuthority,
   recordUpdateDoctorConfigWriteRefusal,
-} from "../infra/update-doctor-result.js";
+} from "../infra/update-doctor-config-capture.js";
 import { createManagedHandoffLeaseStore } from "../infra/update-managed-service-handoff-lease.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore } from "../shared/deferred.js";

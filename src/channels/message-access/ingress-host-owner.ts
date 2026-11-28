@@ -1,4 +1,4 @@
-import type { PreparedCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import type { PreparedCommandOwnerAuthority } from "../../auto-reply/command-owner-facts.js";
 import type { PreparedRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { SessionParticipantIdentity } from "../../config/sessions/session-participant-identity.js";
 import type { prepareChannelOperatorAuthority } from "../../gateway/channel-operator-authority.js";

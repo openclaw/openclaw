@@ -110,6 +110,8 @@ type CodexBoundedTurnParams = {
   authRequirement?: CodexAppServerAuthRequirement;
   timeoutMs: number;
   thinkLevel?: Parameters<typeof resolveCodexAppServerReasoningEffort>[0]["thinkLevel"];
+  /** Route-row reasoning support; preferred over Codex model/list. */
+  supportedReasoningEfforts?: readonly string[];
   streamParams?: CodexInferenceStreamParams;
   signal?: AbortSignal;
   assertCurrent?: () => void;
@@ -399,7 +401,8 @@ async function runBoundedCodexAppServerTurnInWorkspace(
                 : resolveCodexAppServerReasoningEffort({
                     thinkLevel: params.thinkLevel,
                     modelId: modelSelection.model,
-                    supportedReasoningEfforts: modelSelection.supportedReasoningEfforts,
+                    supportedReasoningEfforts:
+                      params.supportedReasoningEfforts ?? modelSelection.supportedReasoningEfforts,
                   }),
             ...(params.outputSchema ? { outputSchema: params.outputSchema } : {}),
           } satisfies CodexTurnStartParams,

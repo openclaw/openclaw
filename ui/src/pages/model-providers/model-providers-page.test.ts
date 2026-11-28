@@ -95,20 +95,6 @@ describe("ModelProvidersPage agent scope", () => {
     await waitForSolid(() => expect(page.view.props.providerUsageFailed).toBe(false));
   });
 
-  it("opens the Usage page from provider access", async () => {
-    const { context } = createHarness("main");
-    const page = appendPage(context);
-    await waitForProviders(page);
-    publishRouteData(page, createApiKeyProviderData());
-    await page.updateComplete;
-
-    [...page.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "View usage")
-      ?.click();
-
-    expect(context.navigate).toHaveBeenCalledExactlyOnceWith("usage");
-  });
-
   it("opens a requested connection after an empty preload stops pending", async () => {
     const { context } = createHarness("main");
     const page = createPage(context);

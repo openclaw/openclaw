@@ -11,6 +11,7 @@ import { maybeControlDiscordVoiceAgentRun } from "./agent-control.js";
 import { type DiscordVoiceIngressContext, runDiscordVoiceAgentTurn } from "./ingress.js";
 import { formatVoiceIngressPrompt } from "./prompt.js";
 import type { DiscordVoiceSegmentOutcome } from "./recording-types.js";
+import { publishRecordingUtterance } from "./recording-utterance.js";
 import { logVoiceVerbose, type VoiceSessionEntry } from "./session.js";
 import { synthesizeVoiceReplyAudio } from "./tts.js";
 
@@ -108,22 +109,12 @@ export async function processDiscordVoiceSegment(
     return { status: "empty", conversationAuthorized };
   }
   if (recording?.capture.isCurrent()) {
-    await recording.capture.onUtterance({
-      sessionId: recording.capture.sessionId,
-      startedAt: new Date(recording.startedAt).toISOString(),
-      final: true,
-      speaker: {
-        id: userId,
-        label: speakerLabel,
-      },
-      text: transcript,
-      metadata: {
-        channel: "discord",
-        guildId: entry.guildId,
-        channelId: entry.channelId,
-        voiceSessionKey: entry.voiceSessionKey,
-      },
-    });
+    await publishRecordingUtterance(
+      recording.capture,
+      entry,
+      { id: userId, label: speakerLabel },
+      { text: transcript, startedAt: recording.startedAt },
+    );
   }
   return { status: "transcribed", text: transcript, conversationAuthorized };
 }

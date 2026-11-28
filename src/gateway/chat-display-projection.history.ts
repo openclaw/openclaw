@@ -32,6 +32,7 @@ import {
   hasAssistantDisplayableNonTextContent,
   hasTranscriptMediaFacts,
   isEmptyTextOnlyContent,
+  isLegacySessionsSendFailureNoticeMessage,
   isProjectedForwardedMessage,
   isForwardedUserMessage,
   isCronRunMessage,
@@ -400,7 +401,10 @@ function shouldHideProjectedHistoryMessage(
   roleContent: RoleContentMessage | null,
   heartbeatUser: boolean,
 ): boolean {
-  if (isDisplayHiddenProjectedMessage(message)) {
+  if (
+    isDisplayHiddenProjectedMessage(message) ||
+    isLegacySessionsSendFailureNoticeMessage(message)
+  ) {
     return true;
   }
   if (isProjectedForwardedMessage(message)) {

@@ -6,7 +6,10 @@ import * as updateCheck from "../../infra/update-check.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import { readGitRuntimeArtifactIdentity } from "../../infra/update-git-runtime.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
-import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
+import {
+  updateRunStepsFromResultStep,
+  updateRunWarningMessages,
+} from "../../infra/update-run-step.js";
 import * as pluginRecords from "../../plugins/installed-plugin-index-records.js";
 import * as pluginLifecycle from "../../plugins/plugin-lifecycle-lease.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -137,8 +140,6 @@ describe("candidate convergence Doctor dispatch authority", () => {
   it.each([false, true])("reports only final candidate warnings (pending=%s)", async (pending) => {
     const migrations = await import("../../infra/deferred-plugin-migrations.js");
     const freshDoctor = await import("./update-command-fresh-doctor.js");
-    const { renderUpdateRunReport, updateRunReportInputFromResult } =
-      await import("../../infra/update-run-report.js");
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("candidate-warnings-"));
     vi.mocked(shared.readPackageVersion).mockResolvedValue(VERSION);
     vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockResolvedValue({ changed: false });
@@ -175,12 +176,9 @@ describe("candidate convergence Doctor dispatch authority", () => {
     });
     const { resultWithPostUpdate } = await converge({ candidateRuntime: true });
     expect(resultWithPostUpdate.status).toBe("ok");
-    const report = renderUpdateRunReport(updateRunReportInputFromResult(resultWithPostUpdate));
-    expect(report.lines.filter((line) => line.startsWith("Warning: "))).toEqual([
-      `Warning: ${advisory}`,
-      ...(pending ? [`Warning: ${finalWarning}`] : []),
-    ]);
-    expect(report.markdown).not.toContain("Let the current update or repair finish.");
+    const steps = resultWithPostUpdate.steps.flatMap(updateRunStepsFromResultStep);
+    expect(updateRunWarningMessages(steps)).toEqual([advisory, ...(pending ? [finalWarning] : [])]);
+    expect(JSON.stringify(steps)).not.toContain("Let the current update or repair finish.");
   });
   it("converges plugins for a switched Git release in the updater, without Doctor", async () => {
     const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");

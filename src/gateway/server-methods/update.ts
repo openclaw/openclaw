@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
-import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
+import { prepareCommandOwnerAuthority } from "../../auto-reply/command-owner-facts.js";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
 import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
@@ -74,7 +74,6 @@ import { parseRestartRequestParams } from "./restart-request.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import {
   admitGatewayUpdateRequest,
-  retainUpdateRequesterAuthority,
   createUnexpectedUpdateFailureResult,
   makeUpdateRefusal,
   recordHandoffFailure,
@@ -149,11 +148,6 @@ export const updateHandlers: GatewayRequestHandlers = {
       ...requesterInput,
       ...(requesterAuthority ? { authorizationSource: requesterAuthority.source ?? "" } : {}),
     };
-    const retainedRequesterAuthority = retainUpdateRequesterAuthority(
-      requester,
-      requesterAuthority,
-      getConfig,
-    );
     const noticeTarget = await resolveUpdateRunNoticeTarget({
       cfg: config,
       sessionKey,
@@ -481,7 +475,7 @@ export const updateHandlers: GatewayRequestHandlers = {
           assertUpdateAdmissionCurrent();
           const started = await startManagedServiceUpdateHandoff({
             runId,
-            requesterAuthority: retainedRequesterAuthority,
+            requesterAuthority: { signal: requesterAuthority?.signal },
             beforePark: async () => {
               const current = (await getUpdateRun(runId)) ?? run;
               const claimMayPark = async () =>
@@ -490,10 +484,9 @@ export const updateHandlers: GatewayRequestHandlers = {
                   ? await claimManagedServiceUpdateHandoff(managedHandoffOwner)
                   : false);
               const assertMayPark = (claimed: boolean) => {
-                retainedRequesterAuthority.assertCurrent();
                 assertForegroundRespawnEnabled();
-                if (!claimed || (foregroundOrigin && !isRestartEnabled(getConfig()))) {
-                  throw new Error("Foreground update authority changed before parking.");
+                if (!claimed) {
+                  throw new Error("The update handoff ended. Start a new update to retry.");
                 }
               };
               assertMayPark(await claimMayPark());

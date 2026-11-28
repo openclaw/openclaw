@@ -2,12 +2,21 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../../../config/sessions/main-session.js";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasPairedCardRenderer } from "../../../infra/device-pairing.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
+import {
+  readAdmittedRunOperatorAuthority,
+  type AdmittedRunContext,
+} from "../../admitted-run-context.js";
 import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { prepareProgressCardToolForOpenClawTools } from "../../openclaw-tools.registration.js";
+import {
+  isSessionProjectMoveEligible,
+  sessionProjectGuidanceSource,
+} from "../../session-project-guidance.js";
 import { resolveUtilityModelRefForAgent } from "../../utility-model.js";
 
 const INCOGNITO_SYSTEM_PROMPT =
@@ -18,6 +27,8 @@ const PROGRESS_CARD_SYSTEM_PROMPT =
 /** Prepares host-owned additions before either embedded or plugin harness dispatch. */
 export async function prepareAttemptSystemPromptAdditions(params: {
   agentId: string;
+  workspaceDir: string;
+  cwd?: string;
   authProfileId?: string;
   config?: OpenClawConfig;
   extraSystemPrompt?: string;
@@ -27,6 +38,9 @@ export async function prepareAttemptSystemPromptAdditions(params: {
   sessionKey?: string;
   storePath?: string;
   toolsAllow?: string[];
+  entry?: InternalSessionEntry;
+  senderIsOwner?: boolean;
+  admittedRunContext?: AdmittedRunContext;
 }) {
   let extraSystemPrompt = params.extraSystemPrompt;
   const incognito =
@@ -90,5 +104,27 @@ export async function prepareAttemptSystemPromptAdditions(params: {
     storePath: params.storePath,
   });
   // Credit has its own retained prompt placement; do not fold it into dynamic additions.
-  return { extraSystemPrompt, gitCoauthorPrompt };
+  return {
+    extraSystemPrompt,
+    gitCoauthorPrompt,
+    sessionProjectMoveEligible: isSessionProjectMoveEligible(
+      params.config,
+      params.agentId,
+      params.entry,
+      params.cwd?.trim() || params.workspaceDir,
+    ),
+    ...(params.entry
+      ? {
+          prepareSessionProjectGuidance: sessionProjectGuidanceSource({
+            workspaceDir: params.cwd?.trim() || params.workspaceDir,
+            config: params.config,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            entry: params.entry,
+            senderIsOwner: params.senderIsOwner,
+            operatorAuthority: readAdmittedRunOperatorAuthority(params.admittedRunContext),
+          }),
+        }
+      : {}),
+  };
 }

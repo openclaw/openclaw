@@ -91,7 +91,7 @@ export function enqueueMessageInjection<T>(backend: object, run: () => Promise<T
 /** A refused owner assertion is terminal for this input, not permission to redispatch it. */
 export class MessageInjectionAuthorityError extends Error {
   constructor(options?: ErrorOptions) {
-    super("Message injection authority is no longer current", options);
+    super("The message input is no longer available. Start a new turn to retry.", options);
     this.name = "MessageInjectionAuthorityError";
   }
 }

@@ -6,13 +6,19 @@
  */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { waitForBrowserStartup } from "../sdk-node-runtime.js";
 import { getChromeMcpModule } from "./chrome-mcp.runtime.js";
 import type { RunningChrome } from "./chrome.js";
 import { stopOpenClawChrome, stopOwnedOpenClawChrome } from "./chrome.js";
 import { withChromeProfileLifecycleLock } from "./chrome.profile-lifecycle-lock.js";
-import { isLocalManagedProfile, type ResolvedBrowserProfile } from "./config.js";
+import {
+  isLocalManagedProfile,
+  resolveManagedBrowserHeadlessMode,
+  type ResolvedBrowserProfile,
+} from "./config.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 import type { ExtensionRelayResource } from "./extension-relay/relay-access.js";
 import { getBrowserProfileCapabilities } from "./profile-capabilities.js";
@@ -27,6 +33,7 @@ type ProfileLifecycleActor = {
   /** Settled-only tail: failed starts/transitions never poison later work. */
   tail: Promise<void>;
   starts: Map<string, Promise<void>>;
+  addressWarmupOnly?: boolean;
   leases: Set<Promise<void>>;
   handles: Set<RunningChrome>;
   cleanupChromeMcp: string | undefined;
@@ -208,6 +215,85 @@ export function registerProfileHandle(
   return true;
 }
 
+/** A conflicting explicit mode supersedes only a pending speculative start. */
+export function prepareAddressWarmupForStart(
+  state: () => BrowserServerState,
+  runtime: ProfileRuntimeState,
+  options?: { prewarm?: true; headless?: boolean },
+): Promise<ProfileTransitionResult> | undefined {
+  const actor = getProfileLifecycle(runtime);
+  const pendingWarmup = actor.addressWarmupOnly && actor.starts.size > 0;
+  actor.addressWarmupOnly = options?.prewarm === true;
+  if (options?.prewarm || !pendingWarmup || typeof options?.headless !== "boolean") {
+    return undefined;
+  }
+  const current = state();
+  const warmupHeadless =
+    runtime.running?.headless ??
+    resolveManagedBrowserHeadlessMode(current.resolved, runtime.profile).headless;
+  if (options.headless !== warmupHeadless) {
+    return beginProfileTransition({
+      state: current,
+      runtime,
+      reason: "explicit browser launch mode requested",
+    });
+  }
+  return undefined;
+}
+
+export function observeAddressWarmupPages(
+  runtime: ProfileRuntimeState | undefined,
+  pages: readonly { url: string }[],
+): boolean {
+  if (!runtime?.running) {
+    return false;
+  }
+  const actor = getProfileLifecycle(runtime);
+  if (!actor.addressWarmupOnly) {
+    return false;
+  }
+  actor.addressWarmupOnly =
+    pages.length <= 1 &&
+    pages.every(({ url }) =>
+      ["about:blank", "chrome://newtab/", "chrome://new-tab-page/"].includes(url),
+    );
+  return actor.addressWarmupOnly;
+}
+
+/** An address edit may launch Chrome, but never close a browser someone has since used. */
+export function scheduleAddressWarmupExpiry(
+  state: BrowserServerState,
+  runtime: ProfileRuntimeState,
+  launched: RunningChrome,
+  readPages: () => Promise<{ url: string }[]>,
+): void {
+  const actor = getProfileLifecycle(runtime);
+  const unclaimed = () => actor.addressWarmupOnly && runtime.running === launched;
+  async function expire() {
+    if (!unclaimed()) {
+      return;
+    }
+    // A human or CDP client can navigate without going through this actor.
+    const pages = await readPages().catch(async () => {
+      await sleepWithAbort(1_000, undefined, { ref: false });
+      return unclaimed() ? await readPages() : null;
+    });
+    if (pages && unclaimed() && observeAddressWarmupPages(runtime, pages)) {
+      await beginProfileTransition({ state, runtime, reason: "unused address warmup" });
+    }
+  }
+  setTimeout(() => {
+    void expire().catch((error: unknown) => {
+      if (unclaimed()) {
+        actor.addressWarmupOnly = false;
+      }
+      createSubsystemLogger("browser").warn(
+        `Could not retire unused Chrome warmup: ${String(error)}`,
+      );
+    });
+  }, 30_000).unref();
+}
+
 /** Release only the exact managed-process handle that completed cleanup. */
 export function releaseProfileHandle(runtime: ProfileRuntimeState, running: RunningChrome): void {
   getProfileLifecycle(runtime).handles.delete(running);
@@ -367,6 +453,7 @@ export function beginProfileTransition(
   actor.controller.abort(reason);
   actor.controller = new AbortController();
   actor.starts.clear();
+  actor.addressWarmupOnly = false;
   if (params.terminal) {
     actor.terminal = params.terminal;
   }

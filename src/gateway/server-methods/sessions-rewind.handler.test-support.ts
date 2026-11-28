@@ -5,7 +5,6 @@ import { harnessRegistry } from "../../agents/model-catalog-fixtures.test-suppor
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -35,12 +34,8 @@ export function sessionRoleConfig(
   return { gateway: { roles: { default: name, definitions: { [name]: definition } } } };
 }
 
-export function installHarness(
-  overrides: Partial<AgentHarness>,
-  registerPlugin = false,
-  id = "test-harness",
-) {
-  const registry = harnessRegistry(id, {
+export function installHarness(overrides: Partial<AgentHarness>) {
+  const registry = harnessRegistry("test-harness", {
     label: "Test harness",
     supports: () => ({ supported: false }),
     runAttempt: async () => {
@@ -49,9 +44,6 @@ export function installHarness(
     ...overrides,
   });
   registry.agentHarnesses[0]!.source = "runtime";
-  if (registerPlugin) {
-    registry.plugins.push(createPluginRecord({ id }));
-  }
   setActivePluginRegistry(registry);
 }
 

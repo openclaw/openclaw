@@ -4,7 +4,9 @@ import { parseSkillsPromptCatalog } from "../skills/loading/skill-prompt-catalog
 import { TOOL_CALL_RAW_TOOL_NAME } from "./tool-catalog.js";
 
 // `skills_read(name)` resolves by name, so path-based loading prose and `<location>` only cost context.
-// Matches the one-tag-per-line shape that `formatSkillCatalog` in skill-contract.ts renders.
+// With `skills_search` usable, descriptions stay out too: search matches them on demand, and they
+// were 4.2 KB of every fresh-install request. Without search they are the only selection signal.
+// Matches the one-tag-per-line shape `formatSkillCatalog` renders.
 const CATALOG_INTRO =
   /^The following skills provide[^\n]*\n[^\n]*\nWhen a skill file references[^\n]*\n\n/mu;
 const CATALOG_ENTRY =
@@ -14,13 +16,16 @@ const CATALOG_ENTRY =
 const prose = (value: string) => decodeSkillXml(value).replace(/\s+/gu, " ").trim();
 
 /** Idempotent: an already-compact catalog has no XML entries to rewrite. */
-export function compactCatalogForSkillRead(skillsPrompt: string): string {
+export function compactCatalogForSkillRead(
+  skillsPrompt: string,
+  withDescriptions: boolean,
+): string {
   return skillsPrompt
     .replace(CATALOG_INTRO, "")
     .replace(
       CATALOG_ENTRY,
       (_match, name: string, desc?: string, note?: string) =>
-        `- ${JSON.stringify(decodeSkillXml(name))}${desc ? `: ${prose(desc)}` : ""}${note ? ` (${prose(note)})` : ""}`,
+        `- ${JSON.stringify(decodeSkillXml(name))}${withDescriptions && desc ? `: ${prose(desc)}` : ""}${note ? ` (${prose(note)})` : ""}`,
     );
 }
 
@@ -50,7 +55,9 @@ export function buildSkillsSection(params: {
     return { skillsPrompt, section: skillsPrompt ? ["## Skills", skillsPrompt, ""] : [] };
   }
   const renderedSkillsPrompt =
-    installedSkillRead && hasListedSkills ? compactCatalogForSkillRead(skillsPrompt) : skillsPrompt;
+    installedSkillRead && hasListedSkills
+      ? compactCatalogForSkillRead(skillsPrompt, !installedSkillSearch)
+      : skillsPrompt;
   const dispatchDeferredSkills =
     !params.deferredToolsDirectlyCallable && visibleTools.has(TOOL_CALL_RAW_TOOL_NAME);
   const readCall =
@@ -70,9 +77,11 @@ export function buildSkillsSection(params: {
         ? [
             params.codeModeActive && installedSkillRead
               ? 'Scan `<available_skills>` for a matching workflow; load a known name or clear match with `skills.read("<name>")` inside `exec` before acting.'
-              : installedSkillRead
-                ? `Scan \`<available_skills>\` for a matching workflow; load a known name or clear match by ${readCall} before acting.`
-                : `Scan \`<available_skills>\` for a matching workflow; read exact \`<location>\` with \`${params.readToolName}\` before acting.`,
+              : installedSkillRead && installedSkillSearch
+                ? `\`<available_skills>\` lists names only; load an exact name that clearly fits by ${readCall} before acting.`
+                : installedSkillRead
+                  ? `Scan \`<available_skills>\` for a matching workflow; load a known name or clear match by ${readCall} before acting.`
+                  : `Scan \`<available_skills>\` for a matching workflow; read exact \`<location>\` with \`${params.readToolName}\` before acting.`,
           ]
         : [
             params.codeModeActive && installedSkillRead
@@ -83,10 +92,10 @@ export function buildSkillsSection(params: {
           ]),
       ...(installedSkillSearch
         ? [
-            `For specialized, unfamiliar, or reusable workflows, ${hasListedSkills ? "use a listed match or search" : "search"} ${searchCall} (by goal/terms; skip for simple local file work or self-contained answers; searches installed skills only).`,
+            `For specialized, unfamiliar, or reusable workflows, ${hasListedSkills ? "use a clearly matching listed name or search" : "search"} ${searchCall} by goal/terms (it matches descriptions of installed skills only; skip for simple local file work or self-contained answers).`,
           ]
         : []),
-      "Pick at most one (most specific) up front; read none if irrelevant; never invent paths. Batch external writes safely and honor 429/Retry-After.",
+      "Pick at most one (most specific) up front; read none if irrelevant; never invent names or paths. Batch external writes safely and honor 429/Retry-After.",
       ...(renderedSkillsPrompt ? [renderedSkillsPrompt] : []),
       "",
     ],

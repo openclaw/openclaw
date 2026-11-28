@@ -90,7 +90,6 @@ afterEach(() => {
 
 it("bounds scheduling work as directories subscribe and close", async () => {
   const root = timedDirectory("fleet");
-  const timeout = vi.spyOn(globalThis, "setTimeout");
   const clock = vi.spyOn(Date, "now");
   const listener = vi.fn();
   for (let index = 0; index < 8; index++) {
@@ -100,13 +99,11 @@ it("bounds scheduling work as directories subscribe and close", async () => {
     observe(directory, listener);
     expect(clock.mock.calls.length).toBeLessThanOrEqual(4);
   }
-  expect(timeout).toHaveBeenCalledOnce();
-  clock.mockClear();
+  expect(vi.getTimerCount()).toBe(1);
   while (subscriptions.length > 1) {
     subscriptions.pop()!.close();
   }
-  expect(clock).not.toHaveBeenCalled();
-  expect(timeout).toHaveBeenCalledOnce();
+  expect(vi.getTimerCount()).toBe(1);
   const syncFs = ["existsSync", "accessSync", "statSync", "lstatSync", "realpathSync"] as const;
   const probes = syncFs.map((method) => vi.spyOn(fs, method));
   await vi.advanceTimersByTimeAsync(29_999);

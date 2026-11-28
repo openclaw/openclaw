@@ -4,6 +4,7 @@ import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
 import type { SessionPendingInputReceipt } from "./session-history-read.types.js";
 import type { SessionPendingInputEndCause } from "./session-pending-input-end-cause.types.js";
+import type { SessionPendingInputReceipt as PendingInputCustodyReceipt } from "./session-pending-input-receipt.types.js";
 import type { SessionPendingInput, SessionPendingInputRow } from "./session-pending-input.types.js";
 
 export function parseSessionPendingInputMessage(messageJson: string): PersistedUserTurnMessage {
@@ -13,6 +14,49 @@ export function parseSessionPendingInputMessage(messageJson: string): PersistedU
   }
   // SAFETY: only typed admission writes this JSON; parsing preserves its canonical message shape.
   return value as PersistedUserTurnMessage;
+}
+
+/** Kinds of result a producer stores for a chat; see `src/sessions/owed.ts`. */
+export type OwedKind = "exec";
+
+/** The owed kind of a stored pending-input message, or undefined for ordinary input. */
+export function readOwedKind(messageJson: string): OwedKind | undefined {
+  return asOptionalRecord(JSON.parse(messageJson))?.kind === "exec" ? "exec" : undefined;
+}
+
+/**
+ * A restage keeps an ordinary row's canonical bytes. An owed row takes the adopting turn's bytes
+ * (a shared turn's joined text) and keeps its owed fields (kind, origin facts), so restart
+ * recovery still knows it.
+ */
+export function restagePendingInputMessageJson(stored: string, next: string): string {
+  const row = asOptionalRecord(JSON.parse(stored));
+  if (!row || readOwedKind(stored) === undefined) {
+    return stored;
+  }
+  const { kind, originFacts } = row;
+  return JSON.stringify({ ...JSON.parse(next), kind, ...(originFacts ? { originFacts } : {}) });
+}
+
+/** Receipt for input a committed transcript already holds: it grants no execution. */
+export function consumedPendingInputReceipt(
+  inputId: string,
+  message: PersistedUserTurnMessage,
+  refusal: string,
+  completion?: AgentRunTerminalOutcome,
+): PendingInputCustodyReceipt {
+  return {
+    state: "consumed",
+    inputId,
+    message,
+    ...(completion ? { completion } : {}),
+    run: () => {
+      throw new Error(refusal);
+    },
+    finish: () => {},
+    release: () => {},
+    relinquish: () => {},
+  };
 }
 
 export function isFinalInputCompletion(outcome: AgentRunTerminalOutcome): boolean {

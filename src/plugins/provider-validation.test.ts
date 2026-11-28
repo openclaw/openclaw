@@ -108,6 +108,7 @@ it("drops wizard metadata when a provider has no auth methods", () => {
   const { provider, diagnostics } = normalize({
     wizard: { setup: { choiceId: "demo" }, modelPicker: { label: "Demo" } },
   });
+  expect(provider).toMatchObject({ id: "demo", auth: [] });
   expect(provider?.wizard).toBeUndefined();
   expect(diagnostics.map(({ level }) => level)).toEqual(["warn", "warn"]);
 });

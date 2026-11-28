@@ -1,5 +1,6 @@
-import { getEnvironmentData } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
+import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { createNodeEvalArgs } from "../test-utils/node-process.js";
 import type { GatewayResourceProfile } from "./gateway-resource-profile.js";
 import { createWorkerMemoryBudget } from "./worker-memory-budget-ledger.js";
 import {
@@ -218,13 +219,41 @@ describe("worker memory budget", () => {
     cpus: 8,
   });
 
-  it("retires the previous Gateway's policy and inherited flag when standard is selected", () => {
-    initializeWorkerMemoryBudget(profile("lean"), undefined);
-    expect(getEnvironmentData("openclaw.workerMemoryBudget.floorOnly")).toBe(true);
-    expect(getWorkerMemoryBudgetSnapshot()).toBeDefined();
-    initializeWorkerMemoryBudget(profile("standard"), undefined);
-    expect(getEnvironmentData("openclaw.workerMemoryBudget.floorOnly")).toBeUndefined();
-    expect(getWorkerMemoryBudgetSnapshot()).toBeUndefined();
+  it("retires the previous Gateway's policy and inherited flag when standard is selected", async ({
+    signal,
+  }) => {
+    // The Vitest worker receives the separate floor-only policy, not the Gateway's budget.
+    const result = await runNodeScript(
+      createNodeEvalArgs(
+        `
+          import assert from "node:assert/strict";
+          import { getEnvironmentData, isMainThread } from "node:worker_threads";
+          import {
+            createWorkerPoolMemoryBudget,
+            getWorkerMemoryBudgetSnapshot,
+            initializeWorkerMemoryBudget,
+          } from ${JSON.stringify(new URL("./worker-memory-budget.ts", import.meta.url).href)};
+          assert.equal(isMainThread, true);
+          initializeWorkerMemoryBudget(${JSON.stringify(profile("lean"))}, undefined);
+          assert.equal(getEnvironmentData("openclaw.workerMemoryBudget.floorOnly"), true);
+          assert.notEqual(getWorkerMemoryBudgetSnapshot(), undefined);
+          const previousPool = createWorkerPoolMemoryBudget({}, new URL(${JSON.stringify(transcriptUrl.href)}), 2);
+          assert.equal(previousPool?.isCurrent(), true);
+          initializeWorkerMemoryBudget(${JSON.stringify(profile("standard"))}, undefined);
+          assert.equal(previousPool.isCurrent(), false);
+          assert.equal(getEnvironmentData("openclaw.workerMemoryBudget.floorOnly"), undefined);
+          assert.equal(getWorkerMemoryBudgetSnapshot(), undefined);
+          console.log("retired");
+        `,
+        { imports: [new URL("../../scripts/tsx.mjs", import.meta.url).href] },
+      ),
+      { ...process.env, NODE_OPTIONS: "" },
+      undefined,
+      { signal, maxBuffer: 64 * 1024, requireProcessTreeExit: process.platform !== "win32" },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim().split("\n").at(-1)).toBe("retired");
   });
 
   it.each([

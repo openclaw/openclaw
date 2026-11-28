@@ -11,15 +11,36 @@ import {
 import { parseJsonMessageParam } from "../../infra/outbound/message-action-params.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
+import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { readStringArrayParam, readToolStringParam } from "./common.js";
+
+const ESCAPED_LINE_BREAKS = /\\r\\n|\\n|\\r/g;
+
 export function normalizeEscapedLineBreaksForVisibleText(text: string): string {
   if (!text.includes("\\")) {
     return text;
   }
   // The send path turns literal "\n" sequences into line breaks later; match
   // that before privacy stripping so escaped delimiter lines cannot bypass it.
-  return text.replace(/\\r\\n|\\n|\\r/g, "\n");
+  return text.replace(ESCAPED_LINE_BREAKS, "\n");
+}
+
+function sliceLiteralPollBody(literal: string, start: number, end: number): string {
+  // Map the formatter's two UTF-16 boundaries back across the decoded escapes.
+  let literalStart = start;
+  let literalEnd = end;
+  for (const match of literal.matchAll(ESCAPED_LINE_BREAKS)) {
+    if (match.index >= literalEnd) {
+      break;
+    }
+    const extra = match[0].length - 1;
+    if (match.index < literalStart) {
+      literalStart += extra;
+    }
+    literalEnd += extra;
+  }
+  return literal.slice(literalStart, literalEnd).replace(/\r\n/g, "\n");
 }
 
 export type VisibleTextSuppressionReason =
@@ -28,14 +49,12 @@ export type VisibleTextSuppressionReason =
   | "poll_vote_echo";
 
 function sanitizeUserVisibleToolTextResult(
-  text: string,
+  strippedReasoning: string,
   bootPrompt: string | undefined,
 ): {
   text: string;
   suppressionReason?: VisibleTextSuppressionReason;
 } {
-  const normalized = normalizeEscapedLineBreaksForVisibleText(text);
-  const strippedReasoning = stripFormattedReasoningMessage(normalized);
   const strippedInternal = stripInternalRuntimeContext(strippedReasoning);
   const strippedBoot = stripBootEchoFromOutboundText(strippedInternal, bootPrompt);
   const strippedInbound = hasInboundMetadataSentinel(strippedBoot)
@@ -236,11 +255,40 @@ export function sanitizeMessageToolVisiblePayload(
 ): VisibleTextSuppressionReason | undefined {
   const bootPromptForSession = getBootEchoContextForSession(agentSessionKey);
   let suppressedVisiblePayloadReason: VisibleTextSuppressionReason | undefined;
-  const sanitizeText = (text: string, trim = false) => {
+  const filterVisibleText = (text: string) => {
     const sanitized = sanitizeUserVisibleToolTextResult(text, bootPromptForSession);
     // Keep sanitizing after suppression; the first reason only labels the outcome.
     suppressedVisiblePayloadReason ??= sanitized.suppressionReason;
-    return trim ? sanitized.text.trim() : sanitized.text;
+    return sanitized.text;
+  };
+  const sanitizeText = (text: string, trim = false) => {
+    const visible = filterVisibleText(
+      stripFormattedReasoningMessage(normalizeEscapedLineBreaksForVisibleText(text)),
+    );
+    return trim ? visible.trim() : visible;
+  };
+  const sanitizePollText = (text: string) => {
+    const normalized = normalizeEscapedLineBreaksForVisibleText(text);
+    if (normalized === text) {
+      return filterVisibleText(stripFormattedReasoningMessage(text));
+    }
+    let literalBody: string | undefined;
+    const reasoningStripped = stripFormattedReasoningMessage(normalized, (source, start, end) => {
+      const literal =
+        source === normalized ? text : stripReasoningTagsFromText(text, { trim: "none" });
+      if (source === normalized || normalizeEscapedLineBreaksForVisibleText(literal) === source) {
+        literalBody = sliceLiteralPollBody(literal, start, end);
+      }
+    });
+    const visible = filterVisibleText(reasoningStripped);
+    if (!visible) {
+      return visible;
+    }
+    const literal = sanitizeUserVisibleToolTextResult(
+      literalBody ?? stripFormattedReasoningMessage(text),
+      bootPromptForSession,
+    ).text;
+    return normalizeEscapedLineBreaksForVisibleText(literal) === visible ? literal : visible;
   };
   parseJsonMessageParam(params, "presentation");
   parseJsonMessageParam(params, "interactive");
@@ -252,20 +300,18 @@ export function sanitizeMessageToolVisiblePayload(
     "SendMessage",
     "quoteText",
     "quote_text",
-    "pollQuestion",
-    "poll_question",
   ]) {
     if (typeof params[field] === "string") {
       params[field] = sanitizeText(params[field]);
     }
   }
-  for (const field of ["pollOption", "poll_option"]) {
+  for (const field of ["pollQuestion", "poll_question", "pollOption", "poll_option"]) {
     const value = params[field];
     if (typeof value === "string") {
-      params[field] = sanitizeText(value);
-    } else if (Array.isArray(value)) {
+      params[field] = sanitizePollText(value);
+    } else if ((field === "pollOption" || field === "poll_option") && Array.isArray(value)) {
       params[field] = value.map((entry) =>
-        typeof entry === "string" ? sanitizeText(entry) : entry,
+        typeof entry === "string" ? sanitizePollText(entry) : entry,
       );
     }
   }

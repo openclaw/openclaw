@@ -114,8 +114,8 @@ export function createCliTestHarness(prefix = "openclaw-claude-stderr-") {
 export async function prepareClaudeCli(
   context: CliBackendExecuteContext,
   authCredential: { type: "token"; token: string } | { type: "api_key"; key: string },
-  backend = buildAnthropicCliBackend(),
 ) {
+  const backend = buildAnthropicCliBackend();
   const prepared = (await backend.prepareExecution?.({
     workspaceDir: context.cwd,
     provider: "claude-cli",

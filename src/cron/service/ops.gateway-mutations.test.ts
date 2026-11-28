@@ -72,7 +72,11 @@ async function withCronGateway(
         agentId: "main",
         sessionKey: "agent:main:cron-mutation-fixture",
         operationalRunInstance: { instanceId: "cron-mutation-fixture", runId: "fixture-run" },
-        receiptAuthority: () => current,
+        receiptAuthority: () => {
+          if (!current) {
+            throw new Error("agent tool caller authority is no longer active");
+          }
+        },
         gatewayContextResolver: () => fixture.context,
       };
       await run({

@@ -123,7 +123,10 @@ describe("subagents command dispatch", () => {
     const result = await handleSubagentsCommand(params, true);
 
     expect(auth).toMatchObject({ senderIsOwner: false, isAuthorizedSender: false });
-    expect(result).toEqual({ shouldContinue: false });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "You are not authorized to use this command." },
+    });
     expect(readContextMock).not.toHaveBeenCalled();
   });
 });

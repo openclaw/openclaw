@@ -486,7 +486,6 @@ describe("mixed inline directives", () => {
     const operatorAuthority = createTestOperatorAuthority({
       profileId: "limited-operator",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
       modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { deny: ["fixture/blocked"] } }),
     });
     const sessionEntry = createSessionEntry();

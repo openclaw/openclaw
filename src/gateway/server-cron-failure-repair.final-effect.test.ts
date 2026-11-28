@@ -8,8 +8,10 @@ import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/ru
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronOperatorExecutionRevision } from "../cron/service/jobs-tool-policy.js";
 import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
+import { readVisibleSessionTranscriptMessageEntries } from "../plugin-sdk/session-transcript-runtime.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { projectChatDisplayMessages } from "./chat-display-projection.core.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import {
   createOperatorRecoveryFixture,
@@ -18,7 +20,6 @@ import {
 import { createGatewayCronFailureRepair } from "./server-cron-notifications.js";
 import { createGatewayCronTargetResolver } from "./server-cron-targets.js";
 import {
-  cfg,
   createCronFixture,
   installRequesterCronAuthorityTestHooks,
   SESSION,
@@ -56,7 +57,7 @@ it.for(
   "persists the $source job update only for a current owner requester: $requester",
   async ({ source, requester }) => {
     const config = {
-      ...cfg,
+      agents: { entries: { main: { model: "openai/gpt-4.1" } } },
       plugins: { enabled: false },
       channels: { telegram: {} },
       commands: { ownerAllowFrom: ["456"] },
@@ -152,6 +153,17 @@ it.for(
         ).enqueueSessionEvent(message, { agentId: "main", sessionKey: SESSION, jobId: job.id });
         const receipt = expectDefined(handoff.mock.results[0]?.value, "auto-disable receipt");
         expect(await receipt.settled).toMatchObject({ executionStarted: true });
+        // The notice shows once: its posted row, not also the repair turn's input.
+        const shown = projectChatDisplayMessages(
+          (
+            await readVisibleSessionTranscriptMessageEntries({
+              agentId: "main",
+              sessionKey: SESSION,
+              sessionId: SESSION_ID,
+            })
+          ).map((entry) => entry.message),
+        ).filter((entry) => JSON.stringify(entry).includes(message));
+        expect(shown.map((entry) => entry.role)).toEqual(["assistant"]);
       } finally {
         handoff.mockRestore();
       }
@@ -175,7 +187,7 @@ it.for(
 // An operator-source job (created from a Control UI turn) repaired in its source conversation.
 const operatorOutcomes = {
   // A Control UI administrator's restored source keeps owner tools, as its in-session runs do.
-  "control-ui-admin": { update: "ok", description: "fixed by repair" },
+  operator: { update: "ok", description: "fixed by repair" },
   // A restored source that was not a Control UI administrator is a non-owner requester.
   "non-admin-source": { update: "gated", description: "original" },
   "device-revoked": { update: "not run", description: "original" },
@@ -185,7 +197,10 @@ const operatorOutcomes = {
 it.for(Object.keys(operatorOutcomes) as Array<keyof typeof operatorOutcomes>)(
   "persists an operator-source repair's job update only while its source stays current: %s",
   async (scenario) => {
-    const config = { ...cfg, plugins: { enabled: false } } as OpenClawConfig;
+    const config = {
+      agents: { entries: { main: { model: "openai/gpt-4.1" } } },
+      plugins: { enabled: false },
+    } as OpenClawConfig;
     setRuntimeConfigSnapshot(config);
     const { context, read } = createCronFixture(undefined, config);
     const recovery = await createOperatorRecoveryFixture({

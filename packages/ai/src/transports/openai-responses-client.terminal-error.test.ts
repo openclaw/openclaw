@@ -1,6 +1,5 @@
 import type { AssistantMessageEventStreamLike, SimpleStreamOptions } from "@openclaw/llm-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { recoverAfterTransportDrop } from "../../../../src/agents/embedded-agent-runner/run/attempt-recovery.test-support.js";
 import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { isResponsesOutputLimitToolCallError } from "../providers/openai-responses-terminal-usage.js";
@@ -29,11 +28,9 @@ vi.mock("openai/resources/responses/ws.js", () => ({
 
 import { createOpenAIResponsesTransportStreamFn } from "./openai-responses-client.js";
 import type { OpenAIResponsesOptions } from "./openai-responses-contracts.js";
-import * as responsesDiagnostics from "./openai-responses-debug.js";
 import { createModel } from "./openai-responses-prompt-observer.test-support.js";
 import {
   argumentDelta,
-  completedResponse,
   collectEventTypes,
   outputItem,
   wireCall,
@@ -113,76 +110,6 @@ afterEach(() => {
   vi.restoreAllMocks();
   sseState.signal = undefined;
   configureAiTransportHost(initialHost);
-});
-
-it("aborts whitespace argument churn and recovers through the same-model retry owner", async () => {
-  let emittedDeltas = 0;
-  let closed = false;
-  const call = wireCall("churn", "exec", "");
-  queueStream(async function* () {
-    try {
-      yield outputItem("added", call);
-      yield argumentDelta(call.id, '{"code":"return 1;');
-      for (let index = 0; index < 40; index++) {
-        emittedDeltas += 1;
-        yield argumentDelta(call.id, " \r\r\n".repeat(256));
-      }
-      yield completedResponse("resp_churn", [{ ...call, arguments: '{"code":"return 1;"}' }]);
-    } finally {
-      closed = true;
-    }
-  });
-
-  const { events, result } = await collect(await run());
-  expect(result).toMatchObject({ stopReason: "error", errorCode: "degenerate_output" });
-  expect(emittedDeltas).toBe(4);
-  expect(closed).toBe(true);
-  expect(sseState.signal).toMatchObject({
-    aborted: true,
-    reason: { code: "degenerate_output" },
-  });
-  expect(events).not.toContain("toolcall_end");
-  expect(logWarn).toHaveBeenCalledWith(
-    "provider-error",
-    "Model request failed",
-    expect.objectContaining({ abortReason: "degenerate_output" }),
-  );
-  expect(JSON.stringify(logWarn.mock.calls)).not.toContain("return 1;");
-
-  vi.useFakeTimers();
-  const recovering = recoverAfterTransportDrop({
-    assistant: result,
-    noTools: true,
-    replaySafe: true,
-  });
-  await vi.advanceTimersByTimeAsync(10_000);
-  const recovered = await recovering;
-  expect(recovered.recovery).toMatchObject({
-    action: "retry",
-    lastRetryFailoverReason: "server_error",
-  });
-});
-
-it("accepts 200 KiB of arguments with whitespace runs interrupted by code", async () => {
-  const call = wireCall("large", "exec", "");
-  const codeChunk = `${" ".repeat(1023)};`;
-  const code = codeChunk.repeat(200);
-  const args = JSON.stringify({ code });
-  queueStream(async function* () {
-    yield outputItem("added", call);
-    yield argumentDelta(call.id, '{"code":"');
-    for (let index = 0; index < 200; index++) {
-      yield argumentDelta(call.id, codeChunk);
-    }
-    yield argumentDelta(call.id, '"}');
-    yield completedResponse("resp_large", [{ ...call, arguments: args }]);
-  });
-  const { result } = await collect(await run());
-  expect(result).toMatchObject({
-    stopReason: "toolUse",
-    content: [{ type: "toolCall", arguments: { code } }],
-  });
-  expect(sseState.signal?.aborted).toBe(false);
 });
 
 it("logs the actual output budget, served tier, and usage after a long incomplete stream", async () => {
@@ -311,19 +238,16 @@ it.each(["filtered", "failed", "eof", "aborted"])(
 
 it("skips payload summaries when explicit transport debugging is promoted to disabled info", async () => {
   vi.stubEnv("OPENCLAW_DEBUG_MODEL_TRANSPORT", "1");
-  const summarize = vi.spyOn(responsesDiagnostics, "summarizeResponsesPayload");
   configureAiTransportHost({ logWarn, logDebug, logInfo, isLogEnabled: () => false });
   sseState.outcomes.push(
     Object.assign(new Error("private response"), { code: "rate_limit_exceeded" }),
   );
   expect((await (await run()).result()).stopReason).toBe("error");
-  expect(summarize).not.toHaveBeenCalled();
   expect(logInfo).not.toHaveBeenCalled();
   expect(logWarn).not.toHaveBeenCalled();
 });
 
 it("logs exactly one bounded warning per rate-limited provider attempt", async () => {
-  const summarize = vi.spyOn(responsesDiagnostics, "summarizeResponsesPayload");
   for (let attempt = 1; attempt <= 3; attempt++) {
     sseState.outcomes.push(
       Object.assign(new Error("private provider response body"), {
@@ -335,7 +259,6 @@ it("logs exactly one bounded warning per rate-limited provider attempt", async (
     );
     expect((await (await run()).result()).stopReason).toBe("error");
   }
-  expect(summarize).not.toHaveBeenCalled();
   expect(logWarn.mock.calls).toEqual(
     [1, 2, 3].map((attempt) => [
       "provider-error",

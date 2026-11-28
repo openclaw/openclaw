@@ -19,6 +19,7 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import { recordSessionCreated } from "../../sessions/session-created.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-input.types.js";
+import { getUserTurnTranscriptAdmissionOwner } from "../../sessions/user-turn-transcript-admission.js";
 import { settleUserTurnPendingInput } from "../../sessions/user-turn-transcript-processing.js";
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -53,6 +54,7 @@ import {
   prepareChatSendSteerDocumentContext,
 } from "./chat-send-message-injection.js";
 import type { ChatSendInternalOptions } from "./chat-send-options.js";
+import { captureChatSendQuestionReplacement } from "./chat-send-question-replacement.js";
 import { readChatSendRetryComparison } from "./chat-send-retry-comparison.js";
 import { createChatSendSessionInitialization } from "./chat-send-session-binding.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
@@ -116,7 +118,7 @@ export async function handleChatSendWithStorage(
       }
     },
   };
-  const { systemInputProvenance, reconnectResumeRequested } = request;
+  const { systemInputProvenance } = request;
   const { clientRunId, cfg, storePath, entry, sessionKey, sessionRoutingChanged, selectedAgent } =
     session;
   const {
@@ -168,12 +170,11 @@ export async function handleChatSendWithStorage(
       !resolveSessionChildController(sessionKey, entry),
     ),
     client,
-    isCurrent: hasCurrentClientAuthority,
     inputProvenance: systemInputProvenance,
+    grant: admission.operatorAuthority?.grant,
     hasExplicitOrigin: request.explicitOrigin !== undefined,
     hasRestoredCronContinuation: entry?.cronRunContinuation !== undefined,
     isIncognitoEntry: entry?.incognito === true,
-    isReconnectResume: reconnectResumeRequested,
     isSystemGenerated:
       request.suppressCommandInterpretation || request.systemProvenanceReceipt !== undefined,
     turnKind: request.turnKind,
@@ -547,6 +548,14 @@ export async function handleChatSendWithStorage(
       imageOrder,
       documentContext: steerDocumentContext,
       userTurnTranscriptRecorder: userTurnRecorder,
+      replaceQuestion: captureChatSendQuestionReplacement(
+        handlerOptions,
+        request,
+        sessionKey,
+        messageInjectionTarget?.runId,
+        isInternalTextSlashCommandTurn,
+        admission.operatorAuthority?.grant,
+      ),
       logGateway: context.logGateway,
       assertCurrent:
         req.expectedProfileId === undefined &&
@@ -610,7 +619,8 @@ export async function handleChatSendWithStorage(
     assertInputAdmissionCurrent();
     admission.setDiscardAbandonedPreparedMedia(undefined);
     phase?.mark("response");
-    admission.markInputAccepted();
+    admission.markInputAccepted(!stageInput && !commitFreshInput);
+    getUserTurnTranscriptAdmissionOwner(userTurnRecorder)?.markInputAccepted();
     assertAcceptedInputCurrent ??= pendingAdmission.assertAdmittedCurrent;
     if (requestAuthority.family === "worker") {
       acceptGatewayDeviceSourceAuthority(hasCurrentClientAuthority);
@@ -642,11 +652,7 @@ export async function handleChatSendWithStorage(
           context,
           sessionMutationCommitGuard: assertInputAdmissionCurrent,
         },
-        isHumanTurn:
-          !options &&
-          !systemInputProvenance &&
-          !reconnectResumeRequested &&
-          request.turnKind === "main",
+        grant: admission.operatorAuthority?.grant,
       },
       cronCreatorAuthority,
       assertDashboardReadCurrent,

@@ -10,6 +10,7 @@ import {
   type WorkerToolSurface,
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
+import { PlacedSessionsSpawnSchema } from "../../../packages/gateway-protocol/src/schema/worker-session-tools.js";
 import { validateWorkerGatewayToolResponseFrame } from "../../../packages/gateway-protocol/src/worker-response-validators.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
 import {
@@ -393,8 +394,9 @@ it("prepares deferred discovery guidance with the model tool projection", async 
     "dispatch_action",
   ]);
   const guidance = projection.toolSchemaDirectoryPrompt;
-  expect(guidance).toContain("Deferred names are not directly callable.");
-  expect(guidance).not.toContain("Call a unique deferred tool name directly");
+  expect(guidance?.split("\n")[0]).toBe("Deferred tools: web_fetch");
+  expect(guidance).toContain("not directly callable: call dispatch_action");
+  expect(guidance).not.toContain("Call a unique name directly");
 });
 
 it("carries the run-granted listing that the cached deferred directory omits", async () => {
@@ -406,7 +408,7 @@ it("carries the run-granted listing that the cached deferred directory omits", a
     }),
   }));
   const projection = await runtime.getPromptProjection(identity);
-  expect(projection.toolSchemaDirectoryPrompt).toContain("- web_fetch");
+  expect(projection.toolSchemaDirectoryPrompt?.split("\n")[0]).toBe("Deferred tools: web_fetch");
   expect(projection.toolSchemaDirectoryPrompt).not.toContain("skill_library");
   expect(projection.runGrantedToolDirectory).toContain("- skill_library (core)");
 });
@@ -462,6 +464,20 @@ it("issues one finite surface and invokes only an issued Gateway handle with val
   expect(execute).not.toHaveBeenCalled();
   await expect(invoke()).resolves.toEqual(success);
   expect(execute).toHaveBeenCalledTimes(1);
+});
+
+it("names the missing and unexpected fields when rejecting worker tool arguments", async () => {
+  const execute = vi.fn(async () => success);
+  const spawn = tool("sessions_spawn", execute, { parameters: PlacedSessionsSpawnSchema });
+  const { invoke, invocation } = await issued([spawn]);
+  const rejection = invoke({
+    ...invocation,
+    arguments: { objective: "Reply with exactly R12-0002", label: "r12-b" },
+  });
+  await expect(rejection).rejects.toThrow("Worker tool arguments are invalid");
+  await expect(rejection).rejects.toThrow("- task: must have required properties task");
+  await expect(rejection).rejects.toThrow("- objective: schema is false");
+  expect(execute).not.toHaveBeenCalled();
 });
 
 it.each(["tool count", "definition bytes"] as const)(

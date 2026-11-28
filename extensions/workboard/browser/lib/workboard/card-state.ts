@@ -12,6 +12,19 @@ export function isActiveWorkboardCard(card: WorkboardCard): boolean {
   return !card.metadata?.archivedAt;
 }
 
+// A drop previews placement only. Detail, history and write receipts still read canonical cards.
+export function cardsWithPendingDrops(state: WorkboardUiState): WorkboardCard[] {
+  if (!state.pendingDrops.size || state.mutationReadiness !== "ready") {
+    return state.cards;
+  }
+  return state.cards
+    .map((card) => {
+      const placement = state.pendingDrops.get(card.id);
+      return placement ? { ...card, ...placement } : card;
+    })
+    .toSorted((left, right) => left.position - right.position);
+}
+
 export function nextWorkboardCardPosition(
   cards: readonly WorkboardCard[],
   card: WorkboardCard,

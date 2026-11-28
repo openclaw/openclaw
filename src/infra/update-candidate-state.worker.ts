@@ -171,6 +171,9 @@ async function inspectCandidateState(input: UpdateStateInspectionInput): Promise
     case "discover": {
       const plan = await discoverUpdateStateSchemaInspectionInProcess({
         ...input,
+        // Released requests lack prepared paths and a policy; their source WAL index must stay intact.
+        preserveSourceArtifacts:
+          input.preserveSourceArtifacts ?? input.additionalPaths === undefined,
         onProgress: createUpdateStateInspectionReporter(),
       });
       const { writeUpdateStateSchemaOwnership } =

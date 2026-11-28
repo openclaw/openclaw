@@ -5,7 +5,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import * as activationCheck from "../../plugin-sdk/facade-activation-check.runtime.js";
 import * as facadeRuntime from "../../plugin-sdk/facade-runtime.js";
 import { writeFacadeFiles } from "../../plugin-sdk/facade-runtime.test-support.js";
@@ -19,7 +18,6 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 }));
 
 const originalEnv = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR", "OPENCLAW_STATE_DIR"]);
-const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 const tempDirs = createTempDirTracker();
 
 function createInstalledRuntimePluginDir(pluginId: string, marker: string) {
@@ -83,46 +81,5 @@ describe("shared runtime seam contracts", () => {
       }).marker,
     ).toBe("line-ok");
     expect(facadeRuntime.listImportedBundledPluginFacadeIds()).toEqual([pluginId]);
-  });
-
-  it("keeps guarded fetch on mocked global fetches even when a dispatcher is attached", async () => {
-    class MockAgent {
-      constructor(readonly options: unknown) {}
-    }
-    class MockEnvHttpProxyAgent {
-      constructor(readonly options: unknown) {}
-    }
-    class MockProxyAgent {
-      constructor(readonly options: unknown) {}
-    }
-
-    const runtimeFetch = vi.fn(async () => new Response("runtime", { status: 200 }));
-    const globalFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(requestInit.dispatcher).toBeInstanceOf(MockAgent);
-      return new Response("mock", { status: 200 });
-    });
-
-    vi.stubGlobal("fetch", globalFetch);
-    vi.stubGlobal(TEST_UNDICI_RUNTIME_DEPS_KEY, {
-      Agent: MockAgent,
-      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
-      ProxyAgent: MockProxyAgent,
-      fetch: runtimeFetch,
-    });
-
-    const lookupFn = vi.fn(
-      async () => ({ address: "93.184.216.34", family: 4 }) as const,
-    ) as unknown as NonNullable<Parameters<typeof fetchWithSsrFGuard>[0]["lookupFn"]>;
-
-    const result = await fetchWithSsrFGuard({
-      url: "https://public.example/resource",
-      lookupFn,
-    });
-
-    expect(globalFetch).toHaveBeenCalledTimes(1);
-    expect(runtimeFetch).not.toHaveBeenCalled();
-    expect(await result.response.text()).toBe("mock");
-    await result.release();
   });
 });

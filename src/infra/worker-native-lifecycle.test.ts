@@ -56,7 +56,7 @@ const nativeExit = {
   promiseCallbackRanWhileBlocked: false,
 };
 const cases = [
-  { ending: "reference-liveness", activeCompleted: true },
+  { ending: "reference-liveness", activeCompleted: true, activeCaptureCompleted: true },
   ...(["close-live-worker", "close-owner-retry"] as const).map((ending) =>
     Object.assign({ ending }, trueFields("refusedSourceUsable retryJoined freshSourceUsable")),
   ),
@@ -259,7 +259,11 @@ it("retains an independent resource after completed execution source close", asy
     successor = await captureRetainedNativeWorkerSource({
       runtimeGeneration: undefined,
     }).captureIndependentResource(moduleUrl);
-    await resource.close();
+    const closing = resource.close();
+    // A pending capture client can acknowledge while attachment.close() awaits.
+    resource.unref();
+    expect(resource.port.hasRef()).toBe(true);
+    await closing;
     const successorReply = once(successor.port, "message");
     successor.port.postMessage("successor-custody", []);
     expect(await successorReply).toEqual(["successor-custody"]);
@@ -313,13 +317,15 @@ it("replaces failed retained broker authority after completed source close", asy
 });
 
 it("selects a fresh broker after native disconnect before its callback runs", async () => {
-  const createBroker = spawnBroker.createSpawnBrokerHost;
-  const brokers: spawnBroker.SpawnBrokerHost[] = [];
-  const factory = vi.spyOn(spawnBroker, "createSpawnBrokerHost").mockImplementation((options) => {
-    const broker = createBroker(options);
-    brokers.push(broker);
-    return broker;
-  });
+  const createBroker = spawnBroker.createAttachmentBrokerHost;
+  const brokers: ReturnType<typeof createBroker>[] = [];
+  const factory = vi
+    .spyOn(spawnBroker, "createAttachmentBrokerHost")
+    .mockImplementation((brokerUrl) => {
+      const broker = createBroker(brokerUrl);
+      brokers.push(broker);
+      return broker;
+    });
   await using cleanup = new AsyncDisposableStack();
   cleanup.defer(() => {
     factory.mockRestore();

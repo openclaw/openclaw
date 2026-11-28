@@ -1,8 +1,6 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
@@ -46,45 +44,33 @@ function fixture() {
     runId: run.runId,
   };
   const opts = { json: true, run: { runId: run.runId, env } };
-  const reportPath = path.join(stateDir, "update-reports", `${run.runId}.md`);
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-  return { stateDir, options, run, result, opts, reportPath };
+  return { stateDir, options, run, result, opts };
 }
 
 async function finishFromPublishedDriver(
   runId: string,
   outcome: { status: "failed"; reason: string },
   options: { env: NodeJS.ProcessEnv },
-  contention?: { lockPath: string; observed: () => void },
-): Promise<string> {
+): Promise<void> {
   const entry = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.daemon);
   // Published managed drivers call this stable export without awaiting it.
-  // Their child exits naturally after the finalizer's filesystem work settles.
+  // Their child exits naturally after the finalizer settles the ledger.
   const result = await runCliProcessChild({
     nodeArgs: [
       ...resolveRuntimeWorkerArgv(entry).slice(0, -1),
       "--input-type=module",
       "-e",
       `
-        const lockPath = ${JSON.stringify(contention?.lockPath ?? null)};
         const { finishUpdateRun } = await import(${JSON.stringify(entry.href)});
         finishUpdateRun(${JSON.stringify(runId)}, ${JSON.stringify(outcome)}, ${JSON.stringify(options)});
-        if (lockPath && (await import("node:fs")).existsSync(lockPath)) {
-          process.stdout.write("REPORT_LOCK_PRESENT\\n");
-        }
       `,
     ],
     nodeArgsPolicy: "caller",
     env: { ...process.env, ...options.env },
     timeoutMs: 15_000,
-    onStdout(stdout) {
-      if (stdout.includes("REPORT_LOCK_PRESENT")) {
-        contention?.observed();
-      }
-    },
   });
   expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
-  return result.stderr;
 }
 
 it("exports the terminal-safe update diagnostic writer for installed-runtime finalization", async () => {
@@ -106,39 +92,16 @@ it("exports the terminal-safe update diagnostic writer for installed-runtime fin
 });
 
 it.each(["published driver", "settled child"] as const)(
-  "refreshes the foreground report after %s terminal settlement, preserving complete findings",
+  "preserves terminal ledger authority after %s settlement",
   async (driver) => {
-    const { options, run, result, opts, reportPath } = fixture();
-    const lintMessage = "Synthetic warning retained from candidate validation";
-    await printResult(
-      {
-        ...result,
-        steps: [
-          {
-            name: "candidate Doctor lint",
-            command: "openclaw doctor --lint",
-            cwd: "synthetic",
-            durationMs: 1,
-            exitCode: 0,
-            doctorLintFindings: [
-              { checkId: "core/config", severity: "warning", message: lintMessage },
-            ],
-          },
-        ],
-      },
-      opts,
-      { nextAction: "Update is not finished. Check progress: openclaw update status" },
-    );
-    expect(await fs.readFile(reportPath, "utf8")).toContain("in progress");
+    const { options, run } = fixture();
     const reason =
       driver === "settled child" ? "candidate-validation-failed" : handoffFailure.reason;
     if (driver === "settled child") {
-      // The child committed its verdict, then exited before replacing the report.
       finishLedgerRun(run.runId, fail(reason), options);
       await finishUpdateRun(run.runId, handoffFailure, options);
     } else {
-      const stderr = await finishFromPublishedDriver(run.runId, handoffFailure, options);
-      expect(stderr).not.toContain("Update report could not be saved:");
+      await finishFromPublishedDriver(run.runId, handoffFailure, options);
     }
     expect(getUpdateRun(run.runId, options)).toMatchObject({
       status: "failed",
@@ -146,101 +109,29 @@ it.each(["published driver", "settled child"] as const)(
       reason,
       verification: {},
     });
-    const saved = await fs.readFile(reportPath, "utf8");
-    expect(saved).toContain(`OpenClaw update failed: ${reason}`);
-    expect(saved).toContain("Run openclaw triage");
-    expect(saved).toContain("Complete Doctor lint findings (1)");
-    expect(saved).toContain(lintMessage);
-    expect(saved).not.toContain("in progress");
-    expect(saved).not.toContain("Update is not finished");
-    expect(saved).not.toContain("The gateway is running");
   },
 );
 
-it("preserves a child-authored terminal report and its first recorded outcome", async () => {
-  const { options, run, result, opts, reportPath } = fixture();
+it("preserves a child-authored terminal verdict in JSON and the ledger", async () => {
+  const { options, run, result, opts } = fixture();
   await finishUpdateRun(run.runId, fail("candidate-validation-failed"), options);
-  await printResult({ ...result, status: "error", reason: "candidate-validation-failed" }, opts, {
-    nextAction: "Keep this specific candidate diagnostic and inspect the failed check.",
-  });
-  const report = await fs.readFile(reportPath, "utf8");
-  expect(report).toContain("Keep this specific candidate diagnostic and inspect the failed check.");
+  await printResult({ ...result, status: "error", reason: "candidate-validation-failed" }, opts);
+  expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      run: expect.objectContaining({ status: "failed", reason: "candidate-validation-failed" }),
+    }),
+  );
   await finishUpdateRun(run.runId, { status: "succeeded" }, options);
   expect(getUpdateRun(run.runId, options)?.status).toBe("failed");
-  expect(await fs.readFile(reportPath, "utf8")).toBe(report);
 });
-
-it("keeps durable failure when the report directory cannot be written", async () => {
-  const { stateDir, options, run } = fixture();
-  await fs.writeFile(path.join(stateDir, "update-reports"), "unrelated file");
-  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-  await expect(finishUpdateRun(run.runId, handoffFailure, options)).resolves.toMatchObject({
-    status: "failed",
-  });
-  expect(getUpdateRun(run.runId, options)?.status).toBe("failed");
-  expect(warn).toHaveBeenCalledWith(expect.stringContaining("Update report could not be saved:"));
-  expect(await fs.readFile(path.join(stateDir, "update-reports"), "utf8")).toBe("unrelated file");
-});
-
-it.each(["contention observed", "helper wait exhausted"] as const)(
-  "reconciles in-flight foreground publication after %s",
-  async (releaseAfter) => {
-    const { options, run, result, opts, reportPath } = fixture();
-    const paused = createDeferred();
-    const release = createDeferred();
-    const rename = fs.rename;
-    let intercepted = false;
-    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-      if (to === reportPath && !intercepted) {
-        intercepted = true;
-        paused.resolve();
-        await release.promise;
-      }
-      return rename(from, to);
-    });
-    const foreground = printResult(result, opts);
-    await awaitGateBeforeSettlement(
-      paused.promise,
-      foreground,
-      "Foreground report completed without reaching its atomic write gate",
-    );
-    const contended = createDeferred();
-    const terminal = finishFromPublishedDriver(run.runId, handoffFailure, options, {
-      lockPath: `${reportPath}.lock`,
-      observed: () => contended.resolve(),
-    });
-    try {
-      // Exercise both lock handoff and a writer delayed beyond the actual budget.
-      if (releaseAfter === "helper wait exhausted") {
-        expect(await terminal).toContain("Update report could not be saved:");
-      } else {
-        await Promise.race([terminal, contended.promise]);
-      }
-      expect(getUpdateRun(run.runId, options)).toMatchObject(handoffFailure);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([foreground, terminal]);
-    }
-    await foreground;
-    expect(intercepted).toBe(true);
-    const stderr = await terminal;
-    if (releaseAfter === "contention observed") {
-      expect(stderr).not.toContain("Update report could not be saved:");
-    }
-    const saved = await fs.readFile(reportPath, "utf8");
-    expect(saved).toContain("OpenClaw update failed: managed-service-handoff-failed");
-    expect(saved).not.toContain("in progress");
-  },
-);
 
 it.each(["terminal", "captured"] as const)(
-  "preserves %s report details after schema admission closes",
+  "preserves %s terminal output authority after schema admission closes",
   async (kind) => {
-    const { options, run, result, opts, reportPath } = fixture();
+    const { options, run, result, opts } = fixture();
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
     const captured = await finishUpdateRun(run.runId, fail("helper-first-failure"), options);
     expect(getUpdateRun(run.runId, options)?.status).toBe("failed");
-    const before = await fs.readFile(reportPath, "utf8");
     closeOpenClawStateDatabaseForTest();
     {
       using database = new DatabaseSync(resolveOpenClawStateSqlitePath(options.env));
@@ -254,14 +145,16 @@ it.each(["terminal", "captured"] as const)(
         ? { record: captured, nextAction: "Captured terminal recovery instructions." }
         : {},
     );
-    const saved = await fs.readFile(reportPath, "utf8");
     if (kind === "captured") {
       expect(error).not.toHaveBeenCalled();
-      expect(saved).toContain("OpenClaw update failed: helper-first-failure");
-      expect(saved).toContain("Captured terminal recovery instructions.");
+      expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          run: expect.objectContaining({ status: "failed", reason: "helper-first-failure" }),
+        }),
+      );
     } else {
       expect(error).toHaveBeenCalledWith(expect.stringContaining("history unavailable"));
-      expect(saved).toBe(before);
+      expect(vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0]).not.toHaveProperty("run");
     }
   },
 );

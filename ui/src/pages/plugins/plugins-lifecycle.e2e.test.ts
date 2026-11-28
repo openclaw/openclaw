@@ -158,17 +158,11 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
       .poll(() => new URL(page.url()).pathname)
       .toBe(`/plugins/${calendarDiscoveryPlugin.id}`);
     await page.getByRole("switch", { name: "Calendar Plus", checked: true, exact: true }).waitFor();
-    const inspectionReads = (await gateway.getRequests("plugins.inspect")).length;
     await gateway.setMethodResponse("plugins.uiDescriptors", {
       ...enabledWorkboardCapabilities(),
       generation: 17,
       controlUiTabs: [],
     });
-    if (inspection === "before") {
-      await gateway.deferNext("plugins.inspect");
-      await gateway.emitGatewayEvent("plugins.changed", { generation: 17 });
-      await gateway.waitForRequest("plugins.inspect", { after: inspectionReads });
-    }
     const removalErrors = await page.evaluateHandle(() => {
       const errors = new Set<string>();
       const observer = new MutationObserver(() => {
@@ -181,6 +175,14 @@ describeControlUiE2e("Control UI plugin lifecycle", () => {
     });
     await gateway.deferNext("plugins.uninstall");
     await page.getByRole("button", { name: "Uninstall Calendar Plus", exact: true }).click();
+    await page.locator("openclaw-modal-dialog").waitFor();
+    if (inspection === "before") {
+      // Let confirmation inspect first; hold the background read that overlaps removal.
+      const inspectionReads = (await gateway.getRequests("plugins.inspect")).length;
+      await gateway.deferNext("plugins.inspect");
+      await gateway.emitGatewayEvent("plugins.changed", { generation: 17 });
+      await gateway.waitForRequest("plugins.inspect", { after: inspectionReads });
+    }
     await page
       .locator("openclaw-modal-dialog")
       .getByRole("button", { name: "Remove", exact: true })

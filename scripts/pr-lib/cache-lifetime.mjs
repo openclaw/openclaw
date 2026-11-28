@@ -844,13 +844,8 @@ function withCacheOwner(cache, operation, initialize, readOnly = false, recovery
   // while it holds the mutex; a crashed empty namespace is never adopted.
   for (;;) {
     assertCache();
-    if (performance.now() >= deadline) {
-      const reason = lstatSync(join(cache, ledgerName), { throwIfNoEntry: false })
-        ? "metadata is busy"
-        : "ledger is missing";
-      throw new Error(`PR dependency cache ${reason}; retain ${path}`);
-    }
-    if (created || lstatSync(join(cache, ledgerName), { throwIfNoEntry: false })) {
+    const admissible = created || lstatSync(join(cache, ledgerName), { throwIfNoEntry: false });
+    if (admissible) {
       try {
         mkdirSync(path, { mode: 0o700 });
         break;
@@ -858,56 +853,66 @@ function withCacheOwner(cache, operation, initialize, readOnly = false, recovery
         if (error.code !== "EEXIST") {
           throw error;
         }
-        let owners;
+      }
+    }
+    // Validation or a completed retirement may consume the wait budget without
+    // contention. Bound failed acquisition, not the first admissible attempt.
+    if (performance.now() >= deadline) {
+      const reason = lstatSync(join(cache, ledgerName), { throwIfNoEntry: false })
+        ? "metadata is busy"
+        : "ledger is missing";
+      throw new Error(`PR dependency cache ${reason}; retain ${path}`);
+    }
+    if (admissible) {
+      let owners;
+      try {
+        owners = readdirSync(path);
+      } catch (missing) {
+        if (missing.code === "ENOENT") {
+          continue;
+        }
+        throw missing;
+      }
+      const ownerName = owners.find((name) => /^owner-[0-9]+-[a-f0-9-]+$/.test(name));
+      if (ownerName && owners.length === 2 && owners.includes("lifetime")) {
+        const pid = Number(ownerName.split("-")[1]);
+        let gone = false;
         try {
-          owners = readdirSync(path);
-        } catch (missing) {
-          if (missing.code === "ENOENT") {
+          process.kill(pid, 0);
+        } catch (failure) {
+          gone = failure.code === "ESRCH";
+        }
+        if (gone) {
+          // The metadata helper inherits this separate lock too: a killed JS
+          // owner cannot release the mutex while its deletion child still runs.
+          const leasePath = join(path, "lifetime");
+          let lockIdentity;
+          let leaseIdentity;
+          try {
+            lockIdentity = identityRecord(directory(path));
+            leaseIdentity = identityRecord(physicalFile(leasePath));
+          } catch (inspectionError) {
+            if (inspectionError.code !== "ENOENT") {
+              throw inspectionError;
+            }
+            // The previous owner can finish releasing after our directory read.
+            assertCache();
             continue;
           }
-          throw missing;
-        }
-        const ownerName = owners.find((name) => /^owner-[0-9]+-[a-f0-9-]+$/.test(name));
-        if (ownerName && owners.length === 2 && owners.includes("lifetime")) {
-          const pid = Number(ownerName.split("-")[1]);
-          let gone = false;
-          try {
-            process.kill(pid, 0);
-          } catch (failure) {
-            gone = failure.code === "ESRCH";
-          }
-          if (gone) {
-            // The metadata helper inherits this separate lock too: a killed JS
-            // owner cannot release the mutex while its deletion child still runs.
-            const leasePath = join(path, "lifetime");
-            let lockIdentity;
-            let leaseIdentity;
-            try {
-              lockIdentity = identityRecord(directory(path));
-              leaseIdentity = identityRecord(physicalFile(leasePath));
-            } catch (inspectionError) {
-              if (inspectionError.code !== "ENOENT") {
-                throw inspectionError;
-              }
-              // The previous owner can finish releasing after our directory read.
-              assertCache();
-              continue;
-            }
-            const checked = processLifetime("retire", {
-              candidates: [
-                {
-                  id: path,
-                  path,
-                  identity: lockIdentity,
-                  lease: { path: leasePath, ...leaseIdentity },
-                  targets: [],
-                },
-              ],
-              limit: 1,
-            });
-            if (checked.results[0].state === "retired") {
-              continue;
-            }
+          const checked = processLifetime("retire", {
+            candidates: [
+              {
+                id: path,
+                path,
+                identity: lockIdentity,
+                lease: { path: leasePath, ...leaseIdentity },
+                targets: [],
+              },
+            ],
+            limit: 1,
+          });
+          if (checked.results[0].state === "retired") {
+            continue;
           }
         }
       }

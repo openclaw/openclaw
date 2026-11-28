@@ -198,7 +198,6 @@ export async function prepareEmbeddedSessionState(params: {
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
       params.opts.abortSignal?.throwIfAborted();
       params.opts.assertSourceCurrent?.();
-      params.opts.operatorAuthority?.assertCurrent();
     };
     await recordSessionHumanDirectMessage(
       {

@@ -30,6 +30,10 @@ const loaders = {
     import("../agents/subagents/registry/subagent-registry.store.worker.js").then(
       (m) => m.subagentRegistryOperations,
     ),
+  templateClawHub: () =>
+    import("../secrets/store/secret-store-clawhub-template.worker.js").then(
+      (m) => m.templateClawHubWriteOperations,
+    ),
   secrets: () =>
     import("../secrets/store/secret-store.worker.js").then((m) => m.secretStoreOperations),
   agentProvenance: () =>

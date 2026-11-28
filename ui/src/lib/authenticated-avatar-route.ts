@@ -1,4 +1,5 @@
-import { fetchControlUiResource, subscribeBrowserAuthRestored } from "../app/browser-http.ts";
+import { subscribeBrowserAuthRestored } from "../app/browser-http.ts";
+import { fetchWithControlUiAuth } from "../app/control-ui-auth.ts";
 import {
   fetchGatewayContextResource,
   readAvatarGatewayContext,
@@ -91,29 +92,23 @@ async function fetchAvatarRoute(
   let notFound = false;
   let retryDelayMs: number | undefined;
   try {
-    // Ordered credential recovery: a saved token can be stale while the session's
-    // password is valid, so a rejected credential falls through to the next one
-    // instead of silently leaving the caller on its fallback forever.
-    for (const authToken of !gatewayContext && authTokens.length > 0 ? authTokens : [""]) {
-      const response = gatewayContext
-        ? await fetchGatewayContextResource(url, 5_000, entry.controller.signal)
-        : await fetchControlUiResource(url, {
-            ...(authToken ? { headers: { Authorization: `Bearer ${authToken}` } } : {}),
-            signal: entry.controller.signal,
-          });
-      if (response.ok) {
-        blobUrl = URL.createObjectURL(await response.blob());
-        break;
-      }
-      // Rejected bodies are never read, including cached misses. Release them
-      // without letting stalled cleanup block credential recovery or fallback.
+    const response = gatewayContext
+      ? await fetchGatewayContextResource(url, 5_000, entry.controller.signal)
+      : await fetchWithControlUiAuth(
+          url,
+          { signal: entry.controller.signal },
+          authTokens,
+          () => true,
+        );
+    if (response.ok) {
+      blobUrl = URL.createObjectURL(await response.blob());
+    } else {
+      // The final rejected body is never read, including cached misses. Release
+      // it without letting stalled cleanup block fallback.
       void response.body?.cancel().catch(() => undefined);
       notFound = response.status === 404;
       entry.unavailable = retryUnavailable && response.status === 503;
       retryDelayMs = entry.unavailable ? retryAfterMs(response) : undefined;
-      if (response.status !== 401 && response.status !== 403) {
-        break;
-      }
     }
   } catch {
     // A missing image leaves the owning view's existing text/mascot fallback visible.

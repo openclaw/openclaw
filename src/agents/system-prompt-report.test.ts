@@ -269,5 +269,15 @@ describe("rendered skills diagnostics", () => {
       expect(report.entries.map(({ name }) => name)).toEqual(names);
       expect(report.promptChars).toBe(rendered.length);
     }
+    // With skills_search usable the catalog renders names only and the report still finds it.
+    const namesOnly = buildAgentSystemPrompt({
+      workspaceDir: "/workspace",
+      toolNames: ["skills_read", "skills_search"],
+      skillsPrompt: stored,
+    });
+    expect(namesOnly).toContain('- "say \\"hi\\""\n</available_skills>');
+    expect(namesOnly).not.toContain("release notes description");
+    const report = makeReport({ systemPrompt: namesOnly, skillsPrompt: stored }).skills;
+    expect(report.entries.map(({ name }) => name)).toEqual(names);
   });
 });

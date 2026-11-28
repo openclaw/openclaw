@@ -16,6 +16,7 @@ import {
   iterateModelStream,
   withProviderResponseHook,
 } from "../../packages/ai/src/transports/transport-stream-shared.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -64,12 +65,7 @@ const observer = new PerformanceObserver((list) => {
 observer.observe({ entryTypes: ["gc"] });
 const inspector = values.allocations ? new Session() : undefined;
 if (inspector) {
-  inspector.connect();
-  await inspector.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(inspector, 4096);
 }
 const before = process.memoryUsage();
 const cpu = process.threadCpuUsage();
