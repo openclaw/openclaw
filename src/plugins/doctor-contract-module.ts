@@ -208,6 +208,7 @@ export type PluginDoctorStateMigration = {
   ) =>
     | readonly PluginDoctorMigrationBackupResource[]
     | Promise<readonly PluginDoctorMigrationBackupResource[]>;
+  /** Read-only: `doctor --lint` runs it against the user's real stores, so never create, lock or change files. */
   detectLegacyState: (
     params: PluginDoctorStateMigrationInput,
   ) =>

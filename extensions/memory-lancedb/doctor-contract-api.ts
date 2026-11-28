@@ -147,6 +147,8 @@ async function openMemoryTable(params: {
   env: NodeJS.ProcessEnv;
   pluginRoot: string;
   stateDir: string;
+  /** Only writers take custody: `ltm optimize` keeps old versions, so readers need none. */
+  write?: true;
 }): Promise<{
   connection: LanceDbConnection | null;
   table: LanceDbTable | null;
@@ -162,7 +164,7 @@ async function openMemoryTable(params: {
   if (!dbPath.includes("://") && !fs.existsSync(dbPath)) {
     return { connection: null, table: null, dbPath };
   }
-  const usage = await acquireMemoryTableUsage(dbPath);
+  const usage = params.write ? await acquireMemoryTableUsage(dbPath) : null;
   let connection: LanceDbConnection | null = null;
   try {
     const lancedb = await import("@lancedb/lancedb");
@@ -217,7 +219,7 @@ export function createMemoryLanceDbStateMigrations(
         });
       },
       async migrateLegacyState(params: StateMigrationParams) {
-        return await withMemoryTable({ ...params, pluginRoot }, async (opened) => {
+        return await withMemoryTable({ ...params, pluginRoot, write: true }, async (opened) => {
           if (!opened.table || hasAgentScopeColumn(await opened.table.schema())) {
             return { changes: [], warnings: [] };
           }
@@ -267,7 +269,7 @@ export function createMemoryLanceDbStateMigrations(
         });
       },
       async migrateLegacyState(params: StateMigrationParams) {
-        return await withMemoryTable({ ...params, pluginRoot }, async (opened) => {
+        return await withMemoryTable({ ...params, pluginRoot, write: true }, async (opened) => {
           if (!opened.table) {
             return { changes: [], warnings: [] };
           }

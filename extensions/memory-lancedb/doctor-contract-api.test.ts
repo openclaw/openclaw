@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import * as lancedb from "@lancedb/lancedb";
@@ -201,6 +203,36 @@ test("keeps literal $ patterns in home when expanding a tilde dbPath", async () 
   await expect(scopeMigration.detectLegacyState(params)).resolves.toMatchObject({
     preview: [expect.stringContaining(dollarDbPath)],
   });
+});
+
+async function snapshotTree(root: string): Promise<Record<string, string>> {
+  const tree: Record<string, string> = {};
+  for (const entry of await fs.readdir(root, { recursive: true, withFileTypes: true })) {
+    const entryPath = path.join(entry.parentPath, entry.name);
+    const stat = await fs.lstat(entryPath);
+    tree[path.relative(root, entryPath)] = entry.isFile()
+      ? `${stat.size}:${stat.mtimeMs}:${createHash("sha256")
+          .update(await fs.readFile(entryPath))
+          .digest("hex")}`
+      : `dir:${stat.mtimeMs}`;
+  }
+  tree["."] = `dir:${(await fs.lstat(root)).mtimeMs}`;
+  return tree;
+}
+
+// `doctor --lint --all` runs every detector against the user's real store.
+test("detection leaves an explicit dbPath byte-identical", async () => {
+  await createLegacyTable(getDbPath(), [
+    { id: "legacy-envelope", text: "Sender (untrusted metadata): Alex\nI prefer tea" },
+  ]);
+  const before = await snapshotTree(getDbPath());
+  const params = migrationParams();
+  for (const migration of stateMigrations) {
+    await expect(migration.detectLegacyState(params)).resolves.toMatchObject({
+      preview: [expect.stringContaining(getDbPath())],
+    });
+  }
+  expect(await snapshotTree(getDbPath())).toEqual(before);
 });
 
 test("deletes only structurally complete legacy envelope rows", async () => {
