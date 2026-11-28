@@ -28,6 +28,7 @@ export function useMessageCacheFixture(prefix: string, interruptRetained = false
     beforeCompare: undefined as ((key: string) => Promise<void>) | undefined,
     beforeMove: undefined as (() => Promise<void>) | undefined,
     afterMove: undefined as (() => Promise<void>) | undefined,
+    beforeRegister: undefined as ((key: string) => Promise<void>) | undefined,
     options: () => ({ namespace, maxEntries, env: state.env }),
     store<T>(retained = false) {
       return createPluginStateKeyedStoreForTests<T>(
@@ -38,7 +39,11 @@ export function useMessageCacheFixture(prefix: string, interruptRetained = false
   };
   beforeEach(async () => {
     state = await createOpenClawTestState({ prefix, layout: "state-only" });
-    fixture.beforeCompare = fixture.beforeMove = fixture.afterMove = undefined;
+    fixture.beforeCompare =
+      fixture.beforeMove =
+      fixture.afterMove =
+      fixture.beforeRegister =
+        undefined;
     const openKeyedStore: TelegramRuntime["state"]["openKeyedStoreV2"] = <T>(
       options: Parameters<TelegramRuntime["state"]["openKeyedStore"]>[0],
     ): PluginStateKeyedStore<T, 2> => {
@@ -47,8 +52,19 @@ export function useMessageCacheFixture(prefix: string, interruptRetained = false
         { ...options, env: state.env },
         { assertCurrent() {} },
       );
-      if (!interruptRetained || options.retention !== "retained") {
+      if (!interruptRetained) {
         return store;
+      }
+      if (options.retention !== "retained") {
+        return {
+          ...store,
+          async register(key, value) {
+            const interrupt = fixture.beforeRegister;
+            fixture.beforeRegister = undefined;
+            await interrupt?.(key);
+            return store.register(key, value);
+          },
+        };
       }
       return {
         ...store,
