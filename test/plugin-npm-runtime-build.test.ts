@@ -148,6 +148,7 @@ it.for([
           'export { resolveBotThreadMentionPolicy, resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-mention-gating";',
           'export { createLivePreviewLifecycle, createPreviewMessageReceipt } from "openclaw/plugin-sdk/channel-outbound";',
           'export { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";',
+          'export { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";',
         ].join("\n"),
       });
       const hostDir = path.join(packageDir, "node_modules", "openclaw");
@@ -193,6 +194,9 @@ it.for([
         (async () => {
           const symbols = new Set(Object.getOwnPropertySymbols(globalThis));
           const entry = await import(probeData.entry);
+          assert.equal(entry.sha256Hex("abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+          assert.equal(entry.sha256Hex(new Uint8Array([97, 98, 99])), entry.sha256Hex("abc"));
           const cfg = { channels: { telegram: { webhookPort: 8123 } } };
           const migrated = entry.createLegacyWebhookListenerDoctorContract({
             channelKey: "telegram", defaultPort: 8787,

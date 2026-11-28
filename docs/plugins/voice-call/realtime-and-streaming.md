@@ -209,7 +209,28 @@ The failure can come from carrier hangup or local finalization after hangup succ
 Inspect that call's status and logs before retrying; an active local record does not
 necessarily mean the carrier call is still connected.
 
-### Hangup detection
+### Long prepared statements
+
+OpenAI response-mode calls can deliver a long prepared opening or later `speak`
+statement in bounded passages. The shorter `say` steering route retains its existing
+500-character limit. The next passage starts only after generation
+finishes and the carrier acknowledges playback. This prevents the model from
+filling the audio queue faster than the listener can hear it.
+
+Statements remain interruptible. When the listener speaks, the unfinished
+statement pauses while the voice agent handles the interruption. The agent uses
+`openclaw_statement` to resume when appropriate or discard the remainder when
+asked to stop. Resume repeats the last unacknowledged short passage rather than
+skipping words the listener may not have heard. It is not word-exact seek/resume.
+The host supplies new prepared statements; the control tool cannot start or replace
+them. Host-supplied passages are spoken directly, not routed back through the tool.
+
+This does not guarantee unlimited spontaneous model replies: those are not known
+text that the host can split in advance. Other providers, including continuous/native-delegation providers,
+retain their existing delivery path. The audio queue's overflow protection stays
+enabled; text length alone cannot guarantee how much audio a model produces.
+
+## Hangup detection
 
 Realtime calls normally end when the carrier sends a stream stop event or closes
 the media WebSocket. If an intermediary does not promptly forward that close,

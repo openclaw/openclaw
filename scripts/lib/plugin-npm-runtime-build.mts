@@ -616,6 +616,12 @@ export function resolvePluginNpmRuntimeBuildPlan(params: PluginNpmRuntimeBuildPa
       repoRoot,
       "packages/normalization-core/src/grapheme.ts",
     ),
+    // Stable 2026.11.3 lacks this pure helper's SDK subpath. Retire the alias
+    // once the declared host floor includes it; runtime owners remain external.
+    "openclaw/plugin-sdk/node-crypto-runtime": path.join(
+      repoRoot,
+      "packages/normalization-core/src/node-crypto.ts",
+    ),
     ...(params.profile === "qa-gateway-fixture"
       ? { [QA_PROTOCOL_SDK_IMPORT]: path.join(repoRoot, "src/plugin-sdk/qa-channel-protocol.ts") }
       : {}),
