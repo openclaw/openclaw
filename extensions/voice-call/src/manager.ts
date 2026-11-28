@@ -580,6 +580,11 @@ export class CallManager {
     return this.activeCalls.get(callId);
   }
 
+  /** True while the call's initial message is being synthesized or played. */
+  isInitialMessageInFlight(callId: CallId): boolean {
+    return this.initialMessageInFlight.has(callId);
+  }
+
   /** Await admitted identity updates before resolving a token-bound stream's active call. */
   getCallForStream(callId: CallId): Promise<CallRecord | undefined> {
     return this.runOperation(() =>

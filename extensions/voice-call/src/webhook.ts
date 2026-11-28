@@ -6,10 +6,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PluginLogger, PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveConfiguredCapabilityProviderAsync } from "openclaw/plugin-sdk/provider-selection-runtime";
-import {
-  normalizeOptionalString,
-  normalizeStringEntries,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   createWebhookInFlightLimiter,
   normalizeWebhookPath,
@@ -212,15 +209,15 @@ export class VoiceCallWebhookServer {
   }
 
   private shouldSuppressBargeInForInitialMessage(call: CallRecord | undefined): boolean {
-    // Suppress only while the initial greeting is actively being played.
-    // If playback fails and the call leaves "speaking", do not block auto-response.
+    // Suppress only while the initial greeting is actively being played. A failed greeting keeps
+    // its text for a retry, so the stored text alone must not block later replies.
     if (!call || call.direction !== "outbound" || call.state !== "speaking") {
       return false;
     }
 
     return (
       (call.metadata?.mode ?? "conversation") === "conversation" &&
-      Boolean(normalizeOptionalString(call.metadata?.initialMessage))
+      this.manager.isInitialMessageInFlight(call.callId)
     );
   }
 

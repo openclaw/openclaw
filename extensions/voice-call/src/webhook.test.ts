@@ -710,6 +710,30 @@ it.each([
   expect(server.getMediaStreamHandler() !== null).toBe(on);
 });
 
+it("answers caller speech while a reply plays after the greeting failed", async () => {
+  // A failed greeting keeps its text for a retry; a later reply puts the call back in "speaking".
+  const call = callRecord({
+    state: "speaking",
+    metadata: { mode: "conversation", initialMessage: "Greeting" },
+  });
+  const { server, processEvent } = fixture(streamConfig, streamingProvider(), [call], {
+    getCallByProviderCallId: (id) => (id === call.providerCallId ? call : undefined),
+    isInitialMessageInFlight: () => false,
+  });
+  processEvent.mockImplementation(async (event) =>
+    event.type === "call.speech"
+      ? { kind: "final-speech", call, transcript: event.transcript, waiterResolved: false }
+      : { kind: "processed" },
+  );
+  await server.start();
+  const respond = vi.fn(async () => {});
+  internals(server).handleInboundResponse = respond;
+  media(server).onTranscript?.("provider-call-1", "are you still there", "stream");
+  await vi.waitFor(() =>
+    expect(respond).toHaveBeenCalledExactlyOnceWith(call.callId, "are you still there"),
+  );
+});
+
 it("logs transcript counts without disclosing inactive-stream speech", async () => {
   const { server, messages } = fixture(streamConfig, streamingProvider(), [], {
     getCallByProviderCallId: () => undefined,
@@ -728,12 +752,14 @@ it("suppresses outbound greeting barge-in until the initial message finishes", a
     metadata: { mode: "conversation", initialMessage: "Greeting" },
   });
   const clearTtsQueue = vi.fn<StreamProvider["clearTtsQueue"]>();
+  let greetingPlaying = true;
   const { server, processEvent } = fixture(
     streamConfig,
     streamingProvider({ clearTtsQueue }),
     [call],
     {
       getCallByProviderCallId: (id) => (id === call.providerCallId ? call : undefined),
+      isInitialMessageInFlight: () => greetingPlaying,
     },
   );
   processEvent.mockImplementation(async (event) => {
@@ -752,6 +778,7 @@ it("suppresses outbound greeting barge-in until the initial message finishes", a
   callbacks.onSpeechStart?.("provider-call-1", "stream");
   callbacks.onTranscript?.("provider-call-1", "hello again", "stream");
   notCalled(clearTtsQueue, respond, processEvent);
+  greetingPlaying = false;
   delete call.metadata!.initialMessage;
   call.state = "listening";
   callbacks.onSpeechStart?.("provider-call-1", "stream");
