@@ -10,6 +10,7 @@ import { elementRef } from "../../lib/reactive/element-ref.ts";
 import type { Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed } from "../overlay-registry.ts";
 import { MENU_FORM_CONTROL_SELECTOR } from "./menu-form-controls.ts";
+import type { MenuKeySource, PendingMenuHover, PendingMenuIntent } from "./menu-navigation.ts";
 import type { MenuNavigationOptions, MenuRuntime } from "./menu-runtime.ts";
 
 export type { MenuNavigationOptions } from "./menu-runtime.ts";
@@ -81,17 +82,13 @@ export function useMenuMachine(
       : connected;
   };
   const parentRuntime = createMemo(() => parent?.runtime());
-  let hover: PointerEvent | undefined;
+  let hover: PendingMenuHover | undefined;
   let runtime: MenuRuntime | undefined;
   let virtualized = false;
   let stopRuntime: (() => void) | undefined;
   let mounted = false;
   let loading = false;
-  let pending: Array<{
-    run: (loaded: MenuRuntime) => void;
-    keyboard?: boolean;
-    highlightedValue?: string | null;
-  }> = [];
+  const pending: PendingMenuIntent[] = [];
   const [revision, setRevision] = createSignal(0);
   const [error, setError] = createSignal<unknown>();
   const notify = () => setRevision((value) => value + 1);
@@ -125,7 +122,8 @@ export function useMenuMachine(
     loading = true;
     setError(undefined);
     try {
-      const { createMenuRuntime } = await retryControlUiImport(() => import("./menu-runtime.ts"));
+      const { createMenuRuntime, adoptNativeMenuInput, replayMenuIntents } =
+        await retryControlUiImport(() => import("./menu-navigation.ts"));
       if (!mounted) {
         return;
       }
@@ -139,28 +137,11 @@ export function useMenuMachine(
         onSelect,
       );
       stopRuntime = runtime.start();
-      if (hover && overlay.trigger?.matches(":hover") && overlay.parent?.open) {
-        runtime.trigger(parentRuntime()).onPointerMove(hover);
-      }
+      adoptNativeMenuInput(runtime, overlay, options.surface, items, hover, parentRuntime);
       hover = undefined;
-      // Native entry already chose focus while the module was loading. Adopt it
-      // before replaying subsequent keyboard input instead of focusing twice.
-      if (overlay.open && options.surface !== "listbox") {
-        const focused = items().find((item) => item.matches(":focus"));
-        if (focused?.dataset.value) {
-          runtime.read().setHighlightedValue(focused.dataset.value);
-        }
-      }
       loading = false;
       notify();
-      while (pending.length) {
-        pending.shift()?.run(runtime);
-        // Vanilla queues the transition; Home/End queue the highlight again,
-        // whose store notification publishes roving focus. Drain both before replay.
-        await new Promise<void>((resolve) => {
-          queueMicrotask(() => queueMicrotask(resolve));
-        });
-      }
+      await replayMenuIntents(pending, runtime, parentRuntime);
     } catch (reason) {
       if (!mounted) {
         return;
@@ -169,7 +150,7 @@ export function useMenuMachine(
       stopRuntime = undefined;
       runtime = undefined;
       loading = false;
-      pending = [];
+      pending.length = 0;
       setError(reason);
       notify();
     }
@@ -179,7 +160,7 @@ export function useMenuMachine(
     const stopOpen = overlay.subscribe((open) => {
       notify();
       if (!open) {
-        pending = [];
+        pending.length = 0;
       } else if (!parent) {
         void load();
       }
@@ -190,7 +171,7 @@ export function useMenuMachine(
     }
     return () => {
       mounted = false;
-      pending = [];
+      pending.length = 0;
       stopOpen();
       stopRuntime?.();
     };
@@ -215,7 +196,7 @@ export function useMenuMachine(
       }
     },
   );
-  const deferKey = (event: KeyboardEvent, target: "content" | "input" | "trigger") => {
+  const deferKey = (event: KeyboardEvent, target: MenuKeySource) => {
     if (
       event.defaultPrevented ||
       event.isComposing ||
@@ -226,9 +207,10 @@ export function useMenuMachine(
     ) {
       return;
     }
+    const { key } = event;
     const editing =
       event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
-    if (event.key === "Escape") {
+    if (key === "Escape") {
       // A child can retain focus on its parent trigger before navigation loads, too.
       if (![...overlay.children].some((child) => child.open)) {
         overlay.keydown(event);
@@ -239,14 +221,13 @@ export function useMenuMachine(
       target === "content" &&
       options.surface !== "listbox" &&
       event.target.matches(MENU_FORM_CONTROL_SELECTOR) &&
-      !(event.target.matches("input[data-search]") && ["ArrowDown", "Enter"].includes(event.key)) &&
-      !(event.target instanceof HTMLButtonElement && ["ArrowDown", "ArrowUp"].includes(event.key))
+      !(event.target.matches("input[data-search]") && ["ArrowDown", "Enter"].includes(key)) &&
+      !(event.target instanceof HTMLButtonElement && ["ArrowDown", "ArrowUp"].includes(key))
     ) {
       return;
     }
     if (
-      event.key === "Tab" ||
-      (event.key.length !== 1 &&
+      (key.length !== 1 &&
         ![
           "ArrowDown",
           "ArrowUp",
@@ -256,8 +237,8 @@ export function useMenuMachine(
           "End",
           "Enter",
           "Backspace",
-        ].includes(event.key)) ||
-      (editing && !["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) ||
+        ].includes(key)) ||
+      (editing && !["ArrowDown", "ArrowUp", "Enter"].includes(key)) ||
       event.ctrlKey ||
       event.metaKey ||
       event.altKey
@@ -265,21 +246,20 @@ export function useMenuMachine(
       return;
     }
     const originalTarget = event.target;
-    const currentTarget = event.currentTarget;
     event.preventDefault();
     event.stopPropagation();
     if (
       target === "content" &&
       options.surface !== "listbox" &&
-      !pending.some((intent) => intent.keyboard)
+      !pending.some((intent) => "event" in intent)
     ) {
       // Close the visible branch before the next Escape chooses its deepest owner.
-      if (parent && event.key === (direction() === "rtl" ? "ArrowRight" : "ArrowLeft")) {
+      if (parent && key === (direction() === "rtl" ? "ArrowRight" : "ArrowLeft")) {
         overlay.request(false, "return");
         return;
       }
       if (
-        ["Enter", " "].includes(event.key) &&
+        ["Enter", " "].includes(key) &&
         itemNodes.has(originalTarget) &&
         !originalTarget.hasAttribute("aria-haspopup")
       ) {
@@ -287,25 +267,7 @@ export function useMenuMachine(
         return;
       }
     }
-    pending.push({
-      keyboard: true,
-      run: (loaded) => {
-        const replay = new KeyboardEvent(event.type, event);
-        Object.defineProperties(replay, {
-          target: {
-            value: target === "content" ? loaded.service.scope.getActiveElement() : originalTarget,
-          },
-          currentTarget: { value: currentTarget },
-        });
-        if (target === "content") {
-          loaded.content().onKeyDown(replay);
-        } else if (target === "trigger") {
-          loaded.trigger(parentRuntime()).onKeyDown(replay);
-        } else {
-          loaded.keydown(replay);
-        }
-      },
-    });
+    pending.push({ event, source: target, originalTarget, currentTarget: event.currentTarget });
   };
   const keydown = (event: KeyboardEvent) =>
     runtime ? runtime.keydown(event) : deferKey(event, "input");
@@ -418,11 +380,7 @@ export function useMenuMachine(
           if (disabled || !parentBinding || event.pointerType !== "mouse") {
             return;
           }
-          hover = new PointerEvent(event.type, event);
-          Object.defineProperties(hover, {
-            target: { value: event.target },
-            currentTarget: { value: event.currentTarget },
-          });
+          hover = { event, originalTarget: event.target, currentTarget: event.currentTarget };
         },
         onPointerLeave: () => {
           hover = undefined;
@@ -440,9 +398,8 @@ export function useMenuMachine(
           }
           const forward = direction() === "rtl" ? "ArrowLeft" : "ArrowRight";
           if (
-            ["ArrowDown", "ArrowUp", "Enter", " ", ...(parentBinding ? [forward] : [])].includes(
-              event.key,
-            )
+            ["ArrowDown", "ArrowUp", "Enter", " "].includes(event.key) ||
+            (parentBinding && event.key === forward)
           ) {
             event.preventDefault();
             overlay.request(true, event.key === "ArrowUp" ? "last" : "first");
