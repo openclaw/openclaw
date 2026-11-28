@@ -98,7 +98,7 @@ function collectStrictSchemaViolations(
 
   const record = schema as Record<string, unknown>;
   const violations: string[] = [];
-  // Unions keep a tool non-strict (a branch can lack the type strict mode requires); a type
+  // Unions are outside strict mode's subset (a branch can lack the type it requires); a type
   // list such as ["string", "null"] is accepted.
   for (const key of ["anyOf", "oneOf", "allOf"] as const) {
     if (key in record) {

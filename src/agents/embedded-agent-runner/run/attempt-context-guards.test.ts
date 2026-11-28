@@ -1,5 +1,7 @@
-import { createHash } from "node:crypto";
-import { rm } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import nodePath from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -8,10 +10,12 @@ import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import type { AssistantMessage } from "../../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
 import { forceFullGc } from "../../../test-utils/retention.js";
+import { createCoreCodingTools } from "../../core-coding-tools.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { agentSessionDeferThresholdCompaction } from "../../sessions/agent-session-types.js";
 import { SessionManager, type AgentSession } from "../../sessions/index.js";
+import { boundSessionToolResult } from "../../sessions/session-tool-result-preparation.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
@@ -262,7 +266,9 @@ describe("installEmbeddedAttemptContextGuards", () => {
   it("bounds the result a prior afterToolCall hook returned and spills it", async () => {
     const huge = `${"row\n".repeat(30_000)}LAST`;
     const previous = vi.fn(async () => ({ content: [{ type: "text" as const, text: huge }] }));
+    const spillOwner = { agentId: "main", sessionKey: randomUUID() };
     const input = createInput({
+      spillOwner,
       sessionManager: guardSessionManager(SessionManager.inMemory(), {
         contextWindowTokens: 200_000,
       }),
@@ -284,6 +290,26 @@ describe("installEmbeddedAttemptContextGuards", () => {
     expect(text).toMatch(/LAST$/u);
     expect(text).toContain(`Full output: ${path}`);
     expect(input.activeSession.agent.afterToolCall).toBe(previous);
+    const root = await mkdtemp(nodePath.join(tmpdir(), "spill-hook-workspace-"));
+    onTestFinished(() => rm(root, { recursive: true, force: true }));
+    const read = createCoreCodingTools({
+      codingRoot: root,
+      containmentRoot: root,
+      includeBaseCodingTools: true,
+      shellTools: "disabled",
+      workspaceOnly: true,
+      readOnly: true,
+      applyPatchEnabled: false,
+      applyPatchWorkspaceOnly: true,
+      execDefaults: {},
+      processDefaults: {},
+      spillOwner,
+    }).find((tool) => tool.name === "read")!;
+    const page = await read.execute("read-bounded-spill", { path, offset: 2, limit: 2 });
+    expect(JSON.stringify(page.content)).toContain("row");
+    expect(await boundSessionToolResult(input.sessionManager, page, { owner: spillOwner })).toBe(
+      page,
+    );
   });
 
   it("does not inspect providers when attempt configuration is absent", () => {

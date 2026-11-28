@@ -69,44 +69,35 @@ struct ChatTalkButton: View {
         }
         .buttonStyle(.plain)
         .disabled(!self.control.isGatewayConnected && !self.control.isEnabled)
-        .accessibilityLabel(self.control.isEnabled ? "Stop realtime chat" : "Start realtime chat")
-        .accessibilityValue(self.accessibilityValue)
+        .accessibilityLabel(self.accessibilityLabel)
+        .accessibilityValue(self.control.accessibilityStatus)
         .accessibilityIdentifier("chat-realtime-control")
+        #if os(iOS)
+        .accessibilityHint(ChatComposerPrimaryAccessibility.talk(
+            isActive: self.control.isEnabled,
+            isConnected: self.control.isGatewayConnected,
+            liveStatus: "").hint)
+        #else
         .help(self.helpText)
-        .contextMenu {
-            if let selectInputDevice = self.control.selectInputDevice {
-                Button {
-                    selectInputDevice(nil)
-                } label: {
-                    self.menuLabel(
-                        String(localized: "System Default"),
-                        selected: self.control.selectedInputDeviceID == nil)
-                }
-                if !self.control.inputDevices.isEmpty {
-                    Divider()
-                    ForEach(self.control.inputDevices) { device in
-                        Button {
-                            selectInputDevice(device.id)
-                        } label: {
-                            self.menuLabel(
-                                device.name,
-                                selected: self.control.selectedInputDeviceID == device.id)
-                        }
-                    }
-                }
-            }
+        #endif
+        .chatActionContextMenu {
+            ChatTalkInputDeviceMenu(control: self.control)
         }
     }
 
-    @ViewBuilder
-    private func menuLabel(_ text: String, selected: Bool) -> some View {
-        if selected {
-            Label(text, systemImage: "checkmark")
-                .font(OpenClawChatTypography.body)
-        } else {
-            Text(text)
-                .font(OpenClawChatTypography.body)
+    /// iPhone and iPad name the action like the composer's primary button; macOS keeps its wording.
+    private var accessibilityLabel: Text {
+        #if os(iOS)
+        if self.control.isEnabled {
+            return Text("End voice conversation")
         }
+        return Text("Start voice conversation")
+        #else
+        if self.control.isEnabled {
+            return Text("Stop realtime chat")
+        }
+        return Text("Start realtime chat")
+        #endif
     }
 
     private var fullLabel: some View {
@@ -132,7 +123,12 @@ struct ChatTalkButton: View {
 
     private func compactLabel(controlHeight: CGFloat, iconControlSize: CGFloat) -> some View {
         ChatTalkButtonGlyph(control: self.control)
-            .font(.system(size: OpenClawChatTypography.scaled(14), weight: .semibold))
+            #if os(iOS)
+                .font(OpenClawChatTypography.composerPrimaryGlyph)
+                .scaleEffect(0.88)
+            #else
+                .font(.system(size: OpenClawChatTypography.scaled(14), weight: .semibold))
+            #endif
             .foregroundStyle(.white)
             .frame(width: iconControlSize, height: iconControlSize)
             // Prominent filled circle so the mic reads as the primary action,
@@ -162,11 +158,54 @@ struct ChatTalkButton: View {
         }
         return OpenClawChatTheme.composerBorder
     }
+}
 
-    private var accessibilityValue: String {
-        let status = self.control.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
-        let provider = self.control.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
+extension OpenClawChatTalkControl {
+    /// Read after the Talk control's label: its status and the voice provider.
+    var accessibilityStatus: String {
+        let status = self.statusText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let provider = self.providerLabel.trimmingCharacters(in: .whitespacesAndNewlines)
         return [status, provider].filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+}
+
+/// The microphone choices behind a touch and hold on the Talk control.
+struct ChatTalkInputDeviceMenu: View {
+    let control: OpenClawChatTalkControl
+
+    var body: some View {
+        if let selectInputDevice = self.control.selectInputDevice {
+            Button {
+                selectInputDevice(nil)
+            } label: {
+                self.menuLabel(
+                    String(localized: "System Default"),
+                    selected: self.control.selectedInputDeviceID == nil)
+            }
+            if !self.control.inputDevices.isEmpty {
+                Divider()
+                ForEach(self.control.inputDevices) { device in
+                    Button {
+                        selectInputDevice(device.id)
+                    } label: {
+                        self.menuLabel(
+                            device.name,
+                            selected: self.control.selectedInputDeviceID == device.id)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func menuLabel(_ text: String, selected: Bool) -> some View {
+        if selected {
+            Label(text, systemImage: "checkmark")
+                .font(OpenClawChatTypography.body)
+        } else {
+            Text(text)
+                .font(OpenClawChatTypography.body)
+        }
     }
 }
 

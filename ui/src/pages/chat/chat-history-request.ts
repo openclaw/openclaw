@@ -42,10 +42,7 @@ import {
   projectChatTranscriptMetadata,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
-export {
-  CHAT_HISTORY_REQUEST_LIMIT,
-  chatHistoryRequestParams,
-} from "./chat-history-request-params.ts";
+export { openingHistoryLimit, chatHistoryRequestParams } from "./chat-history-request-params.ts";
 
 export function captureChatHistoryRun(
   state: ChatState,
@@ -112,6 +109,7 @@ type SharedChatHistoryArgs = [
   inputRunIds?: string[],
   historyState?: ChatHistoryState,
   initialHistory?: InitialChatHistoryReceipt,
+  compactOpening?: boolean,
 ];
 
 export function requestSharedHistory(
@@ -136,6 +134,7 @@ export function requestSharedHistory(
     inputRunIds = [],
     historyState,
     initialHistory,
+    compactOpening,
   ]: SharedChatHistoryArgs
 ): Promise<ChatHistoryResponse & { observation?: ChatHistoryObservation }> {
   consumerObservation.signal?.throwIfAborted();
@@ -146,8 +145,9 @@ export function requestSharedHistory(
     cursor,
     inputRunIds,
     historyState,
+    compactOpening,
   );
-  const requestKey = baseRequestKey + JSON.stringify(params.knownState);
+  const requestKey = baseRequestKey + JSON.stringify([params.limit, params.knownState]);
   let owners = sharedChatHistoryRequests.get(client);
   if (!owners) {
     owners = new WeakMap();

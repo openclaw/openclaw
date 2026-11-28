@@ -68,13 +68,13 @@ export {
 
 export function applyResponsesServiceTierPricing(
   usage: Usage,
-  serviceTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
+  serviceTier: ResponseCreateParamsStreaming["service_tier"] | "fast" | undefined,
   model: Pick<Model, "id">,
 ): void {
   let multiplier = 1;
   if (serviceTier === "flex") {
     multiplier = 0.5;
-  } else if (serviceTier === "priority") {
+  } else if (serviceTier === "priority" || serviceTier === "fast") {
     multiplier = model.id === "gpt-5.5" ? 2.5 : 2;
   } else if (
     serviceTier === "ultrafast" &&

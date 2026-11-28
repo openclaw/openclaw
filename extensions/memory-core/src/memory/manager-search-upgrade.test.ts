@@ -104,10 +104,11 @@ async function publishIndex(
   }
   return dbPath;
 }
-it("rebuilds unchanged prior-version content on the first default search", async () => {
+it("rebuilds unchanged version 6 content on the first default search", async () => {
   const cfg = createConfig();
-  const dbPath = await publishIndex(cfg, "chunkingVersion");
+  const dbPath = await publishIndex(cfg, "chunkingVersion", 6 - MEMORY_CHUNKING_VERSION);
   const manager = await fixture.getFreshManager(cfg, "default");
+  expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(6);
   expect(await manager.search("alpha", { lexicalOnly: true })).toEqual(alphaResult);
   expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
   expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION);
@@ -126,16 +127,16 @@ it("rebuilds unchanged prior-version content on the first default search", async
   expect(publication()).toEqual(rebuilt);
 });
 
-it("keeps status inspection read-only during an upgrade", async () => {
+it("keeps status inspection read-only during a version 6 upgrade", async () => {
   const cfg = createConfig();
-  const dbPath = await publishIndex(cfg, "chunkingVersion");
+  const dbPath = await publishIndex(cfg, "chunkingVersion", 6 - MEMORY_CHUNKING_VERSION);
   const manager = await fixture.getFreshManager(cfg, "status");
   expect(manager.status().custom?.indexIdentity).toMatchObject({
     status: "mismatched",
     code: "chunking_version",
     owner: "openclaw",
   });
-  expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(MEMORY_CHUNKING_VERSION - 1);
+  expect(withDatabase(dbPath, readMeta).chunkingVersion).toBe(6);
 });
 
 it("rebuilds a persisted v2026.11.5 CJK scope hash on normal search", async () => {

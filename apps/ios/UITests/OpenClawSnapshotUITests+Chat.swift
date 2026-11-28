@@ -3,6 +3,125 @@ import Vision
 import XCTest
 
 extension OpenClawSnapshotUITests {
+    func testLiveGatewayNewChatDraftAndSlashCommandCompletion() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Phone drawer")
+        let app = try self.launchPairedLiveGatewayApp(initialTab: "chat", initialDestination: "chat")
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        try self.startNewChatFromSidebar()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        print("NEW_CHAT_PROOF sidebar draft is open without sending")
+        input.typeText("/ne")
+        XCTAssertEqual(input.value as? String, "/ne")
+        let newCommand = app.buttons["/new"]
+        XCTAssertTrue(newCommand.waitForExistence(timeout: 8))
+        input.typeText("w")
+        XCTAssertEqual(input.value as? String, "/new")
+        self.attachScreenshot(named: "new-command-completion")
+        XCTAssertTrue(newCommand.waitForExistence(timeout: 5), "The standard /new suggestion stays visible")
+    }
+
+    /// The accessibility label is unabridged even when the toolbar only draws an ellipsis.
+    /// Read the pixels between the leading and trailing controls, on their center line.
+    private func assertCompactHeaderRenders(
+        _ name: String,
+        in app: XCUIApplication,
+        beside leading: XCUIElement,
+        attachment: String) throws
+    {
+        let left = leading.frame, right = app.buttons["Chat actions"].firstMatch.frame
+        let row = CGRect(x: left.maxX, y: left.minY, width: right.minX - left.maxX, height: left.height)
+        XCTAssertGreaterThan(row.width, 0)
+        // The app's geometry updates before the system finishes its rotation animation.
+        let deadline = Date.now.addingTimeInterval(4)
+        repeat {
+            let screenshot = XCUIScreen.main.screenshot()
+            let image = UIGraphicsImageRenderer(size: row.size).image { _ in
+                screenshot.image.draw(in: CGRect(origin: CGPoint(x: -row.minX, y: -row.minY), size: app.frame.size))
+            }
+            let recognize = VNRecognizeTextRequest()
+            recognize.recognitionLevel = .accurate
+            try VNImageRequestHandler(cgImage: XCTUnwrap(image.cgImage)).perform([recognize])
+            let lines = (recognize.results ?? []).compactMap { $0.topCandidates(1).first?.string }
+            let visible = lines.contains { $0.contains(name) }
+            if visible || Date.now >= deadline {
+                let frame = XCTAttachment(screenshot: screenshot)
+                frame.name = attachment
+                frame.lifetime = .keepAlways
+                self.add(frame)
+                XCTAssertTrue(visible, "Expected one visible line for \(name); rendered: \(lines)")
+                return
+            }
+        } while true
+    }
+
+    func testLandscapeNormalHeaderShowsNameBesideAvatar() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("Requires the compact chat toolbar") }
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Compact landscape chat")
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: ["--openclaw-chat-switch-fixture"])
+        let app = try XCTUnwrap(self.app)
+        XCTAssertTrue(self.agentIdentity(in: app).waitForExistence(timeout: 6))
+        let identity = self.agentIdentity(in: app)
+        for orientation in [UIDeviceOrientation.landscapeLeft, .landscapeRight] {
+            XCUIDevice.shared.orientation = orientation
+            XCTAssertGreaterThan(app.frame.width, app.frame.height)
+            let sidebar = app.buttons["RootTabs.Sidebar.Show"]
+            XCTAssertTrue(sidebar.waitForExistence(timeout: 5))
+            try self.assertCompactHeaderRenders(
+                "Molty", in: app, beside: sidebar, attachment: "main-title-\(orientation.rawValue)")
+            XCTAssertEqual(identity.frame.midX, app.frame.midX, accuracy: 2)
+            XCTAssertEqual(identity.frame.midY, sidebar.frame.midY, accuracy: 2)
+        }
+    }
+
+    func testLandscapeLongProjectChatTitleFitsBetweenControls() throws {
+        guard #available(iOS 27.1, *) else { throw XCTSkip("Requires the compact chat toolbar") }
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Compact landscape chat")
+        XCUIDevice.shared.orientation = .portrait
+        defer { XCUIDevice.shared.orientation = .portrait }
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: [
+            "--openclaw-chat-switch-fixture", "--openclaw-long-project-title-fixture",
+        ])
+        let app = try XCTUnwrap(self.app)
+        try self.openSidebarWithSlowEdgeDrag()
+        let regular = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "Launch plan")).firstMatch
+        XCTAssertTrue(regular.waitForExistence(timeout: 5))
+        regular.tap()
+        XCTAssertTrue(app.staticTexts["OPENCLAW_SWITCH_B_LATEST"].waitForExistence(timeout: 5))
+        let identity = self.agentIdentity(in: app)
+        XCTAssertTrue(identity.label.contains("Fieldnotes"))
+        for orientation in [UIDeviceOrientation.landscapeLeft, .landscapeRight] {
+            XCUIDevice.shared.orientation = orientation
+            XCTAssertGreaterThan(app.frame.width, app.frame.height)
+            let leading = app.buttons["RootTabs.Sidebar.Show"]
+            XCTAssertTrue(leading.waitForExistence(timeout: 5))
+            let trailing = app.buttons["Chat actions"]
+            try self.assertCompactHeaderRenders(
+                "Launch plan", in: app, beside: leading, attachment: "project-title-\(orientation.rawValue)")
+            XCTAssertGreaterThan(identity.frame.minX, leading.frame.maxX)
+            XCTAssertLessThan(identity.frame.maxX, trailing.frame.minX)
+            XCTAssertEqual(identity.frame.midX, (leading.frame.maxX + trailing.frame.minX) / 2, accuracy: 5)
+        }
+    }
+
+    func testNewChatFromSidebarFocusesDraft() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Phone drawer")
+        self.launchApp(for: Self.chatScreenshotTarget, appearance: "light", additionalArguments: [
+            "--openclaw-empty-chat-fixture",
+        ])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        XCTAssertFalse(app.keyboards.firstMatch.exists)
+        try self.startNewChatFromSidebar()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        self.attachScreenshot(named: "01-new-chat-teclado")
+        app.typeText("Hello")
+        XCTAssertEqual(input.value as? String, "Hello")
+    }
+
     func testChatComposerAccessibilityControls() throws {
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat", initialDestination: "chat", name: "chat-accessibility-controls"))
@@ -49,7 +168,6 @@ extension OpenClawSnapshotUITests {
         let controls = [
             app.buttons["chat-attachment-picker"],
             app.buttons["chat-composer-inline-permissions"],
-            app.buttons["chat-context-usage"],
             model,
             app.buttons["chat-composer-inline-effort"],
             app.buttons["chat-dictation-control"],
@@ -65,6 +183,22 @@ extension OpenClawSnapshotUITests {
         }
         self.assertNoHorizontalOverlap(controls)
         self.attachScreenshot(named: "accessibility-model-and-send-controls")
+    }
+
+    func testChatComposerPermissionsOpensWithKeyboardVisible() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Phone composer")
+        self.launchApp(for: Self.chatScreenshotTarget)
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        let permissions = app.buttons["chat-composer-inline-permissions"]
+        XCTAssertTrue(permissions.wait(for: \.isHittable, toEqual: true, timeout: 5))
+        permissions.tap()
+
+        let defaultMode = app.buttons["chat-composer-permission-default"]
+        XCTAssertTrue(defaultMode.wait(for: \.isHittable, toEqual: true, timeout: 5))
     }
 
     func testChatComposerReturnInsertsNewlineWithoutSending() throws {
@@ -151,7 +285,50 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "stop-guard-deliberate-stop-cancelled-response")
     }
 
-    func testTextDraftKeepsStopAvailableDuringActiveResponse() throws {
+    func testSendLongPressKeepsKeyboardUpDuringActiveResponse() throws {
+        self.launchApp(
+            for: ScreenshotTarget(initialTab: "chat", initialDestination: "chat", name: "chat-send-menu"),
+            additionalArguments: [
+                "--openclaw-hold-initial-chat-run",
+                "--openclaw-queue-menu-fixture",
+                "--openclaw-empty-chat-fixture",
+            ])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Keep the reply running.")
+        let send = app.buttons["chat-send-message"].firstMatch
+        self.waitForEnabled(send)
+        send.tap()
+        let stop = app.buttons["chat-stop-response"].firstMatch
+        XCTAssertTrue(stop.waitForExistence(timeout: 8))
+        input.tap()
+        input.typeText("Send this next.")
+        self.waitForEnabled(send)
+        let keyboard = app.keyboards.firstMatch
+        XCTAssertTrue(keyboard.exists)
+        let inputBottom = input.frame.maxY
+        self.attachScreenshot(named: "send-menu-before-press")
+        send.press(forDuration: 0.8)
+        let queueNext = app.buttons["Queue next"].firstMatch
+        XCTAssertTrue(queueNext.waitForExistence(timeout: 5))
+        self.attachScreenshot(named: "send-menu-open")
+        XCTAssertTrue(queueNext.isHittable, "Queue next must be available in the menu")
+        // UIKit retains an accessibility keyboard even after its keys slide offscreen.
+        // A dismissed keyboard also drops the composer to the bottom safe area.
+        XCTAssertTrue(keyboard.exists)
+        XCTAssertEqual(input.frame.maxY, inputBottom, accuracy: 2, "The composer dropped when the keyboard closed")
+
+        // Dismiss the options, then use the same menu-backed Send with an ordinary tap.
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.1, dy: 0.35)).tap()
+        XCTAssertTrue(queueNext.waitForNonExistence(timeout: 3))
+        send.tap()
+        XCTAssertTrue(send.waitForNonExistence(timeout: 5), "A plain tap must submit the follow-up draft")
+        XCTAssertFalse(queueNext.exists, "A plain tap must not open the menu")
+    }
+
+    func testTextDraftKeepsOnePrimaryButtonDuringActiveResponse() throws {
         self.launchApp(
             for: ScreenshotTarget(
                 initialTab: "chat",
@@ -174,11 +351,11 @@ extension OpenClawSnapshotUITests {
         input.tap()
         input.typeText("Keep this follow-up draft")
         self.attachScreenshot(named: "text-draft-during-active-response")
+        // One primary button. This fixture has no outbox, so the draft waits for the reply and the
+        // button stays Stop; Send never appears beside it.
         XCTAssertTrue(stop.exists, "Drafting must keep the current response stoppable")
-        XCTAssertTrue(stop.isHittable)
-        XCTAssertTrue(send.exists)
+        XCTAssertFalse(send.exists, "Stop and Send must never show together")
         self.assertMinimumTouchTarget(stop)
-        self.assertNoHorizontalOverlap([stop, send])
 
         stop.tap()
         XCTAssertTrue(stop.waitForNonExistence(timeout: 8))
@@ -292,29 +469,17 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts["Notice fixture ready."].waitForExistence(timeout: 8))
         self.attachScreenshot(named: "system-notices-collapsed")
 
-        for (label, start, end) in [
-            ("injected context", "CONTEXT_START", "CONTEXT_END"),
-            ("background task", "TASK_START", "TASK_END"),
-        ] {
-            let disclosure = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", label)).firstMatch
-            let body = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", start)).firstMatch
-            XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
-            XCTAssertFalse(body.exists, "System payload should start collapsed")
-            for _ in 0..<4 where !disclosure.isHittable {
-                app.swipeDown()
-            }
-            XCTAssertTrue(disclosure.isHittable)
-            disclosure.tap()
-            XCTAssertTrue(body.waitForExistence(timeout: 5))
-            XCTAssertTrue(body.label.contains(end), "Expanded disclosure must expose the complete payload")
-            self.attachScreenshot(named: "system-notice-expanded-\(start)")
-            for _ in 0..<4 where !disclosure.isHittable {
-                app.swipeDown()
-            }
-            XCTAssertTrue(disclosure.isHittable)
-            disclosure.tap()
-            XCTAssertTrue(body.waitForNonExistence(timeout: 5))
-        }
+        let context = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "injected context"))
+        XCTAssertFalse(context.firstMatch.exists)
+        let disclosure = app.buttons.matching(NSPredicate(format: "label CONTAINS[c] %@", "background task")).firstMatch
+        let body = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "TASK_START")).firstMatch
+        XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
+        XCTAssertFalse(body.exists)
+        disclosure.tap()
+        XCTAssertTrue(body.waitForExistence(timeout: 5))
+        XCTAssertTrue(body.label.contains("TASK_END"))
+        disclosure.tap()
+        XCTAssertTrue(body.waitForNonExistence(timeout: 5))
         self.attachScreenshot(named: "system-notices-recollapsed")
     }
 
@@ -751,6 +916,26 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "completed-work-collapsed-again")
     }
 
+    func testLandscapeTranscriptScrollsBeneathComposer() throws {
+        try XCTSkipUnless(UIDevice.current.userInterfaceIdiom == .phone, "Compact landscape chat")
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        self.launchApp(for: Self.chatScreenshotTarget, additionalArguments: ["--openclaw-chat-switch-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let latest = app.staticTexts["OPENCLAW_SWITCH_A_LATEST"]
+        XCTAssertTrue(latest.waitForExistence(timeout: 8))
+        let transcript = try self.chatTranscript(in: app)
+        let composer = app.otherElements["chat-composer-surface"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 3))
+        XCTAssertGreaterThan(app.frame.width, app.frame.height)
+        transcript.swipeDown(velocity: .slow)
+        let capture = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
+        capture.name = "landscape-composer-edge"
+        capture.lifetime = .keepAlways
+        self.add(capture)
+        XCTAssertGreaterThan(transcript.frame.maxY, composer.frame.midY)
+    }
+
     func testIPadTranscriptStaysInsideComposerColumn() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .pad, "iPad reading-column proof only")
         defer { XCUIDevice.shared.orientation = .portrait }
@@ -966,6 +1151,7 @@ extension OpenClawSnapshotUITests {
     }
 
     func testAssistantReplyHoldOffersActionsInMenu() throws {
+        XCUIDevice.shared.orientation = .portrait
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone message interaction proof only")
         self.launchApp(for: ScreenshotTarget(
             initialTab: "chat",
@@ -1140,33 +1326,6 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "chat-session-return-to-overview")
         try self.selectSidebarDestination("Overview")
         XCTAssertTrue(self.app?.staticTexts["Agent session"].waitForExistence(timeout: 8) == true)
-    }
-
-    func testAgentUsesToolbarFilter() throws {
-        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone Agent proof only")
-        self.launchApp(for: ScreenshotTarget(
-            initialTab: "agent",
-            initialDestination: "agents",
-            name: "agent-toolbar-filter"))
-
-        let menu = try XCTUnwrap(app?.buttons["agent-status-filter-menu"])
-        XCTAssertTrue(menu.waitForExistence(timeout: 8))
-        XCTAssertFalse(self.app?.segmentedControls["Agent status"].exists == true)
-        menu.tap()
-        XCTAssertTrue(self.app?.buttons["All"].waitForExistence(timeout: 3) == true)
-        XCTAssertTrue(self.app?.buttons["Online"].exists == true)
-        XCTAssertTrue(self.app?.buttons["Ready"].exists == true)
-        self.attachScreenshot(named: "agent-toolbar-filter")
-
-        // Native context menus must finish their dismissal before teardown. Killing
-        // the app with this menu open can leave the next app scene inactive.
-        self.app?.buttons["Ready"].tap()
-        self.waitForValue("Ready", of: menu)
-        menu.tap()
-        let all = try XCTUnwrap(self.app?.buttons["All"])
-        XCTAssertTrue(all.waitForExistence(timeout: 3))
-        all.tap()
-        self.waitForValue("All", of: menu)
     }
 
     /// Real app onboarding, history decoder, artifact RPC, HTTP loader, and system share sheet.

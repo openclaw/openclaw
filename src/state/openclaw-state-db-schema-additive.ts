@@ -3,6 +3,7 @@ import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   assertSqliteSchemaContains,
+  createSqliteTableContractReader,
   getCanonicalSqliteNamedIndexNames,
   getCanonicalSqliteTableNames,
 } from "../infra/sqlite-schema-contract.js";
@@ -229,6 +230,43 @@ function ensureColumns(
   return added;
 }
 
+const RETIRED_DIAGNOSTIC_EVENT_INDEX = "idx_diagnostic_events_scope_created";
+
+/**
+ * Read-only: whether repair-scope {@link ensureAdditiveStateColumns} would change the
+ * catalog: create a worker tool-state table, add a startup column to a present table, or
+ * drop the retired diagnostic index. Its row backfills are decided by their own owners.
+ */
+export function hasAdditiveStateSchemaRepairWork(db: DatabaseSync): boolean {
+  if (
+    ["worker_turn_tool_authorities", "worker_session_tool_operations"].some(
+      (table) => !tableExists(db, table),
+    )
+  ) {
+    return true;
+  }
+  const definitions = [
+    ...CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
+    ...Object.values(columns)
+      .flat()
+      .map(([tableName, definition]) => ({
+        tableName,
+        columnName: definition.trim().split(/\s+/, 1)[0] ?? "",
+      })),
+  ];
+  return (
+    definitions.some(
+      ({ tableName, columnName }) =>
+        tableExists(db, tableName) && !tableHasColumn(db, tableName, columnName),
+    ) ||
+    Boolean(
+      createSqliteTableContractReader(db)("diagnostic_events")?.indexes.some(
+        (index) => index.name === RETIRED_DIAGNOSTIC_EVENT_INDEX,
+      ),
+    )
+  );
+}
+
 /** Runtime pairs new columns with their transforms; full historical repair stays explicit. */
 export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | "repair"): void {
   const repairHistoricalRows = scope === "repair";
@@ -267,7 +305,7 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
     `);
   }
   if (addedDiagnosticEventSequence || repairHistoricalRows) {
-    db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
+    db.exec(`DROP INDEX IF EXISTS ${RETIRED_DIAGNOSTIC_EVENT_INDEX};`);
   }
   const addedCronLogColumns = ensureColumns(db, columns.cronRunLogs);
   if (
