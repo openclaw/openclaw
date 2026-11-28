@@ -4,8 +4,9 @@ import { en } from "./en.ts";
 const enChatToolLabels = {
   chat: {
     toolCards: {
-      backgroundWork: "Background work",
-      backgroundResultDelivery: "Background result delivery",
+      undeliveredSubagentResult: "Subagent result not delivered",
+      undeliveredSubagentResults: "Subagent results not delivered",
+      subagentReport: "Subagent report",
       patch: {
         move: "Move {source} → {path}",
         add: "Add {path}",

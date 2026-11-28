@@ -64,7 +64,15 @@ export function describeToolGroup(
     ).values(),
   ];
   if (all.length && all.every((item) => item.kind === "subagent-delivery")) {
-    return { total: all.length, label: t("chat.toolCards.backgroundWork"), outcomes: [] };
+    return {
+      total: all.length,
+      label: t(
+        all.length === 1
+          ? "chat.toolCards.undeliveredSubagentResult"
+          : "chat.toolCards.undeliveredSubagentResults",
+      ),
+      outcomes: [],
+    };
   }
   const summary = summarizeAgentActivity(all, options);
   const groups = new Map<string, AgentActivityItem[]>(

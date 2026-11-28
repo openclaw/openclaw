@@ -74,6 +74,7 @@ export function PreparedActivityRow(props: {
   activity: AgentActivityItem;
   options: Pick<ActivityOperationProps["options"], "pluginToolIcons">;
 }) {
+  const isDeliveryReport = () => props.activity.kind === "subagent-delivery";
   const detail = () =>
     props.activity.error || props.activity.summary || props.activity.progressText;
   return (
@@ -82,9 +83,11 @@ export function PreparedActivityRow(props: {
         <span class="chat-tool-msg-summary__icon" aria-hidden="true">
           <ChatToolIcon
             name={
-              props.activity.commandBearing
-                ? "squareTerminal"
-                : resolveToolDisplayIcon(props.activity.name ?? "")
+              isDeliveryReport()
+                ? "bot"
+                : props.activity.commandBearing
+                  ? "squareTerminal"
+                  : resolveToolDisplayIcon(props.activity.name ?? "")
             }
             tool={{
               toolName: props.activity.name ?? "",
@@ -95,28 +98,28 @@ export function PreparedActivityRow(props: {
         </span>
         <span class="chat-tool-disclosure__content">
           <span class="chat-tool-row__title">
-            {props.activity.title || resolveToolDisplayIdentity(props.activity.name ?? "").label}
+            {isDeliveryReport() && detail()
+              ? t("chat.toolCards.subagentReport")
+              : props.activity.title || resolveToolDisplayIdentity(props.activity.name ?? "").label}
           </span>
         </span>
-        <span
-          class={{
-            "chat-tool-failure": props.activity.status === "failed",
-            "chat-tool-skipped": props.activity.status === "skipped",
-            muted: props.activity.status !== "failed" && props.activity.status !== "skipped",
-          }}
-        >
-          {t(`chat.toolCards.${!props.activity.status ? "outcomeUnknown" : props.activity.status}`)}
-        </span>
+        <Show when={!isDeliveryReport()}>
+          <span
+            class={{
+              "chat-tool-failure": props.activity.status === "failed",
+              "chat-tool-skipped": props.activity.status === "skipped",
+              muted: props.activity.status !== "failed" && props.activity.status !== "skipped",
+            }}
+          >
+            {t(
+              `chat.toolCards.${!props.activity.status ? "outcomeUnknown" : props.activity.status}`,
+            )}
+          </span>
+        </Show>
       </div>
       <Show when={detail()}>
         {(text) => (
-          <div
-            class={
-              props.activity.kind === "subagent-delivery"
-                ? "chat-tool-card__block-content"
-                : "chat-tool-msg-body"
-            }
-          >
+          <div class={isDeliveryReport() ? "chat-tool-card__block-content" : "chat-tool-msg-body"}>
             {text()}
           </div>
         )}

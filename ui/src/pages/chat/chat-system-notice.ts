@@ -6,6 +6,7 @@ import { isOpenClawDeliveryMirrorAssistantMessage } from "../../../../src/shared
 import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import { registerChatSystemNoticeEnglish } from "../../i18n/locales/en-chat-system-notice.ts";
+import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
 import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
@@ -20,6 +21,7 @@ import {
 
 registerChatSessionEnglish();
 registerChatSystemNoticeEnglish();
+registerChatToolLabelsEnglish();
 
 type SubmittedModel = { provider: string; model: string };
 
@@ -136,7 +138,7 @@ export function projectChatSystemNotice(
     ];
   }
   if (raw?.role === "custom" && raw.customType === "subagent-delivery-failed") {
-    const title = t("chat.toolCards.backgroundResultDelivery");
+    const title = t("chat.toolCards.undeliveredSubagentResult");
     const error = extractTextCached(item.message) ?? "";
     // The work log owns these reports; hiding tools must not hide a retained result.
     return showToolCalls
@@ -165,6 +167,7 @@ export function projectChatSystemNotice(
             key: item.key,
             text: error,
             label: title,
+            icon: "bot",
             collapsedBody: true,
             systemEvent: "info",
             timestamp: normalized?.timestamp ?? 0,
