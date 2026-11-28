@@ -393,7 +393,9 @@ describe("archive confirmation for bound automations", () => {
           compact: true,
         }),
       );
-      expect(document.body.textContent).toContain('Archiving "Batch 1" pauses its automations.');
+      expect(document.body.textContent).toContain("Archive “Batch 1”?");
+      expect(document.body.textContent).toContain("This session’s automations will pause.");
+      expect(document.body.textContent?.match(/Batch 1/g)).toHaveLength(1);
       expect(document.body.textContent).not.toContain("openclaw automations");
       expect(document.body.textContent).toContain("Nightly digest");
       expect(document.body.textContent).not.toContain("job-1");

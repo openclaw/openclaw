@@ -908,12 +908,12 @@ suite.define(() => {
       const namesLocator = page.locator(".sidebar-recent-session__name");
       await expect
         .poll(() => trimmedTextContents(namesLocator))
-        .toContain("clawdbot ⎇ wt-1 · …0357");
+        .toContain("clawdbot · wt-1 · …0357");
 
       // Names and subtitles never show raw node ids or raw agent keys.
       const names = await trimmedTextContents(page.locator(".sidebar-recent-session__name"));
       expect(names).toContain("New session");
-      expect(names).toContain("clawdbot ⎇ wt-1 · …0357");
+      expect(names).toContain("clawdbot · wt-1 · …0357");
       expect(names).toContain("node-mcp-debug-…8b2e");
       const subtitles = await trimmedTextContents(
         page.locator(".sidebar-recent-session__subtitle"),

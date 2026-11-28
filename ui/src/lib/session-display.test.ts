@@ -91,7 +91,7 @@ describe("resolveSessionDisplayName", () => {
         worktree: { branch: "openclaw/wt-3f2a", repoRoot: "/repo/clawdbot" },
         derivedTitle: "Quarterly launch plan",
       }),
-    ).toBe("clawdbot ⎇ wt-3f2a");
+    ).toBe("clawdbot · wt-3f2a");
   });
 
   it("names named subsessions after their slug, never the raw agent key", () => {
@@ -145,7 +145,7 @@ describe("resolveSessionWorkSubtitle", () => {
         worktree: { branch: "feature/x", repoRoot: "/repo/clawdbot" },
         execNode: "macbook",
       }),
-    ).toBe("clawdbot ⎇ feature/x · macbook");
+    ).toBe("clawdbot · feature/x · macbook");
     expect(resolveSessionWorkSubtitle({ execNode: "macbook" })).toBe("macbook");
     expect(resolveSessionWorkSubtitle({})).toBeUndefined();
   });

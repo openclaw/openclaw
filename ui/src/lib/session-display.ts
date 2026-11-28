@@ -130,7 +130,7 @@ export function resolveSessionWorkContext(
     : undefined;
 }
 
-/** Compact "repo ⎇ branch" (plus node host) line for worktree/work sessions. */
+/** Compact checkout and optional node context for work sessions. */
 export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): string | undefined {
   if (row.deviceFolder) {
     return `${row.deviceFolder.path} · ${shortenOpaqueIdRuns(row.deviceFolder.deviceId)}`;
@@ -144,7 +144,7 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   const branch = resolveWorktreeBranch(row);
   const checkout = repoRoot
     ? branch
-      ? `${pathDisplayName(repoRoot)} ⎇ ${branch}`
+      ? `${pathDisplayName(repoRoot)} · ${branch}`
       : pathDisplayName(repoRoot)
     : undefined;
   if (checkout && node) {

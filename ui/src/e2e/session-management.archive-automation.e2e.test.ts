@@ -33,7 +33,7 @@ suite.define(() => {
     (surface) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const main = sessionRow("agent:main:main", "Main", 1);
-        const name = surface === "list" ? "handbook ⎇ nightly" : "Nightly owner";
+        const name = surface === "list" ? "handbook · nightly" : "Nightly owner";
         const target = sessionRow("agent:main:nightly", name, 2, {
           ...(surface === "list"
             ? {
@@ -78,7 +78,10 @@ suite.define(() => {
         expect(await automation.textContent()).not.toContain(job.id);
         expect(await automation.getByRole("switch").count()).toBe(0);
         await captureUiProof(suite, page, "archive-automation-confirm-" + surface + ".png");
-        expect(await dialog.textContent()).toContain(`Archiving "${name}" pauses its automations.`);
+        const text = await dialog.textContent();
+        expect(text).toContain(`Archive “${name}”?`);
+        expect(text).toContain("This session’s automations will pause.");
+        expect(text?.split(name)).toHaveLength(2);
         expect((await gateway.getRequests("cron.list")).map(({ params }) => params)).toContainEqual(
           expect.objectContaining({ sessionKey: target.key, enabled: "enabled", compact: true }),
         );

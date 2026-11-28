@@ -223,7 +223,7 @@ const enSessionOrganization = {
     archiveGroupSessionOther: "{count} sessions",
     archiveGroupEmpty: "There are no unarchived sessions in this group.",
     archiveGroupListFailed: "Couldn’t load all sessions in the group. Try again.",
-    automationPauseArchiveOne: 'Archiving "{session}" pauses its automations.',
+    automationPauseArchiveOne: "This session’s automations will pause.",
     automationPauseArchiveOther:
       "Automations are bound to {count} of these conversations. Archiving a conversation pauses its automations.",
     automationDeleteWarningOne:
