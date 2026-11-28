@@ -179,7 +179,7 @@ async function createRun(sessionId: string, model: string, staged = false) {
     stateDir,
     workspaceDir,
     target,
-    run: (overrides: Partial<Parameters<ProductionRun>[0]> = {}) =>
+    run: (overrides: Partial<Parameters<ProductionRun>[0]>) =>
       runEmbeddedAgent({ ...params, ...overrides }).then(
         (result) => ({ result }),
         (error: unknown) => ({ error }),

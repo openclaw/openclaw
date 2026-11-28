@@ -97,7 +97,7 @@ function persisted(message: ReturnType<typeof makeUserMessage>, messageId: strin
 }
 
 function createRecorder(
-  overrides: Partial<UserTurnTranscriptRecorder> = {},
+  overrides: Partial<UserTurnTranscriptRecorder>,
 ): UserTurnTranscriptRecorder {
   let pendingPersistence: Promise<void> | undefined;
   return {
@@ -134,7 +134,7 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
 
 type PromptState = Awaited<ReturnType<typeof createState>>;
 
-async function recordedState(overrides: Partial<UserTurnTranscriptRecorder> = {}) {
+async function recordedState(overrides: Partial<UserTurnTranscriptRecorder>) {
   const recorder = createRecorder(overrides);
   const persistedCallback = vi.fn();
   return Object.assign(
