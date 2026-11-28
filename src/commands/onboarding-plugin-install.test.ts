@@ -62,7 +62,9 @@ vi.mock("../plugins/install.js", () => ({
 
 // mock-isolation: beta-channel tag selection reads ClawHub; offline keeps the @beta attempt.
 const fetchClawHubPackageDetail = vi.hoisted(() =>
-  vi.fn(async () => Promise.reject(new Error("offline"))),
+  vi.fn(async () => {
+    throw new Error("offline");
+  }),
 );
 vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/clawhub-packages.js")>()),
@@ -635,14 +637,9 @@ describe("ensureOnboardingPluginInstalled", () => {
 
   it("opens the source menu without waiting on ClawHub", async () => {
     const select = vi.fn(async (_input: InstallPrompt) => "skip");
-    const result = await runInstall(
-      installEntry({ clawhubSpec: "clawhub:demo-plugin" }),
-      {
-        select,
-      } as never,
-      { cfg: { update: { channel: "beta" } } },
-    );
-
+    const cfg = { update: { channel: "beta" as const } };
+    const entry = installEntry({ clawhubSpec: "clawhub:demo-plugin" });
+    const result = await runInstall(entry, { select } as never, { cfg });
     expect(result.status).toBe("skipped");
     expect(select).toHaveBeenCalledOnce();
     expect(fetchClawHubPackageDetail).not.toHaveBeenCalled();
