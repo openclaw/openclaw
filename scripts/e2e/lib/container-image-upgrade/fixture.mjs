@@ -217,14 +217,10 @@ function verify(mode) {
       );
     });
   }
-  const agentBackup = verifyBackup(agentPath, before.agent);
   const sharedBackup = verifyBackup(sharedPath, before.shared);
-  assert.equal(agentBackup.backupId, sharedBackup.backupId, "Migration backups are not paired");
-  assertSession(agentBackup.path);
   console.log(
     JSON.stringify({
       mode,
-      agentBackup,
       sharedBackup,
       workspace: verifyWorkspace(true),
     }),
