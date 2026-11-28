@@ -624,6 +624,18 @@ struct OpenClawApp: App {
             UserDefaults.standard.set(true, forKey: "gateway.hasConnectedOnce")
             UserDefaults.standard.set(true, forKey: "onboarding.quickSetupDismissed")
             appModel.enterScreenshotFixtureMode()
+            if let state = Self.talkFixtureState {
+                appModel.talkMode.enterChatFixture(state)
+                if ProcessInfo.processInfo.arguments.contains("--openclaw-talk-fixture-live") {
+                    appModel.setTalkEnabled(true)
+                } else if let seconds = Self.talkFixtureStartDelay {
+                    // Talk turned on from outside the composer (Shortcuts, another client) over a draft.
+                    Task { @MainActor in
+                        try? await Task.sleep(for: .seconds(seconds))
+                        appModel.setTalkEnabled(true)
+                    }
+                }
+            }
             if Self.screenshotNotificationGuidanceEnabled {
                 appModel._debug_presentNotificationPermissionGuidancePromptForScreenshot()
             }
@@ -644,6 +656,9 @@ struct OpenClawApp: App {
         WindowGroup {
             RootTabs()
                 .openClawToasts(self.appModel.toasts)
+                #if DEBUG
+                .task { await Self.sendDebugSpokenTurnIfRequested(self.appModel) }
+                #endif
                 .menuStyle(PrimaryInkMenuStyle())
                 .tint(OpenClawBrand.accent)
                 .font(OpenClawType.body)
@@ -710,6 +725,34 @@ struct OpenClawApp: App {
         #endif
         return OpenClawVoiceNoteRecorder()
     }
+
+    #if DEBUG
+    private static var talkFixtureState: TalkModeManager.ChatFixtureState? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-talk-fixture"), index + 1 < arguments.count
+        else { return nil }
+        return TalkModeManager.ChatFixtureState(rawValue: arguments[index + 1])
+    }
+
+    private static var talkFixtureStartDelay: Double? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-talk-fixture-start-after"), index + 1 < arguments.count
+        else { return nil }
+        return Double(arguments[index + 1])
+    }
+    #endif
+
+    #if DEBUG
+    @MainActor
+    private static func sendDebugSpokenTurnIfRequested(_ appModel: NodeAppModel) async {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-talk-say"), index + 1 < arguments.count else { return }
+        for _ in 0..<60 where !appModel.talkMode.isGatewayConnected {
+            try? await Task.sleep(for: .milliseconds(500))
+        }
+        await appModel.talkMode._debug_sendSpokenTurn(arguments[index + 1])
+    }
+    #endif
 
     private static var screenshotNotificationGuidanceEnabled: Bool {
         #if DEBUG

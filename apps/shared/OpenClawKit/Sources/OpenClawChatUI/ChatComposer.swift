@@ -439,9 +439,12 @@ struct OpenClawChatComposer: View {
             }
         }
 
+        #if !os(iOS)
+        // The phone composer becomes the Talk surface itself (ChatTalkComposerRow).
         if let talkControl, talkControl.isEnabled {
             ChatTalkActivityStrip(control: talkControl)
         }
+        #endif
 
         if let dictationControl, dictationTask != nil || dictationControl.isActive {
             ChatDictationActivityRow(
@@ -710,6 +713,23 @@ struct OpenClawChatComposer: View {
     }
 
     private var cleanComposerCard: some View {
+        self.cleanComposerCardContent
+            .modifier(CleanChatComposerSurface(cornerRadius: cleanCornerRadius, usesSystemGlassEdge: true))
+            .modifier(ChatComposerPanelBridge(composer: self))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("chat-composer-surface")
+    }
+
+    #if !os(iOS)
+    private var cleanComposerCardContent: some View {
+        self.cleanComposerDraft
+            .padding(.horizontal, self.isDesktopLayout ? 0 : 6)
+            .padding(.vertical, self.isDesktopLayout ? 0 : 2)
+    }
+    #endif
+
+    /// The draft and everything attached to it; on iPhone Talk holds it (ChatTalkComposerRow.swift).
+    var cleanComposerDraft: some View {
         VStack(alignment: .leading, spacing: 8) {
             #if os(iOS)
             // As in the Control UI, notices come first and the attachments sit straight on the draft.
@@ -739,14 +759,6 @@ struct OpenClawChatComposer: View {
                 }
             }
         }
-        #if !os(iOS)
-        .padding(.horizontal, self.isDesktopLayout ? 0 : 6)
-            .padding(.vertical, self.isDesktopLayout ? 0 : 2)
-        #endif
-        .modifier(CleanChatComposerSurface(cornerRadius: cleanCornerRadius, usesSystemGlassEdge: true))
-        .modifier(ChatComposerPanelBridge(composer: self))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("chat-composer-surface")
     }
 
     @ViewBuilder

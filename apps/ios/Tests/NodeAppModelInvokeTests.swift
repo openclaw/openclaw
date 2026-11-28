@@ -1619,13 +1619,21 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(appModel.chatViewModelIdentityID != selectedIdentity)
     }
 
-    @Test @MainActor func `init preserves saved talk mode preference`() {
-        withUserDefaults(["talk.enabled": true]) {
+    @Test @MainActor func `a fresh launch starts with Talk off and never starts it`() async {
+        await withUserDefaults(["talk.enabled": true]) {
+            // A previous run left Talk on. Starting is the path that asks for the microphone.
             let talkMode = TalkModeManager(allowSimulatorCapture: true)
+            var startAttempts = 0
+            talkMode._test_setStartEntryHandler { startAttempts += 1 }
+            defer { talkMode._test_setStartEntryHandler(nil) }
             let appModel = NodeAppModel(talkMode: talkMode)
+            // The connection becoming ready used to resume a restored Talk.
+            appModel.talkMode.updateGatewayConnected(true)
+            await Task.yield()
 
-            #expect(UserDefaults.standard.bool(forKey: "talk.enabled"))
-            #expect(appModel.talkMode.isEnabled)
+            #expect(!appModel.talkMode.isEnabled)
+            #expect(startAttempts == 0)
+            #expect(UserDefaults.standard.object(forKey: "talk.enabled") == nil)
         }
     }
 
@@ -5086,7 +5094,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `Talk toggle preserves Voice Wake preference and enabled owner state`() async {
-        let keys = [VoiceWakePreferences.enabledKey, "talk.enabled"]
+        let keys = [VoiceWakePreferences.enabledKey]
         let previousValues = keys.map { ($0, UserDefaults.standard.object(forKey: $0)) }
         for key in keys {
             UserDefaults.standard.set(false, forKey: key)
@@ -5116,7 +5124,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         #expect(!appModel.talkMode.isEnabled)
         #expect(appModel.voiceWake.isEnabled)
         #expect(UserDefaults.standard.bool(forKey: VoiceWakePreferences.enabledKey))
-        #expect(!UserDefaults.standard.bool(forKey: "talk.enabled"))
+        // Talk's on/off belongs to the running app; nothing is stored for the next launch.
+        #expect(UserDefaults.standard.object(forKey: "talk.enabled") == nil)
     }
 
     @Test @MainActor func `voice note start cannot race an acquired PTT lease`() async {
