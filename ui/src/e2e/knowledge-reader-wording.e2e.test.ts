@@ -12,7 +12,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Knowledge reader wording" });
 suite.define(() => {
-  it.each(["citations", "identity-request"])(
+  it.each(["citations", "identity-request", "version-layout"])(
     "opens the %s reader with accurate outcomes",
     async (scenario) => {
       await suite.withPage(
@@ -31,6 +31,7 @@ suite.define(() => {
           ).join("\n");
           const hash = createHash("sha256").update(source).digest("hex");
           const company = scenario === "identity-request";
+          const versionLayout = scenario === "version-layout";
           const total = scenario === "citations" ? 25 : 1;
           const record = {
             id: "reader_record",
@@ -57,7 +58,7 @@ suite.define(() => {
                     ],
                   },
                 }
-              : { claim_kind: "fact" },
+              : { claim_kind: "fact", ...(versionLayout ? { supersedes: "prior_plan" } : {}) },
           };
           const candidate = {
             ...record,
@@ -91,7 +92,17 @@ suite.define(() => {
                     offsets.push(input.evidenceOffset);
                     const result = {
                       view: "content",
-                      record,
+                      record:
+                        input.id === "prior_plan"
+                          ? {
+                              ...record,
+                              id: "prior_plan",
+                              title: "Earlier pilot plan",
+                              body: "Start in May.",
+                              lifecycle: "superseded",
+                              metadata: { superseded_by: record.id },
+                            }
+                          : record,
                       content: { offset: 0, totalChars: record.body.length, nextOffset: null },
                       issues: [],
                       references: company ? [candidate] : [],
@@ -159,6 +170,47 @@ suite.define(() => {
               "25 citations · 1 file",
             );
             await page.getByRole("button", { name: "More citations", exact: true }).waitFor();
+          } else if (versionLayout) {
+            const rows = page.locator(".knowledge-version");
+            await expect.poll(() => rows.count()).toBe(2);
+            for (const width of [1440, 820]) {
+              await page.setViewportSize({ width, height: 1100 });
+              await expect
+                .poll(() =>
+                  rows.evaluateAll((elements, compact) => {
+                    const statusStarts = [];
+                    for (const row of elements) {
+                      const button = row.querySelector("button")!;
+                      const box = button.getBoundingClientRect();
+                      if (box.height < 32) {
+                        return false;
+                      }
+                      const range = document.createRange();
+                      range.selectNodeContents(button);
+                      if (Math.abs(range.getBoundingClientRect().left - box.left) > 1) {
+                        return false;
+                      }
+                      const status = row.querySelector("small")!.getBoundingClientRect();
+                      if (
+                        compact &&
+                        (status.top < box.bottom || Math.abs(status.left - box.left) > 1)
+                      ) {
+                        return false;
+                      }
+                      statusStarts.push(status.left);
+                    }
+                    return Math.max(...statusStarts) - Math.min(...statusStarts) < 1;
+                  }, width === 820),
+                )
+                .toBe(true);
+            }
+            await rows.first().getByRole("button").press("Tab");
+            const previous = rows.last().getByRole("button", { name: "Start in May." });
+            expect(await previous.evaluate((button) => button.matches(":focus-visible"))).toBe(
+              true,
+            );
+            await page.keyboard.press("Enter");
+            await page.getByRole("heading", { name: "Earlier pilot plan", exact: true }).waitFor();
           } else {
             await page.getByText(/finds evidence they refer to the same subject/).waitFor();
           }
