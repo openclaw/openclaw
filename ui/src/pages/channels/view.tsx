@@ -121,14 +121,13 @@ function ChannelStatusFeedback(props: { channels: ChannelsState }) {
 
 export function ChannelsView(props: ChannelsProps) {
   const snapshot = createMemo(() => props.channels.channelsSnapshot);
-  const channelOrder = createMemo(() => resolveChannelOrder(snapshot()));
-  // Key both lists so status updates cannot retarget an in-flight channel click.
-  const connected = createMemo(() =>
-    channelOrder().filter((key) => channelSnapshotEntryIsActive(snapshot(), key)),
-  );
-  const available = createMemo(() =>
-    channelOrder().filter((key) => !channelSnapshotEntryIsActive(snapshot(), key)),
-  );
+  // Keep channel IDs as row keys so status updates cannot retarget an in-flight click.
+  const groups = createMemo(() => {
+    const current = snapshot();
+    return Object.groupBy(resolveChannelOrder(current), (key) =>
+      channelSnapshotEntryIsActive(current, key) ? "connected" : "available",
+    );
+  });
 
   return (
     <Show
@@ -154,14 +153,16 @@ export function ChannelsView(props: ChannelsProps) {
             />
           }
         >
-          {connected().length === 0 && snapshot() ? (
+          {!groups().connected && snapshot() ? (
             <div class="channels-empty">
               {/* No configured transports is a true empty state, so Clawd rests here. */}
               <openclaw-mascot mood="sleepy" prop:size={80} />
               <SettingsEmpty message={t("channels.hub.noneConnected")} />
             </div>
           ) : (
-            <For each={connected()}>{(key) => <ConnectedRow channelId={key} props={props} />}</For>
+            <For each={groups().connected}>
+              {(key) => <ConnectedRow channelId={key} props={props} />}
+            </For>
           )}
         </SettingsSection>
         <SettingsSection
@@ -174,7 +175,7 @@ export function ChannelsView(props: ChannelsProps) {
             </InlineAlert>
           ) : (
             <>
-              <For each={available()}>
+              <For each={groups().available}>
                 {(key) => <AvailableRow channelId={key} props={props} />}
               </For>
               {renderBrowseAllRow(props)}
