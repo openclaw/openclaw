@@ -4,6 +4,7 @@ Regression tests for skill packaging security behavior.
 """
 
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -40,6 +41,33 @@ class TestPackageSkillSecurity(TestCase):
         self.assertEqual(result, out_dir / f"{skill_dir.name}.skill")
         with zipfile.ZipFile(result) as archive:
             return archive.namelist()
+
+    def test_usage_command_packages_a_skill_from_the_repo_root(self):
+        repo_root = SCRIPT_DIR.parents[2]
+        usage = subprocess.run(
+            [sys.executable, str(SCRIPT_DIR / "package_skill.py")],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(usage.returncode, 1)
+        usage_line = next(
+            line for line in usage.stdout.splitlines() if line.startswith("Usage: ")
+        )
+        script_path = usage_line.split(maxsplit=3)[2]
+        skill_dir = self.create_skill()
+        output_dir = self.temp_dir / "out"
+        result = subprocess.run(
+            [sys.executable, script_path, str(skill_dir), str(output_dir)],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with zipfile.ZipFile(output_dir / "test-skill.skill") as archive:
+            self.assertEqual(
+                archive.read("test-skill/SKILL.md"), (skill_dir / "SKILL.md").read_bytes()
+            )
 
     def test_packages_regular_entry_and_rejects_linked_entry(self):
         skill_dir = self.create_skill("normal-skill")
