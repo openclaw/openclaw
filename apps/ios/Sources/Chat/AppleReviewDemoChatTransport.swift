@@ -403,10 +403,7 @@ struct LocalFixtureChatTransport: OpenClawChatGoalTransport, OpenClawChildStopTr
                 status: "running",
                 hasActiveRun: true))
         }
-        await ActivityPillsFixture.decorate(
-            sessions: &sessions,
-            parentKey: self.fixture.sessionKey,
-            stoppedAt: self.store.stoppedChildAt)
+        await ActivityPillsFixture.decorate(sessions: &sessions, stoppedAt: self.store.stoppedChildAt)
         if ScreenshotFixtureMode.groupControlsEnabled { sessions += await DrawerGroupFixture.store.sessions() }
         if ScreenshotFixtureMode.sessionStatesEnabled { sessions += ScreenshotFixtureMode.sessionStateRows() }
         if ScreenshotFixtureMode.toolFailuresEnabled {

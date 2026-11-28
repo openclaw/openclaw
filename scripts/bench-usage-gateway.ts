@@ -1960,7 +1960,6 @@ try {
             const prefix = `${owner.role}-${engine}-${cpu}x`;
             for (const [name, selector] of [
               ["overview", ".usage-overview-card"],
-              ["cost-windows", ".usage-summary-strip--windows"],
               ["sessions", ".sessions-card"],
             ] as const) {
               await page

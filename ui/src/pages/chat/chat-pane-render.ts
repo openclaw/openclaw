@@ -624,6 +624,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         state.realtimeTalk.update({ realtimeTalkInputNotice: null }),
       ...sessionActionCallbacks,
       onQueueRemove: state.removeQueuedMessage,
+      onDiscardQueuedMessage: (id) => state.removeQueuedMessage(id, "discard"),
       queuePaused: isChatQueuePaused(state),
       onQueueResume: providerPaused ? undefined : () => resumeChatQueue(state),
       onQueueClear: () => clearChatQueue(state),

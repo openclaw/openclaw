@@ -215,7 +215,7 @@ describe("loadChatRoute", () => {
       slug
         ? "/chat/roboclaw/default-mode-with-rare-surprises"
         : "/dashboard/ignored/deploy-12345678",
-      slug ? "" : "?draft=ship&__openclawComposerFocus=1",
+      slug ? "" : "?dashboard=expanded&draft=ship%20%26%20review&__openclawComposerFocus=1",
       face,
     );
     expect(ambiguous).toMatchObject({
@@ -238,8 +238,8 @@ describe("loadChatRoute", () => {
             "/chat/research/default-mode-with-rare-surprises-123456780b",
           ]
         : [
-            "/dashboard/main/deploy-monitor-123456780a?draft=ship&__openclawComposerFocus=1",
-            "/dashboard/work/deploy-monitor-two-123456780b?draft=ship&__openclawComposerFocus=1",
+            "/dashboard/main/deploy-monitor-123456780a?draft=ship+%26+review&__openclawComposerFocus=1",
+            "/dashboard/work/deploy-monitor-two-123456780b?draft=ship+%26+review&__openclawComposerFocus=1",
           ],
     );
     expect(request).toHaveBeenCalledOnce();
@@ -255,7 +255,7 @@ describe("loadChatRoute", () => {
         sessionData(expectedRow.key, {
           routeLoadingSkeleton: true,
           agentId: candidate.agentId,
-          draft: "ship",
+          draft: "ship & review",
           focusComposer: true,
           face: "dashboard",
           shortId: candidate.idPrefix,

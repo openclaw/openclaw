@@ -1,12 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as immutableUpdate from "../cli/update-cli/update-command-immutable.js";
 import { updateCommand } from "../cli/update-cli/update-command.js";
 import { SystemdServiceAccountRefusalError } from "../daemon/service-inspection-error.js";
+import * as installSource from "../infra/install-source-utils.js";
+import type * as registryTarget from "../infra/update-check-package-target.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
+import type * as targetModule from "./target.js";
 
 const native = vi.hoisted(() => ({
   scope: vi.fn(),
@@ -16,6 +20,8 @@ const native = vi.hoisted(() => ({
   active: vi.fn(),
   install: vi.fn(),
   lookup: vi.fn(),
+  target: vi.fn<typeof targetModule.resolveTarget>(),
+  metadata: vi.fn(),
   root: "",
   engine: ">=24.0.0",
 }));
@@ -79,14 +85,13 @@ vi.mock("../infra/update-global.js", async (original) => ({
     packageRoot: native.root,
   }),
 }));
+vi.mock("../infra/update-check-package-target.js", async (original) => ({
+  ...(await original<typeof registryTarget>()),
+  fetchNpmPackageTargetStatus: native.metadata,
+}));
 vi.mock("./target.js", async (original) => ({
-  ...(await original<typeof import("./target.js")>()),
-  resolveTarget: async () => ({
-    kind: "package",
-    spec: "openclaw@2026.11.29",
-    version: "2026.11.29",
-    engines: { node: native.engine },
-  }),
+  ...(await original<typeof targetModule>()),
+  resolveTarget: native.target,
 }));
 
 let home: TempHomeEnv;
@@ -105,8 +110,6 @@ function serviceAccountMismatch(account = "openclaw") {
     serviceUser: account,
     programArguments: [serviceNode, path.join(native.root, "dist", "index.js"), "gateway"],
     workingDirectory: "/",
-    selectors: { HOME: "/var/lib/openclaw", OPENCLAW_STATE_DIR: serviceState },
-    selectorsIncomplete: false,
   });
 }
 
@@ -141,6 +144,13 @@ beforeEach(async () => {
   native.scope.mockResolvedValue(unit);
   native.command.mockRejectedValue(serviceAccountMismatch());
   native.engine = ">=24.0.0";
+  native.target.mockImplementation(async () => ({
+    kind: "package",
+    spec: "openclaw@2026.11.29",
+    version: "2026.11.29",
+    engines: { node: native.engine },
+  }));
+  native.metadata.mockResolvedValue({ version: "2026.11.29", nodeEngine: ">=24.0.0" });
   native.probe.mockResolvedValue({ code: 0, stdout: "v24.22.1\n", stderr: "" });
   native.install.mockImplementation(async () => {
     await fs.writeFile(
@@ -282,5 +292,51 @@ it("refuses before probing when a numeric UID has no matching NSS login", async 
   await expect(updating).rejects.toThrow("Cannot resolve service UID 1001 to a login name");
   await expect(updating).rejects.toThrow("Select a compatible runtime");
   expect(native.probe).not.toHaveBeenCalled();
+  expect(native.install).not.toHaveBeenCalled();
+});
+
+it.each([">=26.0.0", null])(
+  "refuses extended-stable before replacement when registry engines are %s",
+  async (nodeEngine) => {
+    native.target.mockResolvedValue({
+      kind: "package",
+      spec: "openclaw@2026.11.29",
+      version: "2026.11.29",
+    });
+    native.metadata.mockResolvedValue({ version: "2026.11.29", nodeEngine });
+    await expect(updateCommand({ yes: true, channel: "extended-stable" })).rejects.toThrow(
+      nodeEngine ? "Select a compatible runtime" : "Node requirements",
+    );
+    expect(native.install).not.toHaveBeenCalled();
+  },
+);
+
+it("routes adopted immutable --sha updates before system-package updates", async () => {
+  vi.spyOn(immutableUpdate, "tryRunImmutableUpdateCommand").mockResolvedValue(true);
+  await updateCommand({ yes: true, sha: "a".repeat(40) });
+  expect(native.install).not.toHaveBeenCalled();
+  expect(native.scope).not.toHaveBeenCalled();
+});
+
+it("accepts a package-qualified --tag without treating it as an artifact", async () => {
+  const actual = await vi.importActual<typeof targetModule>("./target.js");
+  native.target.mockImplementation(actual.resolveTarget);
+  vi.spyOn(installSource, "packNpmSpecToArchive").mockRejectedValue(
+    new Error("A registry tag must not be packed as an artifact"),
+  );
+  await updateCommand({ yes: true, tag: "openclaw@latest" });
+  expect(native.install).toHaveBeenCalledWith(
+    expect.objectContaining({ installSpec: "openclaw@2026.11.29" }),
+  );
+});
+
+it("does not replace the package after the shared update deadline expires", async () => {
+  let now = Date.now();
+  vi.spyOn(Date, "now").mockImplementation(() => now);
+  native.probe.mockImplementationOnce(async () => {
+    now += 1_100;
+    return { code: 0, stdout: "v24.22.1\n", stderr: "" };
+  });
+  await expect(updateCommand({ yes: true, timeout: "1" })).rejects.toThrow("timed out");
   expect(native.install).not.toHaveBeenCalled();
 });

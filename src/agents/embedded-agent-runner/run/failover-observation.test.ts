@@ -20,8 +20,8 @@ beforeEach(() => {
 });
 
 function observeDecision(
-  overrides: Partial<DecisionBase> = {},
-  decision: Parameters<ReturnType<typeof createFailoverDecisionLogger>>[0] = "surface_error",
+  overrides: Partial<DecisionBase>,
+  decision: Parameters<ReturnType<typeof createFailoverDecisionLogger>>[0],
   extra?: Parameters<ReturnType<typeof createFailoverDecisionLogger>>[1],
 ) {
   createFailoverDecisionLogger({ ...base, ...overrides })(decision, extra);

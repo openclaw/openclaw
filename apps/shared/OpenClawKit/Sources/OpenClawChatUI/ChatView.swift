@@ -357,7 +357,7 @@ extension OpenClawChatView {
     private var subagentWaitRow: some View {
         if let wait = self.viewModel.subagentWait {
             HStack(spacing: 7) {
-                ChatWorkingClawView(seed: "subagent-wait", parked: true)
+                ChatWorkingClawView(parked: true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Waiting on subagents")
                         .font(OpenClawChatTypography.caption)
@@ -409,10 +409,7 @@ extension OpenClawChatView {
         #endif
     }
 
-    private func messageListScrollContent(
-        transcript: TranscriptPresentation,
-        hasVisibleContent: Bool) -> some View
-    {
+    private func messageListScrollContent(transcript: TranscriptPresentation) -> some View {
         #if !os(iOS)
         let groups = self.runGroups(transcript)
         let latestTurn = ChatAssistantRunGroup.latestTurnStart(in: groups)
@@ -423,7 +420,7 @@ extension OpenClawChatView {
             List {
                 ChatOlderHistoryBoundaryRow(viewModel: self.viewModel, load: self.loadOlderHistory)
                 Group {
-                    self.transcriptGroups(transcript: transcript, hasVisibleContent: hasVisibleContent)
+                    self.transcriptGroups(transcript: transcript)
                     if self.usesInlineProgressCard { self.progressCard }
                     self.subagentWaitRow
                 }
@@ -455,8 +452,7 @@ extension OpenClawChatView {
                     VStack(spacing: spacing) {
                         self.messageListRows(
                             transcript: transcript,
-                            groups: groups[latestTurn...],
-                            hasVisibleContent: hasVisibleContent)
+                            groups: groups[latestTurn...])
                         if self.usesInlineProgressCard { self.progressCard }
                         if !self.showsComposer, !self.viewModel.hasBlockingRunActivity { self.turnRecapRow }
                         self.subagentWaitRow
@@ -483,7 +479,7 @@ extension OpenClawChatView {
             ? self.bannerText : nil
         let isWaitingForTranscript = self.showsCleanLoadingPlaceholder(hasVisibleContent: hasVisibleContent)
         return ZStack {
-            self.messageListScrollContent(transcript: transcript, hasVisibleContent: hasVisibleContent)
+            self.messageListScrollContent(transcript: transcript)
                 .chatTranscriptReveal(isWaiting: isWaitingForTranscript)
                 .accessibilityIdentifier("chat-transcript")
                 #if !os(macOS)
@@ -667,11 +663,8 @@ extension OpenClawChatView {
     }
 
     /// Keep one grouping owner per platform so new turns do not recreate disclosure state.
-    private func transcriptGroups(transcript: TranscriptPresentation, hasVisibleContent: Bool) -> some View {
-        self.messageListRows(
-            transcript: transcript,
-            groups: self.runGroups(transcript)[...],
-            hasVisibleContent: hasVisibleContent)
+    private func transcriptGroups(transcript: TranscriptPresentation) -> some View {
+        self.messageListRows(transcript: transcript, groups: self.runGroups(transcript)[...])
             .environment(\.openClawToolRowContext, transcript.tools)
     }
 
@@ -693,8 +686,7 @@ extension OpenClawChatView {
     @ViewBuilder
     private func messageListRows(
         transcript: TranscriptPresentation,
-        groups shownGroups: ArraySlice<ChatAssistantRunGroup>,
-        hasVisibleContent: Bool) -> some View
+        groups shownGroups: ArraySlice<ChatAssistantRunGroup>) -> some View
     {
         let inputs = self.rowPassInputs
         if let introText = visibleEmptyAssistantIntro {
@@ -891,7 +883,6 @@ extension OpenClawChatView {
                 let name = pending?.addressedSessionKey.flatMap(transcript.tools.names.name(for:))
                 ChatTypingIndicatorBubble(
                     showsAssistantAvatar: self.showsAssistantAvatars,
-                    runIdentity: self.viewModel.workingIndicatorIdentity,
                     status: self.viewModel.runWorkingLabel,
                     toolLabel: pending?.stepTitle(chatName: name),
                     openTools: run.flatMap { id in items.isEmpty ? nil : { self.selectedWork = .run(id, items) } })
