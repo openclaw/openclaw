@@ -354,12 +354,15 @@ async function precacheOfflineShell(signal) {
   // A deep chat URL must resolve the portable bundle against the registered app
   // root. No fetched document, credential, or route-specific metadata is retained.
   const escapedPath = SCOPE_PATH.replaceAll("&", "&amp;").replaceAll('"', "&quot;");
+  // The offline CSP omits 'wasm-unsafe-eval'; declaring Terminal disabled lets
+  // config refresh reload into a live document before Terminal is enabled.
   let html = OFFLINE_BOOT.html
     .replaceAll('src="./', () => `src="${escapedPath}`)
     .replaceAll('href="./', () => `href="${escapedPath}`)
     .replace(
       "<html",
-      () => `<html data-openclaw-control-ui-base-path="${escapedPath.slice(0, -1)}"`,
+      () =>
+        `<html data-openclaw-control-ui-base-path="${escapedPath.slice(0, -1)}" data-openclaw-terminal-enabled="false"`,
     );
   let csp = OFFLINE_BOOT.csp;
   const importMap = /(<script\b[^>]*\btype="importmap"[^>]*>)([\s\S]*?)(<\/script>)/u.exec(html);

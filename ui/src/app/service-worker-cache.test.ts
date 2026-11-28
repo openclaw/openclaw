@@ -646,6 +646,9 @@ describe("Control UI offline app shell", () => {
       const html = await response?.text();
       expect(html).toContain(`src="${new URL(base).pathname}assets/app-AbCd1234.js"`);
       expect(html).toContain("generic shell");
+      // The offline CSP omits 'wasm-unsafe-eval', so the document must declare
+      // Terminal disabled for config refresh to reload before enabling it.
+      expect(html).toMatch(/<html [^>]*\bdata-openclaw-terminal-enabled="false"[ >]/u);
       const map = /<script type="importmap">(.*?)<\/script>/u.exec(html ?? "")?.[1] ?? "";
       const assets = new URL(base).pathname + "assets/";
       expect(JSON.parse(map)).toEqual({
