@@ -232,6 +232,10 @@ export function parseTerminalToolCallArguments(
    * Bounded, content-free diagnostics for a rejected terminal argument buffer. Carried as the
    * error `cause` and mirrored onto the error's `errorCode` / `errorBody` fields so
    * `projectProviderError` surfaces them on the terminal assistant message.
+   *
+   * The digest identifies the buffer without revealing it, so it must not be a bare
+   * function of the content: a published digest would confirm guessed buffers. Hosts
+   * derive it with a per-install secret; without one, fall back to the plain digest.
    */
   const diagnostics: {
     code: typeof MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE;
@@ -241,7 +245,10 @@ export function parseTerminalToolCallArguments(
   } = {
     code: MALFORMED_TOOL_CALL_TERMINAL_ERROR_CODE,
     argumentChars: text?.length ?? 0,
-    argumentHash: text === undefined ? "" : shortHash(text),
+    argumentHash:
+      text === undefined
+        ? ""
+        : (getAiTransportHost().hashDiagnosticValue?.(text) ?? shortHash(text)),
     repairAttempted: repairStringLiterals,
   };
   const error = new Error(errorMessage, { cause: diagnostics });

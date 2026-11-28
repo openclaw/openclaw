@@ -23,6 +23,7 @@ import {
   isDeeplyFrozenPlainData,
   isPlainData,
 } from "../shared/immutable-data.js";
+import { hashDiagnosticValue } from "./diagnostic-digest-key.js";
 import { formatModelTransportContext } from "./model-transport-context.js";
 
 const transportLogBySubsystem = new Map<string, ReturnType<typeof createSubsystemLogger>>();
@@ -76,6 +77,7 @@ export function configureAiTransportBaseHost(): { runtime: boolean } {
         return swapped.text;
       },
       redactToolPayloadText,
+      hashDiagnosticValue,
       normalizeAnthropicInlineContentBlocks,
       resolveModelRequestTimeoutMs: (model) => resolveModelRequestTimeoutMs(model, undefined),
       isLogEnabled: (subsystem, level) => transportLog(subsystem).isEnabled(level, "any"),
