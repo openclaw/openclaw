@@ -99,8 +99,9 @@ export function buildRunEntrySelection(
     agentDir: selection.agentDir,
     fallbacksOverride: selection.fallbacksOverride,
     cyberAccessProgram: run.cyberAccessProgram,
-    userLockedAuthProfileId: run.scheduledAutomation
-      ? run.scheduledAutomation.job.inferenceBinding?.source === "user"
+    // A recorded binding owns the lock; an unbound scheduled turn keeps the run's explicit choice.
+    userLockedAuthProfileId: run.scheduledAutomation?.job.inferenceBinding
+      ? run.scheduledAutomation.job.inferenceBinding.source === "user"
         ? run.scheduledAutomation.job.inferenceBinding.profileId
         : undefined
       : run.authProfileIdSource === "user"

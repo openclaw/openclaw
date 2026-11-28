@@ -4,6 +4,7 @@ import {
   type AuthProfileAuthorization,
 } from "../agents/auth-profiles/authorization-contract.js";
 import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
+import { isConfiguredAwsSdkAuthProfileForProvider } from "../agents/auth-profiles/order.js";
 import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-override.js";
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import {
@@ -239,6 +240,16 @@ export async function captureCronInferenceBinding(params: {
   );
   const credential = store.profiles[selection.profileId];
   if (!credential) {
+    // A configured AWS SDK profile has no stored secret; the job stays unbound and runs select it live.
+    if (
+      isConfiguredAwsSdkAuthProfileForProvider({
+        cfg,
+        provider: model.provider,
+        profileId: selection.profileId,
+      })
+    ) {
+      return undefined;
+    }
     throw new Error("Automation requires an available stored inference account.");
   }
   const authRequirement =
