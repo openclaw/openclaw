@@ -161,9 +161,7 @@ export function createCodexDynamicToolBridge(params: {
   directToolNames?: Iterable<string>;
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
-  const { maxChars: toolResultMaxChars, presentSkillResult } = createCodexToolResultPresentation(
-    params.hookContext,
-  );
+  const { presentSkillResult, resultBound } = createCodexToolResultPresentation(params.hookContext);
   const availableProjection = projectCodexExecutableDynamicToolSurface(
     params.tools,
     params.hookContext,
@@ -372,6 +370,7 @@ export function createCodexDynamicToolBridge(params: {
         signal,
         assertCurrent: params.assertCurrent,
         boundaries: executionBoundaries,
+        resultBound,
         retainExecutionSnapshot: options?.retainExecutionSnapshot,
         initialArguments: args,
         prepareArguments: (toolArgs, nativeArgumentsPrepared) => {
@@ -556,7 +555,7 @@ export function createCodexDynamicToolBridge(params: {
               : resultIsError || resultFailureKind
                 ? "error"
                 : "completed";
-          const contentItems = convertToolContents(result.content, toolResultMaxChars);
+          const contentItems = convertToolContents(result.content);
           const deliveredFrameImages = contentItems.filter((item) => item.type === "inputImage");
           const finalFrameImageIdentity = computerFrameImageIdentity(result.content);
           if (

@@ -152,6 +152,7 @@ function options() {
       coordinationKey: "file:12:34",
       databasePath,
       identity: { key: "file:12:34", canonicalPath: databasePath },
+      isCurrent: () => true,
       assertCurrent() {},
     },
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },

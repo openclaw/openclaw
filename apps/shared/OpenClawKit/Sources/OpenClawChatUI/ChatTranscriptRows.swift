@@ -257,6 +257,39 @@ extension ChatTranscriptRow {
     }
 }
 
+extension ChatTranscriptRow {
+    /// Tool search records each call twice: the dispatcher's own call (with its result) and a nested
+    /// row whose call names it as `parentToolCallId`. Both are one invocation with one outcome, so the
+    /// nested row presents it and the envelope leaves the transcript (web chat-message.tools.test.tsx:532-534).
+    /// Other containers (a code-mode `exec`) keep their row: their own outcome can differ from a child's.
+    static func retiringDispatchEnvelopes(in messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
+        let parents = Set(messages.lazy.filter(\.isNestedToolActivity).flatMap(\.content)
+            .compactMap(\.parentToolCallId))
+        guard !parents.isEmpty else { return messages }
+        return messages.compactMap { message in
+            if message.isToolResult {
+                let retired = message.toolCallId.map(parents.contains) == true &&
+                    ChatToolActivity.isDispatcher(message.toolName)
+                return retired ? nil : message
+            }
+            guard message.role.lowercased() == "assistant" else { return message }
+            let retired = Set(message.content.compactMap { block -> String? in
+                guard block.isToolCall, ChatToolActivity.isDispatcher(block.name),
+                      let id = block.id, parents.contains(id) else { return nil }
+                return id
+            })
+            guard !retired.isEmpty else { return message }
+            var kept = message
+            kept.content = message.content.filter { block in
+                !(block.isToolCall || block.isToolResult) || block.id.map(retired.contains) != true
+            }
+            kept.activity = message.activity?.filter { $0.toolCallId.map(retired.contains) != true }
+            // A message that carried only envelopes would otherwise split the activity around it.
+            return kept.content.isEmpty ? nil : kept
+        }
+    }
+}
+
 extension OpenClawChatMessage {
     /// A row woken by its own exec, a restart, or a subagent: it resumes this session's work.
     var resumesProjectedTurn: Bool {

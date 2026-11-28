@@ -80,7 +80,6 @@ import {
   resolveAcpSpawnRequesterState,
   readAcpSpawnParentDeliveryContext,
   resolveRequesterInternalSessionKey,
-  shouldStreamAcpSpawnToParent,
 } from "./acp-spawn-requester.js";
 import {
   buildAcpSpawnError,
@@ -284,6 +283,9 @@ export async function spawnAcpDirect(
     parentSessionKey,
     requesterAgentId,
     ownerAgentId,
+    spawnMode,
+    requestThreadBinding,
+    streamToParentRequested,
     ctx,
     assertActive: ctx.assertActive,
   });
@@ -356,13 +358,6 @@ export async function spawnAcpDirect(
   if (!runtimeOptionsResult.ok) {
     return buildAcpSpawnError("spawn_failed", runtimeOptionsResult.error);
   }
-  const effectiveStreamToParent = shouldStreamAcpSpawnToParent({
-    spawnMode,
-    requestThreadBinding,
-    streamToParentRequested,
-    requester: requesterState,
-  });
-
   const sessionKey = mintSpawnSessionKey({ targetAgentId: ownerAgentId, backend: "acp" });
   const resolvedCwd = resolveSpawnedWorkspaceInheritance({
     config: cfg,
@@ -408,27 +403,42 @@ export async function spawnAcpDirect(
   const childIdem = crypto.randomUUID();
   // Resolve parent session delivery context so system events route to the
   // correct thread/topic instead of falling back to the main DM.
-  const parentDeliveryCtx =
-    effectiveStreamToParent && parentSessionKey
-      ? await readAcpSpawnParentDeliveryContext({
+  const parentRelayContext =
+    requesterState.streamToParent && parentSessionKey
+      ? {
           parentSessionKey,
-          requesterAgentId,
-          assertActive: ctx.assertActive,
-        })
+          deliveryContext: await readAcpSpawnParentDeliveryContext({
+            parentSessionKey,
+            requesterAgentId,
+            assertActive: ctx.assertActive,
+          }),
+        }
       : undefined;
   ctx.assertActive?.();
 
-  const parentRelayStateEnv = { ...process.env };
-  const parentEventRouting = parentSessionKey
-    ? resolveEventSessionRoutingPolicy({ cfg, sessionKey: parentSessionKey })
-    : undefined;
-  const parentEventTarget =
-    effectiveStreamToParent && parentSessionKey && parentEventRouting
-      ? await captureSessionEventTarget(
-          requesterAgentId,
-          resolveEventSessionKeyForPolicy(parentSessionKey, parentEventRouting),
-        )
-      : undefined;
+  let parentRelayParams:
+    | Omit<Parameters<typeof startAcpSpawnParentStreamRelay>[0], "runId">
+    | undefined;
+  if (parentRelayContext) {
+    const { parentSessionKey: relayParentSessionKey, deliveryContext } = parentRelayContext;
+    const eventRouting = resolveEventSessionRoutingPolicy({
+      cfg,
+      sessionKey: relayParentSessionKey,
+    });
+    parentRelayParams = {
+      parentSessionKey: relayParentSessionKey,
+      requesterAgentId,
+      expectedTarget: await captureSessionEventTarget(
+        requesterAgentId,
+        resolveEventSessionKeyForPolicy(relayParentSessionKey, eventRouting),
+      ),
+      childSessionKey: sessionKey,
+      agentId: targetAgentId,
+      eventRouting,
+      deliveryContext,
+      cfg,
+    };
+  }
   const gatewayAttachments = toGatewayImageAttachments(params.attachments);
   const requesterOrigin = requesterState.origin;
   const progressOrigin = {
@@ -569,7 +579,7 @@ export async function spawnAcpDirect(
       const deliveryPlan = resolveAcpSpawnBootstrapDeliveryPlan({
         cfg,
         spawnMode,
-        effectiveStreamToParent,
+        effectiveStreamToParent: requesterState.streamToParent,
         requester: requesterState,
         binding: state.binding,
       });
@@ -589,21 +599,8 @@ export async function spawnAcpDirect(
         agentId: ownerAgentId,
       });
       const startParentRelay = (runId: string) =>
-        effectiveStreamToParent && parentSessionKey && parentEventRouting && parentEventTarget
-          ? startAcpSpawnParentStreamRelay({
-              runId,
-              parentSessionKey,
-              requesterAgentId,
-              expectedTarget: parentEventTarget,
-              childSessionKey: sessionKey,
-              childSessionId: state.initializedSession.sessionId,
-              agentId: targetAgentId,
-              ownerAgentId,
-              env: parentRelayStateEnv,
-              eventRouting: parentEventRouting,
-              deliveryContext: parentDeliveryCtx,
-              cfg,
-            })
+        parentRelayParams
+          ? startAcpSpawnParentStreamRelay({ ...parentRelayParams, runId })
           : undefined;
       state.parentRelay = startParentRelay(childIdem);
       const response = await runWithAgentToolSourceExecutionScope(ctx.assertActive, () =>

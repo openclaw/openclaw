@@ -8,7 +8,6 @@ import {
   redactPublicSupportConfigKey,
   redactPublicSupportDiagnosticLine,
   redactPublicSupportVersion,
-  redactSupportDiagnosticLine,
   redactSupportString,
   type SupportRedactionContext,
 } from "../logging/diagnostic-support-redaction.js";
@@ -26,7 +25,12 @@ import {
 } from "./update-failure-facts-format.js";
 import { normalizeUpdateFailureFacts } from "./update-failure-facts.js";
 import { projectPublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
-import { formatNpmFailureFacts } from "./update-npm-failure.js";
+import {
+  formatNpmFailureFacts,
+  isPublicReleaseVersion,
+  isPublicUpdateSelector,
+  publicNpmPackageSpec,
+} from "./update-npm-failure.js";
 import { updatePreflightDetailMessage } from "./update-preflight-details.js";
 import { classifyUpdateRunCause } from "./update-run-cause.js";
 import {
@@ -116,12 +120,28 @@ function resolveFailedSteps(input: UpdateRunRecord): ReportedFailedStep[] {
     }));
 }
 
-function resolveUpdateTarget(input: UpdateRunRecord, context: UpdateFailureReportContext): string {
-  const target = input.target;
-  return sanitizeReportField(
-    target.sha || target.version || target.tag || target.channel || "not-recorded",
-    context,
-  );
+// Fork versions, custom tags and build IDs can name private projects or hosts; publish the
+// release shapes OpenClaw writes and a placeholder otherwise.
+function publicCommit(value: string): string {
+  return /^[0-9a-f]{7,64}$/u.test(value) ? value : "[redacted-sha]";
+}
+
+function publicBuildId(value: string): string {
+  const version =
+    /^(.+?)-(?:release-)?[0-9a-f]{12}-\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d(?:\.\d+)?Z$/u.exec(value)?.[1];
+  return version && isPublicReleaseVersion(version) ? value : "[redacted-build]";
+}
+
+function resolveUpdateTarget(input: UpdateRunRecord): string {
+  const { sha, version, tag, channel } = input.target;
+  if (sha) {
+    return publicCommit(sha);
+  }
+  const selector = version || tag || channel;
+  if (!selector) {
+    return "not-recorded";
+  }
+  return isPublicUpdateSelector(selector) ? selector : "[redacted-tag]";
 }
 
 async function renderBoundedDiagnostics(
@@ -150,14 +170,17 @@ async function renderBoundedDiagnostics(
     ["Before", input.before],
     ["After", input.after],
   ] as const) {
-    for (const field of ["version", "sha"] as const) {
-      if (identity?.[field]) {
-        diagnostics.push(`${label} ${field}: ${sanitizeReportField(identity[field], context)}`);
-      }
+    if (identity?.version) {
+      diagnostics.push(
+        `${label} version: ${isPublicReleaseVersion(identity.version) ? identity.version : "[redacted-version]"}`,
+      );
+    }
+    if (identity?.sha) {
+      diagnostics.push(`${label} sha: ${publicCommit(identity.sha)}`);
     }
   }
   if (input.after?.buildId) {
-    diagnostics.push(`After build: ${sanitizeReportField(input.after.buildId, context)}`);
+    diagnostics.push(`After build: ${publicBuildId(input.after.buildId)}`);
   }
   for (const step of selectUpdateFailureReportSteps(steps)) {
     const phase = sanitizeFactIdentifier(step.name, context);
@@ -209,7 +232,7 @@ async function renderBoundedDiagnostics(
     const diagnostic = refused
       ? "[redacted-diagnostic]"
       : npm
-        ? [npm.npmErrorCode, npm.packageSpec].filter(Boolean).join(" ")
+        ? [npm.npmErrorCode, publicNpmPackageSpec(npm.packageSpec)].filter(Boolean).join(" ")
         : truncateUtf8Prefix(
             [
               ...new Set(
@@ -236,10 +259,11 @@ async function renderBoundedDiagnostics(
         ? publicDetail
         : `${exit} (${publicDetail})`;
     diagnostics.push(`Failed phase ${phase}: ${detail}${termination}`);
-    diagnostics.push(...formatNpmFailureFacts(facts, context));
+    diagnostics.push(...formatNpmFailureFacts(facts));
     diagnostics.push(
       ...publicFacts
-        .filter((fact) => fact.check !== "npm" && fact.check !== "bun")
+        // Projection can rename the check; npm facts are already summarized above.
+        .filter((_fact, index) => facts[index]?.check !== "npm" && facts[index]?.check !== "bun")
         .map(formatUpdateFailureFact),
     );
     if (
@@ -290,7 +314,7 @@ export async function prepareUpdateFailureReport(
   };
   const version = sanitizeReportField(VERSION, context);
   const platform = sanitizeReportField(`${process.platform}/${process.arch}`, context);
-  const target = resolveUpdateTarget(input, context);
+  const target = resolveUpdateTarget(input);
   const steps = resolveFailedSteps(input);
   const phase = sanitizeFactIdentifier(steps.at(-1)?.name ?? "not-recorded", context);
   const { rollbackOutcome: rollback, recovery, runningVersion } = input.verification;
@@ -311,7 +335,8 @@ export async function prepareUpdateFailureReport(
     `- Failed phase: ${phase}`,
     ...(rollback
       ? [
-          `- Rollback outcome: ${{ "not-needed": "not needed", "not-attempted": "not attempted", succeeded: "attempted; succeeded", failed: "attempted; failed" }[rollback.status]} — ${redactSupportDiagnosticLine(rollback.reason, context)}`,
+          // The reason can carry a restore error's text; it stays in the local record.
+          `- Rollback outcome: ${{ "not-needed": "not needed", "not-attempted": "not attempted", succeeded: "attempted; succeeded", failed: "attempted; failed" }[rollback.status]}`,
         ]
       : []),
     ...(recovery

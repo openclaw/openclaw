@@ -66,10 +66,54 @@ extension OpenClawChatComposer {
         #endif
     }
 
+    var stopButtonFill: Color {
+        #if os(iOS)
+        OpenClawChatTheme.accent
+        #else
+        OpenClawChatTheme.danger
+        #endif
+    }
+
+    var sendButtonFill: Color {
+        #if os(iOS)
+        OpenClawChatTheme.accent
+        #else
+        self.userAccent ?? OpenClawChatTheme.userBubble
+        #endif
+    }
+
+    var disabledSendButtonFill: Color {
+        #if os(iOS)
+        let cleanFill = self.sendButtonFill.opacity(0.4)
+        #else
+        let cleanFill = Color.clear
+        #endif
+        return self.composerChrome == .clean ? cleanFill : Color.secondary.opacity(0.32)
+    }
+
+    var sendButtonForeground: Color {
+        #if os(iOS)
+        return self.canSendMessage || self.composerChrome == .full ? .white : .white.opacity(0.7)
+        #else
+        let disabledInk: Color = self.composerChrome == .full ? .white : .secondary.opacity(0.55)
+        return self.canSendMessage ? OpenClawChatTheme.userText(on: self.userAccent) : disabledInk
+        #endif
+    }
+
+    var sendButtonBorderOpacity: Double {
+        if self.composerChrome == .clean, !self.canSendMessage {
+            return 0
+        }
+        return self.canSendMessage ? 0.18 : 0.08
+    }
+
     #if os(iOS)
     var phonePrimaryRole: ChatComposerPrimaryRole {
         ChatComposerPrimaryRole.resolve(
-            hasDraftToSend: self.viewModel.hasDraftToSend,
+            // A tile, preparing or failed, keeps the button on a disabled Send instead of Talk:
+            // a voice conversation would leave the tile sitting in the composer.
+            hasDraftToSend: self.viewModel.hasDraftToSend || !self.viewModel.composerPreparingAttachments.isEmpty,
+            // A tile still preparing goes with the message, so Send works while it prepares.
             canSendDraft: self.canSendMessage,
             hasOwnReply: self.viewModel.pendingRunCount > 0 ||
                 (self.primaryReplyMark != nil && !self.replyMarkEnded),
@@ -77,7 +121,7 @@ extension OpenClawChatComposer {
                 self.viewModel.hasActiveSessionRunWithoutChatSnapshot,
             hasBlockingRunActivity: self.viewModel.hasBlockingRunActivity,
             isLocalVoiceCaptureActive: self.isLocalVoiceCaptureActive,
-            hasTalkControl: self.talkControl != nil)
+            talk: self.talkControl.map { $0.isEnabled ? .live : .available } ?? .unavailable)
     }
 
     /// The reply normally registers within about a second (0.1 s live, up to 1 s through the
@@ -287,11 +331,6 @@ struct ChatComposerPrimaryButton: View {
         // Only Stop shows progress; a send never turns the button into a spinner.
         if role == .stop, self.stop.isAborting {
             ProgressView().controlSize(.mini).tint(self.ink(for: role))
-        } else if role == .talk, self.role == .talk, let talkControl, talkControl.isEnabled {
-            ChatTalkButtonGlyph(control: talkControl)
-                .font(OpenClawChatTypography.composerPrimaryGlyph)
-                .scaleEffect(0.88)
-                .foregroundStyle(self.ink(for: role))
         } else {
             Image(systemName: self.symbolName(for: role))
                 .font(self.symbolFont(for: role))
@@ -314,7 +353,8 @@ struct ChatComposerPrimaryButton: View {
 
     private func symbolName(for role: ChatComposerPrimaryRole) -> String {
         switch role {
-        case .talk: "waveform"
+        // Live, the Talk face ends the conversation: a close mark reads as that at a glance.
+        case .talk: self.talkControl?.isEnabled == true ? "xmark" : "waveform"
         case .send: "arrow.up"
         case .stop: "stop.fill"
         }
@@ -341,7 +381,7 @@ struct ChatComposerPrimaryButton: View {
         case .talk:
             guard let talkControl else { return AnyShapeStyle(OpenClawChatTheme.accent) }
             if talkControl.isEnabled {
-                return AnyShapeStyle(OpenClawChatTheme.userBubble)
+                return AnyShapeStyle(OpenClawChatTheme.accent)
             }
             return AnyShapeStyle(OpenClawChatTheme.accent.opacity(talkControl.isGatewayConnected ? 1 : 0.4))
         case .send:
@@ -363,7 +403,7 @@ struct ChatComposerPrimaryButton: View {
             return .talk(
                 isActive: isActive,
                 isConnected: self.talkControl?.isGatewayConnected == true,
-                liveStatus: isActive ? self.talkControl?.statusText ?? "" : "")
+                liveStatus: isActive ? self.talkControl.map { ChatTalkPresentation(control: $0).status } ?? "" : "")
         case .send:
             return .send(isReplyRunning: self.send.isReplyRunning, sendKeepsReply: self.send.keepsReply)
         case .stop:

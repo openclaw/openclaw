@@ -7,6 +7,44 @@ struct ChatWorkingProgressTests {
     private let previousEndedAt = 900_000.0
     private let runEndedAt = 1_000_000.0
 
+    #if os(iOS)
+    @Test @MainActor func `working row shows the claw alone until something names the step`() {
+        func label(status: String?, tool: String? = nil) -> String? {
+            ChatTypingIndicatorBubble(showsAssistantAvatar: false, runIdentity: "run", status: status, toolLabel: tool)
+                .label
+        }
+        #expect(label(status: nil) == nil)
+        #expect(label(status: "Waiting for a response…") == "Waiting for a response…")
+        #expect(label(status: "Thinking", tool: "Reading README.md") == "Reading README.md")
+    }
+
+    /// Victor's recording: workspace for one frame, this turn for 0.2 s, then 0.67 s of waiting.
+    @Test func `a phase that passes faster than the hold is skipped, not flashed`() {
+        var hold = ChatWorkingLabelHold()
+        let start = ContinuousClock.now
+        func at(_ ms: Int) -> ContinuousClock.Instant {
+            start.advanced(by: .milliseconds(ms))
+        }
+        func offer(_ label: String?, at ms: Int, tool: Bool = false) -> Bool {
+            hold.show(label, isTool: tool, at: at(ms))
+        }
+        #expect(offer("Preparing workspace…", at: 0))
+        // The next phases arrive while workspace holds; the line waits and then takes the newest.
+        #expect(!offer("Preparing this turn…", at: 33))
+        #expect(!offer("Waiting for a response…", at: 230))
+        #expect(hold.shown == "Preparing workspace…")
+        #expect(hold.until == at(400))
+        #expect(offer("Waiting for a response…", at: 400))
+        // Answer text clears the label once the phase has held its time.
+        #expect(!offer(nil, at: 700))
+        #expect(offer(nil, at: 800))
+        #expect(hold.shown == nil)
+        // A tool's title holds longer, as before.
+        #expect(offer("Reading README.md", at: 900, tool: true))
+        #expect(hold.until == at(1500))
+    }
+    #endif
+
     @Test func `stance selection is deterministic for a run and salt`() {
         let salt: UInt32 = 0xA1B2_C3D4
         let run = "run-4c71b7e8"

@@ -27,13 +27,17 @@ function resolveUpdateRecoveryTerminalOutcome(
   return undefined;
 }
 
-function unreadableCapture(directory: string, error: string) {
+function unreadableCapture(directory: string, error: string, isCapture = true) {
+  const subject = isCapture ? "Update capture" : "Update capture root";
+  const retained = isCapture
+    ? "Retained files are unverified evidence for manual inspection."
+    : "Captures inside it are retained but cannot be listed.";
   return {
     directory,
     status: "unreadable" as const,
     nextAction:
       "Preserve this capture and current state; inspect with openclaw update status --json before manual recovery.",
-    message: `Update capture at ${directory} is unreadable: ${error}. Retained files are unverified evidence for manual inspection.`,
+    message: `${subject} at ${directory} is unreadable: ${error}. ${retained}`,
   };
 }
 
@@ -54,12 +58,22 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
       if (invalidRoot) {
         throw new Error(`Capture root is aliased or not a directory: ${invalidRoot.path}`);
       }
+      const unreadableRoots = inventory.artifacts.filter(
+        (item) => item.reason === "unreadable-capture-root",
+      );
       const byDirectory = new Map(
         inventory.artifacts.filter((item) => item.captureSource).map((item) => [item.path, item]),
       );
       return {
         captures: byDirectory,
-        evidence: await readUpdateRecoveryBackups(readRun, [...byDirectory.keys()]),
+        evidence: [
+          ...unreadableRoots.map((item) => ({
+            kind: "unreadable" as const,
+            directory: item.path,
+            error: "directory permissions deny reading it",
+          })),
+          ...(await readUpdateRecoveryBackups(readRun, [...byDirectory.keys()])),
+        ],
       };
     },
     { lazy: true },
@@ -67,7 +81,7 @@ export async function inspectUpdateRecoveryBackups(readRun = getUpdateRunAsync) 
   const classified = await Promise.all(
     evidence.map(async (entry) => {
       if (entry.kind === "unreadable") {
-        return unreadableCapture(entry.directory, entry.error);
+        return unreadableCapture(entry.directory, entry.error, captures.has(entry.directory));
       }
       const directory = entry.kind === "sealed" ? entry.ref.directory : entry.directory;
       const cleanup = captures.get(directory)!;
