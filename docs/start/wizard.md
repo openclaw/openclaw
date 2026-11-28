@@ -70,10 +70,12 @@ later with `openclaw configure --section memory`. See
 
 The wizard localizes fixed onboarding copy. It uses the first nonblank value from
 `OPENCLAW_LOCALE`, `LC_ALL`, `LC_MESSAGES`, and `LANG`, in that order, then
-falls back to English. Supported locales: `en`, `zh-CN`, `zh-TW`.
+falls back to English. Supported locales: `en`, `pt-PT`, `zh-CN`, and `zh-TW`. Locale values may use underscore and POSIX suffix forms such as `pt_PT.UTF-8`. Bare `pt`, `ptBR`, and `pt-BR` continue to fall back to English.
 
 ```bash
 OPENCLAW_LOCALE=zh-CN openclaw onboard
+OPENCLAW_LOCALE=pt-PT openclaw onboard
+OPENCLAW_LOCALE=pt_PT.UTF-8 openclaw onboard
 OPENCLAW_LOCALE=en openclaw onboard # Explicit English override
 ```
 

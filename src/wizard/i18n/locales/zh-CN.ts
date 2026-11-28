@@ -17,6 +17,9 @@ export const zh_CN = {
     skip: "跳过",
     skipForNow: "暂时跳过",
     tokenRecommended: "令牌（推荐）",
+    yes: "是",
+    no: "否",
+    cancel: "设置已取消。",
   },
   wizard: {
     customProvider: {

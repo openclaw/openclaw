@@ -17,6 +17,9 @@ export const en = {
     skip: "Skip",
     skipForNow: "Skip for now",
     tokenRecommended: "Token (recommended)",
+    yes: "Yes",
+    no: "No",
+    cancel: "Setup cancelled.",
   },
   wizard: {
     customProvider: {

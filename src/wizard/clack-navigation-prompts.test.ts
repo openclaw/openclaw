@@ -1,6 +1,6 @@
 // Navigation prompt tests cover shared onboarding footer copy through the prompt renderer.
 import type { Writable } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 
 type TestPromptOption = {
@@ -16,10 +16,29 @@ type TestSelectPrompt = {
   options: TestPromptOption[];
 };
 
+type TestConfirmPrompt = {
+  state: "active";
+  value: boolean;
+};
+
 vi.mock("@clack/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@clack/core")>();
   return {
     ...actual,
+    ConfirmPrompt: class {
+      readonly state = "active" as const;
+      readonly value: boolean;
+      readonly render: () => string;
+
+      constructor(params: { initialValue?: boolean; render: (this: TestConfirmPrompt) => string }) {
+        this.value = params.initialValue ?? true;
+        this.render = params.render.bind(this);
+      }
+
+      prompt(): Promise<string> {
+        return Promise.resolve(this.render());
+      }
+    },
     SelectPrompt: class {
       readonly state = "active" as const;
       readonly cursor = 0;
@@ -41,13 +60,20 @@ vi.mock("@clack/core", async (importOriginal) => {
   };
 });
 
-import { selectWithNavigationFooter } from "./clack-navigation-prompts.js";
+import {
+  confirmWithNavigationFooter,
+  selectWithNavigationFooter,
+} from "./clack-navigation-prompts.js";
 import type { WizardPromptNavigation } from "./prompts.js";
 
 const output = {
   columns: 80,
   write: () => true,
 } as unknown as Writable;
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 async function renderNavigationFooter(
   navigation: WizardPromptNavigation | undefined,
@@ -58,6 +84,19 @@ async function renderNavigationFooter(
         message: "Pick one",
         options: [{ value: "one", label: "One" }],
         navigation,
+        output,
+      }),
+    ),
+  );
+}
+
+async function renderNavigationConfirmation(initialValue: boolean): Promise<string> {
+  return stripAnsi(
+    String(
+      await confirmWithNavigationFooter({
+        message: "Continue?",
+        initialValue,
+        navigation: { canGoBack: true },
         output,
       }),
     ),
@@ -84,5 +123,16 @@ describe("navigation-aware select rendering", () => {
     await expect(
       renderNavigationFooter({ canGoBack: false, canGoForward: true }),
     ).resolves.toContain("→ next  ↑/↓ option");
+  });
+});
+
+describe("navigation-aware confirmation rendering", () => {
+  it("renders localized confirmation choices", async () => {
+    vi.stubEnv("OPENCLAW_LOCALE", "pt-PT");
+
+    const rendered = await renderNavigationConfirmation(false);
+
+    expect(rendered).toContain("Sim");
+    expect(rendered).toContain("Não");
   });
 });
