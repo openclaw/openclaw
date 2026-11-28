@@ -435,8 +435,7 @@ describe("backupVerifyCommand", () => {
     {
       name: "missing archive",
       prepare: async (tempDir: string) => path.join(tempDir, "missing.tar.gz"),
-      detail:
-        "Archive does not exist. Check the path and run `openclaw backup verify <archive>` again.",
+      detail: "Archive does not exist. Check the archive path and try again.",
     },
     {
       name: "directory",

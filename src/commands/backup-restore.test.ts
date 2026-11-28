@@ -616,6 +616,16 @@ describe("backupRestoreCommand", () => {
     });
   });
 
+  it("keeps the restore task in the recovery guidance for a missing archive", async () => {
+    await withState(async (state) => {
+      const target = state.path("restore-target");
+      await expect(restore(state.path("missing.tar.gz"), target)).rejects.toThrow(
+        /Archive does not exist\. Check the archive path and try again\.$/u,
+      );
+      await expect(fs.lstat(target)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
   it("verifies a corrupt archive before touching an empty target", async () => {
     await withState(async (state) => {
       const archivePath = state.path("corrupt.tar.gz");
