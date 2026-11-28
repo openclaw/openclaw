@@ -45,6 +45,7 @@ export function dispatchAgentRunWithMedia(
         channel: runContext?.messageChannel ?? ingressOpts.messageChannel,
         chatType: params.sessionEntry?.chatType,
         activeModel: params.prepared.imageUnderstandingModel,
+        inputProvenance: ingressOpts.inputProvenance,
         execution: {
           signal: abortController.signal,
           assertCurrent: () => dispatch.assertCurrent?.(),

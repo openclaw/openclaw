@@ -81,7 +81,7 @@ struct TalkMicrophoneMuteTests {
                 "late duplicate", isFinal: true, pttCaptureId: nil, recognitionGeneration: generation)
 
             #expect(await fixture.requests.prompts == [
-                "Talk Mode active. Reply in a concise, spoken tone.\n\nfive four",
+                "five four",
             ])
             #expect(manager.isEnabled)
             #expect(manager.isMicrophoneMuted)
@@ -113,7 +113,7 @@ struct TalkMicrophoneMuteTests {
             await manager._test_handleTranscript(
                 "late final", isFinal: true, pttCaptureId: nil, recognitionGeneration: generation)
             #expect(await fixture.requests.prompts == [
-                "Talk Mode active. Reply in a concise, spoken tone.\n\nfive four",
+                "five four",
             ])
         }
     }
@@ -139,7 +139,7 @@ struct TalkMicrophoneMuteTests {
                 toggle == .emptyUnmute ? "" : "five four", isFinal: true,
                 pttCaptureId: nil, recognitionGeneration: oldGeneration)
             let expected = toggle == .emptyUnmute ? [] : [
-                "Talk Mode active. Reply in a concise, spoken tone.\n\nfive four",
+                "five four",
             ]
             #expect(await fixture.requests.prompts == expected)
             if toggle == .remute {

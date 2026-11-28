@@ -1,8 +1,12 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createRunToolUsageRecorder } from "../../agents/tool-usage-recorder.js";
 import { decayToolUsage } from "../../agents/tool-usage.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
+import { registerOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import {
@@ -343,5 +347,30 @@ it("keeps reset ahead of a later flush while its execution capture is pending", 
       spy.mockRestore();
       queueSpy.mockRestore();
     }
+  });
+});
+
+it("prunes registered stores without recreating a retired agent's removed directory", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    // A retired agent absent from config whose directory Doctor's advice removed; its
+    // registration stays and no process has its store open (#205927).
+    const retiredPath = resolveOpenClawAgentSqlitePath({ agentId: "retired", env });
+    const retiredDir = path.dirname(path.dirname(retiredPath));
+    fs.mkdirSync(path.dirname(retiredPath), { recursive: true });
+    registerOpenClawAgentDatabase({ agentId: "retired", path: retiredPath, env });
+    fs.rmSync(retiredDir, { recursive: true });
+    const live = { agentId: "main", env, now };
+    const { generation } = await seedAgentToolUsageRunForTest(live);
+    await flushAgentToolUsage({
+      ...live,
+      generation,
+      rows: [{ toolId, score: 1, updatedAt: now }],
+    });
+
+    await pruneRegisteredAgentToolUsage({ env, now: now + 91 * day, assertCurrent: () => {} });
+
+    expect(fs.existsSync(retiredDir)).toBe(false);
+    // The missing store is skipped, not fatal: other registered stores are still pruned.
+    expect((await readAgentToolUsageStatus(live)).rows).toEqual([]);
   });
 });

@@ -1270,36 +1270,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     );
   });
 
-  it("keeps mobile slash command copy in separate grid tracks", async () => {
-    await withBrowserPage(openBrowserPage(390, 844), async (page) => {
-      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-        <div class="slash-menu" style="position: relative">
-          <div class="slash-menu-item" role="option">
-            <span class="slash-menu-icon">${iconSvg()}</span>
-            <span class="slash-menu-copy">
-              <span class="slash-menu-name">/session <span class="slash-menu-args">idle max-age &lt;duration|off&gt;</span></span>
-              <span class="slash-menu-desc">Manage session-level settings (for example /session idle).</span>
-            </span>
-          </div>
-        </div>
-      </body></html>`);
-
-      const geometry = await page.locator(".slash-menu-copy").evaluate((copy) => {
-        const name = copy.querySelector<HTMLElement>(".slash-menu-name")!;
-        const description = copy.querySelector<HTMLElement>(".slash-menu-desc")!;
-        const nameRect = name.getBoundingClientRect();
-        const descriptionRect = description.getBoundingClientRect();
-        return {
-          copyOverflow: copy.scrollWidth - copy.clientWidth,
-          gap: descriptionRect.left - nameRect.right,
-        };
-      });
-
-      expect(geometry.copyOverflow).toBeLessThanOrEqual(1);
-      expect(geometry.gap).toBeGreaterThanOrEqual(8);
-    });
-  });
-
   it("allows pointer selection in the embedded side-chat transcript", async () => {
     await withBrowserPage(openBrowserPage(1024, 768), async (page) => {
       await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>

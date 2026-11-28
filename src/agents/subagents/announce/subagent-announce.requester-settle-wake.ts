@@ -161,7 +161,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   let pendingMembers: readonly SubagentRunRecord[] = [];
   if (pauseNotice) {
     settledBatch = [currentSettledEntry];
-  } else if (frozenBatchRunIds && frozen) {
+  } else if (frozenBatchRunIds?.length) {
     const runsById = new Map(requesterRuns.map((entry) => [entry.runId, entry]));
     // Retired rows no longer own completion.
     const cohort = subagentRuns.selectCompletionAuthorityBatch(
@@ -219,9 +219,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     : undefined;
   if (preparation) {
     await preparation;
-    if (params.signal?.aborted || !params.isSourceCurrent()) {
-      return false;
-    }
   }
   const batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
   const batchSessionKeys = [...new Set(settledBatch.map((run) => run.childSessionKey))].toSorted();
@@ -472,32 +469,33 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
         ...(!parentOnly ? { privateOnly: false as const } : {}),
       },
     };
-    controllerInput = await reserveSubagentControllerSource(
+    const reservedInput = await reserveSubagentControllerSource(
       settledBatch[0]!,
       batchKey,
       directIdempotencyKey,
       continuationCaller,
       { requester },
     );
-    if (!controllerInput) {
+    if (!reservedInput) {
       return false;
     }
-    params.onControllerInput(controllerInput);
+    controllerInput = reservedInput;
+    params.onControllerInput(reservedInput);
     // A live settle check may find this same input waiting in the mailbox.
-    if (controllerInput.custody.rpcAdopted) {
+    if (reservedInput.custody.rpcAdopted) {
       return false;
     }
     const retireUnadoptedInput = () => {
-      if (controllerInput && !controllerInput.custody.rpcAdopted) {
-        retireSessionControllerInput(controllerInput);
+      if (!reservedInput.custody.rpcAdopted) {
+        retireSessionControllerInput(reservedInput);
       }
     };
     // Revocation or retirement owns a changed batch: record nothing, or consume the obsolete wake.
     // A stopped evaluation records nothing; the durable wake stays owed.
     const settleRevokedBatch = async (): Promise<boolean> => {
       if (
-        controllerInput?.abortSignal.aborted &&
-        !controllerInput.custody.rpcAdopted &&
+        reservedInput.abortSignal.aborted &&
+        !reservedInput.custody.rpcAdopted &&
         !dispatchAccepted &&
         params.isSourceCurrent() &&
         isBatchCurrent() &&
@@ -511,7 +509,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       }
       if (
         params.signal?.aborted ||
-        isAgentRunRestartAbortReason(controllerInput?.abortSignal.reason) ||
+        isAgentRunRestartAbortReason(reservedInput.abortSignal.reason) ||
         isGatewayClosed() ||
         !isBatchCurrent()
       ) {
@@ -551,10 +549,14 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;
     const waitForRequesterDelivery =
       !pauseNotice && params.recordRequesterDelivery
-        ? observeSubagentRequesterDelivery(controllerInput, (fact) =>
+        ? observeSubagentRequesterDelivery(reservedInput, (fact) =>
             params.recordRequesterDelivery!(settledBatch, fact, refreshBatch),
           )
         : undefined;
+    const acceptDispatch = () => {
+      dispatchAccepted = true;
+      params.onAccepted?.();
+    };
     try {
       const requesterDelivery = pauseNotice
         ? undefined
@@ -562,8 +564,8 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
             state: "waiting" as const,
             runId: directIdempotencyKey,
             at: Date.now(),
-            blockingRunId: controllerInput.mailbox.claim?.inputs.find(
-              (source) => source !== controllerInput,
+            blockingRunId: reservedInput.mailbox.claim?.inputs.find(
+              (source) => source !== reservedInput,
             )?.protocolRunId,
           };
       const dispatch = () => {
@@ -588,15 +590,9 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
             resolveGatewayContext,
             isSourceSessionEffectsAllowed,
             sourceReceiptAdmission,
-            controllerInput,
-            onAccepted: () => {
-              dispatchAccepted = true;
-              params.onAccepted?.();
-            },
-            onExecutionStarted: () => {
-              dispatchAccepted = true;
-              params.onAccepted?.();
-            },
+            controllerInput: reservedInput,
+            onAccepted: acceptDispatch,
+            onExecutionStarted: acceptDispatch,
             onBeforeDispatch: async () => {
               await params.transitionBatch(
                 settledBatch,
@@ -660,18 +656,17 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     }
     // Results committed to the requester transcript are never replayed: settle what the turn did.
     const currentBatch = readCurrentBatch() ?? settledBatch;
-    const settledDelivery = resolveRequesterDeliveryOutcome(currentBatch, delivery)!;
-    if (settledDelivery.delivered || currentBatch.every(hasConsumedRequesterInput)) {
-      await completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
-      return settledDelivery.delivered;
-    }
+    const settledDelivery = resolveRequesterDeliveryOutcome(currentBatch, delivery);
     // The controller mailbox owns a queued handoff and settles it itself.
-    if ((await settleRevokedBatch()) || delivery.path === "queued") {
+    if (
+      !settledDelivery.delivered &&
+      ((await settleRevokedBatch()) || delivery.path === "queued")
+    ) {
       return false;
     }
-    // A wake that missed its turn settles the batch into requester history; nothing retries it.
+    // Delivered and missed turns share the same durable settlement; neither replays delivery.
     await completeBatch(settledBatch, state, delivery, requesterEntry.sessionId);
-    return false;
+    return settledDelivery.delivered;
   } finally {
     if (controllerInput) {
       // Queued admission still consumes this current-source guard after its observer returns.

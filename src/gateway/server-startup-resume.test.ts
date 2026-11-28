@@ -14,6 +14,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import {
   createProductState,
@@ -232,6 +233,8 @@ it("serves startup reads and unrelated turns while a resumed session retains inp
   await using cleanup = new AsyncDisposableStack();
   cleanup.defer(() => state.cleanup());
   cleanup.defer(() => closeProvider(providerServer));
+  const runExecution = await observeGatewayRunExecution();
+  cleanup.defer(() => runExecution.restore());
   cleanup.defer(async () => {
     release.resolve();
     if (gateway) {
@@ -304,9 +307,6 @@ it("serves startup reads and unrelated turns while a resumed session retains inp
   stage = "unrelated acceptance";
   const healthy = await send(healthyKey, "HEALTHY_DURING_RESUME");
   stage = "unrelated model input";
-  const waitForRun = (runId: string) =>
-    gateway!.client.request("agent.wait", { runId, timeoutMs: 10_000 });
-  const healthyRun = waitForRun(healthy.runId);
   await withinTest(observed.healthy.promise, signal);
   expect(calls).toEqual(["healthy"]);
   const transcript = { agentId: "main", sessionKey: resumeKey, sessionId: "resuming-session" };
@@ -319,8 +319,11 @@ it("serves startup reads and unrelated turns while a resumed session retains inp
   stage = "fresh model input";
   await withinTest(observed.fresh.promise, signal);
   expect(calls).toEqual(["healthy", "resume", "fresh"]);
-  for (const result of [healthyRun, waitForRun(resumed.runId)]) {
-    expect(await result).toMatchObject({
+  stage = "run completion";
+  for (const { runId } of [healthy, resumed]) {
+    // Join the source's actual completion; this test asserts ordering, not RPC wait latency.
+    await withinTest(runExecution.waitForCompletion(runId), signal);
+    expect(await gateway.client.request("agent.wait", { runId, timeoutMs: 0 })).toMatchObject({
       status: "ok",
     });
   }

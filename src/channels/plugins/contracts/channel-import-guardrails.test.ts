@@ -92,7 +92,7 @@ const CHANNEL_CONFIG_SCHEMA_GUARDS: GuardedSource[] = [
   ["tlon", "src/config-schema.ts", [/["']openclaw\/plugin-sdk\/core["']/]],
 ];
 
-function expectGuardedSources(sources: GuardedSource[], read = readSource) {
+function expectGuardedSources(sources: GuardedSource[], read: typeof readSource) {
   for (const [plugin, path, patterns] of sources) {
     const fullPath = bundledPluginFile(plugin, path);
     const text = read(fullPath);

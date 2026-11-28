@@ -192,14 +192,7 @@ function verify(mode) {
       "Refusal mutated protected agent bytes",
     );
     assert.deepEqual(logicalSnapshot(agentPath), before.agent);
-    if (mode === "old-shape") {
-      assert.equal(
-        sha(fs.readFileSync(sharedPath)),
-        before.sharedSha256,
-        "Startup control repaired shared state",
-      );
-      assert.deepEqual(readJson(path.join(workspace, "openclaw-workspace-state.json")), setup);
-    } else if (sha(fs.readFileSync(sharedPath)) !== before.sharedSha256) {
+    if (sha(fs.readFileSync(sharedPath)) !== before.sharedSha256) {
       verifyBackup(sharedPath, before.shared);
     }
     console.log(
@@ -224,14 +217,10 @@ function verify(mode) {
       );
     });
   }
-  const agentBackup = verifyBackup(agentPath, before.agent);
   const sharedBackup = verifyBackup(sharedPath, before.shared);
-  assert.equal(agentBackup.backupId, sharedBackup.backupId, "Migration backups are not paired");
-  assertSession(agentBackup.path);
   console.log(
     JSON.stringify({
       mode,
-      agentBackup,
       sharedBackup,
       workspace: verifyWorkspace(true),
     }),

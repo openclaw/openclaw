@@ -171,21 +171,29 @@ export async function consumeGoogleGenerateContentStream(params: {
       const cacheRead = knownUsage.cachedContentTokenCount;
       const toolUsePromptTokens = knownUsage.toolUsePromptTokenCount;
       const outputTokens = knownUsage.candidatesTokenCount + knownUsage.thoughtsTokenCount;
+      const usageReported =
+        sawTerminalReason ||
+        chunk.candidates?.some(
+          (candidate) =>
+            candidate.finishReason && candidate.finishReason !== "FINISH_REASON_UNSPECIFIED",
+        ) === true;
+      // The prompt count includes cached content; tool-use prompt tokens are prompt too.
+      const contextPromptTokens = promptTokens + toolUsePromptTokens;
       params.output.usage = {
         ...createEmptyTransportUsage(),
-        usageReport: {
-          state:
-            sawTerminalReason ||
-            chunk.candidates?.some(
-              (candidate) =>
-                candidate.finishReason && candidate.finishReason !== "FINISH_REASON_UNSPECIFIED",
-            )
-              ? "available"
-              : "unavailable",
-        },
+        usageReport: { state: usageReported ? "available" : "unavailable" },
         input: Math.max(0, promptTokens - cacheRead) + toolUsePromptTokens,
         output: outputTokens,
         cacheRead,
+        // The measured request size; context pressure counts from it instead of re-estimating.
+        contextUsage:
+          usageReported && promptTokens > 0
+            ? {
+                state: "available",
+                promptTokens: contextPromptTokens,
+                totalTokens: contextPromptTokens + outputTokens,
+              }
+            : { state: "unavailable" },
         totalTokens:
           chunk.usageMetadata.totalTokenCount ?? promptTokens + outputTokens + toolUsePromptTokens,
       };
@@ -402,6 +410,8 @@ export async function consumeGoogleGenerateContentStream(params: {
     throw new Error("An unknown error occurred");
   }
 
+  // No terminal usage report means no measurement; complete it as explicitly unmeasured.
+  params.output.usage.contextUsage ??= { state: "unavailable" };
   params.stream.push({
     type: "done",
     reason: params.output.stopReason,

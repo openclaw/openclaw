@@ -18,6 +18,7 @@ export function createSessionRowProjectionArchive(params: {
     byKey: ReadonlyMap<string, Set<string>>;
   };
   dirty: Set<string>;
+  publishFacts: (row: records.Row) => void;
   invalidateTranscript: (id: string) => void;
   put: (row: records.Row) => void;
   release: (id: string) => void;
@@ -53,19 +54,32 @@ export function createSessionRowProjectionArchive(params: {
   }
   function markRelated(row: records.Row, relations: records.RelatedRows = "all") {
     const { byKey, byParent } = params.indexes;
-    const related = new Set(relations === "parents" ? [] : records.dependents(row, byParent));
-    if (relations !== "parents" && parseAgentSessionKey(row.key)) {
+    if (relations !== "children") {
+      for (const parent of row.parents) {
+        for (const id of byKey.get(parent) ?? []) {
+          const current = params.rows.get(id);
+          if (!records.ready(current)) {
+            continue;
+          }
+          if (current.materialized.rowPatched) {
+            // Full refresh restores the builder's wire field order after incremental patches.
+            params.dirty.add(id);
+          } else if (current.subagentRevision !== undefined) {
+            current.subagentRevision = undefined;
+            params.publishFacts(current);
+          }
+        }
+      }
+    }
+    if (relations === "parents") {
+      return;
+    }
+    const related = new Set(records.dependents(row, byParent));
+    if (parseAgentSessionKey(row.key)) {
       // A new literal parent must wake children still indexed under its absent-row alias.
       const alias = records.parentReference(params.config(), row.key, row.agentId);
       for (const id of byParent.get(alias) ?? []) {
         related.add(id);
-      }
-    }
-    if (relations !== "children") {
-      for (const parent of row.parents) {
-        for (const id of byKey.get(parent) ?? []) {
-          related.add(id);
-        }
       }
     }
     for (const id of related) {
