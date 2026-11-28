@@ -89,7 +89,8 @@ class CronJobManagementTest {
     }
     val target = "session:agent:main:main"
     val update = objectJson(buildCronUpdateParams(original, edit.copy(sessionTarget = target)))
-    assertEquals(target, update.getValue("patch").jsonObject.getValue("sessionTarget").jsonPrimitive.content)
+    val patch = update.getValue("patch").jsonObject
+    assertEquals(target, patch.getValue("sessionTarget").jsonPrimitive.content)
   }
 
   @Test
