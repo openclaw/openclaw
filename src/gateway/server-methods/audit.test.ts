@@ -190,10 +190,14 @@ describe("audit gateway methods", () => {
   );
 
   it.each(["audit.list", "audit.activity.list"] as const)(
-    "rejects malformed cursors and inverted ranges for %s",
+    "rejects malformed cursors, inverted ranges and blank ids for %s",
     async (method) => {
       expectInvalid(await runAuditHandler(method, { cursor: "bad" }));
       expectInvalid(await runAuditHandler(method, { after: 2, before: 1 }));
+      expectInvalid(
+        await runAuditHandler(method, { agentId: " " }),
+        `invalid ${method} filters: agentId must not be blank`,
+      );
       expect(listAuditEvents).not.toHaveBeenCalled();
     },
   );
