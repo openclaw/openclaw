@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import {
+  GATEWAY_CLIENT_IDS,
+  normalizeGatewayClientName,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -233,12 +237,28 @@ export function removePairedDeviceInWorker(
   return { deviceId: normalized };
 }
 
+// Browser UI clients persist their device keypair per browser profile
+// (localStorage), so each profile keeps a stable deviceId across reconnects.
+// Distinct profiles are distinct devices per the pairing docs: remembered
+// until revoked or explicitly removed. Exclude them from cluster dedup as
+// both anchor and victim so pairing one profile never prunes another.
+const PERSISTENT_BROWSER_IDENTITY_CLIENT_IDS = new Set<string>([
+  GATEWAY_CLIENT_IDS.CONTROL_UI,
+  GATEWAY_CLIENT_IDS.WEBCHAT_UI,
+  GATEWAY_CLIENT_IDS.BROWSER_COPILOT,
+]);
+
 // Silent pairings from the same client software on the same host mint a fresh
 // deviceId whenever their state dir (and thus keypair) is ephemeral. The cluster
 // key groups those records so a replacement pairing can retire its predecessors.
 function silentPairingClusterKey(
   device: Pick<PairedDevice, "clientId" | "clientMode" | "displayName">,
 ): string | null {
+  if (
+    PERSISTENT_BROWSER_IDENTITY_CLIENT_IDS.has(normalizeGatewayClientName(device.clientId) ?? "")
+  ) {
+    return null;
+  }
   const clientId = device.clientId?.trim().toLowerCase() ?? "";
   const clientMode = device.clientMode?.trim().toLowerCase() ?? "";
   const displayName = device.displayName?.trim().toLowerCase() ?? "";
@@ -258,9 +278,10 @@ const PRUNE_RECENT_APPROVAL_GRACE_MS = 60_000;
  * pairing of the same client cluster. Only records whose latest approval was
  * same-host local ("silent") are eligible, as anchor and as victim: local
  * clients re-pair silently by construction and share the gateway host, so the
- * metadata cluster key cannot match a different machine. Currently connected
- * devices are skipped so concurrent sessions with distinct state dirs keep
- * their tokens while live.
+ * metadata cluster key cannot match a different machine. Browser UI clients
+ * with durable per-profile identities are excluded from clustering entirely.
+ * Currently connected devices are skipped so concurrent sessions with distinct
+ * state dirs keep their tokens while live.
  */
 export function pruneSupersededSilentPairedDevicesInWorker(params: {
   deviceId: string;
