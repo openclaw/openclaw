@@ -1298,6 +1298,8 @@ const config = {
     "src/update/launcher.ts": ["exports"],
     // Session and cron state type this slot through `import(...)` type queries.
     "src/cron/service/timer-execution-timeout.ts": ["types"],
+    // The non-isolated test runner evicts natively required sources between files.
+    "src/plugins/native-module-require.ts": ["exports"],
     // Diagnostic fixtures reset owner-private state; the full-tree audit checks these consumers.
     "src/logging/diagnostic-memory.ts": ["exports"],
     "src/logging/diagnostic-phase.ts": ["exports"],

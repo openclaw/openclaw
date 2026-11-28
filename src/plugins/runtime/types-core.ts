@@ -1,3 +1,4 @@
+import type { AgentCommandPluginIngressOpts } from "../../agents/command/types.js";
 import type { AcquireConfiguredProviderLocalService } from "../../agents/provider-local-service-target.js";
 import type { CreateChannelIngressDrainOptions } from "../../channels/message/ingress-drain.js";
 import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.types.js";
@@ -161,7 +162,7 @@ export type PluginRuntimeCore = {
      * tools the calling plugin declares.
      */
     runCommandFromIngress: (
-      opts: import("../../agents/command/types.js").AgentCommandPluginIngressOpts,
+      opts: AgentCommandPluginIngressOpts,
       runtime: import("../../runtime.js").RuntimeEnv,
     ) => ReturnType<typeof import("../../agents/agent-command.js").agentCommandFromIngress>;
     runEmbeddedAgent: (

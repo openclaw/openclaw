@@ -41,7 +41,7 @@ export const sentinelState: {
   restartSentinelWriteError: Error | null;
   onSentinelWrite?: () => void;
 } = { restartSentinelWriteError: null };
-export const resolveUpdateInstallSurfaceMock =
+const resolveUpdateInstallSurfaceMock =
   vi.fn<
     typeof import("../../infra/update-runner-install-surface.js").resolveUpdateInstallSurface
   >();
