@@ -300,7 +300,10 @@ function buildFailureAlertPayload(params: {
     params.consecutiveErrors > 1
       ? `Automation "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times in a row`
       : `Automation "${safeJobName}" ${statusVerb}`,
-    ...detailLines,
+    // The count spans several runs but the cause is only the last run's.
+    ...(params.consecutiveErrors > 1
+      ? detailLines.map((line) => line.replace(/^Cause: /, "Latest cause: "))
+      : detailLines),
   ].join("\n");
   const oauthRefreshFailure = params.error ? classifyOAuthRefreshFailure(params.error) : null;
   const providerLoginRecovery =
