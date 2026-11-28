@@ -1,5 +1,12 @@
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  controlUiSessionUrl,
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   expectRequestCount,
@@ -15,6 +22,9 @@ const suite = createControlUiE2eSuite({
 });
 
 const expectUploadSurface = process.env.OPENCLAW_TERMINAL_UPLOAD_EXPECT_PRESENT !== "0";
+
+// Trusted OS-level paste shortcut: the browser builds the ClipboardEvent itself.
+const nativePasteShortcut = process.platform === "darwin" ? "Meta+V" : "Control+V";
 
 suite.define(() => {
   it.skipIf(!expectUploadSurface)(
@@ -248,4 +258,120 @@ suite.define(() => {
       },
     );
   });
+
+  it.skipIf(!expectUploadSurface)(
+    "stages a pasted clipboard image in the chat terminal composer and submits only on Send",
+    async () => {
+      await suite.withPage(
+        {
+          locale: "en-US",
+          permissions: ["clipboard-read", "clipboard-write"],
+          serviceWorkers: "block",
+          viewport: { width: 1440, height: 900 },
+        },
+        async ({ page }) => {
+          const sessionKey = "agent:main:dashboard:11111111-1111-4111-8111-111111111111";
+          const gateway = await installMockGateway(page, {
+            sessionKey,
+            sessions: [
+              createControlUiSessionRow(sessionKey, "Paste image chat", 1_790_000_000_000),
+            ],
+            featureMethods: [...defaultControlUiFeatureMethods, "terminal.open", "terminal.upload"],
+            methodResponses: {
+              "terminal.upload": { path: "/tmp/openclaw-terminal-upload/pasted.png", size: 3 },
+            },
+            terminalEnabled: true,
+          });
+
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+          await waitForControlUiGatewayReady(page);
+          const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+          await openChatSidePanelType(pane, "Terminal");
+          // The embedded chat terminal opens on its session picker; pick the
+          // already-owned session so the composer mounts in the embedded panel.
+          const embedded = pane.locator(".sidebar-region__right-runtime openclaw-terminal-panel");
+          await embedded.locator(".tp-session.is-current").click();
+          const composer = embedded.locator("form.tp-composer input");
+          await composer.waitFor({ state: "visible" });
+
+          // Encode a real PNG in the browser so the paste carries genuine image bytes.
+          const pngBase64 = await page.evaluate(async () => {
+            const canvas = document.createElement("canvas");
+            canvas.width = 24;
+            canvas.height = 16;
+            const context = canvas.getContext("2d")!;
+            context.fillStyle = "#c82828";
+            context.fillRect(0, 0, canvas.width, canvas.height);
+            const blob = await new Promise<Blob>((resolve) => {
+              canvas.toBlob((encoded) => resolve(encoded!), "image/png");
+            });
+            const bytes = new Uint8Array(await blob.arrayBuffer());
+            let binary = "";
+            for (const byte of bytes) {
+              binary += String.fromCharCode(byte);
+            }
+            return btoa(binary);
+          });
+          const copyPngToClipboard = async () => {
+            await page.evaluate(async (image) => {
+              const bytes = Uint8Array.from(atob(image), (char) => char.charCodeAt(0));
+              await navigator.clipboard.write([
+                new ClipboardItem({ "image/png": new Blob([bytes], { type: "image/png" }) }),
+              ]);
+            }, pngBase64);
+          };
+
+          // A text-only clipboard paste stays on the native input path: the draft receives
+          // the text and the upload owner admits nothing.
+          await page.evaluate(async () => {
+            await navigator.clipboard.write([
+              new ClipboardItem({ "text/plain": new Blob(["echo hi"], { type: "text/plain" }) }),
+            ]);
+          });
+          await composer.click();
+          await page.keyboard.press(nativePasteShortcut);
+          await expect.poll(() => composer.inputValue()).toBe("echo hi");
+          expect(await gateway.getRequests("terminal.upload")).toHaveLength(0);
+
+          await composer.fill("cat");
+
+          // A trusted native paste of that real PNG, delivered by the browser to the
+          // shipped composer input: the upload owner admits it instead of the input.
+          await copyPngToClipboard();
+          await composer.click();
+          await page.keyboard.press(nativePasteShortcut);
+
+          await expectRequestCount(gateway, "terminal.upload", 1, 10_000);
+          const pastedUpload = (await gateway.getRequests("terminal.upload"))[0]?.params as {
+            name: string;
+            contentBase64: string;
+          };
+          // Chromium re-encodes clipboard images, so assert the delivered PNG container
+          // and geometry rather than byte equality with the copied file.
+          const stagedBytes = Buffer.from(pastedUpload.contentBase64, "base64");
+          expect(stagedBytes.subarray(0, 8).toString("hex")).toBe("89504e470d0a1a0a");
+          expect(stagedBytes.readUInt32BE(16)).toBe(24);
+          expect(stagedBytes.readUInt32BE(20)).toBe(16);
+          expect(pastedUpload.name).toMatch(/\.png$/i);
+          const chip = embedded.locator(".tp-attachment");
+          await chip.waitFor({ state: "visible" });
+          await expect.poll(() => chip.textContent()).toContain(pastedUpload.name);
+          // The attachment is editable before submission: the composer draft survives.
+          expect(await composer.inputValue()).toBe("cat");
+          expect((await gateway.getRequests("terminal.input")).length).toBe(0);
+
+          await embedded.locator(".tp-composer__submit").click();
+          // Paste line plus Enter arrive as terminal.input requests only after Send.
+          await expectRequestCount(gateway, "terminal.input", 2, 10_000);
+          const sentData = (await gateway.getRequests("terminal.input"))
+            .map((request) => (request.params as { data?: string }).data ?? "")
+            .join("");
+          expect(sentData).toContain("cat /tmp/openclaw-terminal-upload/pasted.png");
+          expect(sentData).toContain("\r");
+          expect(sentData.replace("\r", "")).not.toMatch(/[\r\n]/);
+          await expect.poll(() => chip.count()).toBe(0);
+        },
+      );
+    },
+  );
 });
