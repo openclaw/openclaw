@@ -1,0 +1,2 @@
+# Room allowFrom accessGroup expansion: admit/deny alice vs outsider/guests.
+47

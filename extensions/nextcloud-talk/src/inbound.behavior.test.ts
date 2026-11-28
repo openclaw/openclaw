@@ -394,6 +394,53 @@ describe("nextcloud-talk inbound behavior", () => {
     },
   );
 
+  it.each([
+    { senderId: "users/alice", expectDispatched: true },
+    { senderId: "alice", expectDispatched: true },
+    { senderId: "users/outsider", expectDispatched: false },
+    { senderId: "guests/alice", expectDispatched: false },
+  ])(
+    "admits room accessGroup members when outer groupAllowFrom is set ($senderId)",
+    async ({ senderId, expectDispatched }) => {
+      mocks.roomKind.mockResolvedValue("group");
+      const runtime = createPluginRuntimeMock();
+      setNextcloudTalkRuntime(runtime);
+      installPairingController(vi.fn(async () => []));
+      const account = createAccount({
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["accessGroup:staff"],
+        rooms: {
+          room1: { requireMention: false, allowFrom: ["accessGroup:staff"] },
+        },
+      });
+      await inbound({
+        runtime: createRuntimeSpies(),
+        account,
+        message: createMessage({
+          roomToken: "room1",
+          senderId,
+          senderName: "Alice",
+          isGroupChat: true,
+          text: "hello room",
+        }),
+        config: {
+          accessGroups: {
+            staff: {
+              type: "message.senders",
+              members: { "nextcloud-talk": ["users/alice"] },
+            },
+          },
+          channels: { "nextcloud-talk": account.config },
+        },
+      });
+      if (expectDispatched) {
+        expect(runtime.channel.inbound.dispatch).toHaveBeenCalledOnce();
+      } else {
+        expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("issues a DM pairing challenge and sends the challenge text", async () => {
     const issueChallenge = vi.fn(
       async (params: { sendPairingReply: (text: string) => Promise<void> }) => {
