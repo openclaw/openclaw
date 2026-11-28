@@ -140,7 +140,7 @@ struct DashboardWindowSmokeTests {
         // positive cases run through the bridge's window-identity check rather
         // than its number fallback; a change there would silently weaken them.
         #expect(press.window === window)
-        try bridge.handle(press)
+        bridge.handle(press)
         #expect(bridge.hasPendingPress)
         #expect(!bridge.isDragging)
 
@@ -221,7 +221,7 @@ struct DashboardWindowSmokeTests {
             pressure: 1))
         #expect(floating.window == nil)
 
-        try bridge.handle(floating)
+        bridge.handle(floating)
         #expect(!bridge.hasPendingPress)
 
         bridge.requestWindowDrag()
@@ -381,6 +381,29 @@ struct DashboardWindowSmokeTests {
         #expect(visible.contains(NSPoint(x: titlebar.midX, y: titlebar.midY)))
         // The clamp still tracks the pointer; it must not freeze the window.
         #expect(window.frame.origin != start)
+    }
+
+    @Test func `dashboard host serves window drag requests from its hosted window`() throws {
+        // The receiver hands an accepted page request to one bridge, so the
+        // bridge the host owns has to resolve the window the document sits in.
+        let window = makeDashboardDragWindow()
+        defer { window.close() }
+        let document = ControlUIDocumentHost(
+            url: try #require(URL(string: "http://127.0.0.1:18789/control/")),
+            auth: .unauthenticated,
+            websiteDataStore: .nonPersistent(),
+            installCapabilities: { _ in })
+        let bridge = try #require(document.windowDragBridge)
+        #expect(bridge.isObservingNativePresses)
+        defer { bridge.invalidate() }
+        window.contentView = document.webView
+
+        let press = try #require(dashboardMouseEvent(
+            .leftMouseDown, at: NSPoint(x: 300, y: 400), in: window, timestamp: 100))
+        #expect(press.window === window)
+        bridge.handle(press)
+        #expect(bridge.hasPendingPress)
+        #expect(!bridge.isDragging)
     }
 
     private func makeDashboardDragWindow() -> DashboardWindowGestureSpy {
