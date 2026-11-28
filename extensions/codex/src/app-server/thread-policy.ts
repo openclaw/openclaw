@@ -4,7 +4,8 @@ import {
   formatErrorMessage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
-import type { CodexEphemeralThreadPolicy } from "./client-thread-owner.js";
+import { isCodexAppServerLiveThreadProtected } from "./client-runtime.js";
+import { isEphemeralThreadPolicy, type CodexEphemeralThreadPolicy } from "./client-thread-owner.js";
 import {
   isCodexAppServerOverloadError,
   isCodexAppServerPrewriteRequestCancellationError,
@@ -75,20 +76,58 @@ export async function refreshCodexThreadPolicy(
 }
 
 /**
- * Refreshes skills, persona, and memory instructions on a live thread whose generic policy cannot
- * change (ephemeral threads have no resume source). The refresh is a client-authored
- * developer message, so it must be re-delivered after every compaction.
+ * Native compaction rebuilds from the section a persistent thread was started or resumed
+ * with and can sample its continuation before any host handoff, so a changed section needs
+ * a cold resume. Protected work refuses one; the thread then takes a handoff until its
+ * first unprotected turn. Ephemeral threads have no resume source.
+ */
+export function isCodexNativeSectionStale(
+  params: { client: CodexAppServerClient; refreshableInstructions?: string },
+  threadId: string,
+  policy: CodexEphemeralThreadPolicy | undefined,
+): boolean {
+  return (
+    !isEphemeralThreadPolicy(policy) &&
+    policy?.nativeRefreshableInstructions !== params.refreshableInstructions &&
+    !isCodexAppServerLiveThreadProtected(params.client, threadId)
+  );
+}
+
+/**
+ * Refreshes skills, persona, and memory instructions on a live thread without replacing
+ * its conversation or cold-resuming it (protected background work blocks that). The
+ * refresh is a client-authored developer message, so it must be re-delivered after
+ * every compaction.
  */
 export async function refreshCodexThreadInstructions(
   params: CodexThreadHandoffParams & { refreshableInstructions: string | undefined },
 ): Promise<void> {
-  const notice =
-    "The following is the complete current OpenClaw refreshable thread instructions. It replaces the earlier refreshable instructions in this conversation.\n\n";
-  const text =
-    notice +
-    (params.refreshableInstructions ??
-      "The current OpenClaw refreshable thread instructions are empty; earlier refreshable instructions are withdrawn.");
-  await injectCodexThreadDeveloperHandoff(params, text);
+  await injectCodexThreadDeveloperHandoff(
+    params,
+    renderCodexRefreshableInstructions(params.refreshableInstructions),
+  );
+}
+
+function renderCodexRefreshableInstructions(refreshableInstructions: string | undefined): string {
+  return (
+    "The following is the complete current OpenClaw refreshable thread instructions. It replaces the earlier refreshable instructions in this conversation.\n\n" +
+    (refreshableInstructions ??
+      "The current OpenClaw refreshable thread instructions are empty; earlier refreshable instructions are withdrawn.")
+  );
+}
+
+/**
+ * While a thread's native section differs from the current one (incognito edits, or
+ * protected work deferring a cold resume), native compaction can sample its continuation
+ * from the native section before any handoff. A relay sends this with every request until
+ * the native copy matches again. The section never holds the personal overlay.
+ */
+export function renderCodexRelayRefreshableFallback(
+  policy: CodexEphemeralThreadPolicy | undefined,
+): string | undefined {
+  return policy && policy.nativeRefreshableInstructions !== policy.refreshableInstructions
+    ? renderCodexRefreshableInstructions(policy.refreshableInstructions)
+    : undefined;
 }
 
 /**

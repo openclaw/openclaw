@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type {
-  RestartSentinel,
-  RestartSentinelPayload,
-} from "../../infra/restart-sentinel-store.js";
+import type { RestartSentinelPayload } from "../../infra/restart-sentinel-codec.js";
+import type { RestartSentinel } from "../../infra/restart-sentinel-store.js";
 import { createGatewayUpdateLifecycle } from "../../infra/update-check-lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";

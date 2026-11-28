@@ -1,5 +1,5 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
-import { createMemo, createStore, onSettled } from "solid-js";
+import { createMemo, createSignal, createStore, onSettled } from "solid-js";
 import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-document.ts";
 import { BOARD_GRID_COLUMNS } from "../../lib/board/grid-constants.ts";
 import {
@@ -40,8 +40,8 @@ type BoardPointerGesture = {
   items: BoardGridItem[];
 };
 
-export function orderedWidgets(snapshot: BoardSnapshot, tabId: string): BoardWidget[] {
-  return snapshot.widgets
+export function orderedWidgets(widgets: BoardWidget[], tabId: string): BoardWidget[] {
+  return widgets
     .filter((widget) => widget.tabId === tabId)
     .toSorted(
       (left, right) => left.position - right.position || left.name.localeCompare(right.name),
@@ -99,9 +99,28 @@ export function createBoardViewState(
     contentHeights: initialHeights,
   };
   type Presentation = Omit<typeof initial, "mutationFailure"> & {
+    drop?: { items: BoardGridItem[]; resized?: string };
     mutationFailure: { result: Promise<void> } | undefined;
   };
   const [presentation, update] = createStore<Presentation>(sync, initial);
+  // Command geometry belongs to this view, never to the provider. A replacement
+  // snapshot or view restores the canonical layout even before the write settles.
+  const [commandLayout, setCommandLayout] = createSignal<
+    ReadonlyMap<string, BoardWidget> | undefined
+  >(() => {
+    void props.snapshot;
+    void props.active;
+    void props.activeTabId;
+    void props.pageWidgetName;
+    void props.session.sessionKey;
+    void props.session.agentId;
+    return undefined;
+  });
+  const layoutWidgets = createMemo(() => {
+    const widgets = props.snapshot?.widgets ?? [];
+    const edits = commandLayout();
+    return edits ? widgets.map((widget) => edits.get(widget.name) ?? widget) : widgets;
+  });
   const contentHeights = { get: (name: string) => presentation.contentHeights[name]?.height };
   const fitAutoContent = () => props.fitAutoContent || boardChromeRowPx() > 0;
   onSettled(() => stopGesture);
@@ -149,8 +168,9 @@ export function createBoardViewState(
       local.focusName = "";
     }
     if (
-      gesture &&
-      (snapshotChanged ||
+      (gesture || local.drop) &&
+      (ownerChanged ||
+        snapshotChanged ||
         before?.activeTabId !== props.activeTabId ||
         before?.pageWidgetName !== props.pageWidgetName ||
         !props.active)
@@ -183,7 +203,11 @@ export function createBoardViewState(
     });
   }
 
-  async function applyOps(ops: BoardOp[], announcement: string): Promise<void> {
+  async function applyOps(
+    ops: BoardOp[],
+    announcement: string,
+    preview?: ReadonlyMap<string, BoardWidget>,
+  ): Promise<void> {
     const callbacks = props.callbacks;
     if (!callbacks) {
       return;
@@ -194,6 +218,9 @@ export function createBoardViewState(
     const sessionKey = props.snapshot?.sessionKey;
     const requestId = ++mutationRequestId;
     mutationPending = true;
+    if (preview) {
+      setCommandLayout(preview);
+    }
     // Child cells have independent bridge roots. Keep busy publication outside
     // an action so a held mutation cannot hold their disabled-control updates.
     update((local) => {
@@ -209,8 +236,12 @@ export function createBoardViewState(
       } finally {
         if (requestId === mutationRequestId) {
           mutationPending = false;
+          if (preview) {
+            setCommandLayout(undefined);
+          }
           update((local) => {
             local.mutationPending = false;
+            local.drop = undefined;
           });
         }
       }
@@ -235,7 +266,12 @@ export function createBoardViewState(
     return Math.max(-1, ...positions) + 1;
   }
 
-  function moveWidget(widget: BoardWidget, position: number, tabId?: string): Promise<void> {
+  function moveWidget(
+    widget: BoardWidget,
+    position: number,
+    tabId?: string,
+    preview?: ReadonlyMap<string, BoardWidget>,
+  ): Promise<void> {
     return applyOps(
       [
         {
@@ -246,6 +282,22 @@ export function createBoardViewState(
         },
       ],
       t("board.announcement.moved", { title: widget.title || widget.name }),
+      preview,
+    );
+  }
+
+  function resizeWidget(
+    widget: BoardWidget,
+    sizeW: number,
+    sizeH: number,
+    heightMode: "fixed" | "auto",
+    fromMenu: boolean,
+  ): Promise<void> {
+    const size = { sizeW, sizeH, heightMode };
+    return applyOps(
+      [{ kind: "widget_resize", name: widget.name, ...size }],
+      t("board.announcement.resized", { title: widget.title || widget.name }),
+      fromMenu ? new Map([[widget.name, { ...widget, ...size }]]) : undefined,
     );
   }
 
@@ -269,11 +321,7 @@ export function createBoardViewState(
     movePointerDown: (widget, event) => beginGesture("move", widget, event),
     resizePointerDown: (widget, event) => beginGesture("resize", widget, event),
     moveToTab: (widget, tabId) => moveWidget(widget, nextPosition(tabId), tabId),
-    resizeTo: async (widget, w, h) =>
-      applyOps(
-        [{ kind: "widget_resize", name: widget.name, sizeW: w, sizeH: h, heightMode: "fixed" }],
-        t("board.announcement.resized", { title: widget.title || widget.name }),
-      ),
+    resizeTo: (widget, w, h, source) => resizeWidget(widget, w, h, "fixed", source === "preset"),
     setHeightMode: async (widget, mode) => {
       // Pin the content-derived height rather than stale stored sizeH, within
       // the fixed grid bound. A taller touch/document auto card shrinks to that
@@ -286,18 +334,7 @@ export function createBoardViewState(
               widget.name === props.pageWidgetName ? 0 : boardChromeRowPx(),
             )
           : widget.sizeH;
-      await applyOps(
-        [
-          {
-            kind: "widget_resize",
-            name: widget.name,
-            sizeW: widget.sizeW,
-            sizeH,
-            heightMode: mode,
-          },
-        ],
-        t("board.announcement.resized", { title: widget.title || widget.name }),
-      );
+      await resizeWidget(widget, widget.sizeW, sizeH, mode, true);
     },
     reportContentHeight: (name, height) => {
       const widget = props.snapshot?.widgets.find((candidate) => candidate.name === name);
@@ -322,19 +359,25 @@ export function createBoardViewState(
       if (!snapshot) {
         return;
       }
-      const items = boardWidgetGridItems(orderedWidgets(snapshot, widget.tabId), contentHeights);
-      const moved = nudge(items, widget.name, direction).find((item) => item.name === widget.name);
-      if (!moved || moved.order === widget.position) {
+      const widgets = orderedWidgets(snapshot.widgets, widget.tabId);
+      const items = nudge(boardWidgetGridItems(widgets, contentHeights), widget.name, direction);
+      const moved = items.find((item) => item.name === widget.name);
+      const neighbor = moved && widgets[moved.order];
+      if (!neighbor || neighbor.name === widget.name) {
         return;
       }
-      await moveWidget(widget, moved.order);
+      await moveWidget(
+        widget,
+        neighbor.position,
+        undefined,
+        new Map([
+          [widget.name, { ...widget, position: neighbor.position }],
+          [neighbor.name, { ...neighbor, position: widget.position }],
+        ]),
+      );
     },
     focus: (widget, direction) => {
-      const snapshot = props.snapshot;
-      if (!snapshot) {
-        return;
-      }
-      const widgets = orderedWidgets(snapshot, widget.tabId);
+      const widgets = orderedWidgets(layoutWidgets(), widget.tabId);
       const index = widgets.findIndex((entry) => entry.name === widget.name);
       if (index < 0) {
         return;
@@ -406,7 +449,7 @@ export function createBoardViewState(
       // Synthetic pointers and detached test targets cannot be captured.
     }
     const items = boardWidgetGridItems(
-      orderedWidgets(snapshot, tab.tabId),
+      orderedWidgets(snapshot.widgets, tab.tabId),
       contentHeights,
       fitAutoContent(),
       props.pageWidgetName,
@@ -522,7 +565,7 @@ export function createBoardViewState(
       const result = pointerPreview(event, active, local.previewItems);
       clearGesture(local);
       const widget = props.snapshot?.widgets.find((entry) => entry.name === active.name);
-      if (!widget || !result) {
+      if (!widget || !result || !props.callbacks) {
         return;
       }
       if (active.mode === "move") {
@@ -532,11 +575,17 @@ export function createBoardViewState(
         if (!result.hoverTabId && position === widget.position) {
           return;
         }
+        // The grid already showed this placement during the drag. Keep just its
+        // geometry until settlement; do not move a live document between tabs speculatively.
+        if (!result.hoverTabId) {
+          local.drop = { items: result.items };
+        }
         void moveWidget(widget, position, result.hoverTabId || undefined).catch(() => undefined);
         return;
       }
       const resized = result.items.find((item) => item.name === active.name);
       if (resized && (resized.w !== active.originW || resized.h !== active.originH)) {
+        local.drop = { items: result.items, resized: widget.name };
         void cellCallbacks.resizeTo(widget, resized.w, resized.h).catch(() => undefined);
       }
     });
@@ -556,6 +605,7 @@ export function createBoardViewState(
 
   function clearGesture(local: Presentation): void {
     stopGesture();
+    local.drop = undefined;
     local.gesture = { name: "", mode: "" };
     local.hoverTabId = "";
   }
@@ -567,6 +617,8 @@ export function createBoardViewState(
   };
   return {
     presentation,
+    layoutWidgets,
+    commandLayout,
     mutationFailure: createMemo(
       () => presentation.mutationFailure?.result.then(() => null) ?? null,
     ),

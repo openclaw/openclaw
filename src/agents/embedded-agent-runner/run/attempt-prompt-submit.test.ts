@@ -858,7 +858,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     );
     expect(second?.content[0]).toMatchObject({
       type: "text",
-      text: expect.stringMatching(/more characters truncated/),
+      text: expect.stringMatching(/chars omitted/),
     });
     expect(second?.content[0]?.type === "text" ? second.content[0].text.length : 0).toBe(
       input.toolResultMaxChars,

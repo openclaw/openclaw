@@ -23,6 +23,16 @@ function captureStore() {
   return { context, store };
 }
 
+export async function readWorkshopActivity(
+  agentId: string,
+  skillName: string,
+): Promise<number | null> {
+  return await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
+    type: "skills.workshop.activity.read",
+    input: { agentId, skillName },
+  });
+}
+
 export async function recordWorkshopChange(change: WorkshopChange): Promise<void> {
   const { context, store } = captureStore();
   store.agents.delete(change.agentId);

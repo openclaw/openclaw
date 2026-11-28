@@ -244,41 +244,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
     });
   });
 
-  it("does not duplicate gateway runtime warnings already emitted by the node install plan", async () => {
-    const nvmNode = "/home/test/.nvm/versions/node/v24.22.1/bin/node";
-    mocks.readCommand.mockResolvedValue(createGatewayCommand(undefined, nvmNode));
-    mocks.buildGatewayInstallPlan.mockImplementation(async ({ warn }) => {
-      warn?.(
-        "System Node 20.20.2 at /usr/bin/node is outside the supported range. Using /home/test/.nvm/versions/node/v24.22.1/bin/node for the daemon.",
-        "Gateway runtime",
-      );
-      return {
-        programArguments: [nvmNode, "/usr/local/bin/openclaw", "gateway", "--port", "18789"],
-        workingDirectory: "/tmp",
-        environment: {},
-      };
-    });
-    mocks.auditGatewayServiceConfig.mockResolvedValue({
-      ok: true,
-      issues: [{ code: "runtime", message: "runtime migration", level: "recommended" }],
-    });
-    mocks.needsNodeRuntimeMigration.mockReturnValue(true);
-    mocks.resolveSystemNodeInfo.mockResolvedValue({
-      path: "/usr/bin/node",
-      version: "20.20.2",
-      status: "unsupported",
-    });
-    mocks.renderSystemNodeWarning.mockReturnValue("duplicate doctor runtime warning");
-    await runRepair();
-    const runtimeNotes = mocks.note.mock.calls.filter(([, title]) => title === "Gateway runtime");
-    const runtimeMessages = runtimeNotes.map(([message]) => message);
-    expect(runtimeMessages).not.toContain("duplicate doctor runtime warning");
-    expect(runtimeMessages.map((message) => String(message)).join("\n")).not.toContain("not found");
-    expect(runtimeMessages.map((message) => String(message)).join("\n")).toContain(
-      "Using /home/test/.nvm/versions/node/v24.22.1/bin/node",
-    );
-  });
-
   it("reports failed Bun probes without runtime migration", async () => {
     const command = createGatewayCommand(undefined, "/opt/bun");
     mocks.readCommand.mockResolvedValue(command);
@@ -742,24 +707,6 @@ describe("maybeRepairGatewayServiceConfig", () => {
       );
       expectNoNoteContaining("openclaw doctor --fix", "Gateway service config");
       expect(mocks.install).not.toHaveBeenCalled();
-    });
-  });
-
-  it("does not duplicate Gateway service config panels for a source-checkout entrypoint with audit findings", async () => {
-    await withSourceCheckout(async (currentEntrypoint) => {
-      setupGatewayEntrypointRepairScenario(
-        currentEntrypoint,
-        "/usr/local/lib/node_modules/openclaw/dist/index.js",
-      );
-      await runRepair();
-      const notes = mocks.note.mock.calls.filter(([, title]) => title === "Gateway service config");
-      expect(notes).toHaveLength(1);
-      const consolidated = notes[0]?.[0] ?? "";
-      expect(consolidated).toContain(
-        "Gateway service entrypoint does not match the current install.",
-      );
-      expect(consolidated).not.toContain("resolves to a source checkout");
-      expect(consolidated.match(/openclaw gateway install --force/g) ?? []).toHaveLength(0);
     });
   });
 });

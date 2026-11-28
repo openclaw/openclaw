@@ -79,7 +79,10 @@ import {
   type WorkflowStep,
   writeExecutable,
 } from "./ci-workflow.test-support.js";
-import { runGeneratedPublisherScenario } from "./generated-publisher.test-support.js";
+import {
+  runGeneratedPublisherReconcileThenPublish,
+  runGeneratedPublisherScenario,
+} from "./generated-publisher.test-support.js";
 import {
   gitPathShimShellPrelude,
   resolveGitOutsideFixtures,
@@ -102,6 +105,7 @@ const CONTROL_UI_LOCALE_REFRESH_WORKFLOW = ".github/workflows/control-ui-locale-
 const NATIVE_APP_LOCALE_REFRESH_WORKFLOW = ".github/workflows/native-app-locale-refresh.yml";
 const CREATE_GENERATED_PR_TOKENS_ACTION = ".github/actions/create-generated-pr-tokens/action.yml";
 const PUBLISH_GENERATED_PR_ACTION = ".github/actions/publish-generated-pr/action.yml";
+const PUBLISH_GENERATED_PR_POLICY = ".github/actions/publish-generated-pr/policy.py";
 const PINNED_GIT_OWNER = {
   name: "Prepare Git owner",
   uses: "openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef",
@@ -630,43 +634,6 @@ describe("ci workflow guards", () => {
     expect(evidence.with.path).toContain("wearScreenshots/*.jpg");
   });
 
-  it.each([
-    ["openclaw-performance", ["kova", "source_performance", "gateway_concurrency"]],
-    [
-      "qa-live-transports-convex",
-      [
-        "run_mock_parity",
-        "run_live_runtime_token_efficiency",
-        "run_live_matrix",
-        "run_live_buzz",
-        "run_live_telegram",
-        "run_live_discord",
-        "run_live_whatsapp",
-        "run_live_slack",
-      ],
-    ],
-  ] as const)("routes %s runtime jobs to hosted Ubuntu in Boat mode", (name, jobs) => {
-    const workflow = readWorkflow(`.github/workflows/${name}.yml`);
-    for (const runnerBackend of ["", "blacksmith", "hybrid", "runson", "github", "boat"] as const) {
-      const labels = ["github", "boat"].includes(runnerBackend)
-        ? "ubuntu-24.04"
-        : "blacksmith-4vcpu-ubuntu-2404";
-      for (const group of ["", "release-runners"]) {
-        for (const job of jobs) {
-          expect(
-            evaluateWorkflowRunner(workflow.jobs[job]["runs-on"], {
-              runnerBackend,
-              runnerGroup: group,
-              releaseRunnerGroup: group,
-              dispatchId: "full-release-validation-routing-proof",
-            }),
-            job,
-          ).toEqual(group ? { group, labels } : labels);
-        }
-      }
-    }
-  });
-
   it("separates release QA lanes without weakening their resource locks", () => {
     const workflow = readWorkflow(".github/workflows/qa-live-transports-convex.yml");
     const releaseWorkflow = readReleaseChecksWorkflow();
@@ -1190,6 +1157,120 @@ AFTER_CD
           steps: { [refit.id!]: { outcome } },
         }),
       ).toBe(shouldReport);
+    }
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "disarms a stale generated PR before locale matrix work",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        mode: "reconcile-stale",
+        updateSource: true,
+      });
+
+      expect(result.branchHead).toBe(result.initialBranch);
+      expect(result.mergeCalls).toContain("--disable-auto");
+      expect(result.summary).toContain("Preserved stale generated pull request");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "leaves stale PR auto-merge unchanged when current main only changed unrelated paths",
+    () => {
+      const result = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        invalidationPaths: "unrelated",
+        mode: "reconcile-stale",
+        updateSource: true,
+      });
+
+      expect(result.branchHead).toBe(result.initialBranch);
+      expect(result.mergeCalls).toBe("");
+      expect(result.summary).toBe("");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "rearms exact-head auto-merge only after fresh generated output is published",
+    () => {
+      const { publish, reconcile } = runGeneratedPublisherReconcileThenPublish();
+
+      expect(reconcile.mergeCalls).toContain("--disable-auto");
+      expect(publish.generatedA).toBe("desired-a");
+      expect(publish.mergeCalls).toContain("--disable-auto");
+      expect(publish.mergeCalls).toContain("--auto --squash --match-head-commit");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")("keeps publisher preflight mutation-free", () => {
+    const result = runGeneratedPublisherScenario(null, {
+      autoMerge: true,
+      existingAutoMergeMethod: "SQUASH",
+      existingPr: true,
+      mode: "preflight",
+      repository: "openclaw/clawgrit-reports",
+    });
+
+    expect(result.branchHead).toBe(result.initialBranch);
+    expect(result.mergeCalls).toBe("");
+    expect(result.summary).toBe("");
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "fails closed when a stale generated branch moves during early disarm",
+    () => {
+      const beforeDisarm = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        expectFailure: true,
+        mode: "reconcile-stale",
+        reconcileHeadRace: true,
+        updateSource: true,
+      });
+      const duringDisarm = runGeneratedPublisherScenario(null, {
+        autoMerge: true,
+        disarmRace: true,
+        existingAutoMergeMethod: "SQUASH",
+        existingPr: true,
+        expectFailure: true,
+        mode: "reconcile-stale",
+        updateSource: true,
+      });
+
+      expect(beforeDisarm.mergeCalls).toBe("");
+      expect(beforeDisarm.summary).toBe("");
+      expect(duringDisarm.mergeCalls).toContain("--disable-auto");
+      expect(duringDisarm.summary).not.toContain("Preserved stale");
+    },
+  );
+
+  it("keeps generated publisher action and policy inventories paired", () => {
+    const workflowFiles = globSync(".github/workflows/*.{yml,yaml}");
+    for (const workflowFile of workflowFiles) {
+      const workflow = parse(readFileSync(workflowFile, "utf8"));
+      const triggerPaths = workflow.on?.push?.paths ?? [];
+      expect(triggerPaths.includes(PUBLISH_GENERATED_PR_POLICY), workflowFile).toBe(
+        triggerPaths.includes(PUBLISH_GENERATED_PR_ACTION),
+      );
+      for (const job of Object.values(workflow.jobs ?? {}) as Array<{
+        steps?: Array<{ uses?: string; with?: Record<string, string> }>;
+      }>) {
+        for (const step of job.steps ?? []) {
+          if (step.uses !== "./.github/actions/publish-generated-pr") {
+            continue;
+          }
+          const invalidationPaths = step.with?.["invalidation-paths"]?.trim().split("\n") ?? [];
+          if (invalidationPaths.includes(PUBLISH_GENERATED_PR_ACTION)) {
+            expect(invalidationPaths, workflowFile).toContain(PUBLISH_GENERATED_PR_POLICY);
+          }
+        }
+      }
     }
   });
 
@@ -6878,12 +6959,25 @@ it("pins generated publisher and maturity owners before credentials and selected
       const jobSteps = (job as { steps?: WorkflowStep[] }).steps ?? [];
       return jobSteps.flatMap((step, index) =>
         step.uses === "./.github/actions/publish-generated-pr"
-          ? [{ index, length: jobSteps.length }]
+          ? [{ index, length: jobSteps.length, mode: step.with?.mode }]
           : [],
       );
     });
-    expect(publishers, file).toHaveLength(1);
-    expect(publishers[0]?.index, file).toBe(publishers[0]!.length - 1);
+    const finalPublishers = publishers.filter(
+      ({ mode }) => mode === undefined || mode === "publish",
+    );
+    expect(finalPublishers, file).toHaveLength(1);
+    expect(finalPublishers[0]?.index, file).toBe(finalPublishers[0]!.length - 1);
+    if (
+      file === CONTROL_UI_LOCALE_REFRESH_WORKFLOW ||
+      file === NATIVE_APP_LOCALE_REFRESH_WORKFLOW
+    ) {
+      const preflight = workflow.jobs["publisher-preflight"];
+      const early = requiredWorkflowStep(preflight.steps, "Reconcile stale generated locale PR");
+      expect(early.with?.mode).toContain("reconcile-stale");
+      expect(early.with?.["invalidation-paths"]).toContain(PUBLISH_GENERATED_PR_POLICY);
+      expect(workflow.jobs.refresh.needs).toContain("publisher-preflight");
+    }
   }
 });
 

@@ -21,8 +21,12 @@ unconfirmed, check the project’s issues before trying again.
 
 To leave a top-level comment in that project's repository, call `github_publish`
 with `action: "create_comment"`, `issueNumber`, and a Markdown `body`. The Gateway
-requires approval and returns the comment URL. Check the thread before retrying
-an unconfirmed result.
+posts comments on the session's working PR without a separate approval. The target
+must match its selected PR association or current publication, including the
+GitHub host and repository. Comments on other issues or PRs in that repository
+still require approval of the exact target, account, and text. The tool cannot
+select another repository. Success returns the comment URL; check the thread
+before retrying an unconfirmed result.
 
 ## Session GitHub App reader
 
@@ -142,6 +146,8 @@ OpenClaw sandboxes exclude the Gateway's managed GitHub credentials by default; 
 The default sandbox tool policy also allows `github_publish` in managed Gateway conversations, including their first turn. The tool uses the same Gateway publisher and does not require `allowInSandbox`, a managed GitHub profile mount, or GitHub credentials inside the sandbox. Explicit tool denies and restrictive custom allowlists still apply. Offering the tool permits a publication request, not publication from an unbound workspace or an unavailable GitHub account: the Gateway checks the current workspace, caller, and selected credential when the tool is invoked. Missing or invalid credentials return the existing retry or reconnect guidance without falling back to another account.
 
 Publication may wait until the requesting turn finishes and its workspace is accepted. Its result is appended to the session transcript; this does not start another agent turn. When the authorized task also includes review, CI repair, or landing, the agent must arrange a separate continuation before ending the requesting turn. A draft PR or publication receipt does not complete a landing request.
+
+A publication that creates a PR uses the request's `title` and `body`. The first commit the branch adds to its base supplies each omitted field. For example, **Publish** in the Control UI supplies neither field. The PR body omits the commit's trailers. A branch with no commit of its own, such as a repository checkpoint publication, is titled `Publish <branch>`. The publication commit keeps the requested title, or `Publish <branch>`, as its subject.
 
 Use `github_publish` with `action: "inspect_pr"` and `pullRequestUrl` to inspect
 an existing PR authored by a currently verified GitHub account linked to the

@@ -189,6 +189,9 @@ const enNewSessionSetup = {
     checkoutRepositoryFrom: "Remote checkout from {branch}",
     checkoutRequiresWorktree: "Use an isolated worktree for this project and agent",
     checkoutCheckUnavailable: "Couldn’t check the checkout. Select the project again to retry.",
+    checkoutProjectUnavailable: "This session can’t use this project.",
+    checkoutProjectUnavailableAction:
+      "This session can’t use this project. Choose another project or workspace.",
     checkoutRemoteLocked: "Paired and cloud devices use a worktree",
     local: "This computer",
     folderPlaceholder: "Agent workspace",
@@ -230,6 +233,7 @@ const enNewSessionSetup = {
     autoDeviceInfo: "About automatic device selection",
     autoDeviceScope: "Connected devices only",
     restoringPreferences: "Restoring your last session setup…",
+    savedProjectLookupFailed: "Your saved project didn’t load. Choose a workspace.",
     checkingPlace: "Checking the selected device…",
     agentsUnavailable:
       "No agents are available on this Gateway. Ask an admin to add one before starting a session.",

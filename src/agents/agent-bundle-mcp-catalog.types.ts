@@ -73,4 +73,6 @@ export type McpToolCatalogDiagnostic = {
   safeServerName: string;
   launchSummary: string;
   message: string;
+  /** Name-free recovery guidance for a bounded model notice; message remains the operator record. */
+  promptMessage?: string;
 };

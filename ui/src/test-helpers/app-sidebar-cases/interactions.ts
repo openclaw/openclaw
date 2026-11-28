@@ -197,7 +197,7 @@ describe("AppSidebar catalog session rows", () => {
     await settleLitElement(sidebar);
     const navigate = vi.fn();
     sidebar.onNavigate = navigate;
-    return { sidebar, request, navigate, dom: sidebarDriver(sidebar) };
+    return { navigate, dom: sidebarDriver(sidebar) };
   }
 
   it("opens the catalog view menu from its header and hides that section with undo", async () => {

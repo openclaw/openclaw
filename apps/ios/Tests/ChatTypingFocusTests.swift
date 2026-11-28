@@ -82,7 +82,7 @@ private struct ChatTypingRenderBoundary: UIViewRepresentable {
 private struct ChatTypingRenderedOwner: View {
     var body: some View {
         NavigationStack {
-            ChatProTab(headerSidebarAction: nil, openSettings: {}, startFirstGatewaySetup: nil)
+            ChatProTab(headerSidebarAction: nil, startFirstGatewaySetup: nil)
         }
     }
 }
@@ -124,7 +124,7 @@ private struct ChatTypingRenderedComposer: View {
 /// XCTest keeps key-window checks outside Swift Testing's concurrent suites.
 @MainActor
 final class ChatTypingFocusTests: XCTestCase {
-    func testDraftKeepsSeparateStopAndSendDuringResponse() throws {
+    func testComposerShowsOnePrimaryButtonDuringResponse() throws {
         let appModel = NodeAppModel()
         appModel.enterScreenshotFixtureMode()
         appModel.chatPresentation.sync(appModel: appModel)
@@ -166,12 +166,18 @@ final class ChatTypingFocusTests: XCTestCase {
             return count
         }
 
-        XCTAssertEqual(try primaryControlCount(), 2, "A draft must retain both Stop and Send")
+        // Stop and Send never show together. The fixture has no outbox, so this draft cannot be
+        // queued behind the reply and the one button stays Stop.
+        XCTAssertEqual(try primaryControlCount(), 1)
+        XCTAssertFalse(model.canSend)
+        XCTAssertEqual(composer.phonePrimaryRole, .stop)
         model.input = ""
         XCTAssertEqual(try primaryControlCount(), 1)
+        XCTAssertEqual(composer.phonePrimaryRole, .stop)
         model.input = "Keep this follow-up draft"
         model.pendingRuns.removeAll()
         XCTAssertEqual(try primaryControlCount(), 1)
+        XCTAssertEqual(composer.phonePrimaryRole, .send)
         XCTAssertEqual(model.input, "Keep this follow-up draft")
     }
 

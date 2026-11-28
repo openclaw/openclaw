@@ -87,7 +87,7 @@ struct ChatWorkChunksTests {
           {"type":"text","text":"Final answer."}
         ]}
         """#.utf8))
-        let rows = ChatTranscriptRow.collapseCompletedWork([.message(source)], runWorking: false)
+        let rows = ChatTranscriptRow.collapseCompletedWork([.message(source)].answeredByOpenAI(), runWorking: false)
         let visible = rows.compactMap { row -> OpenClawChatMessage? in
             if case let .message(message) = row { return message }
             return nil
@@ -108,7 +108,7 @@ struct ChatWorkChunksTests {
         #expect(visible.allSatisfy { $0.id == source.id })
         #expect(Set(rows.map(\.id)).count == rows.count)
         #expect(rows.map(\.id) == ChatTranscriptRow.collapseCompletedWork(
-            [.message(source)], runWorking: false).map(\.id))
+            [.message(source)].answeredByOpenAI(), runWorking: false).map(\.id))
         #expect(visible.filter(\.presentationOwnsFooter).map(\.presentationID) == [visible[2].presentationID])
         #expect(work.allSatisfy { $0.durationMilliseconds == nil })
         #expect(source.content.count == 8)

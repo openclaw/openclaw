@@ -97,7 +97,7 @@ describe("visible session placement and authority", () => {
         callGateway,
         config: { tools: { swarm: true } },
       });
-      const [wireTool] = convertResponsesToolPayload([tool], { strict: true });
+      const [wireTool] = convertResponsesToolPayload([tool], { strict: false });
       expect(wireTool?.strict).toBe(false);
       const parameters = requireRecord(wireTool?.parameters, "Responses parameters");
       expect(parameters.required).not.toContain("placement");

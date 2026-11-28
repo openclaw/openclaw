@@ -205,7 +205,6 @@ async function sendSubagentAnnounceDirectlyBound(
         cfg,
         requesterSessionKey: canonicalRequesterSessionKey,
         requesterSessionId,
-        requesterLifecycleRevision,
         requesterAgentId: params.requesterAgentId,
         directIdempotencyKey: params.directIdempotencyKey,
         deliveryTarget,
@@ -441,8 +440,7 @@ async function sendSubagentAnnounceDirectlyBound(
               params.settleWakeSourceSessionKeys?.length &&
               params.isSourceSessionEffectsAllowed)) &&
           params.sourceSessionKey &&
-          requesterActivity.sessionId &&
-          params.isSourceSessionEffectsAllowed?.() !== false
+          requesterActivity.sessionId
             ? {
                 sourceSessionKey: params.sourceSessionKey,
                 ...(trustedCompletionEvent?.childSessionId
@@ -510,8 +508,7 @@ async function sendSubagentAnnounceDirectlyBound(
       }
     }
 
-    const classified = directFailure ?? classifyResponse(directAnnounceResponse);
-    return classified instanceof Promise ? await classified : classified;
+    return await (directFailure ?? classifyResponse(directAnnounceResponse));
   } catch (err) {
     // A failed dispatch receipt has not admitted any delivery; its owner retries preparation.
     if (!dispatchPrepared) {

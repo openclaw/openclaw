@@ -1,6 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
-import { restartSentinelPayloadSchema } from "./restart-sentinel-store.js";
+import { restartSentinelPayloadSchema } from "./restart-sentinel-codec.js";
 import { processIdentitySchema } from "./update-managed-service-handoff-schema.js";
 import type { ManagedHandoffSentinelRequest } from "./update-managed-service-handoff-sentinel.js";
 

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { isDeepStrictEqual } from "node:util";
 import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { getPluginCache } from "./plugin-cache.js";
@@ -8,10 +7,10 @@ import type { PluginCache } from "./plugin-cache.types.js";
 import {
   nativeAdmissionStateFor,
   queuePluginNativeAdmissionPublication,
-  releaseReplacedNamespaces,
   retainNativePath,
   snapshotOwners,
   startNativeAdmissionPublication,
+  updatePluginNativeAdmissionReceipt,
 } from "./plugin-native-admission-state.js";
 import {
   assertPluginNativeNamespaceHost,
@@ -383,21 +382,15 @@ export function createPluginNativeAdmission(
     for (const id of used) {
       state.namespaces.set(id, namespaceById(id)!);
     }
-    const next = structuredClone({
+    const next = updatePluginNativeAdmissionReceipt(state, key, {
       ...finalReceipt,
       nativeArtifacts: Object.fromEntries(files),
       nativeNamespaces: Object.fromEntries([...used].map((id) => [id, namespaceById(id)!])),
     });
-    const replaced = state.receipts.get(key);
-    const unchanged = isDeepStrictEqual(replaced, next);
-    if (!unchanged) {
-      state.receipts.set(key, next);
-      releaseReplacedNamespaces(state, replaced);
-    }
     if (!owner || !publishAdmission) {
       return;
     }
-    if (unchanged) {
+    if (!next) {
       startNativeAdmissionPublication(state, key);
       return;
     }

@@ -178,12 +178,14 @@ async function prepareGatewayServerBootstrapSelected(input: {
       "state.runtime-imports",
       () => import("../state/openclaw-database-preflight.js"),
     );
-    const inspectDatabaseSchemas = (signal?: AbortSignal) =>
-      preflightOpenClawDatabaseSchemas(
+    const inspectDatabaseSchemas = async (signal?: AbortSignal) => {
+      await using stateSchemaReader = opts.stateSchemaReader;
+      return await preflightOpenClawDatabaseSchemas(
         {
           signal,
           env: process.env,
           reuseStartupSchemaPreparation: true,
+          takeStateSchemaReader: stateSchemaReader?.take,
           agentAdmissionConfig: captureConfigOverrideApplier()(
             startupConfigSnapshotRead.snapshot.config,
           ),
@@ -192,6 +194,7 @@ async function prepareGatewayServerBootstrapSelected(input: {
         },
         "runtime",
       );
+    };
     const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
       opts.startupOperation
         ? opts.startupOperation(inspectDatabaseSchemas)

@@ -5,6 +5,7 @@ import {
   validateChatAbortParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { captureExecRequestCancellation } from "../../agents/bash-process-control.js";
+import { abortControlledSubagents } from "../../agents/subagents/cancel-descendants.js";
 import { discardSessionPendingInput } from "../../config/sessions/session-pending-input-withdrawal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -49,12 +50,9 @@ import {
   resolveChatAbortTargetRejection,
   resolveChatAbortSessionRestriction,
 } from "./chat-abort-authorization.js";
+import { descendantAbortError } from "./chat-abort-descendants.js";
 import * as exactRun from "./chat-abort-exact-run.js";
-import {
-  abortChatRunsForSessionKeyWithPartials,
-  abortControlledSubagents,
-  descendantAbortError,
-} from "./chat-abort-runtime.js";
+import { abortChatRunsForSessionKeyWithPartials } from "./chat-abort-runtime.js";
 import type { ChatAbortLifecycle } from "./chat-abort-runtime.types.js";
 import {
   abortedPartialPersistenceError,

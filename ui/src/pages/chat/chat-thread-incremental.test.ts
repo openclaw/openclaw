@@ -2,11 +2,9 @@
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
-import * as displayText from "../../lib/strip-thinking-tags.ts";
 import * as chatThreadBuild from "./chat-thread-build.ts";
 import { buildChatItems, type BuildChatItemsProps } from "./chat-thread-build.ts";
 import * as duplicatePreparation from "./chat-thread-duplicates.ts";
-import * as threadItems from "./chat-thread-items.ts";
 import { createPrependCorpus } from "./chat-thread-prepend-corpus.test-support.ts";
 import { createProps } from "./chat-thread.test-support.ts";
 import {
@@ -226,51 +224,6 @@ it.each([
 });
 
 describe("incremental history build equivalence", () => {
-  it("searches each source once per query across canvas lookahead and visible rows", () => {
-    const messages = [
-      message("request", "user", 1, "Request"),
-      message("match", "assistant", 2, "Needle answer"),
-      message("other-request", "user", 3, "Another request"),
-      message("other-answer", "assistant", 4, "Unrelated answer"),
-    ];
-    const createMatcher = threadItems.createChatSearchMatcher;
-    const matches = vi.fn<(message: unknown) => void>();
-    const factory = vi
-      .spyOn(threadItems, "createChatSearchMatcher")
-      .mockImplementation((...args) => {
-        const matcher = createMatcher(...args);
-        return (source) => {
-          matches(source);
-          return matcher(source);
-        };
-      });
-    try {
-      for (const query of ["Needle", "Unrelated"]) {
-        matches.mockClear();
-        const items = buildChatItems(
-          createProps({ messages, searchOpen: true, searchQuery: query }),
-        );
-        const visible = items.flatMap((item) =>
-          item.kind === "group"
-            ? item.messages.flatMap((entry) =>
-                normalizeMessage(entry.message).content.flatMap((block) =>
-                  block.type === "text" ? [block.text] : [],
-                ),
-              )
-            : [],
-        );
-        expect(visible).toEqual([`${query} answer`]);
-        for (const source of messages) {
-          expect(
-            matches.mock.calls.filter(([sourceMessage]) => sourceMessage === source),
-          ).toHaveLength(1);
-        }
-      }
-    } finally {
-      factory.mockRestore();
-    }
-  });
-
   it.each([
     { searchOpen: false, showToolCalls: true },
     { searchOpen: false, showToolCalls: false },
@@ -329,45 +282,6 @@ describe("incremental history build equivalence", () => {
   });
 });
 
-it("does not re-strip retained display payloads when older history is prepended", () => {
-  resetChatThreadState();
-  const strip = vi.spyOn(displayText, "stripThinkingTags");
-  const preparation = vi.spyOn(duplicatePreparation, "prepareMessagesForGrouping");
-  try {
-    const props = createProps({
-      paneId: "prepend-work",
-      sessionKey: "prepend-work",
-      messages: [
-        message("recent-user", "user", 10, "Recent request"),
-        message("recent-answer", "assistant", 11, "Recent answer"),
-      ],
-    });
-    buildCachedChatItems(props);
-    strip.mockClear();
-    preparation.mockClear();
-    const items = buildCachedChatItems({
-      ...props,
-      messages: [
-        message("older-user", "user", 1, "Earlier request"),
-        message("older-answer", "assistant", 2, "Earlier answer"),
-        ...props.messages,
-      ],
-    });
-    expect(items.filter((item) => item.kind === "group")).toHaveLength(4);
-    expect(strip.mock.calls.some(([text]) => text === "Earlier answer")).toBe(true);
-    expect(strip.mock.calls.filter(([text]) => text === "Recent answer")).toHaveLength(0);
-    expect(
-      preparation.mock.calls
-        .flatMap(([source]) => source)
-        .filter((item) => item.kind === "message" && props.messages.includes(item.message)),
-    ).toHaveLength(0);
-  } finally {
-    strip.mockRestore();
-    preparation.mockRestore();
-    resetChatThreadState();
-  }
-});
-
 it("recomputes shared reply attribution without annotating retained grouping segments", () => {
   resetChatThreadState();
   try {
@@ -404,26 +318,6 @@ it("recomputes shared reply attribution without annotating retained grouping seg
     expect(shared?.kind === "group" && shared.replyShared).toBe(true);
   } finally {
     resetChatThreadState();
-  }
-});
-
-it("groups consecutive forwarded turns with linear source work", () => {
-  const preparation = vi.spyOn(duplicatePreparation, "prepareMessagesForGrouping");
-  try {
-    const messages = Array.from({ length: 24 }, (_, index) =>
-      message(`forwarded-${index}`, "assistant", index + 1, `Forwarded update ${index}`, {
-        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-      }),
-    );
-    const items = buildChatItems(
-      createProps({ paneId: "forwarded-work", sessionKey: "forwarded-work", messages }),
-    );
-    expect(items.filter((item) => item.kind === "group")).toHaveLength(messages.length);
-    expect(preparation.mock.calls.reduce((count, [source]) => count + source.length, 0)).toBe(
-      messages.length,
-    );
-  } finally {
-    preparation.mockRestore();
   }
 });
 

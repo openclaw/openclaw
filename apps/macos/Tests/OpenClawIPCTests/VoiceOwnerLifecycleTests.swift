@@ -23,16 +23,16 @@ struct VoiceOwnerLifecycleTests {
         }
     }
 
-    @Test func `preference observation admits fresh denied holds`() async throws {
+    @Test(.testWaitLimit) func `preference observation admits fresh denied holds`() async throws {
         try await withVoiceOwnerFixture { fixture, state, menu in
             let hotkey = state.voiceRuntime.hotkey
             menu.startVoiceObservation()
             state.voicePushToTalkEnabled = true
             // A positive permission receipt establishes the scheduled Observation
             // route. Repeated down flags do not manufacture a fresh hold.
-            try await waitForVoiceOwner("observed preference enables PTT") { [log = fixture.log] in
-                await MainActor.run { hotkey._testUpdateModifierState(modifierFlags: .init(rawValue: 0x80040)) }
-                return log.count("ptt.permission.request") == 1
+            try await TestWait.state("observed preference enables PTT") {
+                hotkey._testUpdateModifierState(modifierFlags: .init(rawValue: 0x80040))
+                return fixture.log.count("ptt.permission.request") == 1
             }
             hotkey._testUpdateModifierState(modifierFlags: [])
             state.voicePushToTalkEnabled = false
@@ -40,9 +40,8 @@ struct VoiceOwnerLifecycleTests {
             state.voicePushToTalkEnabled = true
             menu.startVoiceObservation()
             hotkey._testUpdateModifierState(modifierFlags: .init(rawValue: 0x80040))
-            try await waitForVoiceOwner("fresh denied hold") { [log = fixture.log] in
-                log.count("ptt.permission.request") == 2
-            }
+            try await fixture.log.wait(for: "ptt.permission.request", atLeast: 2)
+            #expect(fixture.log.count("ptt.permission.request") == 2)
             hotkey._testUpdateModifierState(modifierFlags: [])
             #expect(fixture.log.count("app.permission.request") == 0)
             #expect(fixture.log.count("talk.permission.request") == 0)

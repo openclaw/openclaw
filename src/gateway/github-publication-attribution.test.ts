@@ -9,6 +9,7 @@ import {
   createTestGitHubPublicationCoordinator as createGitHubPublicationCoordinator,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  overrideCommands,
   persistPublicationTestSession,
   publicationWorktree,
   registryPublicationWorktree,
@@ -162,6 +163,7 @@ describe("Gateway GitHub publication attribution", () => {
           session_key: SESSION_KEY,
           branch: BRANCH,
           title: "Prepared change",
+          body: "Review evidence.",
         },
         requesterProfileId: requester.id,
         participantDisplayName: name,
@@ -170,7 +172,7 @@ describe("Gateway GitHub publication attribution", () => {
         host: "github.com",
         assertCurrent: () => {},
         readCurrentEntry: session.read,
-        description: "Review evidence.",
+        defaultDescription: "Checkpoint fallback.",
       });
       expect(content.pullRequestBody()).toBe(
         `Review evidence.\n\nRequested by ${literal} via OpenClaw\n\n## Worked on by\n\n- @alice\n\n<!-- openclaw-publication:participant-publication -->` +
@@ -480,12 +482,14 @@ describe("Gateway GitHub publication attribution", () => {
   });
 
   it.each(
-    (["local", "repository"] as const).flatMap((surface) =>
-      ["private", "public", "revoked", "newly-public", "replaced"].map((state) => ({
-        surface,
-        state,
-      })),
-    ),
+    (["local", "repository"] as const)
+      .flatMap((surface) =>
+        ["private", "public", "revoked", "newly-public", "replaced"].map((state) => ({
+          surface,
+          state,
+        })),
+      )
+      .concat([{ surface: "local", state: "newly-public-during-history" }]),
   )("publishes $surface with $state session disclosure", async ({ surface, state }) => {
     const repository =
       surface === "repository" ? await createRepositoryPublicationFixture(checkpoint) : undefined;
@@ -495,7 +499,8 @@ describe("Gateway GitHub publication attribution", () => {
     const scope = { agentId: "main", sessionKey: SESSION_KEY };
     const read = () => loadSessionEntryReadOnly(scope)!;
     const grant = { id: "a".repeat(48), sessionId: read().sessionId, createdAt: 1 };
-    if (state !== "private" && state !== "newly-public") {
+    const newlyPublic = state === "newly-public" || state === "newly-public-during-history";
+    if (state !== "private" && !newlyPublic) {
       await upsertSessionEntryCore(scope, { publicShare: grant });
     }
     const config = { gateway: { publicOrigin: "https://team.example" } };
@@ -505,14 +510,20 @@ describe("Gateway GitHub publication attribution", () => {
       changed = true;
       replaceSessionEntrySync(scope, {
         ...read(),
-        publicShare:
-          state === "newly-public"
-            ? grant
-            : state === "replaced"
-              ? { ...grant, id: "b".repeat(48) }
-              : undefined,
+        publicShare: newlyPublic
+          ? grant
+          : state === "replaced"
+            ? { ...grant, id: "b".repeat(48) }
+            : undefined,
       });
     };
+    if (state === "newly-public-during-history") {
+      overrideCommands((args) => {
+        if (args.includes("rev-list") && args.includes("--first-parent")) {
+          change();
+        }
+      });
+    }
     const onEffect = () => {
       if (["revoked", "newly-public", "replaced"].includes(state)) {
         change();

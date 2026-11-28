@@ -8,6 +8,7 @@ import { listen } from "../../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { ElementProperties } from "../../../types/solid-elements.d.ts";
 import { useNativeAttachmentCapture } from "./chat-attachment-picker-policy.ts";
+import "./chat-camera-capture.css";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 

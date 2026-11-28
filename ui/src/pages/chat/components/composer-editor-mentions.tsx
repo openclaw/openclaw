@@ -1,15 +1,16 @@
 import "../../../styles/chat/person-reference.css";
-import { invertedEffects, isolateHistory } from "@codemirror/commands";
+import { invertedEffects } from "@codemirror/commands";
 import {
   EditorSelection,
   EditorState,
   Facet,
   MapMode,
   Prec,
-  Transaction,
   StateEffect,
   StateField,
+  type Transaction,
   type ChangeDesc,
+  type Extension,
 } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
 import { render, spread } from "@solidjs/web";
@@ -33,6 +34,7 @@ import {
 } from "../../../lib/chat/human-mentions.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { composerAtomicEditing } from "./composer-editor-atomic.ts";
 import {
   mountComposerEditor,
   type ComposerEditorOptions,
@@ -114,110 +116,6 @@ class MentionChip extends WidgetType {
   }
 }
 
-// Typing straight against an atomic chip inserts the protocol's boundary
-// separator instead of silently dissolving the chip.
-const separateTypedTextFromMentions = EditorState.transactionFilter.of((transaction) => {
-  if (
-    !transaction.docChanged ||
-    (!transaction.isUserEvent("input") && !transaction.isUserEvent("delete")) ||
-    transaction.isUserEvent("input.type.compose") ||
-    // Owner synchronization must mirror the raw draft exactly.
-    transaction.isUserEvent("input.complete")
-  ) {
-    return transaction;
-  }
-  const chips = transaction.startState.field(mentionDecorations, false);
-  if (!chips || chips.size === 0) {
-    return transaction;
-  }
-  // Typing the separator we inserted steps over it instead of doubling it.
-  const typed = transaction.startState.selection.main;
-  let insertedText = "";
-  transaction.changes.iterChanges((_fromA, _toA, _fromB, _toB, text) => {
-    insertedText += text.toString();
-  });
-  if (
-    transaction.isUserEvent("input.type") &&
-    typed.empty &&
-    typed.head > 0 &&
-    (insertedText === "'" || insertedText === "’") &&
-    transaction.startState.sliceDoc(typed.head - 1, typed.head) === " "
-  ) {
-    let chipPrecedes = false;
-    chips.between(typed.head - 1, typed.head - 1, (_from, to) => {
-      chipPrecedes ||= to === typed.head - 1;
-    });
-    if (chipPrecedes) {
-      return [
-        transaction,
-        {
-          changes: { from: typed.head - 1, to: typed.head },
-          sequential: true,
-          selection: EditorSelection.cursor(typed.head),
-        },
-      ];
-    }
-  }
-  if (
-    insertedText === " " &&
-    typed.empty &&
-    transaction.startState.sliceDoc(typed.head, typed.head + 1) === " "
-  ) {
-    let chipFollows = false;
-    chips.between(typed.head + 1, typed.head + 1, (chipFrom) => {
-      chipFollows ||= chipFrom === typed.head + 1;
-    });
-    if (chipFollows) {
-      return { selection: EditorSelection.cursor(typed.head + 1), scrollIntoView: true };
-    }
-  }
-  const separators: { from: number; caret?: number }[] = [];
-  // Preserve the protocol boundary for every surviving chip, including IME
-  // composition and deletion of its adjacent whitespace. A required separator
-  // cannot be removed while that would merge the recipient into another word.
-  chips.between(0, transaction.startState.doc.length, (chipFrom, chipTo) => {
-    const from = transaction.changes.mapPos(chipFrom, 1, MapMode.TrackAfter);
-    const to = transaction.changes.mapPos(chipTo, -1, MapMode.TrackBefore);
-    if (from === null || to === null || to - from !== chipTo - chipFrom) {
-      return;
-    }
-    if (MENTION_BEFORE.test(transaction.newDoc.sliceString(Math.max(0, from - 2), from))) {
-      separators.push({
-        from,
-        ...(transaction.isUserEvent("input") && transaction.state.selection.main.head === from
-          ? { caret: from }
-          : {}),
-      });
-    }
-    if (
-      MENTION_AFTER.test(
-        transaction.newDoc.sliceString(to, Math.min(transaction.newDoc.length, to + 2)),
-      )
-    ) {
-      separators.push({ from: to });
-    }
-  });
-  if (!separators.length) {
-    return transaction;
-  }
-  const changes = separators.map(({ from }) => ({ from, insert: " " }));
-  const caret = separators.find((separator) => separator.caret !== undefined)?.caret;
-  const mapped = transaction.state.changes(changes);
-  // Backspace steps over the separator it may not remove, so the next press
-  // deletes what precedes it instead of repeating a no-op.
-  const side = transaction.isUserEvent("delete.backward") ? -1 : 1;
-  return [
-    transaction,
-    {
-      changes,
-      sequential: true,
-      selection: EditorSelection.cursor(
-        caret ?? mapped.mapPos(transaction.state.selection.main.head, side),
-      ),
-    },
-  ];
-});
-
 const mentionWidgetContext = Facet.define<{
   application?: ApplicationContext;
   avatarUrls?: ReadonlyMap<string, string>;
@@ -250,52 +148,6 @@ function createMentionDecorations(
 }
 
 const setMentionDecorations = StateEffect.define<DecorationSet>();
-// Word/line selection (double/triple click) is not atomic-aware; never let any
-// selection end inside a chip, so typing can't rewrite part of a recipient.
-const keepSelectionOutsideMentions = EditorState.transactionFilter.of((transaction) => {
-  if (!transaction.selection) {
-    return transaction;
-  }
-  const chips = transaction.state.field(mentionDecorations, false);
-  if (!chips || chips.size === 0) {
-    return transaction;
-  }
-  let changed = false;
-  const ranges = transaction.selection.ranges.map((range) => {
-    let { anchor, head } = range;
-    const outside = (position: number, towardEnd: boolean) => {
-      let next = position;
-      chips.between(position, position, (from, to) => {
-        if (from < position && position < to) {
-          next = towardEnd ? to : from;
-        }
-      });
-      return next;
-    };
-    if (range.empty) {
-      chips.between(head, head, (from, to) => {
-        if (from < head && head < to) {
-          head = anchor = head - from < to - head ? from : to;
-        }
-      });
-    } else {
-      const forward = head >= anchor;
-      anchor = outside(anchor, !forward);
-      head = outside(head, forward);
-    }
-    changed ||= anchor !== range.anchor || head !== range.head;
-    return EditorSelection.range(anchor, head);
-  });
-  return changed
-    ? [
-        transaction,
-        {
-          selection: EditorSelection.create(ranges, transaction.selection.mainIndex),
-          sequential: true,
-        },
-      ]
-    : transaction;
-});
 /** History carries complete recipient identity, including same-text selection changes. */
 const restoreMentions = StateEffect.define<readonly HumanMention[]>({
   map: (mentions, mapping) =>
@@ -369,10 +221,10 @@ export type ComposerMentionSnapshot = ComposerEditorSnapshot & {
   mentions: readonly HumanMention[];
 };
 
-/** Whether the native snapshot is what this selection replaced: one @token, or
- * nothing. The owner clears a sent draft without an input event, so an older
+/** Whether the native snapshot is what this selection replaced: one @token,
+ * $token, or nothing. The owner clears a sent draft without an input event, so an older
  * snapshot may hold unrelated text that undo must never restore. Accepted edge:
- * a sent draft ending in a plain "@word" still passes. */
+ * a sent draft ending in a plain "@word" or "$word" still passes. */
 function precedesSelection(before: string, after: string) {
   let start = 0;
   while (start < before.length && before[start] === after[start]) {
@@ -386,7 +238,7 @@ function precedesSelection(before: string, after: string) {
   ) {
     end -= 1;
   }
-  const token = before.lastIndexOf("@", start);
+  const token = Math.max(before.lastIndexOf("@", start), before.lastIndexOf("$", start));
   return end === start || (token >= 0 && !before.slice(token, end).includes("\n"));
 }
 
@@ -397,62 +249,13 @@ export function mountMentionComposerEditor(
   application?: ApplicationContext,
   nativeHistory?: ComposerMentionSnapshot,
   avatarUrls?: ReadonlyMap<string, string>,
+  extensions: Extension = [],
 ) {
   const initialHistory =
     nativeHistory && precedesSelection(nativeHistory.value, input.value)
       ? nativeHistory
       : undefined;
   const canEdit = () => !input.disabled && !input.readOnly;
-  let compositionPadding: { value: string; removals: { from: number; to: number }[] } | undefined;
-  function prepareComposition(view: EditorView) {
-    compositionPadding = undefined;
-    const selection = view.state.selection.main;
-    let padLeft = false;
-    let padRight = false;
-    view.state.field(mentionDecorations).between(selection.from, selection.to, (from, to) => {
-      padLeft ||= to === selection.from;
-      padRight ||= from === selection.to;
-    });
-    if (!padLeft && !padRight) {
-      return;
-    }
-    const changes = [
-      ...(padLeft ? [{ from: selection.from, insert: " " }] : []),
-      ...(padRight ? [{ from: selection.to, insert: " " }] : []),
-    ];
-    const start = selection.from + Number(padLeft);
-    const end = selection.to + Number(padLeft);
-    // Reserve boundaries outside the selection BEFORE the IME owns its DOM
-    // range. Candidate rewrites must not touch the composed range or join the
-    // preceding edit's undo group (compose events always join in CM history).
-    view.dispatch({
-      changes,
-      selection:
-        selection.anchor <= selection.head
-          ? EditorSelection.range(start, end)
-          : EditorSelection.range(end, start),
-      userEvent: "input.type.compose.start",
-      annotations: isolateHistory.of("before"),
-    });
-    compositionPadding = {
-      value: view.state.doc.toString(),
-      removals: changes.map((change, index) => ({
-        from: change.from + index,
-        to: change.from + index + 1,
-      })),
-    };
-  }
-  function finishComposition(event: CompositionEvent, view: EditorView) {
-    const padding = compositionPadding;
-    compositionPadding = undefined;
-    if (padding && !event.data && view.state.doc.toString() === padding.value) {
-      view.dispatch({
-        changes: padding.removals,
-        userEvent: "delete.compose",
-        annotations: Transaction.addToHistory.of(false),
-      });
-    }
-  }
 
   let pendingTransfer: HumanMentionTransfer | undefined;
   function writeSelectedMentions(data: DataTransfer, view: EditorView) {
@@ -531,12 +334,17 @@ export function mountMentionComposerEditor(
   const admittedMentions = readHumanMentions(input.value, mentions()) ?? [];
   const options: ComposerEditorOptions = {
     extensions: [
+      extensions,
       mentionWidgetContext.of({ application, avatarUrls }),
       mentionDecorations.init((state) =>
         createMentionDecorations(state, initialHistory?.mentions ?? admittedMentions),
       ),
-      separateTypedTextFromMentions,
-      keepSelectionOutsideMentions,
+      composerAtomicEditing(
+        (state) => state.field(mentionDecorations, false) ?? Decoration.none,
+        MENTION_BEFORE,
+        MENTION_AFTER,
+        canEdit,
+      ),
       rememberMentionHistory,
       EditorState.transactionFilter.of((transaction) => {
         const copied = pendingTransfer;
@@ -580,21 +388,6 @@ export function mountMentionComposerEditor(
           ),
         };
       }),
-      Prec.highest(
-        EditorView.domEventHandlers({
-          compositionstart(_event, view) {
-            if (!canEdit()) {
-              return true;
-            }
-            prepareComposition(view);
-            return false;
-          },
-          compositionend(event, view) {
-            finishComposition(event, view);
-            return false;
-          },
-        }),
-      ),
       // The host's higher-priority paste handler gives attachments first refusal.
       Prec.high(
         EditorView.domEventHandlers({

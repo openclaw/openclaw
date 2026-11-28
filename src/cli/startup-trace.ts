@@ -127,11 +127,9 @@ export async function measureGatewayBootstrapStep<T>(
   }
   const startedAt = performance.now();
   const { formatConsoleDiagnosticLine } = await import("../logging/json-console-line.js");
-  if (progressEnabled) {
-    process.stderr.write(
-      `${formatConsoleDiagnosticLine({ level: "info", message: `[gateway] startup phase: ${name} starting total=${startedAt.toFixed(1)}ms` })}\n`,
-    );
-  }
+  // Update filters the trace it enables internally; keep ordinary progress visible.
+  const starting = `[gateway] startup ${progressEnabled ? "phase" : "trace"}: ${name} starting total=${startedAt.toFixed(1)}ms`;
+  process.stderr.write(`${formatConsoleDiagnosticLine({ level: "info", message: starting })}\n`);
   const result = await run();
   const completedAt = performance.now();
   const facts = metrics?.() ?? {};

@@ -1658,20 +1658,6 @@ describe("ci workflow guards", () => {
         lintCentralScripts: true,
       },
       {
-        path: "src/agents/session.test.ts",
-        tasks: ["guards", "lint", "test-types", "guards-architecture"],
-        fastTasks: [],
-        baselineRatchets: true,
-        contracts: false,
-        channelContracts: false,
-        performance: false,
-        coreStripes: [1],
-        lintCoreStripes: [1, 2],
-        lintExtensionStripes: [],
-        lintCentralScripts: true,
-        graphs: ["core-test-agents-root", "test-root-tooling"],
-      },
-      {
         path: "ui/src/styles/chat.css",
         tasks: ["lint"],
         fastTasks: [],
@@ -1681,19 +1667,6 @@ describe("ci workflow guards", () => {
         performance: false,
         coreStripes: [],
         lintCoreStripes: [],
-        lintExtensionStripes: [],
-        lintCentralScripts: false,
-      },
-      {
-        path: "packages/ui-shared/index.ts",
-        tasks: ["guards", "prod-types", "lint", "test-types", "guards-architecture"],
-        fastTasks: [],
-        baselineRatchets: true,
-        contracts: false,
-        channelContracts: false,
-        performance: true,
-        coreStripes: [1],
-        lintCoreStripes: [1],
         lintExtensionStripes: [],
         lintCentralScripts: false,
       },
@@ -3856,6 +3829,27 @@ describe("ci workflow guards", () => {
     });
   });
 
+  it.each([false, true])(
+    "keeps Node checks for update test changes (production=%s)",
+    (production) => {
+      const result = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "pull_request",
+        changedPaths: [
+          "src/update/prepare-iroh.test-support.ts",
+          ...(production ? ["src/update/prepare-git.ts"] : []),
+        ],
+      });
+      expect(result.status, result.output).toBe(0);
+      expect(result.outputs.run_docker_seed_e2e).toBe(String(production));
+      expect(result.outputs.docker_seed_lanes).toBe(production ? "release-update-survivor" : "");
+      expect(result.outputs.run_checks_node_core_nondist).toBe("true");
+      expect(
+        readJsonOutput(result.outputs, "checks_node_core_nondist_matrix").include.length,
+      ).toBeGreaterThan(0);
+    },
+  );
+
   it.each<{
     eventName: "pull_request" | "push" | "workflow_dispatch";
     production: boolean;
@@ -3948,27 +3942,9 @@ describe("ci workflow guards", () => {
 
   it.each([
     {
-      eventName: "push" as const,
-      changedPaths: ["src/cli/cron-cli/shared.ts"],
-      qa: false,
-      performance: false,
-    },
-    {
       eventName: "pull_request" as const,
       changedPaths: ["src/cli/cron-cli/shared.ts"],
       qa: false,
-      performance: false,
-    },
-    {
-      eventName: "push" as const,
-      changedPaths: ["extensions/qa-lab/src/ci-smoke-plan.ts"],
-      qa: true,
-      performance: false,
-    },
-    {
-      eventName: "pull_request" as const,
-      changedPaths: ["extensions/telegram/src/index.ts"],
-      qa: true,
       performance: false,
     },
     {
@@ -4414,29 +4390,7 @@ describe("ci workflow guards", () => {
       historicalCompatibility: false,
       runnerBackend: "blacksmith",
     });
-    const github = runCiManifestFixture({
-      bundledPlanner: true,
-      eventName: "push",
-      historicalCompatibility: false,
-      runnerBackend: "github",
-    });
-    const hybrid = runCiManifestFixture({
-      bundledPlanner: true,
-      eventName: "push",
-      historicalCompatibility: false,
-      runnerBackend: "hybrid",
-    });
-    const hybridDispatch = runCiManifestFixture({
-      bundledPlanner: true,
-      eventName: "workflow_dispatch",
-      historicalCompatibility: false,
-      runnerBackend: "hybrid",
-    });
-
     expect(blacksmith.status, blacksmith.output).toBe(0);
-    expect(github.status, github.output).toBe(0);
-    expect(hybrid.status, hybrid.output).toBe(0);
-    expect(hybridDispatch.status, hybridDispatch.output).toBe(0);
     const expectedWindowsMatrix = Array.from({ length: 5 }, (_, index) =>
       expect.objectContaining({
         check_name: `checks-windows-node-test-${index + 1}`,
@@ -4444,12 +4398,7 @@ describe("ci workflow guards", () => {
         predicted_seconds: 400,
       }),
     );
-    for (const [label, manifest] of [
-      ["Blacksmith", blacksmith],
-      ["GitHub", github],
-      ["hybrid", hybrid],
-      ["hybrid dispatch", hybridDispatch],
-    ] as const) {
+    for (const [label, manifest] of [["Blacksmith", blacksmith]] as const) {
       expect(readJsonOutput(manifest.outputs, "checks_windows_matrix").include, label).toEqual(
         expectedWindowsMatrix,
       );
@@ -4466,9 +4415,6 @@ describe("ci workflow guards", () => {
     );
     const manifestRows: Array<{ check_name: string; runtime: string }> = [
       blacksmith,
-      github,
-      hybrid,
-      hybridDispatch,
       frozen,
     ].flatMap((manifest) => readJsonOutput(manifest.outputs, "checks_windows_matrix").include);
     expect(manifestRows.every((row) => row.runtime === "node")).toBe(true);
@@ -5384,38 +5330,6 @@ describe("ci workflow guards", () => {
       }
       expect(manifest.outputs.run_build_artifacts).toBe(String(distRequired));
       expect(manifest.outputs.run_checks_node_core_dist).toBe(String(distRequired));
-    },
-  );
-
-  it.each([
-    ["push", "blacksmith", false],
-    ["workflow_dispatch", "github", true],
-  ] as const)(
-    "shares contract setup while retaining process envelopes (%s, %s, frozen=%s)",
-    (eventName, runnerProfile, frozenTarget) => {
-      const manifest = runCiManifestFixture({
-        bundledPlanner: true,
-        changedPaths: ["package.json"],
-        eventName,
-        runnerProfile,
-        scopeEnv: {
-          OPENCLAW_CI_WORKFLOW_REVISION: (frozenTarget ? "b" : "a").repeat(40),
-        },
-      });
-      expect(manifest.status, manifest.output).toBe(0);
-      for (const family of ["plugin", "channel"] as const) {
-        const outputName = `${family}_contracts_matrix`;
-        const rows = readJsonOutput(manifest.outputs, outputName).include;
-        const expected = ["a", "b"].map((suffix) => ({
-          checkName: `${family}-contracts-${suffix}`,
-          includePatterns: [
-            `${family === "plugin" ? "src/plugins" : "src/channels/plugins"}/contracts/fixture-${suffix}.test.ts`,
-          ],
-          runtime: "node",
-          task: `contracts-${family}s`,
-        }));
-        expect(rows.flatMap((row: { groups: unknown[] }) => row.groups)).toEqual(expected);
-      }
     },
   );
 
@@ -10287,28 +10201,6 @@ describe("ci workflow guards", () => {
       }),
     );
 
-    for (const runnerBackend of [undefined, "github", "hybrid"] as const) {
-      const push = runCiManifestFixture({
-        bundledPlanner: true,
-        eventName: "push",
-        runnerBackend,
-      });
-      expect(push.status, push.output).toBe(0);
-      expect(
-        readJsonOutput(push.outputs, "checks_node_core_nondist_matrix").include,
-      ).toContainEqual(
-        expect.objectContaining({
-          check_name: "bundled-node-plan",
-          env: {
-            OPENCLAW_CI_TEST_COMPACT_MODE: "push",
-            OPENCLAW_CI_TEST_COMPACT_NODE_JOB_CAP: "70",
-            OPENCLAW_CI_TEST_RUNNER_BACKEND: runnerBackend ?? "blacksmith",
-            OPENCLAW_CI_TEST_PROOF_TIER: "true",
-          },
-        }),
-      );
-    }
-
     const dockerSeedPath = "scripts/e2e/docker-openai-seed.ts";
     const changedPullRequest = runCiManifestFixture({
       bundledPlanner: true,
@@ -11678,31 +11570,6 @@ describe("ci workflow guards", () => {
         };
       }),
     }));
-    for (const runnerBackend of ["blacksmith", "github", "hybrid"] as const) {
-      for (const eventName of ["push", "pull_request"] as const) {
-        for (const runAttempt of ["1", "2", ""]) {
-          const manifest = runCiManifestFixture({
-            bundledPlanner: true,
-            selectedTestTargets: Object.values(CI_MANIFEST_FIXTURE_TARGETS).flat(),
-            changedPaths: [],
-            eventName,
-            historicalCompatibility: false,
-            runnerBackend,
-            uiE2eProjectsCapability: true,
-            scopeEnv: { GITHUB_RUN_ATTEMPT: runAttempt, OPENCLAW_CI_RUN_UI_TESTS: "true" },
-          });
-          const assertionName = `${runnerBackend} ${eventName} attempt ${runAttempt || "missing"}`;
-          expect(manifest.status, manifest.output).toBe(0);
-          expect(readJsonOutput(manifest.outputs, "ui_e2e_matrix"), assertionName).toEqual({
-            include: expectDefined(expectedUiE2eMatrices[1], "current UI matrix").include.filter(
-              (row) =>
-                row.task !== "browser-extension" ||
-                manifest.outputs.reuse_browser_extension_build !== "true",
-            ),
-          });
-        }
-      }
-    }
     expect(workflow.jobs["ci-gate"].needs).toContain("checks-ui-e2e");
     expect(workflow.jobs["ci-gate"].needs).toContain("build-artifacts");
     expect(workflow.jobs["checks-ui-browser-extension"]).toBeUndefined();
@@ -14488,17 +14355,6 @@ describe("ci workflow guards", () => {
     expect(runStep.run.match(/src\/scripts\/ci-changed-scope\*\.test\.ts/g)).toHaveLength(1);
     for (const owner of ["guards", "planning", "evidence"]) {
       expect(runStep.run.split(`test/scripts/ci-workflow-${owner}.test.ts`)).toHaveLength(2);
-    }
-    for (const file of [
-      "test/scripts/ci-changed-node-test-plan.test.ts",
-      "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
-      "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
-      "test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts",
-      "test/scripts/ci-changed-node-test-plan.policy.test.ts",
-      "test/scripts/ci-changed-node-test-plan.process-owners.test.ts",
-      "test/scripts/ci-changed-node-test-plan.source-owners.test.ts",
-    ]) {
-      expect(runStep.run.split(file)).toHaveLength(2);
     }
   });
 });

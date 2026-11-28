@@ -92,7 +92,7 @@ it("renders row descriptors lazily with exact pre-refactor text, gaps and trim c
     descriptors.filter(({ source }) => source === 1).map(({ partIndex }) => partIndex),
   ).toEqual([0, 1]);
   expect(JSON.stringify(descriptors)).not.toMatch(/constraint|evidence|output|runtime secret/);
-  // SHA-256 covers the complete BoundedConversation captured before this extraction.
+  // These goldens cover the serialized text and budget accounting before data ranges existed.
   const goldens = [
     [0, "2a8f964a25b22d957fa92f0ede2d4459304d1243ca0c495ded87615910073788"],
     [300, "2a8f964a25b22d957fa92f0ede2d4459304d1243ca0c495ded87615910073788"],
@@ -116,11 +116,22 @@ it("renders row descriptors lazily with exact pre-refactor text, gaps and trim c
         return serializeConversationEntry(message, descriptor, variant);
       },
     );
+    const { dataRanges, ...rendered } = result;
     expect(
-      createHash("sha256").update(JSON.stringify(result)).digest("hex"),
+      createHash("sha256").update(JSON.stringify(rendered)).digest("hex"),
       `budget ${budget}`,
     ).toBe(hash);
     expect(result).toEqual(serializeConversationWithinBudget(messages, budget));
+    const starts = [...result.text.matchAll(/(?:^|\n\n)(?=\[Tool result)/g)].map(
+      ({ index, 0: separator }) => index + separator.length,
+    );
+    expect(dataRanges?.map(({ start }) => start) ?? []).toEqual(starts);
+    for (const { start, end } of dataRanges ?? []) {
+      expect(result.text.slice(start, end)).toMatch(
+        /^\[Tool result.*(?:failed-\d+|orphan result)$/su,
+      );
+      expect(result.text.slice(end, end + 2)).toMatch(/^(?:\n\n)?$/u);
+    }
     if (budget <= 300) {
       expect(reads).toBe(0);
     }

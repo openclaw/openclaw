@@ -61,13 +61,10 @@ export async function withPluginGatewayRequestAuthority<T>(
           throw new GatewayRequestAuthorityExpiredError();
         }
         admission.assertCurrent();
-        // Ordinary policy edits apply at the next admission. A plugin that starts
-        // a grant-owned operation can explicitly require its original role grant.
         if (requiredGrantPluginId !== undefined) {
           if (!access || requiredGrantPluginId !== access.requiredPolicyPlugin) {
             throw new GatewayOperatorAccessDeniedError("access-record-inactive");
           }
-          access.assertCurrent();
         }
       },
     },
@@ -81,8 +78,6 @@ export async function withPluginGatewayRequestAuthority<T>(
       attributionProfileId !== GATEWAY_OWNER_PROFILE_ID
         ? admission.personProfileId
         : undefined,
-    // Composite live authority still includes the role-required policy when its
-    // durable recovery tuple cannot represent every contributing grant.
     requiredGrantPluginId: access?.requiredPolicyPlugin,
     ...bindGuards(lease),
   });

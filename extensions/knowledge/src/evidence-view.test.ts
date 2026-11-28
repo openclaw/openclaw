@@ -29,13 +29,7 @@ function control() {
     filename: source.filename,
     mediaType: "text/plain",
   } satisfies FeatureOutput<FullOutputContract, "attachment">);
-  const view = originalDownload(
-    feature,
-    "project_test",
-    source,
-    () => true,
-    (value) => value,
-  );
+  const view = originalDownload(feature, "project_test", source, () => true);
   document.body.append(view.download, view.status);
   return { ...view, invoke };
 }
@@ -92,7 +86,7 @@ it.each(["saved", "failed"])("waits for the file writer before reporting %s", as
   }
   await vi.waitFor(() => expect(download.disabled).toBe(false));
   expect(status.textContent).toBe(
-    outcome === "saved" ? "Original file saved." : "Error: Disk full",
+    outcome === "saved" ? "Original file saved." : "Couldn’t download the original file.",
   );
   expect(writer.abort).toHaveBeenCalledTimes(outcome === "saved" ? 0 : 1);
 });
@@ -108,5 +102,5 @@ it("does not fetch or report success after the save picker is canceled", async (
   download.click();
   await vi.waitFor(() => expect(download.disabled).toBe(false));
   expect(invoke).not.toHaveBeenCalled();
-  expect(status.textContent).toContain("Canceled");
+  expect(status.textContent).toBe("Download canceled.");
 });

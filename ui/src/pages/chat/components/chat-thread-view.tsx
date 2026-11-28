@@ -266,6 +266,7 @@ function ChatThreadContent(
     const stopSearch = searchState.subscribe(() => {
       const nextQuery = searchState.snapshot.query.trim();
       if (nextQuery && nextQuery !== query) {
+        void searchState.resumeEarlierHistory?.();
         // A live reply can sit below the matches. Only ask for the first result
         // after this query has rendered rows to receive that scroll command.
         onSettled(() => {

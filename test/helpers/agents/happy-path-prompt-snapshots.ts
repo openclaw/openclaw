@@ -96,7 +96,7 @@ type CodexPromptSnapshotApi = {
     config?: Record<string, unknown>;
     promptText?: string;
     developerInstructionAdditions?: string;
-    personaInstructions?: string;
+    refreshableInstructions?: string;
   }) => Promise<{
     developerInstructions: string;
     parentLocalInstructions: string | null;
@@ -729,7 +729,7 @@ function renderModelBoundPromptLayers(params: {
   return [
     "## Reconstructed Model-Bound Prompt Layers",
     "",
-    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses OpenClaw's thread/start base instructions in place of Codex's model prompt, appends the current parent-local context to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions including managed collaboration policy, any supplied per-turn collaboration text, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
+    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses OpenClaw's thread/start base instructions in place of Codex's model prompt, appends any parent-local context (a selected personal profile overlay or cron policy) to the model request instructions, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions including managed collaboration policy and workspace persona, any supplied per-turn collaboration text, supplied additional context with its native role, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
     "",
     "### Layer Metadata",
     "",
@@ -882,7 +882,7 @@ async function renderScenarioSnapshot(
         appServer,
         config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
         promptText: codexTurnPromptText,
-        personaInstructions: CODEX_WORKSPACE_PERSONA_INSTRUCTIONS,
+        refreshableInstructions: CODEX_WORKSPACE_PERSONA_INSTRUCTIONS,
       }),
     ),
   );
@@ -897,7 +897,7 @@ async function renderScenarioSnapshot(
     "",
     ...scenario.notes.map((note) => `- ${note}`),
     "- This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.",
-    "- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as parent-local request instructions, and `MEMORY.md` in turn input.",
+    "- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as thread developer instructions, and `MEMORY.md` in turn input.",
     "",
     "## Scenario Metadata",
     "",

@@ -18,6 +18,7 @@ import {
   buildSourceModelFields,
   mergeProviderModels,
   normalizeProviderMapKeys,
+  validateProviderModels,
 } from "../models-config.merge.js";
 import { materializeConfiguredProviderCatalogModels } from "../models-config.providers.catalog.js";
 import {
@@ -48,7 +49,6 @@ import {
   formatValidationPath,
   omitInvalidModelCosts,
   validateModelsConfig,
-  validateProviderModels,
 } from "./model-registry-schema.js";
 import {
   captureProviderSource,

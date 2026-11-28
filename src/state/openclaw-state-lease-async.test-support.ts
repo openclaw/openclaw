@@ -48,6 +48,7 @@ export function leaseTestContext() {
       coordinationKey: "file:synthetic-state",
       databasePath,
       identity: { key: "file:synthetic-state", canonicalPath: databasePath },
+      isCurrent: () => getOpenClawDatabaseMaintenanceScope() === maintenance,
       assertCurrent() {
         expect(getOpenClawDatabaseMaintenanceScope()).toBe(maintenance);
       },

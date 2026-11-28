@@ -1,3 +1,4 @@
+import { getLoadedChannelPluginById } from "../../../channels/plugins/registry-loaded.js";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
 import type { PreparedSessionSourceAuthority } from "../../../config/sessions/session-source-authority.js";
@@ -7,6 +8,7 @@ import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { normalizeAccountId } from "../../../routing/account-id.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
+import { hasSubagentKill } from "./subagent-control-kill-intent.js";
 import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -24,8 +26,9 @@ export async function startSubagentTyping(
   const runtime = resolveGatewayContext?.()?.lifecycleRuntime;
   if (
     !source ||
-    origin?.channel !== "telegram" ||
+    !origin?.channel ||
     !origin.to ||
+    !getLoadedChannelPluginById(origin.channel)?.heartbeat?.sendTypingGuarded ||
     entry.expectsCompletionMessage !== true ||
     entry.collect ||
     !entry.requesterAgentId ||
@@ -55,8 +58,7 @@ export async function startSubagentTyping(
       !current ||
       current.execution.status !== "running" ||
       current.execution.endedAt !== undefined ||
-      current.killIntent ||
-      current.killReconciliation ||
+      hasSubagentKill(current) ||
       resolveGatewayContext?.()?.lifecycleRuntime !== runtime
     ) {
       throw new Error("Detached typing source is no longer active");
@@ -116,7 +118,7 @@ export async function startSubagentTyping(
     assertHostCurrent();
     stopTyping = runtime.startTyping({
       ...origin,
-      channel: "telegram",
+      channel: origin.channel,
       to: origin.to,
       agentId: entry.requesterAgentId,
       runId: entry.runId,

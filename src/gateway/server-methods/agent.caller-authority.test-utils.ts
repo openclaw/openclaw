@@ -31,7 +31,7 @@ import { prepareGatewayOperatorRunAuthority } from "../operator-run-authority.js
 import { handleGatewayRequest } from "../server-methods.js";
 import { disconnectStaleSharedGatewayAuthClients } from "../server-shared-auth-generation.js";
 import { gatewayProfile } from "../server/client-fixtures.test-support.js";
-import { agentHandlers } from "./agent.js";
+import { agentRunHandler } from "./agent-run-handler.js";
 import {
   describe1AfterEach1,
   describe1BeforeEach0,
@@ -64,7 +64,7 @@ describe("gateway agent caller authority custody", () => {
             name: "agent",
             scope: "operator.write",
             owner: { kind: "core", area: "agents" },
-            handler: expectDefined(agentHandlers.agent, "agent handler missing"),
+            handler: agentRunHandler,
           },
           {
             name: "config.get",
@@ -240,7 +240,7 @@ describe("gateway agent caller authority custody", () => {
         name: "agent",
         scope: "operator.write",
         owner: { kind: "core", area: "agents" },
-        handler: expectDefined(agentHandlers.agent, "agent handler missing"),
+        handler: agentRunHandler,
       },
     ]);
     context.getGatewayMethodRegistry = () => registry;
@@ -395,10 +395,7 @@ describe("gateway agent caller authority custody", () => {
     });
     try {
       await expect(
-        expectDefined(
-          agentHandlers.agent,
-          "agent handler missing",
-        )({
+        agentRunHandler({
           params: { message: "hi", sessionKey: "agent:main:main", idempotencyKey: runId },
           req: { type: "req", id: runId, method: "agent" },
           context,

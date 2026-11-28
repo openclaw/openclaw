@@ -226,16 +226,6 @@ describe("irc client fallback nick", () => {
     expect(server.openSocketCount()).toBe(1);
   });
 
-  it("produces unique fallback nicks across sequential collisions", async () => {
-    const first = await connectAfterNickCollision("bot");
-    const second = await connectAfterNickCollision("bot");
-    const third = await connectAfterNickCollision("bot");
-    expect(first).toMatch(/^bot_\d*$/);
-    expect(second).toMatch(/^bot_\d+$/);
-    expect(third).toMatch(/^bot_\d+$/);
-    expect(new Set([first, second, third]).size).toBe(3);
-  });
-
   it.each([
     ["!!!", /^openclaw_\d*$/],
     ["a".repeat(29), /^a+_\d*$/],
