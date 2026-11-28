@@ -49,7 +49,7 @@ import { deliverBlockReply } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import { createFollowupSpeechPreparer } from "./followup-delivery-tts.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { resolveOriginMessageProvider } from "./origin-routing.js";
+import { resolveFollowupReplyOrigin, resolveOriginMessageProvider } from "./origin-routing.js";
 import { warnPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { enqueueFollowupRun, resolveQueueSettings, type FollowupRun } from "./queue.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
@@ -75,6 +75,8 @@ function resolveFollowupPayloadContext(turn: AdmittedFollowupTurn) {
     originatingChannel: turn.queued.originatingChannel,
     originatingChatType: turn.queued.originatingChatType,
     originatingReplyToMode: turn.queued.originatingReplyToMode,
+    currentMessageId: resolveFollowupReplyOrigin(turn.queued).currentMessageId,
+    originatingReplyThreading: turn.queued.originatingReplyThreading,
     originatingTo: turn.queued.originatingTo,
     originatingThreadId: turn.queued.originatingThreadId,
   };
@@ -562,12 +564,8 @@ export async function deliverFollowupDecision(params: {
     }
   };
   let deliveredCrossChannelOrigin = false;
-  const provider = resolveOriginMessageProvider({
-    provider: turn.queued.run.messageProvider,
-  });
-  const origin = resolveOriginMessageProvider({ originatingChannel });
-  const sameChannelOrigin = Boolean(origin && origin === provider);
-  const crossChannelOrigin = Boolean(origin && provider && origin !== provider);
+  const { sameChannelOrigin, crossChannelOrigin, transportCurrentMessageId } =
+    resolveFollowupReplyOrigin(turn.queued);
   const prepareSpeech = createFollowupSpeechPreparer({ turn, defaults, kind });
   // Queued sends follow the chat by key; a deleted chat drops them.
   const sessionGeneration: ChatRef | undefined =
@@ -637,12 +635,7 @@ export async function deliverFollowupDecision(params: {
         requesterSenderUsername: turn.queued.run.senderUsername,
         requesterSenderE164: turn.queued.run.senderE164,
         threadId: turn.queued.originatingThreadId,
-        currentMessageId:
-          sameChannelOrigin &&
-          (turn.queued.run.inputProvenance?.kind === undefined ||
-            turn.queued.run.inputProvenance.kind === "external_user")
-            ? turn.queued.messageId
-            : undefined,
+        currentMessageId: transportCurrentMessageId,
         cfg: turn.config,
         mirror:
           metadata?.assistantMessageIndex !== undefined ||

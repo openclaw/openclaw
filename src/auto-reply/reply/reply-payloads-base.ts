@@ -38,7 +38,7 @@ export function applyReplyTagsToPayload(params: {
   );
 
   let resolved: ReplyPayload =
-    payload.replyToId ||
+    payload.replyToId != null ||
     payload.replyToCurrent === false ||
     !implicitReplyToId ||
     !allowImplicitReplyToCurrentMessage

@@ -102,6 +102,8 @@ export function resolveFollowupReplyDeliveryKey(run: FollowupRun): string {
     }),
     resolveFollowupReplyAnchor(run) ?? "",
     run.originatingReplyToMode ?? "",
+    run.originatingReplyThreading?.implicitCurrentMessage ?? "default",
+    normalizeMessageChannel(run.messageIdChannel ?? undefined) ?? "",
     normalizeChatType(run.originatingChatType) ?? "",
   ]);
 }
@@ -431,6 +433,7 @@ export function getFollowupOriginRouting(source: FollowupRun) {
     originatingChatId: source.originatingChatId,
     originatingReplyToId: source.originatingReplyToId,
     originatingReplyToMode: source.originatingReplyToMode,
+    originatingReplyThreading: source.originatingReplyThreading,
     originatingChatType: source.originatingChatType,
   };
 }
@@ -460,6 +463,7 @@ export function createOverflowSummaryRetrySource(source: InternalFollowupRun): I
     channelAdmissionEvidence: source.channelAdmissionEvidence,
     gatewayLocalUserIngress: source.gatewayLocalUserIngress,
     messageId: source.messageId,
+    messageIdChannel: source.messageIdChannel,
     summaryLine: source.summaryLine,
     enqueuedAt: source.enqueuedAt,
     ...getFollowupOriginRouting(source),

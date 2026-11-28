@@ -12,7 +12,12 @@ import type { ReplyPayload } from "../types.js";
 import { setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
-import { createDefaults, createTurn as createBaseTurn } from "./followup-delivery.test-helpers.js";
+import {
+  createAccounting,
+  createDefaults,
+  createSettledExecution,
+  createTurn as createBaseTurn,
+} from "./followup-delivery.test-helpers.js";
 import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 
 const { a2aChannelPlugin } = await loadBundledPluginFacade<{ a2aChannelPlugin: ChannelPlugin }>({
@@ -306,39 +311,110 @@ describe("follow-up delivery channel boundary", () => {
   it.each<{
     name: string;
     provenance?: AdmittedFollowupTurn["queued"]["run"]["inputProvenance"];
-    sourceChannel?: string;
-    expectedReply: string | null;
+    origin?: string;
+    source?: string;
+    sentinelAnchor?: string;
+    idChannel?: AdmittedFollowupTurn["queued"]["messageIdChannel"];
+    mode?: AdmittedFollowupTurn["queued"]["originatingReplyToMode"];
+    policy?: AdmittedFollowupTurn["queued"]["originatingReplyThreading"];
+    explicit?: boolean;
+    legacyUnknownIdChannel?: boolean;
+    expected: string | null;
   }>([
-    { name: "implicit current inbound", expectedReply: "new-inbound" },
+    { name: "queued Telegram message", provenance: { kind: "external_user" }, expected: "11" },
     {
-      name: "restart sentinel",
-      provenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
-      expectedReply: null,
+      name: "Tlon group disallows implicit replies",
+      origin: "tlon",
+      policy: { implicitCurrentMessage: "deny" },
+      expected: null,
     },
-    { name: "different source channel", sourceChannel: "discord", expectedReply: null },
-  ])("passes queued origin message facts to the channel resolver: $name", async (testCase) => {
-    const source = createChannelPlugin("slack");
-    source.threading = {
+    {
+      name: "Telegram batched turn allows implicit replies",
+      mode: "batched",
+      policy: { implicitCurrentMessage: "allow" },
+      expected: "11",
+    },
+    {
+      name: "explicit Telegram reply with implicit replies denied",
+      policy: { implicitCurrentMessage: "deny" },
+      explicit: true,
+      expected: "11",
+    },
+    { name: "WebChat message routed to Telegram", idChannel: "webchat", expected: null },
+    {
+      name: "WebChat current-reply directive routed to Telegram",
+      idChannel: "webchat",
+      explicit: true,
+      expected: null,
+    },
+    { name: "queued Telegram message without input provenance", expected: "11" },
+    {
+      name: "old Telegram queue entry with no recorded ID channel",
+      legacyUnknownIdChannel: true,
+      expected: null,
+    },
+    { name: "different source channel", source: "discord", expected: null },
+    { name: "inter-session announcement", provenance: { kind: "inter_session" }, expected: null },
+    {
+      name: "restart sentinel with a channel anchor",
+      provenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
+      sentinelAnchor: "10",
+      expected: "10",
+    },
+    {
+      name: "restart sentinel without a channel anchor",
+      provenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
+      expected: null,
+    },
+    { name: "channel-owned reply policy", origin: "slack", expected: "thread-11" },
+    {
+      name: "channel-owned policy with a foreign ID",
+      origin: "slack",
+      source: "discord",
+      expected: null,
+    },
+    {
+      name: "channel-owned policy with a synthetic ID",
+      origin: "slack",
+      provenance: { kind: "internal_system", sourceTool: "restart-sentinel" },
+      expected: null,
+    },
+  ])("routes the queued final without a live dispatcher: $name", async (testCase) => {
+    const slack = createChannelPlugin("slack");
+    slack.threading = {
       resolveReplyTransport: ({ currentMessageId, replyToId }) => ({
-        replyToId: replyToId ?? currentMessageId,
+        replyToId: replyToId ?? (currentMessageId ? `thread-${currentMessageId}` : null),
       }),
     };
-    register(source, createChannelPlugin("imessage"));
-    const channel = "slack";
-    const turn = createTurn(testCase.sourceChannel ?? channel, channel);
-    turn.queued.originatingTo = "dm:qa-peer";
-    turn.queued.messageId = "new-inbound";
-    turn.queued.originatingChatType = "direct";
+    register(slack, createChannelPlugin("telegram"), createChannelPlugin("tlon"));
+    const channel = testCase.origin ?? "telegram";
+    const turn = createTurn(testCase.source ?? channel, channel);
+    turn.queued.originatingTo = "123";
+    turn.queued.messageId = testCase.idChannel === "webchat" ? "gateway-id" : "11";
+    turn.queued.messageIdChannel = testCase.legacyUnknownIdChannel
+      ? undefined
+      : (testCase.idChannel ?? testCase.source ?? channel);
+    turn.queued.originatingChatType = channel === "tlon" ? "group" : "direct";
+    turn.queued.originatingReplyToMode = testCase.mode ?? "all";
+    turn.queued.originatingReplyThreading = testCase.policy;
+    turn.queued.originatingReplyToId = testCase.sentinelAnchor;
     turn.queued.run.inputProvenance = testCase.provenance;
-    const payload = { text: "queued answer" };
+    const text = testCase.explicit ? "[[reply_to_current]] queued answer" : "queued answer";
+    const decision = await resolveFollowupDeliveryDecision({
+      turn,
+      execution: createSettledExecution(text),
+      accounting: createAccounting([{ text }]),
+    });
     channelState.outcomes = ["delivered"];
-    await sendToOrigin(turn, [payload]);
+    await deliverFollowupDecision({
+      turn,
+      decision,
+      defaults: { ...createDefaults(vi.fn()), opts: undefined },
+      runId: turn.runId,
+      runFollowup: vi.fn(),
+    });
     expect(channelState.deliver).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        channel,
-        to: "dm:qa-peer",
-        replyToId: testCase.expectedReply,
-      }),
+      expect.objectContaining({ channel, to: "123", replyToId: testCase.expected }),
       undefined,
       undefined,
     );

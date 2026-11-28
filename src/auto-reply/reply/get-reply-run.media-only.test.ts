@@ -65,6 +65,7 @@ import {
   bindOwnerIngress,
   createOwnerIngress,
 } from "./get-reply-run.owner-ingress.test-support.js";
+import { registerQueuedReplyRoutingCases } from "./get-reply-run.queued-routing.test-support.js";
 import { registerPendingRequesterAuthorityCases } from "./get-reply-run.requester-authority.test-support.js";
 import { registerSteeringIntentProducerCases } from "./get-reply-run.steering-intent.test-support.js";
 import { registerSystemEventAdmissionCases } from "./get-reply-run.system-event-admission.test-support.js";
@@ -1345,6 +1346,7 @@ describe("runPreparedReply media-only handling", () => {
     );
     expect(call?.followupRun.prompt).toContain("re-read persona files");
     expect(call?.replyThreadingOverride).toEqual({ implicitCurrentMessage: "deny" });
+    expect(call.followupRun.originatingReplyThreading).toEqual({ implicitCurrentMessage: "deny" });
   });
 
   it("does not leave an active reply operation after auth preparation fails", async () => {
@@ -2140,28 +2142,9 @@ describe("runPreparedReply media-only handling", () => {
     expect(secondRun.cliSessionBindingFacts).toEqual(firstRun.cliSessionBindingFacts);
   });
 
-  it("captures the prepared reply policy for queued Slack runs", async () => {
-    await runPrepared({
-      cfg: createConfig({
-        channels: { slack: { replyToMode: "all" } },
-      }),
-      ...turn(
-        "",
-        {
-          ThreadHistoryBody: "Earlier message in this thread",
-          Provider: "slack",
-          OriginatingTo: "C123",
-          ChatType: "group",
-          ReplyToMode: "off",
-        },
-        { media: [{ path: "/tmp/input.png" }], OriginatingChannel: "slack", ReplyToId: "101.001" },
-        { OriginatingChannel: undefined },
-      ),
-    });
-
-    const call = requireRunReplyAgentCall();
-    expect(call?.followupRun.originatingReplyToId).toBe("101.001");
-    expect(call?.followupRun.originatingReplyToMode).toBe("off");
+  registerQueuedReplyRoutingCases(async (overrides) => {
+    await runPrepared(overrides);
+    return requireRunReplyAgentCall().followupRun;
   });
 
   it("keeps cross-channel cron reply policy independent of remembered chat type", async () => {

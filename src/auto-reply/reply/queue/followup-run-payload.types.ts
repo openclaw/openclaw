@@ -34,6 +34,7 @@ import type {
   TraceLevel,
   VerboseLevel,
 } from "../../thinking.shared.js";
+import type { ReplyThreadingPolicy } from "../../types.js";
 import type { GoalContinuation } from "../goal-continuation.types.js";
 import type { ReplyCallbackCustodyBinding } from "../reply-callback-custody.js";
 import type {
@@ -114,6 +115,8 @@ export type FollowupRunPayload = ReplyCallbackCustodyBinding & {
   };
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
+  /** Inbound channel that issued messageId, independent of the reply destination. */
+  messageIdChannel?: string | null;
   summaryLine?: string;
   /** Turn-owned tool authority captured before queue ownership transfers. */
   toolsAllow?: string[];
@@ -154,6 +157,7 @@ export type FollowupRunPayload = ReplyCallbackCustodyBinding & {
   originatingReplyToId?: string;
   /** Effective reply policy for deciding whether the reply target affects queued delivery. */
   originatingReplyToMode?: ReplyToMode;
+  originatingReplyThreading?: ReplyThreadingPolicy;
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
   run: QueuedAgentRunParams & {
