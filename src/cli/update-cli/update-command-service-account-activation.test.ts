@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import vm from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { updateSystemServiceAsAccount } from "./update-command-service-account-activation.js";
@@ -112,6 +113,9 @@ const calls = () =>
     ? fs.readFileSync(path.join(accountDir, "calls"), "utf8").trim().split("\n")
     : [];
 
+// The transient unit runs `node -e <script> <payload>`; it must compile as Node will see it.
+const scheduledScripts = () => native.scheduled.map((argv) => argv[argv.indexOf("-e") + 1] ?? "");
+
 const scheduledPayloads = () =>
   native.scheduled.map((argv) => JSON.parse(argv.at(-1) ?? "null") as Record<string, unknown>);
 
@@ -212,6 +216,9 @@ describe("system service update as the unit's account", () => {
     ]);
     // The transient unit's argv carries no environment values, only the handoff path.
     expect(JSON.stringify(native.scheduled)).not.toContain("unit-only-value");
+    for (const script of scheduledScripts()) {
+      expect(() => new vm.Script(script)).not.toThrow();
+    }
   });
 
   it.runIf(process.platform === "linux")(

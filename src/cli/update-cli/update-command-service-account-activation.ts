@@ -77,7 +77,7 @@ const active = () => spawnSync("/usr/bin/systemctl", ["show", "-p", "ActiveState
 const asAccount = (expected, ...args) => {
   const run = spawnSync(p.runuser, ["-u", p.account, "--", process.execPath, "-e", p.loader, p.envFile, p.root + "/dist/index.js", ...args], { env: { PATH: p.path }, cwd: "/", stdio: ["ignore", "pipe", "inherit"], encoding: "utf8", maxBuffer: 256 * 1024, timeout: 60 * 60000 });
   if (run.status !== 0 || run.error) return false;
-  try { return JSON.parse(run.stdout.trim().split("\n").at(-1)).status === expected; } catch { return false; }
+  try { return JSON.parse(run.stdout.trim().split("\\n").at(-1)).status === expected; } catch { return false; }
 };
 const deadline = Date.now() + 2 * 60 * 60000;
 const settle = () => {
