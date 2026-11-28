@@ -225,13 +225,23 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 : wrapProgressCallback(params.replyOptions?.onPartialReply, {
                     onForward: async () => {
                       await explicitFollowupStartNotice;
-                      if (!state.deliverStandaloneCommentaryProgress) {
+                      if (
+                        !state.deliverStandaloneCommentaryProgress &&
+                        !state.preserveProgressCallbackStartOrder
+                      ) {
                         return;
                       }
                       // Previews bypass the dispatcher queue; settle earlier progress first.
                       await Promise.allSettled(pendingToolProgress);
-                      await flushPendingCommentaryProgress();
-                      await waitForReplyDispatcherIdle(dispatcher, getDispatchAbortSignal());
+                      if (state.deliverStandaloneCommentaryProgress) {
+                        await flushPendingCommentaryProgress();
+                      }
+                      if (
+                        state.deliverStandaloneCommentaryProgress ||
+                        dispatcher.getQueuedCounts().tool > 0
+                      ) {
+                        await waitForReplyDispatcherIdle(dispatcher, getDispatchAbortSignal());
+                      }
                     },
                     onVisible: (payload) => {
                       didDeliverVisiblePartialReply ||= hasOutboundReplyContent(payload, {
