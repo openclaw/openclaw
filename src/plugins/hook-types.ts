@@ -9,6 +9,7 @@ import type {
 import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { InstallPolicyRequestKind as PluginInstallRequestKind } from "../security/install-policy.js";
+import type { PluginHookAfterToolCallEvent } from "./hook-after-tool-call.types.js";
 import type {
   PluginHookAgentContext,
   PluginHookContextWindow,
@@ -61,6 +62,7 @@ import type {
 import type { SkillInstallSpecMetadata } from "./install-security-scan.types.js";
 import type { PluginHookSessionContext } from "./session-end-transcript.js";
 
+export type { PluginHookAfterToolCallEvent } from "./hook-after-tool-call.types.js";
 export type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
 
 export type {
@@ -512,16 +514,6 @@ export type PluginHookBeforeToolCallEvent = {
    * host does not know how to derive paths for.
    */
   derivedPaths?: readonly string[];
-};
-
-export type PluginHookAfterToolCallEvent = {
-  toolName: string;
-  params: Record<string, unknown>;
-  runId?: string;
-  toolCallId?: string;
-  result?: unknown;
-  error?: string;
-  durationMs?: number;
 };
 
 export type PluginHookToolResultPersistContext = {
