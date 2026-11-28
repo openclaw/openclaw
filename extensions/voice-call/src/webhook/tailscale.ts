@@ -15,9 +15,6 @@ function buildTailscaleExposureArgs(opts: {
   path: string;
   localUrl?: string;
 }): string[] {
-  if (!opts.localUrl && opts.port === DEFAULT_TAILSCALE_HTTPS_PORT) {
-    return [opts.mode, "off", opts.path];
-  }
   const portArgs = opts.port === DEFAULT_TAILSCALE_HTTPS_PORT ? [] : ["--https", String(opts.port)];
   return [opts.mode, "--bg", "--yes", ...portArgs, "--set-path", opts.path, opts.localUrl ?? "off"];
 }

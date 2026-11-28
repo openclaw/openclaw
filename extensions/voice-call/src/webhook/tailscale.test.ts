@@ -75,7 +75,7 @@ describe("voice-call tailscale helpers", () => {
     await cleanupTailscaleExposure(config(mode));
     expect(commands().slice(1)).toEqual([
       ["tailscale", mode, "--bg", "--yes", "--set-path", route.path, route.localUrl],
-      ["tailscale", mode, "off", route.path],
+      ["tailscale", mode, "--bg", "--yes", "--set-path", route.path, "off"],
     ]);
   });
 
@@ -108,8 +108,8 @@ describe("voice-call tailscale helpers", () => {
     await cleanupTailscaleExposure(voiceCallConfig);
 
     expectCommand([...funnel, "/voice/stream", "http://127.0.0.1:8787/voice/stream"]);
-    expectCommand(["tailscale", "funnel", "off", "/voice/stream"]);
-    expect(commands().filter((command) => command[5] === "/voice/stream")).toHaveLength(1);
+    expectCommand([...funnel, "/voice/stream", "off"]);
+    expect(commands().filter((command) => command[5] === "/voice/stream")).toHaveLength(2);
   });
 
   it("uses HTTPS 8443 for legacy webhook and realtime routes and cleanup", async () => {
@@ -143,6 +143,6 @@ describe("voice-call tailscale helpers", () => {
     const voiceCallConfig = config("funnel", 443, true);
 
     await expect(setupTailscaleExposure(voiceCallConfig)).resolves.toBeNull();
-    expectCommand(["tailscale", "funnel", "off", "/voice/webhook"]);
+    expectCommand([...funnel, "/voice/webhook", "off"]);
   });
 });
