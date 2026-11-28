@@ -7,6 +7,7 @@ struct ChatNarration {
         let runID: String
         let itemID: String?
         let eventID: String
+        let followingCallID: String?
         let sequence: Int?
         let message: OpenClawChatMessage
     }
@@ -41,7 +42,12 @@ struct ChatNarration {
             phase: "commentary",
             streamFallback: key.map { .init(source: "segment", itemId: $0, runId: event.runId) })
         let segment = Segment(
-            runID: event.runId, itemID: key, eventID: event.id, sequence: event.seq, message: message)
+            runID: event.runId,
+            itemID: key,
+            eventID: event.id,
+            followingCallID: nil,
+            sequence: event.seq,
+            message: message)
         if let index {
             self.segments[index] = segment
         } else if key != nil || !text.isEmpty {
@@ -49,6 +55,17 @@ struct ChatNarration {
             // an older reconnect snapshot must not resurrect the removed item.
             self.segments.append(segment)
         }
+    }
+
+    mutating func appendCLICommentary(_ text: String, before tool: OpenClawChatPendingToolCall, runID: String) {
+        let message = OpenClawChatMessage(
+            role: "assistant",
+            content: [.init(type: "text", text: text)],
+            timestamp: tool.startedAt,
+            transcriptRunID: runID,
+            phase: "commentary")
+        self.segments.append(Segment(
+            runID: runID, itemID: nil, eventID: tool.id, followingCallID: tool.id, sequence: nil, message: message))
     }
 
     func projecting(_ messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
@@ -83,12 +100,26 @@ struct ChatNarration {
         var messages = messages
         let previousCount = self.segments.count
         self.segments.removeAll { segment in
-            guard let itemID = segment.itemID,
-                  let index = messages.firstIndex(where: {
-                      $0.streamSegmentID == itemID &&
-                          ($0.transcriptRunID ?? $0.streamFallback?.runId) == segment.runID
-                  })
-            else { return settled }
+            let index: Int?
+            if let itemID = segment.itemID {
+                index = messages.firstIndex {
+                    $0.streamSegmentID == itemID && ($0.transcriptRunID ?? $0.streamFallback?.runId) == segment.runID
+                }
+            } else if let callID = segment.followingCallID,
+                      let call = messages.firstIndex(where: { message in
+                          (message.workRunID == nil || message.workRunID == segment.runID) &&
+                              message.content.contains { $0.isToolCall && $0.id == callID }
+                      }), call > messages.startIndex
+            {
+                // CLI history has no segment ID. Its exact following call identifies this
+                // commentary, even if another step narrated the same words.
+                let previous = messages[call - 1]
+                index = previous.role == "assistant" && previous.rawText == segment.message.rawText &&
+                    (previous.workRunID == nil || previous.workRunID == segment.runID) ? call - 1 : nil
+            } else {
+                index = nil
+            }
+            guard let index else { return settled }
             // Retire the transient copy while preserving the canonical Markdown
             // and the live row's SwiftUI identity across the handoff.
             messages[index].id = segment.message.id
@@ -101,6 +132,29 @@ struct ChatNarration {
 extension OpenClawChatViewModel {
     var transcriptMessages: [OpenClawChatMessage] {
         self.narration.projecting(self.messages)
+    }
+
+    /// The CLI streams one cumulative assistant item across tool calls. Only its unsealed
+    /// suffix belongs in the trailing bubble; a terminal replacement starts its own text.
+    func updateCLIAssistantText(_ text: String, runID: String) {
+        let prior = self.cliAssistantStream
+        let prefix = prior?.runID == runID ? prior?.sealedPrefix ?? "" : ""
+        let sealed = text.hasPrefix(prefix) ? prefix : ""
+        self.cliAssistantStream = (runID, text, sealed)
+        let suffix = sealed.isEmpty ? text : String(text.dropFirst(sealed.count).drop(while: { $0.isNewline }))
+        self.updateStreamingAssistantText(suffix.isEmpty ? nil : suffix, runID: runID)
+    }
+
+    func sealCLIAssistantText(before tool: OpenClawChatPendingToolCall) {
+        guard var source = self.cliAssistantStream, source.runID == tool.runID,
+              self.streamingAssistantRunID == source.runID, let text = self.streamingAssistantText
+        else { return }
+        if let visible = self.liveText(text), !visible.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            self.narration.appendCLICommentary(visible, before: tool, runID: source.runID)
+        }
+        source.sealedPrefix = source.text
+        self.cliAssistantStream = source
+        self.updateStreamingAssistantText(nil)
     }
 
     func handleAgentNarration(_ event: OpenClawAgentEventPayload) {

@@ -134,7 +134,7 @@ it("hides the history owner's card only in this pane without rekeying the compos
     {
       sessionKey: "notes",
       knownState: {},
-      limit: 80,
+      limit: 24,
       maxBytes: 256 * 1024,
       toolResultMaxChars: 2_000,
     },

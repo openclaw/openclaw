@@ -194,8 +194,7 @@ it.each(["/dashboard/main", "/dashboard/main/abcdef12"])(
   },
 );
 
-it.each([false, true])("opens early dashboard history (compact %s)", async (compact) => {
-  saveSettings({ ...loadSettings(), compactSessionOpening: compact });
+it("opens early dashboard history with 24 messages", async () => {
   window.history.replaceState({}, "", "/dashboard/main/dashboard/proof");
   early = startEarlyApplicationGateway(prepareApplicationStartup());
   expect(early).toBeDefined();
@@ -220,7 +219,7 @@ it.each([false, true])("opens early dashboard history (compact %s)", async (comp
       params: expect.objectContaining({
         key: "agent:main:dashboard:proof",
         initialHistory: {
-          limit: compact ? 24 : 80,
+          limit: 24,
           knownState: {},
           maxBytes: 262144,
           toolResultMaxChars: 2000,

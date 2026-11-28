@@ -54,6 +54,7 @@ export function captureOpenClawStateReadContextWithAdmission(
         return capturedAdmission.identity;
       },
       captureIntegrity: capturedAdmission.captureIntegrity,
+      isCurrent: () => capturedAdmission.isCurrent() && schema.isCurrent(),
       assertCurrent() {
         capturedAdmission.assertCurrent();
         schema.assertCurrent();

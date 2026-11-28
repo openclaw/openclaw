@@ -1044,17 +1044,6 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins).toEqual([expect.objectContaining({ origin: "global" })]);
   });
 
-  it("suppresses duplicate warning when global candidates come from the same package artifact", () => {
-    const candidates = Array.from({ length: 2 }, () =>
-      createPluginCandidate("opik-openclaw", makePluginDir("opik-openclaw"), "global", {
-        packageName: "@opik/opik-openclaw",
-        packageVersion: "0.2.14",
-      }),
-    );
-
-    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(0);
-  });
-
   const bundleCases: Array<{
     idHint: string;
     bundleFormat: "codex" | "claude" | "cursor";

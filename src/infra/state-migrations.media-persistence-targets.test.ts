@@ -235,7 +235,9 @@ it("preserves missing registrations while pruning archived registrations", async
   expect(result.changes).toEqual([
     `Removed archived or transient agent database registry entry ${archivedPath}.`,
   ]);
-  expect(result.warnings).toContain(`Skipped missing registered agent database ${missingPath}.`);
+  expect(result.warnings).toContain(
+    `Skipped missing registered agent database ${missingPath}. If agent "missing" is retired, run openclaw agents delete missing to remove its registration.`,
+  );
   expect(registrations(true)).toEqual([
     expect.objectContaining({ agentId: "missing", path: missingPath }),
   ]);

@@ -302,7 +302,6 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         : hasWriteScope
       : hasWriteScope || mutationAccess.composeScope.allowed || suggestionViewer;
     const nativeConversation = !catalog && !suggestionViewer;
-    const compactFind = nativeConversation && state.settings.compactSessionOpening;
     // Placement progress explains its gate; other gates need a reason or a banner.
     const disabledReason = nativeConversation
       ? (selectedSession?.sendDisabledReason ??
@@ -457,7 +456,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
                 this.history.loadingOlder ||
                 (catalogKey ? this.history.catalogLoading : state.chatLoading),
               onShowEarlier: () => void this.loadOlderMessages(),
-              onSearchEarlier: compactFind && !state.chatLoading ? this.searchEarlier : undefined,
+              onSearchEarlier:
+                nativeConversation && !state.chatLoading ? this.searchEarlier : undefined,
             }
           : undefined,
       catalogPreviewImage: catalog ? this.history.catalogPreviewImage : undefined,

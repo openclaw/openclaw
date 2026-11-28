@@ -37,6 +37,8 @@ struct SettingsProTab: View {
     @State var isRefreshingGateway = false
     @State var connectingGateway: GatewayConnectionAttempt?
     @State var gatewayRegistry = GatewaySettingsStore.GatewayRegistry.empty
+    @State var renamingGateway: GatewaySettingsStore.GatewayRegistryEntry?
+    @State var gatewayNameDraft = ""
     @State var pendingForgetGateway: GatewaySettingsStore.GatewayRegistryEntry?
     @State var gatewayAuthFields = GatewayConnectionController.ManualAuthOverride.Fields()
     @State var manualGatewayPortText = ""
@@ -295,20 +297,42 @@ struct SettingsProTab: View {
                 Text(self.scannerError ?? "")
                     .font(OpenClawType.subhead)
             }
-            .confirmationDialog(
-                String(
-                    format: String(localized: "Forget %@?"),
-                    self.pendingForgetGateway?.name ?? String(localized: "gateway")),
+            .alert(
+                String(localized: "Rename connection"),
                 isPresented: Binding(
-                    get: { self.pendingForgetGateway != nil },
-                    set: {
-                        if !$0 {
-                            self.pendingForgetGateway = nil
-                        }
-                    }),
-                titleVisibility: .visible,
-                // The action only schedules Task; dismissal clears state before that task resumes.
-                presenting: self.pendingForgetGateway)
+                    get: { self.renamingGateway != nil },
+                    set: { if !$0 { self.renamingGateway = nil } }),
+                presenting: self.renamingGateway)
+            { entry in
+                TextField(text: self.$gatewayNameDraft) { Text("Name").font(SettingsType.label) }
+                    .font(SettingsType.label)
+                    .autocorrectionDisabled()
+                Button(role: .cancel) {} label: { Text("Cancel").font(OpenClawType.subhead) }
+                Button {
+                    if !GatewaySettingsStore.setGatewayName(self.gatewayNameDraft, stableID: entry.stableID) {
+                        self.gatewayActionStatusText = String(localized: "Couldn’t save the name")
+                    }
+                } label: { Text("Save").font(OpenClawType.subheadSemiBold) }
+                    .disabled(self.gatewayNameDraft.trimmedNonEmpty == nil)
+                    .keyboardShortcut(.defaultAction)
+            } message: { entry in
+                Text(verbatim: self.gatewayEndpointSummary(entry)).font(SettingsType.description)
+            }
+            .confirmationDialog(
+                    String(
+                        format: String(localized: "Forget %@?"),
+                        self.pendingForgetGateway
+                            .map(self.gatewayRegistry.compactName) ?? String(localized: "Connection")),
+                    isPresented: Binding(
+                        get: { self.pendingForgetGateway != nil },
+                        set: {
+                            if !$0 {
+                                self.pendingForgetGateway = nil
+                            }
+                        }),
+                    titleVisibility: .visible,
+                    // The action only schedules Task; dismissal clears state before that task resumes.
+                    presenting: self.pendingForgetGateway)
             { entry in
                 Button(role: .destructive) {
                     Task { await self.forgetGateway(entry) }
@@ -322,14 +346,14 @@ struct SettingsProTab: View {
                     Text("Cancel")
                         .font(OpenClawType.subheadSemiBold)
                 }
-            } message: { _ in
-                // Keep the extraction key contiguous for the native localization inventory.
-                Text(
-                    String(
-                        localized:
-                        "This removes saved credentials, device access, TLS trust, and cached chats for this gateway."))
-                    .font(OpenClawType.subhead)
-            }
+                } message: { _ in
+                    // Keep the extraction key contiguous for the native localization inventory.
+                    Text(
+                        String(
+                            localized:
+                            "This removes credentials, device access, TLS trust, and chats saved for this connection."))
+                        .font(OpenClawType.subhead)
+                }
     }
 
     private func applyGatewaySetupRequestIfNeeded() {

@@ -3360,7 +3360,7 @@ private func pendingHandoffDiagnostic(
             expectedID = "manual|127.0.0.1|3"
         case .failure:
             let failed = await controller.connectManual(host: "127.0.0.1", port: 70000, useTLS: false)
-            #expect(failed == .failed("This paired gateway has an invalid saved endpoint."))
+            #expect(failed == .failed("Couldn’t connect. Check this host’s address."))
             expectedID = currentID
         }
         #expect(controller.hasPendingConnectionHandoff)
@@ -3426,7 +3426,7 @@ private func pendingHandoffDiagnostic(
 
         let result = await controller.switchToGateway(stableID: discoveredID)
 
-        #expect(result == .failed("Kitchen Gateway is not currently discoverable on this network."))
+        #expect(result == .failed("Couldn’t find Kitchen Gateway on this network."))
         #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == activeID)
         #expect(appModel.activeGatewayConnectConfig == nil)
     }
@@ -3452,7 +3452,7 @@ private func pendingHandoffDiagnostic(
 
         let result = await controller.connectActiveGateway()
 
-        #expect(result == .failed("Kitchen Gateway is not currently discoverable on this network."))
+        #expect(result == .failed("Couldn’t find Kitchen Gateway on this network."))
         #expect(GatewaySettingsStore.activeGatewayEntry()?.stableID == discoveredID)
         #expect(appModel.activeGatewayConnectConfig == nil)
     }

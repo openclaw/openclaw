@@ -23,6 +23,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 
 function readLegacyRecord(json: string | null) {
@@ -73,32 +74,48 @@ function createRetiredWidgetPreview(row: ReturnType<typeof listLegacyWidgets>[nu
 </details></article>`;
 }
 
+/** The agent databases holding widgets the retirement rewrites, read-only. */
+function inspectLegacyWidgetTargets(cfg: OpenClawConfig, env: NodeJS.ProcessEnv) {
+  const warnings: string[] = [];
+  const targets = listExistingAgentDatabaseTargets(cfg, env);
+  const pending = targets.filter((target) => {
+    try {
+      const inspected = withOpenClawAgentDatabaseReadOnly(
+        (database) => listLegacyWidgets(database.db).length,
+        resolveTargetSqliteOptions(target, env),
+      );
+      return inspected.found && inspected.value > 0;
+    } catch (error) {
+      warnings.push(
+        `Could not inspect retired board widgets in agent ${target.agentId}: ${formatErrorMessage(error)}. Run openclaw doctor --fix after resolving the database warning.`,
+      );
+      return false;
+    }
+  });
+  return { targets, pending, warnings };
+}
+
+/** Read-only: whether {@link retireDoctorA2uiWidgets} would rewrite a widget. */
+export function checkDoctorA2uiWidgetsPending(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): DoctorMaintenancePending {
+  const { pending, warnings } = inspectLegacyWidgetTargets(params.cfg, params.env);
+  return pending.length > 0 ? "work" : warnings.length > 0 ? "undecidable" : "none";
+}
+
 /** Retire A2UI and preserve other removed renderers as inert HTML before canonical board reads. */
 export async function retireDoctorA2uiWidgets(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   integrityCheck?: "quick" | "full";
 }): Promise<MigrationMessages> {
+  const { targets, pending, warnings } = inspectLegacyWidgetTargets(params.cfg, params.env);
   const result: MigrationMessages = {
     changes: [],
-    warnings: [],
+    warnings,
     warningDisposition: "recoverable",
   };
-  const targets = listExistingAgentDatabaseTargets(params.cfg, params.env);
-  const pending = targets.filter((target) => {
-    try {
-      const inspected = withOpenClawAgentDatabaseReadOnly(
-        (database) => listLegacyWidgets(database.db).length,
-        resolveTargetSqliteOptions(target, params.env),
-      );
-      return inspected.found && inspected.value > 0;
-    } catch (error) {
-      result.warnings.push(
-        `Could not inspect retired board widgets in agent ${target.agentId}: ${formatErrorMessage(error)}. Run openclaw doctor --fix after resolving the database warning.`,
-      );
-      return false;
-    }
-  });
   if (pending.length === 0) {
     return result;
   }
