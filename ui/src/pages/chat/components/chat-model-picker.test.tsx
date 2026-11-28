@@ -40,6 +40,8 @@ function accountSection(
   selectionKind: "automatic" | "personal" = "automatic",
 ) {
   return {
+    preferredAccountLabel: undefined,
+    canBrowsePersonalAccounts: true,
     prefetch: undefined,
     onClose() {},
     viewProps: (startIndex: number) => ({

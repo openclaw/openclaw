@@ -134,6 +134,57 @@ describe("Codex app-server model catalog", () => {
     }
   });
 
+  it("binds the local managed profile to the workspace observed after login, not an email match", async () => {
+    profiles.store.profiles["openai:work"] = {
+      type: "oauth",
+      provider: "openai",
+      access: [
+        "fixture",
+        Buffer.from(
+          JSON.stringify({
+            "https://api.openai.com/auth": {
+              chatgpt_account_id: "workspace-a",
+              chatgpt_user_id: "user-a",
+            },
+          }),
+        ).toString("base64url"),
+        "fixture",
+      ].join("."),
+      refresh: "test",
+      expires: Date.now() + 600_000,
+      accountId: "workspace-a",
+      email: "shared@example.test",
+    };
+    listModelsMock.mockResolvedValue(opaqueCatalog());
+    const observed = (id: string, userId: string | null = "user-a") =>
+      rpc.request.mockResolvedValue({
+        account: { type: "chatgpt", email: "shared@example.test" },
+        workspaceRouting: { chatgptAccountId: id },
+        userId,
+        requiresOpenaiAuth: true,
+      });
+    for (const userId of ["user-b", null]) {
+      observed("workspace-a", userId);
+      await owner.load(catalogParams, undefined);
+      expect(read()?.managedAccount).toBeUndefined();
+    }
+    observed("workspace-a");
+    await owner.load(catalogParams, undefined);
+    expect(read()?.managedAccount).toEqual({
+      profileId: "openai:work",
+      accountId: "workspace-a",
+      userId: "user-a",
+    });
+    rpc.epoch++;
+    expect(read()).toBeUndefined();
+    observed("workspace-b");
+    await owner.load(catalogParams, undefined);
+    expect(read()?.managedAccount).toBeUndefined();
+    observed("workspace-a");
+    await owner.load(catalogParams, nativePluginConfig);
+    expect(read({}, nativePluginConfig)?.managedAccount).toBeUndefined();
+  });
+
   it("keeps native picker models independent of a host transport", async () => {
     listModelsMock.mockResolvedValue({
       models: [

@@ -467,7 +467,9 @@ export type CodexGetAccountResponse = {
     | { type: "amazonBedrock"; usesCodexManagedCredentials?: boolean }
     | { type: "gcp" }
     | null;
+  userId?: string | null;
   requiresOpenaiAuth: boolean;
+  workspaceRouting?: { chatgptAccountId: string } | null;
 };
 
 export type CodexChatgptAuthTokensRefreshResponse = {

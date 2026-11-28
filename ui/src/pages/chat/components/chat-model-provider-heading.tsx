@@ -64,12 +64,12 @@ export function prepareChatModelProviderAuth(
 }
 
 export function ChatLockedModelHeading(
-  props: Pick<ChatModelPickerParams, "triggerModelLabel" | "nativeLoginLabel">,
+  props: Pick<ChatModelPickerParams, "triggerModelLabel" | "codexLoginLabel">,
 ) {
   return (
     <div class="chat-controls__locked-model" aria-label={t("chat.selectors.modelLockedLabel")}>
       <span class="chat-controls__locked-model-value">{props.triggerModelLabel}</span>
-      <Show when={props.nativeLoginLabel}>
+      <Show when={props.codexLoginLabel}>
         {(label) => <span class="chat-controls__auth-meta">{label()}</span>}
       </Show>
       <span class="chat-controls__locked-model-badge">{t("chat.selectors.modelLocked")}</span>
@@ -87,7 +87,7 @@ export function ChatModelProviderHeading(props: {
   providerAuth: ReadonlyMap<string, ModelProviderAuthLabel>;
   runtime: string | null;
   accounts: ReturnType<ChatModelAccountSection["viewProps"]> | undefined;
-  nativeLoginLabel?: string;
+  codexLoginLabel?: string;
   onSettings: ChatModelPickerParams["onProviderSettings"];
 }) {
   const auth = createMemo(() =>
@@ -113,10 +113,10 @@ export function ChatModelProviderHeading(props: {
     <div class="chat-controls__provider-heading" data-chat-model-provider={props.provider}>
       <span class="chat-controls__provider-label">{props.label}</span>
       <Show when={!props.favorites}>
-        {props.nativeLoginLabel ? (
-          <span class="chat-controls__auth-meta">{props.nativeLoginLabel}</span>
-        ) : props.accounts ? (
-          <ChatModelAccountSectionView {...props.accounts} />
+        {props.accounts && (!props.codexLoginLabel || !props.accounts.disabled) ? (
+          <ChatModelAccountSectionView {...props.accounts} triggerLabel={props.codexLoginLabel} />
+        ) : props.codexLoginLabel ? (
+          <span class="chat-controls__auth-meta">{props.codexLoginLabel}</span>
         ) : showAuth() ? (
           <span class="chat-controls__auth-meta" data-auth-kind={auth()?.kind}>
             <span class="chat-controls__auth-meta-label">

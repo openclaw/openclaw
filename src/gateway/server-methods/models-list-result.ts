@@ -72,7 +72,7 @@ import {
   projectModelServiceTiers,
   projectProviderCatalogOutcomes,
   projectRuntimeLogin,
-  retainModelChoiceAccountPin,
+  retainChoiceAccountFacts,
 } from "./models-list-public-projection.js";
 import { resolveDefaultModelsPreview } from "./models-list-result.default-models.js";
 import { prepareModelPickerRuntimeProjection } from "./models-list-runtime-choices.js";
@@ -104,8 +104,7 @@ export async function prepareModelsListResult({
   preparationAuthority,
   ...params
 }: BuildModelsListResultParams): Promise<PreparedModelsListResult> {
-  const { source } = params;
-  const scope = params.readScope;
+  const { source, readScope: scope } = params;
   const publicationScope = params.publicationScope ?? scope;
   const draft = scope?.draftAccountSelection;
   const authority =
@@ -574,7 +573,8 @@ export async function prepareModelsListResult({
               }
             : {}),
         };
-        return retainModelChoiceAccountPin(choice, decisions.hasPinnedAccount(entry));
+        const baseAuth = runtimeChoice ? undefined : evaluation;
+        return retainChoiceAccountFacts(choice, decisions.hasPinnedAccount(entry), baseAuth);
       };
     };
 

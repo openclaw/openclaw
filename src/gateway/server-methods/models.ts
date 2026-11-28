@@ -26,6 +26,7 @@ import type { ChatMetadataReadParams } from "./chat-metadata-contract.js";
 import { resolveChatMetadataReadParams } from "./chat-metadata-handler.js";
 import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
 import { UnknownModelCatalogProviderError } from "./models-list-capabilities.js";
+import { prepareManagedCodexAccountDisplay } from "./models-list-codex-account.js";
 import { buildModelsListResult } from "./models-list-result.js";
 import { projectModelsProviderPresentation } from "./models-provider-presentation.js";
 import { createPreparedReadHandler } from "./prepared-read.js";
@@ -162,6 +163,10 @@ export const modelsHandlers: GatewayRequestHandlers = {
                     assertCurrent,
                   })
                 : undefined;
+            const readAccountDisplay =
+              scope?.sessionKey && !runtimeOwnership && params.view !== "provider-config"
+                ? await prepareManagedCodexAccountDisplay(options, scope, result)
+                : undefined;
             const publish = () => {
               assertCurrent();
               const currentConfig = context.getRuntimeConfig();
@@ -180,7 +185,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
                         : {}),
                       models: projectSessionModelCatalog(
                         scope ?? { agentId: resolved.agentId },
-                        result.models,
+                        readAccountDisplay?.() ?? result.models,
                         currentConfig,
                         runtimeOwnership,
                       ),

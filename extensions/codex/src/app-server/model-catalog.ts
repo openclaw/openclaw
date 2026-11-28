@@ -1,6 +1,7 @@
 import type { AgentHarnessModelCatalogParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderCatalogOutcome } from "openclaw/plugin-sdk/provider-catalog-shared";
+import { resolveOpenAICodexAuthIdentity } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileStore,
@@ -62,6 +63,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
     models?: ReadonlySet<string>;
     accountType?: "apiKey" | "chatgpt";
     authMode?: string;
+    managedAccount?: { profileId: string; accountId: string; userId: string };
     isCurrent?: () => boolean;
   };
   const scopes = new WeakMap<AgentHarnessModelCatalogParams["config"], Map<string, Observation>>();
@@ -86,6 +88,7 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         observation.isCurrent?.()
         ? {
             accountType: observation.accountType,
+            ...(observation.managedAccount ? { managedAccount: observation.managedAccount } : {}),
             ...(observation.authMode ? { authMode: observation.authMode } : {}),
           }
         : undefined;
@@ -181,7 +184,13 @@ export function createCodexAppServerModelCatalog(runtime: string) {
                 ? observedType
                 : undefined
               : undefined;
-            return { models, isCurrent, accountType } as const;
+            return {
+              models,
+              isCurrent,
+              accountType,
+              accountId: account.workspaceRouting?.chatgptAccountId,
+              userId: account.userId,
+            } as const;
           } catch (error) {
             // Discovery owns its deadline; retire unanswered work without aborting sibling leases.
             if (isCodexAppServerIndeterminateRequestCancellationError(error)) {
@@ -202,6 +211,26 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         ((native?.mode === "oauth" || native?.mode === "token") && result.accountType === "chatgpt")
           ? result.accountType
           : undefined;
+      // Only this local, agent-home client received our selected profile. account/read reports
+      // its current workspace and person; a shared workspace or email cannot identify a login.
+      const credential = authProfileId && authProfileStore?.profiles[authProfileId];
+      if (
+        authProfileId &&
+        credential &&
+        credential.type === "oauth" &&
+        observation.accountType === "chatgpt" &&
+        configured.appServer?.workerHostedCloud !== true &&
+        result.accountId &&
+        credential.accountId === result.accountId &&
+        result.userId &&
+        resolveOpenAICodexAuthIdentity(credential).userId === result.userId
+      ) {
+        observation.managedAccount = {
+          profileId: authProfileId,
+          accountId: result.accountId,
+          userId: result.userId,
+        };
+      }
       observation.isCurrent = result.isCurrent;
       // A remote ChatGPT account does not distinguish OAuth from caller-supplied tokens.
       // Carry the local mode only after its account type matches this discovery observation.

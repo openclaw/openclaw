@@ -775,6 +775,8 @@ it("opens account choices without covering model choices while closed", async ()
   await page.viewport(1280, 900);
   const { picker, params, update, toggle, trigger } = mountPicker();
   params.accountSection = {
+    preferredAccountLabel: undefined,
+    canBrowsePersonalAccounts: true,
     prefetch: undefined,
     onClose() {},
     viewProps: (startIndex) => ({

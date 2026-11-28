@@ -19,6 +19,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { AgentRuntimePolicyScope } from "../../agents/model-runtime-policy.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { retainManagedCodexProfile } from "./models-list-public-projection.js";
 
 type CatalogDecisions = ReturnType<typeof createModelCatalogDecisions>;
 
@@ -130,11 +131,13 @@ function prepareModelPickerRuntimeChoices(
               : { unavailableUntil: evaluation.unavailableUntil }),
           } satisfies ModelRuntimeChoice;
         }
-        return {
+        const choice: ModelRuntimeChoice = {
           ...capabilities,
           agentRuntime: runtime,
           available: evaluation.availability === true,
-        } satisfies ModelRuntimeChoice;
+        };
+        retainManagedCodexProfile(choice, entry.provider, evaluation);
+        return choice;
       };
     });
   return () => {

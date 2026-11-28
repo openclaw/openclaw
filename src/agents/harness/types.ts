@@ -743,11 +743,19 @@ type AgentHarnessContract<
    * Reads current, secret-free native account evidence for this exact catalog scope/model.
    * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is
    * picker metadata only, never execution authorization or a host-route credential.
-   * When known, authMode describes this same account observation.
+   * When known, authMode describes this same account observation. managedAccount names a
+   * host profile only when the runtime observed that exact authenticated account after handoff.
+   * This is private display provenance, never client input or a change of execution authority.
    */
   readModelCatalogReadiness?(
     params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
-  ): { accountType: string; authMode?: string } | undefined;
+  ):
+    | {
+        accountType: string;
+        authMode?: string;
+        managedAccount?: { profileId: string; accountId: string; userId: string };
+      }
+    | undefined;
 };
 
 /**

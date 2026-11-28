@@ -538,17 +538,26 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
       catalog.entry(currentOverride || defaultModel),
       triggerRuntime,
     );
-    const nativeLoginLabel =
+    // Never borrow a private account label from a retained or transitioning session view.
+    const accountLabel =
+      props.connected &&
+      !props.modelSwitching &&
+      props.sessionRowCurrent !== false &&
+      catalogState.status === "ready"
+        ? selectedRoute?.codexAccountLabel
+        : undefined;
+    const codexLoginLabel =
       props.selectedSession &&
       !workerInference &&
       !retired &&
       !uninitialized &&
       (!props.modelSelectionLocked || currentOverride) &&
       selectedRoute?.available === true &&
-      selectedRoute.usesRuntimeLogin &&
+      (selectedRoute.usesRuntimeLogin || selectedRoute.codexAccountLabel !== undefined) &&
       selectedRoute.agentRuntime?.id === "codex"
-        ? t("chat.modelAccounts.codexLogin")
+        ? [t("chat.modelAccounts.codexLogin"), accountLabel].filter(Boolean).join(" · ")
         : undefined;
+    const nativeLogin = Boolean(codexLoginLabel && selectedRoute?.usesRuntimeLogin);
     const effectiveAccessProgram =
       !retired && !uninitialized && !props.modelSwitching
         ? selectedRoute?.cyberAccessProgramDefault
@@ -587,8 +596,8 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
           props.accountSelection?.kind === "automatic"
             ? undefined
             : props.accountSelection?.authProfileId,
-        nativeLoginLabel,
-        accountSection: nativeLoginLabel
+        codexLoginLabel,
+        accountSection: nativeLogin
           ? undefined
           : props.renderAccountSection?.(currentOverride || defaultModel),
         contextWindow:
@@ -643,7 +652,7 @@ function createChatModelControls(props: ModelControlsViewProps): Accessor<{
           policy?.restricted || retired || uninitialized ? undefined : props.onModelSetup,
         onProviderSettings:
           policy?.restricted || retired || uninitialized ? undefined : props.onProviderSettings,
-        onOpen: () => props.onModelPickerOpen?.(!nativeLoginLabel),
+        onOpen: () => props.onModelPickerOpen?.(!nativeLogin),
         onOpenChange: props.onModelPickerOpenChange,
         onModelSelect: async (next, targetSessionKey, agentRuntime) =>
           props.onModelSelect?.(next, targetSessionKey, agentRuntime),

@@ -39,7 +39,7 @@ export type ChatModelPickerParams = {
   modelAuthStatusResult?: ModelAuthStatusResult | null;
   authProfileId?: string;
   accountSection?: ChatModelAccountSection;
-  nativeLoginLabel?: string;
+  codexLoginLabel?: string;
   contextWindow?: ChatContextWindowControlParams;
   disabled: boolean;
   disabledReason?: string;

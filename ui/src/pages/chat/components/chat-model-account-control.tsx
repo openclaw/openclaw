@@ -37,7 +37,7 @@ function AccountPageSentinel(props: { onVisible: () => void }) {
 }
 
 export function ChatModelAccountSectionView(
-  props: ReturnType<ChatModelAccountSection["viewProps"]>,
+  props: ReturnType<ChatModelAccountSection["viewProps"]> & { triggerLabel?: string },
 ) {
   const id = createUniqueId();
   const pending = () => !props.disabled && !props.open && props.loading === "initial";
@@ -63,10 +63,11 @@ export function ChatModelAccountSectionView(
         trigger={
           <>
             <span class="chat-controls__account-selection">
-              {props.selectionKind === "automatic"
-                ? t("chat.modelAccounts.automaticTrigger")
-                : (props.options.find((option) => option.value === props.currentValue)?.label ??
-                  props.selectedIdentity)}
+              {props.triggerLabel ??
+                (props.selectionKind === "automatic"
+                  ? t("chat.modelAccounts.automaticTrigger")
+                  : (props.options.find((option) => option.value === props.currentValue)?.label ??
+                    props.selectedIdentity))}
             </span>
             <Show when={!props.disabled}>
               <Show when={pending()} fallback={<Icon name="chevronDown" />}>

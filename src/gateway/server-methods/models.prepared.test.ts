@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import * as pluginScope from "../../plugins/runtime/gateway-request-scope.js";
 import { connectUserModelAccount } from "../../state/user-model-accounts.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { authorizationClient } from "../server-methods.authorization.test-support.js";
@@ -28,6 +29,7 @@ import {
   createChatMetadataHarness,
   createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
+import * as sessionProjection from "./chat-metadata-session-projection.js";
 import * as modelsListResult from "./models-list-result.js";
 import {
   createModelsListTestContext,
@@ -280,6 +282,177 @@ it("publishes catalog status and policy changes while retaining a retired owner 
     },
   );
 });
+
+it.each(["codex", "openclaw"] as const)(
+  "displays the selected managed Codex workspace with %s as the base runtime",
+  async (baseRuntime) => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "managed-codex-label-",
+        agentEnv: "main",
+        env: WITHOUT_OPENAI_ENV_AUTH,
+      },
+      async (state) => {
+        const id = "gpt-5.5";
+        const provider = "openai";
+        const sessionKey = "agent:main:managed-codex";
+        const profileId = "openai:selected";
+        const alternate = "openai:alternate";
+        const workspace = "synthetic-workspace-a";
+        const creator = ensureProfileForEmail("creator@example.test");
+        const viewer = ensureProfileForEmail("viewer@example.test");
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+        const config: OpenClawConfig = {
+          agents: {
+            entries: { main: {} },
+            defaults: {
+              model: `openai/${id}`,
+              workspace: state.workspaceDir,
+              models: {
+                [`openai/${id}`]: { agentRuntime: { id: baseRuntime }, pickerRuntimes: ["codex"] },
+              },
+            },
+          },
+          auth: { order: { openai: [profileId, alternate] } },
+        };
+        await state.writeConfig(config);
+        setRuntimeConfigSnapshot(config);
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: "managed-codex",
+            visibility: "read-only",
+            createdActor: { type: "human", source: "profile", id: creator.id },
+            updatedAt: 1,
+            authProfileOverride: profileId,
+            authProfileOverrideSource: "user",
+            agentRuntimeOverride: "codex",
+          },
+        );
+        const accessFor = (user: string) =>
+          "fixture." +
+          Buffer.from(
+            JSON.stringify({
+              "https://api.openai.com/auth": {
+                chatgpt_user_id: user,
+                chatgpt_account_id: workspace,
+              },
+            }),
+          ).toString("base64url") +
+          ".fixture";
+        const selected = {
+          type: "oauth" as const,
+          provider,
+          accountId: workspace,
+          access: accessFor("user-a"),
+          refresh: "synthetic",
+          expires: Date.now() + 600_000,
+          displayName: "Research",
+          email: "fixture@example.test",
+        };
+        const other = { ...selected, accountId: "synthetic-workspace-b" };
+        const authStore: AuthProfileStore = {
+          version: 1,
+          profiles: { [profileId]: selected, [alternate]: other },
+        };
+        let seen = workspace;
+        const pluginRegistry = harnessRegistry("codex", {
+          authBootstrap: "harness",
+          readModelCatalogReadiness: () => ({
+            accountType: "chatgpt",
+            managedAccount: { profileId, accountId: seen, userId: "user-a" },
+          }),
+        });
+        const listedModelIds = [id];
+        const context = createModelsListTestContext({
+          cfg: config,
+          catalog: [
+            {
+              ...catalogEntry(id, "openai-chatgpt-responses"),
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+            },
+          ],
+          agentDir: state.agentDir(),
+          workspaceDir: state.workspaceDir,
+          catalogComplete: true,
+          pluginRegistry,
+          preparedAuthStore: authStore,
+          catalogDiagnostics: {
+            providerOutcomes: [{ provider, profileId: alternate, status: "ready", listedModelIds }],
+          },
+        });
+        const read = (scope: string, person = creator) =>
+          modelsReader(
+            context,
+            { agentId: "main", sessionKey, view: "configured" },
+            authorizationClient("member", [scope], {
+              authenticatedUserProfile: gatewayProfile(
+                person.id,
+                person.displayName,
+                person.updatedAt,
+              ),
+            }),
+          )();
+        const managed = (await read("operator.admin"))?.models[0];
+        if (baseRuntime === "openclaw") {
+          expect(managed?.agentRuntime?.id).toBe("openclaw");
+          expect(managed).not.toHaveProperty("codexAccountLabel");
+          expect(managed?.runtimeChoices).toMatchObject([
+            { agentRuntime: { id: "codex" }, available: true, codexAccountLabel: "Research" },
+          ]);
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey },
+            { agentRuntimeOverride: undefined },
+          );
+          const offered = (await read("operator.admin"))?.models[0];
+          expect(offered?.runtimeChoices?.[0]).toMatchObject({
+            agentRuntime: { id: "codex" },
+            available: true,
+          });
+          expect(JSON.stringify(offered)).not.toContain("codexAccountLabel");
+          return;
+        }
+        expect(managed?.codexAccountLabel).toBe("Research");
+        expect(managed).not.toHaveProperty("usesRuntimeLogin");
+        const readOnly = await read("operator.write", viewer);
+        expect(readOnly?.models[0]?.codexAccountLabel).toBeNull();
+        const editor = await read("operator.write");
+        expect(editor?.models[0]?.codexAccountLabel).toBe("Shared account 2");
+        expect(JSON.stringify(editor)).not.toMatch(
+          /Research|fixture@example|openai:selected|synthetic-workspace/,
+        );
+        selected.displayName = "";
+        expect((await read("operator.admin"))?.models[0]?.codexAccountLabel).toBe(
+          "fixture@example.test",
+        );
+        expect((await read("operator.read"))?.models[0]?.codexAccountLabel).toBeNull();
+        listedModelIds.length = 0;
+        expect((await read("operator.admin"))?.models[0]?.codexAccountLabel).toBeNull();
+        listedModelIds.push(id);
+        other.accountId = workspace;
+        const single = (await read("operator.admin"))?.models[0];
+        expect(single).not.toHaveProperty("usesRuntimeLogin");
+        expect(single?.codexAccountLabel).toBeNull();
+        other.accountId = "synthetic-workspace-b";
+        other.expires = 1;
+        expect((await read("operator.admin"))?.models[0]?.codexAccountLabel).toBeNull();
+        // Reconnecting the same profile to another person in the same workspace does not
+        // transfer the earlier local client's observed login to that person's metadata.
+        other.expires = Date.now() + 600_000;
+        selected.access = accessFor("user-b");
+        expect((await read("operator.admin"))?.models[0]).not.toHaveProperty("codexAccountLabel");
+        selected.access = accessFor("user-a");
+        seen = "changed-with-same-email";
+        using acp = vi.spyOn(sessionProjection, "prepareSessionAcpMeta");
+        const unknown = (await read("operator.admin"))?.models[0];
+        expect(unknown).not.toHaveProperty("codexAccountLabel");
+        expect(unknown).not.toHaveProperty("usesRuntimeLogin");
+        expect(acp).not.toHaveBeenCalled();
+      },
+    );
+  },
+);
 
 it("isolates saved account and runtime choices between sessions", async () => {
   await withOpenClawTestState(

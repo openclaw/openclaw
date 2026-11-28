@@ -60,7 +60,7 @@ suite.define(() => {
     });
   });
 
-  it("shows the saved personal preference in chat and only replaces the picker for confirmed native login", async () => {
+  it("distinguishes a saved preference, native login and selected managed account as the catalog changes", async () => {
     await suite.withPage({ viewport: { width: 1080, height: 760 } }, async ({ page }) => {
       const model = {
         provider: "openai",
@@ -100,6 +100,41 @@ suite.define(() => {
       await polledVisible(picker.getByText("Codex", { exact: true })).toBe(true);
       expect(await picker.locator(".chat-controls__account-trigger").count()).toBe(0);
       expect(await gateway.getRequests("users.listModelAccounts")).toEqual([]);
+
+      // On a managed route the login label is independent of personal account switching.
+      const account = {
+        authProfileId: "openai:personal",
+        label: "My account",
+        provider: "openai",
+        authType: "oauth",
+        selected: false,
+      };
+      await gateway.setMethodResponse("users.listModelAccounts", {
+        profileId: "owner",
+        accounts: [account],
+        links: [],
+      });
+      const managed = (codexAccountLabel: string | null) => ({
+        models: [{ ...model, codexAccountLabel }],
+        accountSelection: {
+          kind: "shared",
+          authProfileId: "shared-ref:fixture",
+          label: "Shared account",
+        },
+      });
+      await gateway.setMethodResponse("models.list", managed("Research"));
+      await gateway.emitGatewayEvent("chat.metadata.changed", { modelCatalogChanged: true });
+      const toggle = picker.getByRole("button", { name: "Account", exact: true });
+      await polledText(toggle).toContain("Codex · Research");
+      await gateway.setMethodResponse("models.list", managed(null));
+      await gateway.emitGatewayEvent("chat.metadata.changed", { modelCatalogChanged: true });
+      await expect.poll(() => toggle.textContent()).toBe("Codex");
+      await toggle.click();
+      const patches = await gateway.deferNext("sessions.patch");
+      await picker.getByRole("option", { name: "My account" }).click();
+      expect(
+        (await gateway.waitForRequest("sessions.patch", { after: patches })).params,
+      ).toMatchObject({ model: "openai/shared-alpha@openai:personal" });
     });
   });
 
@@ -207,8 +242,8 @@ suite.define(() => {
       const patches = await gateway.deferNext("sessions.patch");
       await search.press("Enter");
       expect(
-        (await gateway.waitForRequest("sessions.patch", { after: patches })).params.model,
-      ).toBe("openai/shared-alpha@" + profileId);
+        (await gateway.waitForRequest("sessions.patch", { after: patches })).params,
+      ).toMatchObject({ model: "openai/shared-alpha@" + profileId });
       expect(await trigger.textContent()).not.toContain("@example.test");
       expect(await trigger.getAttribute("aria-label")).not.toContain("@example.test");
       await gateway.resolveDeferred("sessions.patch", { ok: true });

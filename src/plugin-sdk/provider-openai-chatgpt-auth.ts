@@ -14,6 +14,8 @@ export type OpenAICodexAuthIdentity = {
    * ChatGPT account id used to group imported profiles under the same account.
    */
   accountId?: string;
+  /** ChatGPT person ID, distinct from the workspace and membership IDs. */
+  userId?: string;
   /**
    * ChatGPT subscription plan claim captured for diagnostics and credential metadata.
    */
@@ -66,10 +68,16 @@ export function resolveOpenAICodexAuthIdentity(params: {
   const email = normalizeOptionalString(profile.email) ?? normalizeOptionalString(params.email);
   const accountId = params.accountId ?? normalizeOptionalString(auth.chatgpt_account_id);
   const chatgptPlanType = normalizeOptionalString(auth.chatgpt_plan_type);
+  const userId =
+    normalizeOptionalString(auth.chatgpt_user_id) ?? normalizeOptionalString(auth.user_id);
+  const identity = {
+    ...(accountId ? { accountId } : {}),
+    ...(userId ? { userId } : {}),
+    ...(chatgptPlanType ? { chatgptPlanType } : {}),
+  };
   if (email) {
     return {
-      ...(accountId ? { accountId } : {}),
-      ...(chatgptPlanType ? { chatgptPlanType } : {}),
+      ...identity,
       email,
       profileName: email,
     };
@@ -81,14 +89,12 @@ export function resolveOpenAICodexAuthIdentity(params: {
     // Prefer account-scoped user ids over generic JWT subject so imports keep
     // profile names stable across token refreshes and provider migrations.
     normalizeOptionalString(auth.chatgpt_account_user_id) ??
-    normalizeOptionalString(auth.chatgpt_user_id) ??
-    normalizeOptionalString(auth.user_id) ??
+    userId ??
     // The OIDC-stable issuer/subject pair matches the shipped extension derivation.
     // Keep bare subject as the last resort for issuer-less tokens.
     (issuer && subject ? `${issuer}|${subject}` : subject);
   return {
-    ...(accountId ? { accountId } : {}),
-    ...(chatgptPlanType ? { chatgptPlanType } : {}),
+    ...identity,
     ...(stableSubject
       ? { profileName: `id-${Buffer.from(stableSubject).toString("base64url")}` }
       : {}),

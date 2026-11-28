@@ -154,6 +154,7 @@ export function renderChatModelAccountControl(
     !params.disabled &&
     params.onSelectShared &&
     route &&
+    (route.agentRuntime?.id ?? "openclaw") === "openclaw" &&
     route.available === true &&
     route.manualSelectionAllowed !== false
       ? {
@@ -391,6 +392,8 @@ export function renderChatModelAccountControl(
         }
       : undefined;
   return {
+    canBrowsePersonalAccounts:
+      personal.some((account) => account.authProfileId !== currentId) || Boolean(cursor || error),
     preferredAccountLabel:
       params.sessionKey && selection.kind !== "automatic" && selection.source !== "auto"
         ? selectedLabel

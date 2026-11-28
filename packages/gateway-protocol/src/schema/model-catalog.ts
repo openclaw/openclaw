@@ -65,6 +65,8 @@ const ModelRuntimeProperties = {
   available: Type.Optional(Type.Boolean()),
   /** This local model route uses the runtime’s confirmed login, not an OpenClaw account. */
   usesRuntimeLogin: Type.Optional(Type.Literal(true)),
+  /** Confirmed managed Codex login: null without a disclosed distinction, otherwise its display label. Absent when unconfirmed. */
+  codexAccountLabel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   /** Scoped manual-choice permission; separate from runtime readiness and automatic selection. */
   manualSelectionAllowed: Type.Optional(Type.Boolean()),
   unavailableReason: Type.Optional(ModelUnavailableReasonSchema),

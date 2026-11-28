@@ -4,6 +4,7 @@ import { asPositiveSafeInteger as resolvePositiveSafeInteger } from "@openclaw/n
 import type {
   ModelCatalogProviderOutcome,
   ModelChoice,
+  ModelRuntimeChoice,
   ModelsListResult,
 } from "../../../packages/gateway-protocol/src/schema/model-catalog.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
@@ -19,8 +20,37 @@ import type { PluginRegistry } from "../../plugins/registry-types.js";
 // Private account provenance follows each projected row, not a shared provider/model key.
 // Weak ownership keeps its catalog lifetime without exposing account selection on the wire.
 const pinnedAccountChoices = new WeakSet<ModelChoice>();
+// Only a host-selected subscription on the concrete Codex route can agree with the
+// plugin's managed login. Neither this private locator nor the observation travels on the wire.
+export const managedCodexProfileForChoice = new WeakMap<ModelChoice | ModelRuntimeChoice, string>();
 
-export function retainModelChoiceAccountPin(choice: ModelChoice, pinned: boolean): ModelChoice {
+export function retainManagedCodexProfile(
+  choice: ModelChoice | ModelRuntimeChoice,
+  provider: string,
+  evaluation: ModelAuthAvailabilityEvaluation,
+): void {
+  const credential = evaluation.selectedCredential;
+  if (
+    choice.agentRuntime?.id === "codex" &&
+    provider === "openai" &&
+    choice.available === true &&
+    !evaluation.runtimeAuth &&
+    credential?.source === "profile" &&
+    credential.requirement === "subscription" &&
+    evaluation.selectedRoute?.authRequirement === "subscription"
+  ) {
+    managedCodexProfileForChoice.set(choice, credential.profileId);
+  }
+}
+
+export function retainChoiceAccountFacts(
+  choice: ModelChoice,
+  pinned: boolean,
+  baseEvaluation: ModelAuthAvailabilityEvaluation | undefined,
+): ModelChoice {
+  if (baseEvaluation) {
+    retainManagedCodexProfile(choice, choice.provider, baseEvaluation);
+  }
   if (pinned) {
     pinnedAccountChoices.add(choice);
   }

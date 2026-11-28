@@ -126,11 +126,12 @@ export function ChatModelPickerPanel(panel: { params: ChatModelPickerParams }) {
       state().hasOptions ||
       (panel.params.accountSection && !isModelCatalogLoading(panel.params.modelCatalogState)),
   );
-  const accounts = createMemo(() =>
-    panel.params.accountSection?.viewProps(
-      state().orderedOptions.length + state().targetOptionCount,
-    ),
-  );
+  const accounts = createMemo(() => {
+    const section = panel.params.accountSection;
+    return panel.params.codexLoginLabel && !section?.canBrowsePersonalAccounts
+      ? undefined
+      : section?.viewProps(state().orderedOptions.length + state().targetOptionCount);
+  });
   // Search uses these four labels; other lazy English catalogs do not change its rows.
   const searchCopy = createMemo(
     () =>
@@ -405,8 +406,7 @@ export function ChatModelPickerPanel(panel: { params: ChatModelPickerParams }) {
     lead: ModelPickerOption[];
     more: ModelPickerOption[];
   }) {
-    const provider = createMemo(() => props.provider);
-    const selected = () => provider() === state().activeProvider;
+    const selected = () => props.provider === state().activeProvider;
     const providerLabel = () =>
       props.provider === FAVORITES_GROUP
         ? t("chat.modelFavorites.label")
@@ -426,7 +426,7 @@ export function ChatModelPickerPanel(panel: { params: ChatModelPickerParams }) {
         data-chat-model-provider-group={props.provider}
         aria-label={groupLabel()}
       >
-        {renderRow(`heading:${provider()}`, () => (
+        {renderRow(`heading:${props.provider}`, () => (
           <ChatModelProviderHeading
             provider={props.provider}
             label={providerLabel()}
@@ -436,7 +436,7 @@ export function ChatModelPickerPanel(panel: { params: ChatModelPickerParams }) {
             providerAuth={providerAuth()}
             runtime={providerRuntime(props.provider)}
             accounts={selected() ? accounts() : undefined}
-            nativeLoginLabel={selected() ? panel.params.nativeLoginLabel : undefined}
+            codexLoginLabel={selected() ? panel.params.codexLoginLabel : undefined}
             onSettings={panel.params.onProviderSettings}
           />
         ))}
@@ -453,7 +453,7 @@ export function ChatModelPickerPanel(panel: { params: ChatModelPickerParams }) {
         </ModelList>
         {props.more.length > 0 ? (
           <>
-            {renderRow(`more:${provider()}`, () => (
+            {renderRow(`more:${props.provider}`, () => (
               <button
                 class="chat-controls__inline-select-option chat-controls__model-more-toggle"
                 type="button"
@@ -695,7 +695,7 @@ export function ChatModelPickerPanel(panel: { params: ChatModelPickerParams }) {
           ) : undefined}
         </>
       )}
-      {modelSelectionLocked() && panel.params.accountSection ? (
+      {modelSelectionLocked() && accounts() ? (
         <div class="chat-controls__model-settings-block">
           <ChatModelAccountSectionView {...accounts()!} startIndex={0} />
         </div>
