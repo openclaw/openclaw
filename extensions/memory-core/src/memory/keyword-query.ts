@@ -107,6 +107,12 @@ function canonicalTermForms(term: string, tokenizer?: FtsCanonicalTokenizer): st
   });
 }
 
+function buildMatchClause(forms: string[]): TextQuery {
+  const alternatives: TextQuery[] = forms.map((text) => ({ kind: "term", text }));
+  // Alternatives belong to each word: one document can mix NFC and NFD words.
+  return alternatives.length === 1 ? alternatives[0]! : { kind: "any", clauses: alternatives };
+}
+
 export function buildMatchQueryFromTerms(
   terms: string[],
   canonicalTokenizer?: FtsCanonicalTokenizer,
@@ -115,12 +121,9 @@ export function buildMatchQueryFromTerms(
   if (terms.length === 0) {
     return null;
   }
-  const clauses: TextQuery[] = uniqueStrings(terms).map((term) => {
-    const forms = canonicalTermForms(term, canonicalTokenizer);
-    const alternatives: TextQuery[] = forms.map((text) => ({ kind: "term", text }));
-    // Alternatives belong to each word: one document can mix NFC and NFD words.
-    return alternatives.length === 1 ? alternatives[0]! : { kind: "any", clauses: alternatives };
-  });
+  const clauses = uniqueStrings(terms).map((term) =>
+    buildMatchClause(canonicalTermForms(term, canonicalTokenizer)),
+  );
   return { kind: matchAny ? "any" : "all", clauses };
 }
 
@@ -155,20 +158,28 @@ export function planKeywordSearch(params: {
     const matchQuery = buildMatchQueryFromTerms(tokens, canonicalTokenizer, params.matchAny);
     return { matchQuery, substringTerms: [], tokens };
   }
-  const matchTerms: string[] = [];
+  const matchClauses: TextQuery[] = [];
+  const seenMatchTerms = new Set<string>();
   const substringTerms: string[] = [];
   for (const token of tokens) {
+    if (seenMatchTerms.has(token)) {
+      continue;
+    }
     const forms = canonicalTermForms(token, canonicalTokenizer);
     // MATCH cannot find fewer than three code points. A decomposed spelling
     // must not hide a short composed form from the normalized substring owner.
     if (forms.some((form) => Array.from(form).length < 3)) {
       substringTerms.push(token);
     } else {
-      matchTerms.push(token);
+      seenMatchTerms.add(token);
+      matchClauses.push(buildMatchClause(forms));
     }
   }
   return {
-    matchQuery: buildMatchQueryFromTerms(matchTerms, canonicalTokenizer, params.matchAny),
+    matchQuery:
+      matchClauses.length > 0
+        ? { kind: params.matchAny ? "any" : "all", clauses: matchClauses }
+        : null,
     substringTerms,
     tokens,
   };
