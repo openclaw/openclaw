@@ -286,6 +286,7 @@ it("attributes slow transcript matching while retaining its hot snapshot", async
     const file = state.path("hot-read.log");
     setLoggerOverride({ level: "info", consoleLevel: "silent", file });
     let clock = Date.now();
+    const startedAt = new Date(clock).toISOString();
     vi.spyOn(Date, "now").mockImplementation(() => clock);
     try {
       const found = findTranscriptEventInDatabase(race.database, race.scope.sessionId, () => {
@@ -321,6 +322,7 @@ it("attributes slow transcript matching while retaining its hot snapshot", async
             commitMs: 0,
           },
           pid: process.pid,
+          startedAt,
           threadId,
           thresholdMs: 1_000,
         },

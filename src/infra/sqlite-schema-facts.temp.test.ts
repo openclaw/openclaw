@@ -22,19 +22,29 @@ function watch(schema?: string, filename?: string) {
   return [database, mutation] as const;
 }
 
-it.each([false, true])(
-  "keeps TEMP trigger admission local without hiding subsequent main DDL: %s",
-  (mainDdl) => {
-    const filename = path.join(tempDirs.make("openclaw-schema-temp-trigger-"), "state.sqlite");
+const temporaryObjects = {
+  trigger: `CREATE TEMP TRIGGER IF NOT EXISTS local_observer AFTER INSERT ON original BEGIN
+        SELECT CASE WHEN NEW.id > 0 THEN 'END; CREATE TABLE quoted(id)' ELSE 'kept' END;
+        /* END; */ SELECT 1;
+        END;`,
+  view: "CREATE TEMP VIEW IF NOT EXISTS local_observer AS SELECT id FROM original;",
+};
+
+it.each([
+  ["trigger", false],
+  ["trigger", true],
+  ["view", false],
+  ["view", true],
+] as const)(
+  "keeps TEMP %s admission local without hiding subsequent main DDL: %s",
+  (kind, mainDdl) => {
+    const filename = path.join(tempDirs.make("openclaw-schema-temp-object-"), "state.sqlite");
     const [writer, localMutation] = watch(undefined, filename);
     const sibling = openDatabase("", true, filename);
     const before = facts(sibling)?.admissionId;
     expect(before).toEqual(expect.any(String));
     const revision = getSqliteDatabaseSchemaRevision(sibling)!;
-    writer.exec(`CREATE TEMP TRIGGER IF NOT EXISTS local_observer AFTER INSERT ON original BEGIN
-        SELECT CASE WHEN NEW.id > 0 THEN 'END; CREATE TABLE quoted(id)' ELSE 'kept' END;
-        /* END; */ SELECT 1;
-        END;
+    writer.exec(`${temporaryObjects[kind]}
         ${mainDdl ? "CREATE TABLE published_after_trigger(id);" : ""}`);
     expect(localMutation).toHaveBeenCalledWith(undefined);
     const after = facts(sibling)?.admissionId;
@@ -42,8 +52,8 @@ it.each([false, true])(
     expect(mainDdl ? nextRevision > revision : nextRevision === revision).toBe(true);
     expect(after === before).toBe(!mainDdl);
     expect(tableExists(sibling, "published_after_trigger")).toBe(mainDdl);
-    const triggers = writer.prepare("SELECT name FROM temp.sqlite_schema WHERE type='trigger'");
-    expect(triggers.all()).toEqual([{ name: "local_observer" }]);
+    const objects = writer.prepare("SELECT name FROM temp.sqlite_schema WHERE type=?");
+    expect(objects.all(kind)).toEqual([{ name: "local_observer" }]);
   },
 );
 

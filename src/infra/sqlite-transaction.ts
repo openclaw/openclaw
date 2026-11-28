@@ -525,6 +525,7 @@ function settleSqliteTransactionSync<T>(
           ...(timing?.holdContext || (hydration && timing?.hydrationActiveEvents !== undefined)
             ? { context: readSqliteOperationHoldContext(options?.diagnosticContext, hydration) }
             : {}),
+          startedAt: new Date(transactionStartedAt).toISOString(),
           elapsedMs,
           phases: {
             prepareMs,
