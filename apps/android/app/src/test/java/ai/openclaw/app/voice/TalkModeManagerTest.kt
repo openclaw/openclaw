@@ -406,13 +406,13 @@ class TalkModeManagerTest {
       val completion = CompletableDeferred<TalkPttStopPayload>()
       setPrivateField(manager, "activePttCaptureId", "capture-new")
       setPrivateField(manager, "pttCompletion", completion)
-      setPrivateField(manager, "lastTranscript", "new partial transcript")
+      setPrivateField(manager, "pttLivePartial", "new partial transcript")
       withMain {
         val payload = manager.endPushToTalk("capture-old")
 
         assertEquals("idle", payload.status)
         assertEquals("capture-new", readPrivateField(manager, "activePttCaptureId"))
-        assertEquals("new partial transcript", readPrivateField(manager, "lastTranscript"))
+        assertEquals("new partial transcript", readPrivateField(manager, "pttLivePartial"))
         assertFalse(completion.isCompleted)
       }
     }
@@ -1089,6 +1089,66 @@ class TalkModeManagerTest {
         assertNull(proof.manager.failureNotice.value)
       }
     }
+
+  @Test
+  fun nativeTalkKeepsFinalizedWordsAcrossRecognizerRestart() {
+    runTest {
+      for (finalizeContinuation in listOf(false, true)) {
+        withNativeTalk { proof, sends ->
+          val recognizer = currentRecognizer()
+          val firstSession = recognizer.lastRecognizerIntent
+          recognizer.triggerOnResults(recognitionResults("Send the agenda."))
+          ShadowSystemClock.advanceBy(Duration.ofMillis(350))
+          proof.scheduler.advanceTimeBy(350)
+          proof.scheduler.runCurrent()
+          shadowOf(Looper.getMainLooper()).idle()
+          assertFalse(firstSession === recognizer.lastRecognizerIntent)
+          assertTrue("A recognizer final does not end the Talk turn", sends.isEmpty())
+
+          recognizer.triggerOnPartialResults(recognitionResults("Then book"))
+          recognizer.triggerOnPartialResults(recognitionResults("Then book the room."))
+          if (finalizeContinuation) {
+            recognizer.triggerOnResults(recognitionResults("Then book the room."))
+          }
+          advanceTalkSilence(proof)
+          awaitTalkWork(proof) { sends.isNotEmpty() }
+          val firstSend = sends.single()
+          assertEquals(
+            "Send the agenda. Then book the room.",
+            firstSend.getValue("message").jsonPrimitive.content,
+          )
+
+          awaitTalkWork(proof) { proof.synthesizer.requested.isCompleted }
+          completeRemoteSynthesis(proof.synthesizer)
+          proof.scheduler.runCurrent()
+          proof.player.finished.complete(Unit)
+          awaitTalkWork(proof) { proof.manager.isListening.value }
+          currentRecognizer().triggerOnResults(recognitionResults("A separate turn."))
+          advanceTalkSilence(proof)
+          awaitTalkWork(proof) { sends.size == 2 }
+          val nextSend = sends.last()
+          assertEquals("A separate turn.", nextSend.getValue("message").jsonPrimitive.content)
+        }
+      }
+    }
+  }
+
+  @Test
+  fun nativeTalkDiscardsFinalizedWordsWhenCaptureIsStopped() {
+    runTest {
+      withNativeTalk { proof, sends ->
+        currentRecognizer().triggerOnResults(recognitionResults("Discard this turn."))
+        proof.manager.setEnabled(false)
+        proof.manager.setEnabled(true)
+        awaitTalkWork(proof) { proof.manager.isListening.value }
+        currentRecognizer().triggerOnResults(recognitionResults("Only this new turn."))
+        advanceTalkSilence(proof)
+        awaitTalkWork(proof) { sends.isNotEmpty() }
+        val sent = sends.single()
+        assertEquals("Only this new turn.", sent.getValue("message").jsonPrimitive.content)
+      }
+    }
+  }
 
   @Test
   fun publishedGatewayRelayContractsStartTheAdvertisedTransport() =
