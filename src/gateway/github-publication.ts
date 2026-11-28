@@ -275,7 +275,12 @@ export function createGitHubPublicationCoordinator(params: {
           if (claimed.status === "published" || claimed.status === "failed") {
             return publicationResult(claimed);
           }
-          const lease = await acquireWorktreeRunLease(claimed.worktree_id);
+          // Accepted receipts must still settle stale session/workspace bindings when
+          // the checkout is gone. Current bindings wait for checkout restoration in
+          // workspace recovery rather than terminally failing the accepted receipt.
+          const lease = await acquireWorktreeRunLease(claimed.worktree_id, {
+            allowMissingCheckout: true,
+          });
           const validateCustody = () => {
             assertCustody();
             return validateExecution();

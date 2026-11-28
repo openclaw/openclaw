@@ -396,9 +396,41 @@ describe("Gateway GitHub publication boundaries", () => {
     });
   });
 
-  it.each(["requested", "publishing"] as const)(
-    "settles a stale %s receipt after reopening despite blocked Git recovery",
-    async (status) => {
+  it("keeps a current receipt retryable while its checkout is unavailable", async () => {
+    const database = localDatabase();
+    seedLocalPublication(database, {
+      requestId: "missing-current-checkout",
+      status: "publishing",
+      headCommit: null,
+      createdAtMs: Date.now(),
+    });
+    const checkout = path.join(root, "synthetic-worktree");
+    await fs.rmdir(checkout);
+    const transport = mocks.runCommand.getMockImplementation()!;
+    respond((argv) => (argv[0] === "git" ? commandResult("", 128) : undefined));
+    await expect(createLocalCoordinator(database).resumeSessionRequests()).rejects.toThrow(
+      "checkout is unavailable",
+    );
+    expect(receipt(database, "missing-current-checkout")).toMatchObject({
+      status: "publishing",
+      head_commit: null,
+    });
+    expectNoCommands("commit-tree", "update-ref", "push", "POST");
+    await fs.mkdir(checkout);
+    mocks.runCommand.mockImplementation(transport);
+    await createLocalCoordinator(database).resumeSessionRequests();
+    expect(receipt(database, "missing-current-checkout")).toMatchObject({
+      status: "published",
+    });
+  });
+
+  it.each(
+    (["requested", "publishing"] as const).flatMap((status) =>
+      [true, false].map((checkoutExists) => ({ status, checkoutExists })),
+    ),
+  )(
+    "settles a stale $status receipt despite blocked Git recovery (checkout=$checkoutExists)",
+    async ({ status, checkoutExists }) => {
       const database = localDatabase();
       seedLocalPublication(database, { requestId: "blocked", status: "publishing" });
       seedLocalPublication(database, { requestId: "following", status: "requested" });
@@ -419,6 +451,9 @@ describe("Gateway GitHub publication boundaries", () => {
         id: "worktree-2",
         path: "/repo/other-worktree",
       };
+      if (!checkoutExists) {
+        await fs.rmdir(path.join(root, "synthetic-other-worktree"));
+      }
       await insertRegistryWorktree(process.env, {
         ...otherWorktree,
         name: "other",

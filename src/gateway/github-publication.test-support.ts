@@ -86,6 +86,21 @@ vi.mock("./github-oauth-lifecycle.js", () => ({
   requestCurrentPersonalGitHubRefresh: mocks.refreshIdentity,
 }));
 
+// Synthetic Git paths map to separate, real temporary directories for
+// checkout-admission probes; actual worktree fixtures keep their own paths.
+vi.mock("../agents/worktrees/git.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/worktrees/git.js")>();
+  return {
+    ...actual,
+    worktreePathExists: (target: string) =>
+      actual.worktreePathExists(
+        ["/repo/worktree", "/repo/delegated-worktree", "/repo/other-worktree"].includes(target)
+          ? path.join(root, `synthetic-${path.basename(target)}`)
+          : target,
+      ),
+  };
+});
+
 // Git transport is synthetic in this harness; keep real SQLite lease exclusion.
 vi.mock("../agents/worktrees/git-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/worktrees/git-lock.js")>()),
@@ -560,6 +575,9 @@ export function installGitHubPublicationTestHarness(
     const syntheticIndex = path.join(root, "synthetic-index");
     await fs.writeFile(syntheticIndex, "synthetic Git transport index");
     if (!realWorktree) {
+      for (const name of ["worktree", "delegated-worktree", "other-worktree"]) {
+        await fs.mkdir(path.join(root, `synthetic-${name}`));
+      }
       await insertRegistryWorktree(process.env, registryPublicationWorktree());
     }
     commands = [];
