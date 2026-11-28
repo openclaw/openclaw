@@ -585,24 +585,38 @@ describe("renderPluginCatalogResults", () => {
     const props = baseProps({
       featured: [],
       trending: [],
-      categories: categories.map((slug, order) => ({
-        slug,
-        label: slug,
-        description: slug,
-        icon: "package",
-        order,
-      })),
+      categories: [...categories, "other"]
+        .map((slug, order) => ({
+          slug,
+          label: slug,
+          description: slug,
+          icon: "package",
+          order,
+        }))
+        .toReversed(),
       result: {
         items: ids.toReversed().map((id) =>
           plugin(id, {
             catalog: {
-              categories: categories.filter((category) => membership[category]!.includes(id)),
+              categories: [
+                "other",
+                ...categories.filter((category) => membership[category]!.includes(id)),
+              ],
             },
           }),
         ),
       },
     });
     const { container } = await mount(props);
+    const chipLabels = [...container.querySelectorAll(".plugin-catalog-chip")].map((chip) =>
+      chip.textContent?.trim(),
+    );
+    expect(chipLabels).toEqual(["All", "Featured", "Trending", ...categories]);
+    expect(
+      [...container.querySelectorAll<HTMLElement>("[data-catalog-section]")].map(
+        (section) => section.dataset.catalogSection,
+      ),
+    ).toEqual(categories);
     for (const [shelf, members] of Object.entries(membership)) {
       const section = container.querySelector(`[data-catalog-section="${shelf}"]`);
       expect(cardIds(section!)).toEqual(members);
