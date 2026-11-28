@@ -3,6 +3,7 @@ import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-run
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import type { TelegramCallbackButton } from "./button-types.js";
+import { isTelegramMessageNotModifiedError } from "./network-errors.js";
 import type { TelegramQuestionCallback } from "./question-callback-data.js";
 import { buildInlineKeyboard } from "./send.js";
 
@@ -41,13 +42,20 @@ export function createTelegramCallbackMessageActions(params: {
   };
 
   const editCallbackButtons = async (buttons: TelegramCallbackButton[][]) => {
-    return await bot.api.editMessageReplyMarkup(
-      callbackMessage.chat.id,
-      callbackMessage.message_id,
-      withCallbackBusinessParams({
-        reply_markup: buildInlineKeyboard(buttons) ?? { inline_keyboard: [] },
-      }),
-    );
+    try {
+      return await bot.api.editMessageReplyMarkup(
+        callbackMessage.chat.id,
+        callbackMessage.message_id,
+        withCallbackBusinessParams({
+          reply_markup: buildInlineKeyboard(buttons) ?? { inline_keyboard: [] },
+        }),
+      );
+    } catch (err) {
+      if (!isTelegramMessageNotModifiedError(err)) {
+        throw err;
+      }
+      return true;
+    }
   };
 
   const deleteCallbackMessage = async () => {
