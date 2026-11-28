@@ -29,9 +29,12 @@ export class PluginSetupPreparationRequiredError extends Error {
 }
 
 /** Prepare only sources requested by a read, retaining its original selection and raw input. */
-export async function withPreparedPluginSetupRead<T>(read: () => T): Promise<T> {
+export async function withPreparedPluginSetupRead<T>(
+  read: () => T,
+  options: { signal?: AbortSignal } = {},
+): Promise<T> {
   return withPluginGenerationSourceCustody(() =>
-    withPluginSetupPreparation({}, async ({ assertCurrent }) => {
+    withPluginSetupPreparation(options, async ({ assertCurrent }) => {
       for (;;) {
         try {
           return read();
@@ -42,6 +45,7 @@ export async function withPreparedPluginSetupRead<T>(read: () => T): Promise<T> 
           await preparePluginSetupModuleLoader(error.record, error.source, error.rootDir, {
             stateOperations: error.stateOperations,
             assertCurrent,
+            signal: options.signal,
           });
           assertCurrent();
         }

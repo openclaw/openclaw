@@ -21,8 +21,10 @@ import {
 import type { ProviderPlugin } from "./types.js";
 
 const fixture = vi.hoisted(() => ({ providers: [] as ProviderPlugin[] }));
+// mock-isolation: Supply fixture discovery without loading real plugin sources.
 vi.mock("./provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => fixture.providers,
+  resolvePluginDiscoveryProvidersRuntimeAsync: async () => fixture.providers,
 }));
 
 function model(id: string, name: string): ModelDefinitionConfig {

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareSyntheticLocalProviderAuth } from "../agents/model-auth-runtime.js";
 import { configForProviders } from "../agents/model-auth.fixtures.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import type { ResolveRuntimePluginDiscoveryProvidersParams } from "./provider-discovery.js";
 import type { ProviderPlugin } from "./provider-plugin.types.js";
 
 const nativeProvider = vi.hoisted(() => ({
@@ -17,7 +18,7 @@ const resolveProviderRuntimePlugin = vi.hoisted(() =>
   vi.fn<() => ProviderPlugin | undefined>(() => undefined),
 );
 const resolvePluginDiscoveryProvidersRuntime = vi.hoisted(() =>
-  vi.fn<() => ProviderPlugin[]>(() => [
+  vi.fn<(params: ResolveRuntimePluginDiscoveryProvidersParams) => ProviderPlugin[]>(() => [
     nativeProvider,
     {
       id: "ollama",
@@ -54,8 +55,12 @@ vi.mock("./provider-hook-runtime.js", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Supply fixture discovery without loading real plugin sources.
 vi.mock("./provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime,
+  resolvePluginDiscoveryProvidersRuntimeAsync: async (
+    params: ResolveRuntimePluginDiscoveryProvidersParams,
+  ) => resolvePluginDiscoveryProvidersRuntime(params),
 }));
 
 const resolveProviderOwnerIds = vi.hoisted(() =>
