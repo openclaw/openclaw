@@ -488,6 +488,8 @@ async function runEmbeddedAgentForSession(
                   notifyExecutionPhase("before_agent_reply", { provider, model: modelId }),
                 onDeclined: () =>
                   notifyExecutionPhase("runtime_plugins", { provider, model: modelId }),
+                onProgress: noteLaneTaskProgress,
+                watchdog: params.replyOperation?.watchdog,
               });
               if (hookResult?.handled) {
                 return {

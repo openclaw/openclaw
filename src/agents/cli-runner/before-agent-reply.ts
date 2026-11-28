@@ -51,6 +51,7 @@ export async function runCliBeforeAgentReply(
               provider: params.provider,
               model: params.model ?? "",
             }),
+          diagnosticOwner: params.diagnosticOwner,
         });
   if (hookResult?.handled) {
     const finalText = hookResult.reply?.text ?? "";

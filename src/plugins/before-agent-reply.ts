@@ -2,7 +2,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { runOncePerAgentRun } from "../infra/agent-events.js";
+import type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
+import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
+import {
+  closeDiagnosticEmbeddedRunOwner,
+  createDiagnosticEmbeddedRunOwner,
+} from "../logging/diagnostic-run-activity.js";
+import type { SessionControllerWatchdog } from "../sessions/session-controller.watchdog.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readClaimingHookAdmission, withClaimingHookAdmission } from "./hook-claim-admission.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
@@ -51,12 +58,15 @@ export function runBeforeAgentReplyForTurn(params: {
   awaitSessionDiffBaseline?: () => Promise<void>;
   onDispatch?: () => void;
   onDeclined?: () => void;
+  onProgress?: (detail?: string) => void;
+  diagnosticOwner?: DiagnosticEmbeddedRunOwner;
+  watchdog?: Pick<SessionControllerWatchdog, "attachAttempt">;
 }): Promise<PluginHookBeforeAgentReplyResult | undefined> {
   const trigger = params.trigger;
   if (!isPluginHookAgentTrigger(trigger)) {
     return Promise.resolve(undefined);
   }
-  const context = { ...params.context, trigger };
+  const context: PluginHookAgentContext = { ...params.context, trigger };
   const inherited = readClaimingHookAdmission(context);
   const assertCurrent = params.assertCurrent
     ? () => {
@@ -88,7 +98,55 @@ export function runBeforeAgentReplyForTurn(params: {
       assertCurrent?.();
       params.onDispatch?.();
       assertCurrent?.();
-      let result = await hookRunner.runBeforeAgentReply(params.event, context);
+      const ownedDiagnosticOwner =
+        !params.diagnosticOwner && params.watchdog
+          ? createDiagnosticEmbeddedRunOwner({
+              runId: params.runId,
+              sessionId: context.sessionId,
+              sessionKey: context.sessionKey,
+              watchdogAttempt: params.watchdog.attachAttempt({
+                assertCurrent: () => assertCurrent?.(),
+              }),
+            })
+          : undefined;
+      const progressOwner = params.diagnosticOwner ?? ownedDiagnosticOwner;
+      let dispatchActive = false;
+      if (params.onProgress || progressOwner) {
+        context.reportProgress = (detail?: string) => {
+          if (!dispatchActive) {
+            return;
+          }
+          try {
+            assertCurrent?.();
+          } catch {
+            return;
+          }
+          params.onProgress?.(detail);
+          if (!progressOwner) {
+            return;
+          }
+          const trimmed = detail?.trim();
+          emitCoreSemanticRunProgressDiagnosticEvent(
+            {
+              runId: params.runId,
+              sessionId: context.sessionId,
+              sessionKey: context.sessionKey,
+              reason: trimmed ? `before_agent_reply:${trimmed}` : "before_agent_reply:progress",
+            },
+            progressOwner,
+          );
+        };
+      }
+      let result: PluginHookBeforeAgentReplyResult | undefined;
+      dispatchActive = true;
+      try {
+        result = await hookRunner.runBeforeAgentReply(params.event, context);
+      } finally {
+        dispatchActive = false;
+        if (ownedDiagnosticOwner) {
+          closeDiagnosticEmbeddedRunOwner(ownedDiagnosticOwner);
+        }
+      }
       assertCurrent?.();
       if (!result?.handled) {
         params.onDeclined?.();

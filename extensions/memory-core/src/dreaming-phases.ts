@@ -459,6 +459,7 @@ async function collectSessionIngestionBatches(params: {
   timezone?: string;
   state: SessionIngestionState;
   admissionPolicy?: SessionAdmissionPolicy;
+  reportProgress?: (detail?: string) => void;
 }) {
   if (!params.cfg) {
     const nextState = { version: 3 as const, files: {}, seenMessages: {} };
@@ -527,6 +528,7 @@ async function collectSessionIngestionBatches(params: {
         delete nextFiles[stateKey];
       }
     }
+    params.reportProgress?.("dreaming:session_corpus");
   }
   const sortedSources = sources.toSorted((a, b) => {
     if (a.agentId !== b.agentId) {
@@ -550,6 +552,7 @@ async function collectSessionIngestionBatches(params: {
       maxCandidates: fileCap,
       classifyDay: (day) => (isDayWithinLookback(day, cutoffMs) ? "include" : "skip"),
     });
+    params.reportProgress?.("dreaming:session_scan");
     if (scan.status === "absent") {
       delete nextFiles[source.stateKey];
       continue;
@@ -993,6 +996,7 @@ export async function ingestDreamingPhaseSignals(
         dedupeByQueryPerDay: source === "sessions",
         dayBucket: ingestionDayBucket ?? batch.day,
       });
+      params.reportProgress?.(`dreaming:record_${source}_batch`);
     }
   };
   await withMemoryWorkspaceLock(workspaceDir, async () => {
@@ -1018,6 +1022,7 @@ export async function ingestDreamingPhaseSignals(
       lookbackDays: params.config.lookbackDays,
       admissionPolicy: params.admissionPolicy,
       state,
+      reportProgress: params.reportProgress,
     });
     const ingestionDayBucket = formatMemoryDreamingDay(nowMs, ingestionParams.timezone);
     await recordBatches(collected.batches, "sessions", ingestionDayBucket);
