@@ -5,6 +5,7 @@ import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
 import { cronTestJob } from "../cron/service.fixture-builders.test-support.js";
 import type { CronDeliveryPreview, CronJob, CronJobCreate, CronJobPatch } from "../cron/types.js";
+import { createGatewayTimeoutTransportError } from "../gateway/transport-error.js";
 import { ExitError } from "../runtime.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -260,6 +261,34 @@ it("reduces each history RPC timeout after the system clock jumps backward", asy
   expect(pollTimeouts[0]).toBeLessThanOrEqual(100);
   expect(pollTimeouts[1]).toBeLessThanOrEqual(75);
   expect(pollTimeouts[1]).toBeLessThan(pollTimeouts[0] ?? 0);
+});
+
+it("keeps the accepted run ID when the wait deadline expires during the history request", async () => {
+  mockQueuedRun();
+  callGatewayFromCli.mockRejectedValueOnce(
+    createGatewayTimeoutTransportError({
+      timeoutMs: 1,
+      requestDispatched: false,
+      connectionDetails: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local",
+        message: "local Gateway",
+      },
+    }),
+  );
+  const error = await parse([...RUN_WAIT, "--wait-timeout", "1ms"]).catch(
+    (reason: unknown) => reason,
+  );
+  expect(formatCliJsonFailure(error)).toMatchObject({
+    error: { message: "timed out waiting for cron run manual:job-1:123:0" },
+  });
+  expect(formatCliFailureLines({ title: "CLI failure", error }).join(" ")).toContain(
+    "--run-id manual:job-1:123:0",
+  );
+  expect(callGatewayFromCli.mock.calls.map(([method]) => method)).toEqual([
+    "cron.run",
+    "cron.runs",
+  ]);
 });
 
 it("bounds oversized poll intervals by the wait timeout", async () => {
