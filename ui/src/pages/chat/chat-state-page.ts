@@ -362,7 +362,7 @@ export function createPageState(
     return handleSendChat(state, messageOverride, options, submissionAction);
   };
   state.handleAbortChat = (options) => handleAbortChat(state, options);
-  state.removeQueuedMessage = (id) => {
+  state.removeQueuedMessage = (id, source = "remove") => {
     if (cancelPendingQueuedChatInput(state, id)) {
       return;
     }
@@ -375,7 +375,10 @@ export function createPageState(
       setChatError(state, null);
       void resumeStoredChatOutboxes(state);
     } else if (outcome === "rejected") {
-      setChatError(state, t("chat.queue.removeFailed"));
+      setChatError(
+        state,
+        t(source === "discard" ? "chat.queue.discardFailed" : "chat.queue.removeFailed"),
+      );
     }
   };
   state.retryQueuedChatMessage = (id) => retryQueuedChatMessage(state, id);
