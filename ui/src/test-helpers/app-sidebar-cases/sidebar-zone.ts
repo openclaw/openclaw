@@ -108,7 +108,6 @@ it("badges pinned attention just like ordinary rows", async () => {
   const { sidebar } = await mountZone(keys, (row) => {
     if (row.key !== "agent:main:main") {
       Object.assign(row, {
-        pinned: row.key === "agent:main:page",
         unread: true,
         status: "failed",
         lastRunError: "boom",
@@ -116,9 +115,12 @@ it("badges pinned attention just like ordinary rows", async () => {
       });
     }
   });
+  sidebar.sidebarEntries = ["session:agent:main:page"];
+  await sidebar.updateComplete;
 
   for (const key of ["agent:main:page", "agent:main:plain"]) {
     const row = sidebar.querySelector(`[data-session-key="${key}"]`)!;
+    expect(Boolean(row.closest('[data-session-section="pinned"]'))).toBe(key === "agent:main:page");
     const glyph = domProbe(row.querySelector(".sidebar-session-indicator .session-glyph")!);
     expect(glyph.present(".sidebar-session-attention__icon")).toEqual([true]);
     expect(

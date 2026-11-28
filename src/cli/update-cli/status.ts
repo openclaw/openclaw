@@ -28,7 +28,6 @@ import {
 } from "../../infra/deferred-plugin-migrations.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readGatewayLastInstallationReplacementAsync } from "../../infra/gateway-boot-lifecycle.js";
-import { readPackageActivationReceipt } from "../../infra/package-update-activation.js";
 import { withSqliteDatabaseAdmissionWait } from "../../infra/sqlite-worker-database-admission-relay.js";
 import {
   normalizeUpdateChannel,
@@ -39,13 +38,13 @@ import {
   formatGitInstallLabel,
   type UpdateCheckResult,
 } from "../../infra/update-check.js";
-import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { projectUpdateRunHistory } from "../../infra/update-run-history-projection.js";
-import { formatUpdateOwedStep, listUpdateOwedSteps } from "../../infra/update-run-owed-step.js";
-import type { getUpdateRunAsync } from "../../infra/update-run-reader.js";
+import { renderUpdateRunSummary } from "../../infra/update-run-notice.js";
+import { formatUpdateRunOmittedSteps } from "../../infra/update-run-omission.js";
+import { formatUpdateOwedStep } from "../../infra/update-run-owed-step.js";
 import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
-import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatusWithOwedSteps } from "../../infra/update-run-status.js";
+import { updateRunWarningMessages } from "../../infra/update-run-step.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { defaultRuntime } from "../../runtime.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
@@ -54,32 +53,11 @@ import { resolveSafeTimeoutDelayMs } from "../../utils/timer-delay.js";
 import { VERSION } from "../../version.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseUpdateTimeoutMs, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
+import { readUpdateRecoverySetStatus } from "./status-recovery.js";
+import { inspectUpdateReleaseStatus } from "./status-releases.js";
 import { readUpdateChannelConfig } from "./update-command-config.js";
 import { withUpdateDatabaseEngine } from "./update-command-database-engine.js";
 import { resolveRefusedRestartRecovery } from "./update-refused-restart-recovery.js";
-
-async function readUpdateRecoverySetStatus(readRun?: typeof getUpdateRunAsync) {
-  try {
-    const { inspectUpdateRecoveryBackups } =
-      await import("../../infra/update-recovery-backup-status.js");
-    const sets = await inspectUpdateRecoveryBackups(readRun);
-    return {
-      recoverySets: sets.map((set) =>
-        set.status === "incomplete" || set.status === "unreadable" || set.status === "warning"
-          ? set
-          : {
-              runId: set.runId,
-              manifestPath: set.ref.manifestPath,
-              status: set.status,
-              message: set.message,
-              nextAction: set.nextAction,
-            },
-      ),
-    };
-  } catch (error) {
-    return { recoverySetsError: formatErrorMessage(error) };
-  }
-}
 
 async function readChannelStatusIssues(
   config: OpenClawConfig,
@@ -153,7 +131,9 @@ async function inspectUpdateStatus(
     return retainedRunStatus;
   };
   const deadline = performance.now() + timeoutMs;
-  const remainingMs = () => Math.max(1, deadline - performance.now());
+  // RPC and child-process timeouts require integer milliseconds; a fractional
+  // remainder is rejected by the channels.status schema (`at /timeoutMs: must be integer`).
+  const remainingMs = () => Math.max(1, Math.ceil(deadline - performance.now()));
   const inspect = async <T>(
     section: string,
     operation: () => T | Promise<T>,
@@ -182,11 +162,14 @@ async function inspectUpdateStatus(
     inspect<OpenClawConfig>("configuration", readSourceConfigBestEffort, {}),
     inspect("Node runtime", collectNodeRuntimeFindings, []),
   ]);
-  const databaseStatusPromise = inspect(
+  const migrationWarningErrors: string[] = [];
+  const databaseInspectionPromise = inspect(
     "state database",
     () =>
-      withUpdateDatabaseEngine(process.env, () =>
-        Promise.all([
+      withUpdateDatabaseEngine(process.env, async () => ({
+        // Start every database reader in the selected scope, but retain each result independently
+        // so a stalled migration reader cannot discard completed history or recovery information.
+        status: Promise.all([
           inspect<RunStatus>("update history", readRunStatus, {
             runStatusError: "Update history inspection unavailable",
           }),
@@ -203,29 +186,50 @@ async function inspectUpdateStatus(
                 undefined,
               ),
         ]),
-      ).catch(async (error: unknown) => {
+        warnings: Promise.all([
+          inspect(
+            "migration warnings",
+            () => readDeferredPluginMigrationsAsync(),
+            [],
+            (message) => {
+              migrationWarningErrors[0] = message;
+            },
+          ),
+          inspect(
+            "migration warnings",
+            () => readSessionSqliteMigrationWarnings(),
+            [],
+            (message) => {
+              migrationWarningErrors[1] = message;
+            },
+          ),
+        ]),
+      })).catch((error: unknown) => {
         const message = sanitizeTerminalText(
           redactSensitiveText(formatErrorMessage(error), { mode: "tools" }),
         );
         inspectionErrors.push({ section: "state database", message });
-        return [
-          { runStatusError: message },
-          await inspect(
-            "recovery sets",
-            () =>
-              readUpdateRecoverySetStatus(async () => {
-                throw new Error(message);
-              }),
-            { recoverySetsError: "Recovery set inspection unavailable" },
-          ),
-          undefined,
-        ] as const;
+        migrationWarningErrors[0] = message;
+        return {
+          status: Promise.all([
+            Promise.resolve({ runStatusError: message }),
+            inspect(
+              "recovery sets",
+              () =>
+                readUpdateRecoverySetStatus(async () => {
+                  throw new Error(message);
+                }),
+              { recoverySetsError: "Recovery set inspection unavailable" },
+            ),
+            Promise.resolve(undefined),
+          ]),
+          warnings: Promise.resolve([[], []] as const),
+        };
       }),
-    [
-      { runStatusError: "Update history inspection unavailable" },
-      { recoverySetsError: "Recovery set inspection unavailable" },
-      undefined,
-    ] as const,
+    undefined,
+    (message) => {
+      migrationWarningErrors[0] = message;
+    },
   );
   const configChannel = normalizeUpdateChannel(config.update?.channel);
   const gitTargetChannel =
@@ -322,7 +326,14 @@ async function inspectUpdateStatus(
     }
   }
 
-  const [inspectedRunStatus, recoveryStatus, replacement] = await databaseStatusPromise;
+  const databaseInspection = await databaseInspectionPromise;
+  const [inspectedRunStatus, recoveryStatus, replacement] = databaseInspection
+    ? await databaseInspection.status
+    : ([
+        { runStatusError: "Update history inspection unavailable" },
+        { recoverySetsError: "Recovery set inspection unavailable" },
+        undefined,
+      ] as const);
   const runStatus = retainedRunStatus ?? inspectedRunStatus;
   const activeRun = "activeRun" in runStatus ? runStatus.activeRun : undefined;
   const updateInProgress =
@@ -397,47 +408,21 @@ async function inspectUpdateStatus(
       ...(issue.fix ? { fix: safeMessage(issue.fix) } : {}),
     }),
   );
-  const migrationWarnings: string[] = [];
-  const migrationWarningErrors: string[] = [];
-  for (const readWarnings of [
-    async () =>
-      (await readDeferredPluginMigrationsAsync()).map((pending) =>
-        formatDeferredPluginMigration(
-          pending,
-          updateInProgress ? { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" } : process.env,
-        ),
+  const [pendingMigrations, sessionWarnings] = databaseInspection
+    ? await databaseInspection.warnings
+    : [[], []];
+  const migrationWarnings = [
+    ...pendingMigrations.map((pending) =>
+      formatDeferredPluginMigration(
+        pending,
+        updateInProgress ? { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: "1" } : process.env,
       ),
-    () => readSessionSqliteMigrationWarnings(),
-  ]) {
-    migrationWarnings.push(
-      ...(
-        await inspect("migration warnings", readWarnings, [], (message) =>
-          migrationWarningErrors.push(message),
-        )
-      ).map(safeMessage),
-    );
-  }
-  const migrationWarningsError = migrationWarningErrors.join("\n");
-  let packageActivation;
-  let packageActivationError: string | undefined;
-  try {
-    if (root) {
-      packageActivation = readPackageActivationReceipt(resolveUpdateInstallRoot(root));
-    }
-  } catch (error) {
-    packageActivationError = safeMessage(formatErrorMessage(error));
-  }
-
-  const packageReleases = root
-    ? await inspect(
-        "package releases",
-        async () => {
-          const { listPackageReleases } = await import("../../infra/package-release-retention.js");
-          return await listPackageReleases(root);
-        },
-        [],
-      )
-    : [];
+    ),
+    ...sessionWarnings,
+  ].map(safeMessage);
+  const migrationWarningsError = migrationWarningErrors.filter(Boolean).join("\n");
+  const { releaseStatus, packageActivation, packageActivationError, packageReleases, releaseRows } =
+    await inspectUpdateReleaseStatus({ root, config, update, inspect, remainingMs, safeMessage });
 
   if (opts.json) {
     defaultRuntime.writeJson({
@@ -449,6 +434,7 @@ async function inspectUpdateStatus(
         config: configChannel,
       },
       availability: updateAvailability,
+      ...(releaseStatus ? { releaseStatus } : {}),
       ...(immutableCoverage ? { immutableCoverage } : {}),
       ...(update.immutable && !immutableCoverage
         ? { immutableCoverageError: immutableCoverageLines[0] }
@@ -480,7 +466,11 @@ async function inspectUpdateStatus(
         )
       : undefined;
   const gitLabel = formatGitInstallLabel(update);
-  const updateLine = formatUpdateOneLiner(update).replace(/^Update:\s*/i, "");
+  const updateLine =
+    releaseStatus?.notice ??
+    (releaseStatus?.trial && ["pending", "trial", "restoring"].includes(releaseStatus.trial.phase)
+      ? `release ${releaseStatus.trial.version} · ${releaseStatus.trial.phase}`
+      : formatUpdateOneLiner(update).replace(/^Update:\s*/i, ""));
   const tableWidth = getTerminalTableWidth();
   const installLabel =
     update.installKind === "host"
@@ -500,6 +490,7 @@ async function inspectUpdateStatus(
   const rows = [
     { Item: "Install", Value: installLabel },
     { Item: "Channel", Value: channelLabel },
+    ...releaseRows,
     ...(immutable
       ? [
           {
@@ -527,29 +518,11 @@ async function inspectUpdateStatus(
     ...(verifiedGateway
       ? [
           {
-            Item: "Last verified Gateway",
+            Item: "Last verified Gateway (historical)",
             Value: `version ${verifiedGateway.version} · build ${verifiedGateway.buildId} · PID ${verifiedGateway.pid} · boot ${verifiedGateway.bootId}`,
           },
         ]
       : []),
-    ...(packageActivation
-      ? [
-          {
-            Item: "Package recovery",
-            Value: `${packageActivation.phase} (${packageActivation.operationId})`,
-          },
-        ]
-      : []),
-    ...(packageActivation?.recoveryCommand
-      ? [{ Item: "Recovery command (external Node)", Value: packageActivation.recoveryCommand }]
-      : []),
-    ...(packageActivationError
-      ? [{ Item: "Package recovery", Value: packageActivationError }]
-      : []),
-    ...packageReleases.map((release) => ({
-      Item: release.selected ? "Active release" : "Retained release",
-      Value: `${release.id} · version ${release.version ?? "unknown"} · build ${release.build ?? "unknown"}${release.leased ? " · in use" : ""}`,
-    })),
     ...(gitLabel ? [{ Item: "Git", Value: gitLabel }] : []),
     {
       Item: "Update",
@@ -557,7 +530,7 @@ async function inspectUpdateStatus(
         ? updateInProgress
           ? `in progress · ${activeRun.phase}`
           : "needs attention · see run details below"
-        : updateAvailability.available
+        : updateAvailability.available && !releaseStatus?.notice && !releaseStatus?.trial
           ? theme.warn(`available · ${updateLine}`)
           : updateLine,
     },
@@ -638,13 +611,13 @@ async function inspectUpdateStatus(
     const { lastRun, staleRun, abandonedRun, advisories, owedSteps } = runStatus;
     const run = activeRun ?? lastRun;
     for (const advisory of advisories ?? []) {
-      if (advisory.runId !== run?.runId) {
-        defaultRuntime.log(advisory.message);
-      }
+      defaultRuntime.log(advisory.message);
     }
     if (run) {
       if (!activeRun) {
-        defaultRuntime.log(`Last recorded update (${new Date(run.createdAtMs).toISOString()}):`);
+        defaultRuntime.log(
+          `Last recorded update (${new Date(run.createdAtMs).toISOString()}, historical):`,
+        );
       }
       if (staleRun) {
         defaultRuntime.log(`Update ${run.runId}: ${staleRun.guidance}`);
@@ -664,32 +637,29 @@ async function inspectUpdateStatus(
               undefined,
             )
           : undefined;
-      const report = renderUpdateRunReport(
-        run,
+      const summary = renderUpdateRunSummary(
         refusedRestartRecovery
-          ? { nextAction: refusedRestartRecovery }
-          : run.status === "failed"
-            ? { currentHealth: currentRunHealth }
-            : {},
+          ? { ...run, origin: { ...run.origin, nextAction: refusedRestartRecovery } }
+          : run,
       );
       const historical =
         currentRunHealth?.kind === "responding"
           ? projectUpdateRunHistory(run, currentRunHealth)
           : null;
       if (!abandonedRun && !staleRun) {
-        defaultRuntime.log(historical ?? report.headline);
+        defaultRuntime.log(historical ?? summary);
       }
-      for (const line of historical ? [] : report.lines) {
+      for (const warning of updateRunWarningMessages(run.steps)) {
+        printWarning(safeMessage(`Warning: ${warning}`));
+      }
+      const omission = historical ? formatUpdateRunOmittedSteps(run.steps) : undefined;
+      for (const line of historical && omission ? [omission] : []) {
         defaultRuntime.log(line);
       }
       defaultRuntime.log("");
     }
-    // The displayed run's report already lists what that run owes.
-    const reported = new Set(run ? listUpdateOwedSteps(run).map((step) => step.id) : []);
     for (const step of owedSteps ?? []) {
-      if (!reported.has(step.id)) {
-        printWarning(safeMessage(`Warning: ${formatUpdateOwedStep(step)}`));
-      }
+      printWarning(safeMessage(`Warning: ${formatUpdateOwedStep(step)}`));
     }
   }
 
@@ -714,7 +684,7 @@ async function inspectUpdateStatus(
     }
   }
 
-  const updateHint = activeRun ? null : formatUpdateAvailableHint(update);
+  const updateHint = activeRun || releaseStatus?.notice ? null : formatUpdateAvailableHint(update);
   if (updateHint) {
     printWarning(updateHint);
   }

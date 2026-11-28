@@ -105,7 +105,11 @@ function createOriginatingRun(currentChat = CURRENT) {
           agentId: "main",
           sessionKey,
           operationalRunInstance,
-          receiptAuthority: () => validateAgentRunDelegatedAuthority(delegatedAuthority),
+          receiptAuthority: () => {
+            if (!validateAgentRunDelegatedAuthority(delegatedAuthority)) {
+              throw new Error("agent tool caller authority is no longer active");
+            }
+          },
         },
       ),
     dispose: () => {
@@ -477,7 +481,7 @@ it("stops live peer pagination when the plugin retires between pages", async () 
 
   await expect(
     fixture.dispatch("channel-list", { scope: "peers", query: "Other", limit: 1 }),
-  ).rejects.toThrow("no longer active");
+  ).rejects.toThrow("Plugin feishu was reloaded during the read. Retry the action.");
   expect(contentRequests()).toEqual([PEERS_PATH]);
 });
 
@@ -579,7 +583,9 @@ it.each([
     }
   };
   await expect(fixture.dispatch("list-pins", { chatId: ALLOWED })).rejects.toThrow(
-    "no longer active",
+    owner === "plugin"
+      ? "Plugin feishu was reloaded during the read. Retry the action."
+      : "Message-read turn authority is no longer active",
   );
   expect(contentRequests()).toEqual(phase === "metadata" ? [CHAT_PATH] : [CHAT_PATH, PINS_PATH]);
 });
@@ -599,7 +605,11 @@ it.each(["channel-list", "member-info"] as const)(
     };
     await expect(
       fixture.dispatch(action, action === "member-info" ? { chatId: DIRECT } : {}),
-    ).rejects.toThrow("no longer active");
+    ).rejects.toThrow(
+      action === "channel-list"
+        ? "Plugin feishu was reloaded during the read. Retry the action."
+        : "Message-read turn authority is no longer active",
+    );
     if (action === "channel-list") {
       expectResult(observed ?? null, { groups: [{ id: ALLOWED }], peers: [{ id: SELF }] });
     } else {
@@ -634,7 +644,7 @@ it.each(["allowed", "turn"] as const)("uses the normal local message tool (%s)",
   if (mode === "allowed") {
     expectResult(await result, { message: { messageId: MESSAGE, content: "allowed context" } });
   } else {
-    await expect(result).rejects.toThrow("no longer active");
+    await expect(result).rejects.toThrow("message action turn capability is no longer active");
   }
   expect(contentRequests()).toEqual([MESSAGE_PATH, CHAT_PATH]);
 });

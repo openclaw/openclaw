@@ -134,6 +134,39 @@ describe("generateConversationLabel", () => {
     }
   });
 
+  it("makes no utility attempt or warning when the role refuses every utility model", async () => {
+    const warningLog = createWarnLogCapture("conversation-label");
+    const logs = createDiagnosticLogRecordCapture();
+    const cfg = {
+      agents: {
+        entries: { main: {} },
+        defaults: modelConfig("openai/gpt-main", "openai/gpt-mini", []).agents.defaults,
+      },
+    };
+    const operatorAuthority = createTestOperatorAuthority({
+      profileId: "label-guest",
+      scopes: ["operator.write"],
+      modelPolicy: prepareOperatorModelPolicy({
+        cfg,
+        policy: { sourceAgent: "main", allow: ["openai/gpt-main"] },
+        manifestPlugins: [],
+      }),
+    });
+    try {
+      await expect(generate({ cfg, agentId: "main", operatorAuthority })).resolves.toBe(
+        "Topic label",
+      );
+      await logs.flush();
+      expect(
+        logs.records.filter((record) => record.message.includes("Conversation label generation")),
+      ).toEqual([]);
+      expectCompletion({ model: "gpt-main", operatorAuthority });
+    } finally {
+      logs.cleanup();
+      warningLog.cleanup();
+    }
+  });
+
   it.each<{ primary: string; sessionRuntime?: string }>([
     { primary: "claude-sonnet" },
     { primary: "claude-opus", sessionRuntime: "openclaw" },
@@ -298,7 +331,6 @@ describe("generateConversationLabelWithFallback", () => {
     const operatorAuthority = createTestOperatorAuthority({
       profileId: "label-reader",
       scopes: ["operator.write"],
-      assertCurrent: () => {},
       modelPolicy: prepareOperatorModelPolicy({
         cfg,
         policy: {

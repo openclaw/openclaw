@@ -23,7 +23,10 @@ import { buildBootstrapContextForFiles } from "./embedded-agent-helpers/bootstra
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 import type { AgentRunSessionTarget } from "./run-session-target.types.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
-import { resolveWorkspaceBootstrapPath } from "./workspace-bootstrap-policy.js";
+import {
+  resolveWorkspaceBootstrapPath,
+  WORKSPACE_BOOTSTRAP_FILENAMES,
+} from "./workspace-bootstrap-policy.js";
 import { loadPersonalUserBootstrapFile } from "./workspace-personal-bootstrap.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -294,23 +297,56 @@ async function resolveBootstrapFiles(
     chatType: params.chatType,
     workspaceDir: params.workspaceDir,
   };
-  const [workspaceSetupCompleted, rawFiles, personalFile] = await settleCurrentReadPreparations([
-    isWorkspaceSetupCompletedForContext(params.workspaceDir, params.readOnlyState),
-    loadWorkspaceBootstrapFiles(params.workspaceDir),
-    loadPersonalUserBootstrapFile(personalWorkspaceDir, params.bootstrapUserProfileId, params.warn),
-  ] as const);
+  const sessionAgentId =
+    params.agentId ??
+    (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
+  const configuredSharedUserDir =
+    params.config && sessionAgentId
+      ? resolveAgentConfig(params.config, sessionAgentId)?.sharedUserDir
+      : undefined;
+  const sharedUserDir = configuredSharedUserDir && resolveUserPath(configuredSharedUserDir);
+  const [workspaceSetupCompleted, rawFiles, sharedUserFiles, personalFile] =
+    await settleCurrentReadPreparations([
+      isWorkspaceSetupCompletedForContext(params.workspaceDir, params.readOnlyState),
+      loadWorkspaceBootstrapFiles(
+        params.workspaceDir,
+        sharedUserDir
+          ? WORKSPACE_BOOTSTRAP_FILENAMES.filter((name) => name !== DEFAULT_USER_FILENAME)
+          : undefined,
+      ),
+      sharedUserDir ? loadWorkspaceBootstrapFiles(sharedUserDir, [DEFAULT_USER_FILENAME]) : [],
+      loadPersonalUserBootstrapFile(
+        personalWorkspaceDir,
+        params.bootstrapUserProfileId,
+        params.warn,
+      ),
+    ] as const);
   for (const file of rawFiles) {
     file.origin = { kind: "agent-workspace", rootPath: resolveUserPath(params.workspaceDir) };
+  }
+  const sharedUserFile = sharedUserFiles[0];
+  if (sharedUserFile) {
+    // Operator-owned and outside the workspace, so memory provenance does not classify it.
+    sharedUserFile.origin = { kind: "other", rootPath: sharedUserDir };
+    const nextIndex = rawFiles.findIndex(
+      (file) =>
+        WORKSPACE_BOOTSTRAP_FILENAMES.indexOf(file.name) >
+        WORKSPACE_BOOTSTRAP_FILENAMES.indexOf(DEFAULT_USER_FILENAME),
+    );
+    rawFiles.splice(nextIndex < 0 ? rawFiles.length : nextIndex, 0, sharedUserFile);
+  } else if (sharedUserDir) {
+    params.warn?.(`shared USER.md not found in ${sharedUserDir}`);
   }
   const userIndex = rawFiles.findIndex((file) => file.name === DEFAULT_USER_FILENAME);
   if (personalFile) {
     rawFiles.splice(userIndex < 0 ? rawFiles.length : userIndex + 1, 0, personalFile);
   }
   const ineligibleAutomaticMemoryFiles = await resolveIneligibleAutomaticMemoryFiles({
-    files:
-      personalFile && personalWorkspaceDir !== resolveUserPath(params.workspaceDir)
-        ? rawFiles.filter((file) => file !== personalFile)
-        : rawFiles,
+    files: rawFiles.filter(
+      (file) =>
+        file !== sharedUserFile &&
+        !(file === personalFile && personalWorkspaceDir !== resolveUserPath(params.workspaceDir)),
+    ),
     workspaceDir: params.workspaceDir,
     config: params.config,
     agentId: params.agentId,
@@ -354,16 +390,13 @@ async function resolveBootstrapFiles(
   let hooked = bootstrapFiles;
   if (hooks === "registered") {
     const hookSessionKey = params.sessionKey ?? params.sessionId ?? "unknown";
-    const agentId =
-      params.agentId ??
-      (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
     const context: AgentBootstrapHookContext = {
       workspaceDir: params.workspaceDir,
       bootstrapFiles,
       cfg: params.config,
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
-      agentId,
+      agentId: sessionAgentId,
     };
     const event = createInternalHookEvent("agent", "bootstrap", hookSessionKey, context);
     await triggerInternalHook(event);

@@ -404,11 +404,13 @@ describe("plugin scheduled turns", () => {
   });
 
   it("rejects invalid schedules, unsupported delivery modes, and ambiguous tags before cron.add", async () => {
+    mockCronAdd(makeCronJob({ id: "unexpected-job" }));
     const reject = (schedule: SessionTurnSchedule) =>
       expect(
         schedulePluginSessionTurn({
           pluginId: WORKFLOW_PLUGIN_ID,
           origin: "bundled",
+          cron,
           schedule,
         }),
       ).resolves.toBeUndefined();
@@ -973,7 +975,8 @@ describe("plugin scheduled turns", () => {
     const activeFixture = createPluginRegistryFixture();
     setActivePluginRegistry(activeFixture.registry.registry);
 
-    const loadingFixture = createPluginRegistryFixture();
+    mockCronAdd(makeCronJob({ id: "preactivation-job" }));
+    const loadingFixture = createPluginRegistryFixture({}, { hostServices: { cron } });
     const loadingApi = loadingFixture.registry.createApi(
       createPluginRecord({
         id: "preactivation-scheduler",

@@ -50,7 +50,6 @@ import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
-import { decodeGatewayOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import {
   restoreScheduledAutomationOperator,
   type RestoredGatewayOperatorAuthority,
@@ -287,8 +286,6 @@ export async function runPluginCommandScheduledTurn(params: {
       restored = await restoreScheduledAutomationOperator({
         agentId: params.agentId,
         source: schedule.operatorSource,
-        operatorSource:
-          job.operatorSource && decodeGatewayOperatorRecoverySource(job.operatorSource.source),
         context,
         assertCurrent: () => {
           if (
@@ -301,14 +298,11 @@ export async function runPluginCommandScheduledTurn(params: {
       });
       assertParent();
       const operatorAuthority = restored.authority;
-      const assertCurrent = composeSessionSourceAssertion(
-        [assertParent, operatorAuthority.assertCurrent],
-        (assertSources) => {
-          assertSources();
-          inference?.assertCurrent();
-          modelLease?.assertCurrent();
-        },
-      );
+      const assertCurrent = composeSessionSourceAssertion([assertParent], (assertSources) => {
+        assertSources();
+        inference?.assertCurrent();
+        modelLease?.assertCurrent();
+      });
       assertCurrent();
       const model = resolveSessionModelRef(cfg, entry, schedule.parent.agentId);
       modelLease = bindOperatorModelExecution(operatorAuthority, model);

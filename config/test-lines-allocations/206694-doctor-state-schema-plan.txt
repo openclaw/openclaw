@@ -1,0 +1,2 @@
+# Exact net regression-test lines for #206694: one real-store guard fixture per condition the Doctor state schema plan decides.
+213

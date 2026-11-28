@@ -9,7 +9,6 @@ import { compileMemoryWikiVault } from "./compile.js";
 import {
   loadMemoryWikiCompiledDashboards,
   MemoryWikiDashboardUnavailableError,
-  setMemoryWikiDashboardState,
 } from "./compiled-cache.js";
 import {
   WIKI_SEARCH_BACKENDS,
@@ -102,6 +101,7 @@ export function registerMemoryWikiGatewayMethods(params: {
   getAppConfig: () => OpenClawConfig | undefined;
   resolveConfig: (agentId?: string, appConfig?: OpenClawConfig) => ResolvedMemoryWikiConfig;
   resolveSourceSyncSignal?: () => AbortSignal | undefined;
+  refreshSources: (config: ResolvedMemoryWikiConfig, appConfig?: OpenClawConfig) => void;
 }) {
   const { api } = params;
   const registerResultMethod = (
@@ -124,8 +124,8 @@ export function registerMemoryWikiGatewayMethods(params: {
           signal,
           assertCurrent() {
             signal?.throwIfAborted();
-            if (!active || (hasCurrentClientAuthority && !hasCurrentClientAuthority())) {
-              throw new Error("Memory Wiki request authority is no longer current.");
+            if (!active) {
+              throw new Error("Memory Wiki request ended. Start a new request to retry.");
             }
           },
         };
@@ -139,27 +139,6 @@ export function registerMemoryWikiGatewayMethods(params: {
       },
       { scope },
     );
-  };
-
-  const syncImportedSourcesInBackground = (
-    config: ResolvedMemoryWikiConfig,
-    appConfig?: OpenClawConfig,
-  ) => {
-    const signal = params.resolveSourceSyncSignal?.();
-    if (params.resolveSourceSyncSignal && !signal) {
-      return;
-    }
-    void syncMemoryWikiImportedSources({
-      config,
-      appConfig,
-      ...(signal ? { signal } : {}),
-    }).catch((error: unknown) => {
-      if (signal?.aborted) {
-        return;
-      }
-      setMemoryWikiDashboardState(config, { state: "failed" });
-      api.logger.warn(`memory-wiki: background source sync failed: ${formatErrorMessage(error)}`);
-    });
   };
 
   const resolveSourceSyncSignal = () => {
@@ -195,13 +174,13 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   registerResultMethod("wiki.importInsights", READ_SCOPE, async (requestParams) => {
     const { appConfig, config } = resolveRequestContext(requestParams);
-    syncImportedSourcesInBackground(config, appConfig);
+    params.refreshSources(config, appConfig);
     return (await loadMemoryWikiCompiledDashboards(config)).importInsights;
   });
 
   registerResultMethod("wiki.overview", READ_SCOPE, async (requestParams) => {
     const { appConfig, config } = resolveRequestContext(requestParams);
-    syncImportedSourcesInBackground(config, appConfig);
+    params.refreshSources(config, appConfig);
     return (await loadMemoryWikiCompiledDashboards(config)).overview;
   });
 
@@ -274,12 +253,16 @@ export function registerMemoryWikiGatewayMethods(params: {
 
   registerResultMethod("wiki.search", READ_SCOPE, async (requestParams, memoryContext) => {
     const { agentId, appConfig, config, signal } = resolveRequestContext(requestParams);
-    await syncMemoryWikiImportedSources({ config, appConfig, ...(signal ? { signal } : {}) });
+    if (!signal) {
+      // One-shot hosts have no service to own background work.
+      await syncMemoryWikiImportedSources({ config, appConfig });
+    }
     const query = readStringParam(requestParams, "query", { required: true });
     const maxResults = readPositiveIntegerParam(requestParams, "maxResults");
     const searchBackend = readEnumParam(requestParams, "backend", WIKI_SEARCH_BACKENDS);
     const searchCorpus = readEnumParam(requestParams, "corpus", WIKI_SEARCH_CORPORA);
     const mode = readEnumParam(requestParams, "mode", WIKI_SEARCH_MODES);
+    // Refresh after the search: a cold read owner activates through the vault queue.
     return await searchMemoryWiki({
       memoryContext,
       config,
@@ -290,7 +273,7 @@ export function registerMemoryWikiGatewayMethods(params: {
       searchBackend,
       searchCorpus,
       mode,
-    });
+    }).finally(() => params.refreshSources(config, appConfig));
   });
 
   registerResultMethod("wiki.apply", WRITE_SCOPE, async (requestParams) => {

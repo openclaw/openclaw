@@ -45,7 +45,7 @@ struct OnboardingNewUserGuideSheet: View {
                 } label: {
                     Text("Connection help")
                         .font(OpenClawType.subheadSemiBold)
-                        .foregroundStyle(OpenClawBrand.activationPrimaryAction)
+                        .foregroundStyle(.primary)
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 18)
@@ -84,7 +84,7 @@ private struct OnboardingNewUserGuideStep: View {
         HStack(alignment: .top, spacing: 14) {
             Text(verbatim: "\(self.number)")
                 .font(OpenClawType.subheadSemiBold)
-                .foregroundStyle(OpenClawBrand.activationPrimaryAction)
+                .foregroundStyle(.primary)
                 .frame(width: 30, height: 30)
                 .background {
                     Circle()

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -550,14 +550,47 @@ function status(options, record) {
     throw new Error("Same-version canonical Linux metadata conflicts with immutable publication.");
   }
   const latest = readRelease(options.repository, undefined, true);
-  let needsUpdaterPublication = false;
-  if (publicStable(latest) && compareReleaseVersions(version, latest.tagName.slice(1)) <= 0) {
+  const latestVersion = publicStable(latest) && releaseVersion(latest.tagName);
+  let needsUpdaterPublication = true;
+  if (latestVersion && compareReleaseVersions(version, latestVersion.version) <= 0) {
     const current = readManifest(options.repository, latest);
     const selected = canonical ?? manifest;
     needsUpdaterPublication =
       !current ||
       compareReleaseVersions(current.version, selected.version) < 0 ||
       (current.version === selected.version && !current.bytes.equals(selected.bytes));
+    if (canonical && !needsChannelPublication && !needsUpdaterPublication) {
+      // The release API can return fresh bytes before either public URL converges.
+      const expectedHash = hash(canonical.bytes);
+      for (const path of [
+        `download/v${latestVersion.version}/latest.json`,
+        "latest/download/latest.json",
+      ]) {
+        const url = `https://github.com/${options.repository}/releases/${path}`;
+        const result = spawnSync(
+          "curl",
+          [
+            "--disable",
+            "--fail",
+            "--silent",
+            "--location",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            url,
+          ],
+          { timeout: 10_000, killSignal: "SIGKILL", maxBuffer: 1024 * 1024 },
+        );
+        if (result.status !== 0 || hash(result.stdout) !== expectedHash) {
+          console.error(
+            `Linux updater publication is pending: ${url} did not serve canonical ${canonical.version} (SHA-256 ${expectedHash}). Inspect the Linux builder or mirror readback before retrying.`,
+          );
+          needsUpdaterPublication = true;
+          break;
+        }
+      }
+    }
   }
   writeFileSync(join(options.output, "latest.json"), manifest.bytes, { flag: "wx" });
   writeFileSync(join(options.output, publication.checksumsName), publication.checksumBytes, {

@@ -81,7 +81,7 @@ it.each([
     changedPaths: edited ? [staleBuild] : ["ui/src/app/stale-chunk-reload.ts"],
     selectedTestTargets: [staleBuild, cron],
     targetFiles: [staleBuild, cron],
-    uiTestGroupsSource: `export { createUiTestShardGroups } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-node-test-plan.mts")).href)};`,
+    uiTestGroupsSource: `export { createUiTestShardGroups } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-ui-test-plan.mts")).href)};`,
     uiE2eSelectorSource: `
         export const resolveUiE2ePrTestSelection = () => ({
           mode: 'owners', files: ${JSON.stringify([staleBuild, cron])},

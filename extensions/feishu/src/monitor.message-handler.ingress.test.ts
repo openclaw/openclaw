@@ -141,7 +141,6 @@ function createHarness(params: {
     entries,
     handler,
     handleMessage,
-    hasProcessedMessage,
     flush: async () => {
       if (!onFlush) {
         throw new Error("debouncer flush callback missing");

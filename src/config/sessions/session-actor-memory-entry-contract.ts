@@ -132,6 +132,7 @@ export type SessionActorMemoryEntryWrites = {
   };
   "session.lifecycle.reclaim": {
     input: {
+      retainedMcpSessionIds?: readonly string[];
       entries: readonly {
         sessionKey: string;
         expected: SessionEntry;
@@ -146,6 +147,7 @@ export type SessionActorMemoryEntryWrites = {
     output: {
       removedSessionKeys: string[];
       archivedSessionKeys: string[];
+      retiredMcpSessionIds?: string[];
       beforeCount: number;
       afterCount: number;
     };

@@ -212,6 +212,8 @@ With preload enabled, embedding requests also check that their model is loaded a
 instance prepared for the configured context length. This avoids truncating input through a smaller
 loaded instance and lets memory embeddings recover after model eviction even when LM Studio JIT
 loading is disabled. Embedding model and cache identity keep the configured model key.
+If a native preload fails and the subsequent embedding request also fails, the error includes
+the context length OpenClaw attempted alongside the inference error.
 
 ### Disabling preload
 
@@ -272,6 +274,38 @@ When LM Studio rejects a prompt because it exceeds the loaded context, OpenClaw 
 If a single message is too large, shorten it or load the model with a larger context; compacting
 earlier history cannot shrink that message. Server-side truncation without an overflow error
 does not trigger this recovery.
+
+### Embedding model fails to load on a small host
+
+Memory indexing fails with `Model is unloaded` when LM Studio cannot allocate the embedding model's
+context. In OpenClaw 2026.11.3, a missing `models.providers.lmstudio.models` entry requested
+64,000 tokens, capped to the model's maximum. Loading a 32,768-token embedding model this way
+could exhaust a 16 GB host. Set a small `contextTokens` in the model entry to request a fixed budget:
+
+```json5
+{
+  models: {
+    providers: {
+      lmstudio: {
+        models: [
+          {
+            id: "text-embedding-qwen3-embedding-0.6b",
+            name: "Qwen3 Embedding 0.6B",
+            input: ["text"],
+            contextWindow: 32768,
+            contextTokens: 1024,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+After a successful preload, OpenClaw uses the prepared context to split long text documents before embedding them. Rebuild an existing index with `openclaw memory index --force`, then search for a phrase near the end of a long note. Choose a context that also fits your queries and any custom input prefix. LM Studio can truncate oversized inputs and still return a vector.
+
+To skip LM Studio for embeddings, [llmman](/providers/llmman#advanced-configuration) sizes the
+embedding context per daemon with `LLMMAN_CONTEXT_LENGTH`.
 
 ### Model discovery failures
 

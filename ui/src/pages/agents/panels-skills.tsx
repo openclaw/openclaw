@@ -20,9 +20,9 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import {
   SettingsSection,
   SettingsRow,
-  SettingsToggle,
   SettingsEmpty,
 } from "../../components/solid/settings-ui.tsx";
+import { Switch } from "../../components/solid/switch.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentConfig } from "../../lib/agents/display.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -282,11 +282,21 @@ function AgentSkillsContent(
                           learned() || !usingAllowlist() || allowSet().has(skill().name);
                         return (
                           <div class="settings-row agent-skill-row">
-                            <div class="settings-row__text">
-                              <span class="settings-row__title">
-                                {skill().emoji ? `${skill().emoji} ` : ""}
+                            <label class="agent-skill-row__heading">
+                              <span class="settings-row__title" title={skill().name}>
+                                {skill().emoji ? `${skill().emoji}\u00a0` : ""}
                                 {skill().name}
                               </span>
+                              <Switch
+                                checked={enabled()}
+                                disabled={learned() || !editable()}
+                                ariaLabel={skill().name}
+                                onChange={(checked) =>
+                                  params.onToggle(params.agentId, skill().name, checked)
+                                }
+                              />
+                            </label>
+                            <div class="settings-row__text">
                               <span class="settings-row__desc">{skill().description}</span>
                               <SkillStatusChips skill={skill()} />
                               <For
@@ -311,16 +321,6 @@ function AgentSkillsContent(
                                   {t("agents.skillsPanel.learnedAlwaysOn")}
                                 </span>
                               ) : undefined}
-                            </div>
-                            <div class="settings-row__control">
-                              <SettingsToggle
-                                checked={enabled()}
-                                disabled={learned() || !editable()}
-                                ariaLabel={skill().name}
-                                onChange={(checked) =>
-                                  params.onToggle(params.agentId, skill().name, checked)
-                                }
-                              />
                             </div>
                           </div>
                         );

@@ -74,7 +74,6 @@ it.for([
   "automatic",
   "deny",
   "cancel",
-  "revoked",
   "labs",
   "authority",
   "trust",
@@ -202,7 +201,6 @@ it.for([
               return { text: "Host review requested.", directive: directiveRef.current };
             },
           });
-          let current = true;
           const controller = new AbortController();
           const manager = createTestApprovalManager<SystemAgentApprovalRequestPayload>(test, {
             approvalKind: "system-agent",
@@ -230,7 +228,6 @@ it.for([
               },
             },
             signal: controller.signal,
-            hasCurrentClientAuthority: () => current,
             context: {
               getRuntimeConfig: () => config,
               broadcastToConnIds: vi.fn(),
@@ -303,9 +300,6 @@ it.for([
                 const description = (await manager.getSnapshot(pending.id))?.request.description;
                 expect(description).toContain(modelReview?.planIntegrity);
                 expect(description).toContain(modelReview?.target.workspace);
-                if (scenario === "revoked") {
-                  current = false;
-                }
                 if (scenario === "cancel") {
                   controller.abort(new Error("Fixture requester cancelled"));
                   expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);

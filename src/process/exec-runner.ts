@@ -20,6 +20,7 @@ import {
   hasChildProcessExited,
   releaseChildProcessOutputAfterExit,
 } from "./child-process.js";
+import type { CommandInputOptions } from "./command-stdin-file.js";
 import {
   appendCapturedOutput,
   appendPreservedOutputLines,
@@ -63,14 +64,11 @@ import { BrokerChild } from "./spawn-broker/child.js";
 
 type CommandTerminationReason = SpawnResult["termination"] | "output-limit";
 
-export type CommandOptions = {
+export type CommandOptions = CommandInputOptions & {
   executionIntent?: ProcessExecutionIntent;
   executionScopeKey?: string;
   timeoutMs?: number;
   cwd?: string;
-  input?: string | Uint8Array;
-  /** Borrow a caller-owned descriptor as stdin without buffering or piping its bytes. */
-  stdinFileDescriptor?: number;
   /** Synchronous admission with the spawned PID and argv, before input is released. */
   beforeInput?: (pid: number, argv?: readonly string[]) => void;
   /** Prepare physical source facts after startup, before the final synchronous input grant. */
@@ -163,6 +161,7 @@ async function runCommandWithOutputEncoding(
     timeoutMs,
     cwd,
     input,
+    stdinFile,
     stdinFileDescriptor,
     baseEnv,
     env,
@@ -189,6 +188,9 @@ async function runCommandWithOutputEncoding(
   }
   if (guardedInput && !hasInput) {
     throw new Error("Child input admission requires explicit input");
+  }
+  if (stdinFile && hasInput) {
+    throw new Error("Command stdin file cannot be combined with input");
   }
   const resolvedKillGraceMs = resolveTimerTimeoutMs(
     killGraceMs,
@@ -265,12 +267,11 @@ async function runCommandWithOutputEncoding(
     killSignal,
     ...(hasInput && !guardedInput ? { input } : {}),
     reject: false,
-    stdio: [
-      // SAFETY: Execa forwards arbitrary numeric descriptors to Node; its stdin type narrows them to fd 0.
-      (options.stdinFileDescriptor as 0 | undefined) ?? (hasInput ? "pipe" : "inherit"),
-      "pipe",
-      "pipe",
-    ],
+    stdinFile,
+    stdin:
+      // SAFETY: Execa passes numeric descriptors through to Node despite its fd-0 type.
+      (stdinFileDescriptor as 0 | undefined) ??
+      (stdinFile ? undefined : hasInput ? "pipe" : "inherit"),
     stripFinalNewline: false,
     windowsVerbatimArguments: options.windowsVerbatimArguments,
   });
@@ -369,7 +370,8 @@ async function runCommandWithOutputEncoding(
     }
     eofGraceTimer?.clear();
     termination = reason;
-    if (waitingForSpawn) {
+    // Keep the caller's file pinned through broker admission, even after cancellation.
+    if (waitingForSpawn && !stdinFile) {
       startupCanceled.resolve(reason);
     }
     if (childExitState) {

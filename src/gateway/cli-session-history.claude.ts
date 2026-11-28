@@ -173,6 +173,8 @@ function normalizeClaudeCliContent(
       block.type = "toolcall";
       delete block.input;
     } else if (type === "tool_result") {
+      // Claude omits is_error on successful tool results; history must agree with live activity.
+      block.is_error ??= false;
       const toolUseId = resolveToolUseId(block);
       if (!block.name && toolUseId) {
         const toolName = toolNameRegistry.get(toolUseId);

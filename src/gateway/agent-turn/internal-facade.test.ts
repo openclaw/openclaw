@@ -48,10 +48,17 @@ vi.mock("./agent-request-preflight.js", () => ({
   prepareAgentRequestPreflight: ({ request }: { request: unknown }) => ({ request }),
 }));
 
-const service = () => ({ createAgentTurnService: () => ({ startTurn, waitForTurn }) });
-vi.mock("./agent-turn-service.js", () => ({
-  createAgentTurnService: () => ({ startTurn, waitForTurn }),
+const service = vi.hoisted(() => () => ({ createAgentTurnService: () => ({ startTurn }) }));
+const waitService = vi.hoisted(() => async () => ({
+  ...(await vi.importActual<typeof import("./agent-wait.js")>("./agent-wait.js")),
+  prepareExactAgentTurnWait: (_context: unknown, params: unknown) => ({
+    wait: () => waitForTurn(params),
+  }),
 }));
+// mock-isolation: Control start admission so cancellation can race the cold import.
+vi.mock("./agent-turn-service.js", service);
+// mock-isolation: Retain the real wait exports while controlling the observation boundary.
+vi.mock("./agent-wait.js", waitService);
 
 function createContext() {
   return Object.assign({} as GatewayRequestContext, {
@@ -188,6 +195,8 @@ it.for([
     return held.promise;
   };
   const cold = stage === "cold";
+  const coldModule = method === "wait" ? "./agent-wait.js" : "./agent-turn-service.js";
+  const loadColdModule = method === "wait" ? waitService : service;
   const authorizationAbort = stage === "authorization" && boundary === "abort";
   const releaseMutation = vi.fn();
   const releaseAccess = vi.fn();
@@ -197,9 +206,9 @@ it.for([
     startTurn.mockImplementation(async ({ io }) => accept(io, "guarded-run"));
     waitForTurn.mockResolvedValue({ result: { status: "timeout" } });
     // mock-isolation: Hold service loading at the cold-admission boundary without real runtime state.
-    vi.doMock("./agent-turn-service.js", async () => {
+    vi.doMock(coldModule, async () => {
       await pause();
-      return service();
+      return await loadColdModule();
     });
   } else if (stage === "authorization") {
     authorize.mockImplementationOnce(async () => {
@@ -318,7 +327,7 @@ it.for([
     signal.removeEventListener("abort", unblock);
     if (cold) {
       // mock-isolation: Restore the controlled turn service after each cold import.
-      vi.doMock("./agent-turn-service.js", service);
+      vi.doMock(coldModule, loadColdModule);
       vi.resetModules();
     }
   }

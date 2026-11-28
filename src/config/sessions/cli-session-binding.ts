@@ -141,3 +141,7 @@ export function clearAllCliSessions(
   entry.cliSessionIds = undefined;
   entry.claudeCliSessionId = undefined;
 }
+
+export function hasCliSessionReuseMetadata(binding: CliSessionBinding): boolean {
+  return Object.entries(binding).some(([key, value]) => key !== "sessionId" && value !== undefined);
+}

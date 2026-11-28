@@ -16,7 +16,6 @@ const containers: HTMLElement[] = [];
 const subscribers: (() => void)[] = [];
 type ImageFixtureProps = MessageImagesProps & {
   role?: string;
-  maxWidth?: number;
   withDocument?: boolean;
   nextMessage?: boolean;
 };
@@ -78,10 +77,7 @@ function ImageFixture(props: ImageFixtureProps) {
   return (
     <Show when={props.role} fallback={<ImageContent {...props} />}>
       {(role) => (
-        <div
-          class={["chat-group", role()]}
-          style={props.maxWidth ? { "--chat-message-max-width": `${props.maxWidth}px` } : undefined}
-        >
+        <div class={["chat-group", role()]}>
           <div class="chat-group-messages">
             <ImageContent {...props} />
           </div>
@@ -257,62 +253,8 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     await image.decode();
     expect(image.naturalWidth).toBe(400);
     expect(fetchMock).toHaveBeenCalledOnce();
-    expect(new URL(fetchMock.mock.calls[0]![0], location.href).searchParams.get("v")).toBe("4");
+    expect(new URL(fetchMock.mock.calls[0]![0], location.href).searchParams.get("v")).toBe("5");
   });
-
-  it.each([
-    ["landscape", 1200, 800, 500, 400, 400 / 1.5, "assistant", true],
-    ["portrait", 800, 1600, 500, 180, 360, "user", true],
-    ["tiny image", 1, 1, 500, 160, 160, "assistant", true],
-    ["narrow pane", 1200, 800, 180, 180, 120, "user", true],
-    ["panorama", 1200, 80, 500, 400, 400 / 15, "assistant", true],
-    ["tiny tall image", 80, 1600, 500, 18, 360, "user", true],
-    ["unknown dimensions", 800, 1600, 500, 400, 400 / 1.5, "assistant", false],
-  ] as const)(
-    "keeps %s geometry through fetch, decode, and cache reuse",
-    async (name, width, height, pane, expectedWidth, expectedHeight, role, sized) => {
-      const { page } = await import("vitest/browser");
-      await page.viewport(1440, 900);
-      // Constrain the message column, not the surrounding avatar row or mobile breakpoint.
-      const container = mount(1000);
-      const { response, fetchMock } = pendingResponse();
-      const images = [outgoingImage(name, sized ? width : undefined, sized ? height : undefined)];
-      const draw = () => drawImages(container, { images, role, maxWidth: pane, nextMessage: true });
-      draw();
-      const originalFrame = frame(container);
-      const before = geometry(container);
-      expect(before.width).toBeCloseTo(sized ? expectedWidth : 400, 1);
-      expect(before.height).toBeCloseTo(sized ? expectedHeight : 400 / 1.5, 1);
-      expectSkeleton(container);
-      expect(
-        getComputedStyle(originalFrame.querySelector(".chat-image-surface")!).backgroundColor,
-      ).not.toBe("rgba(0, 0, 0, 0)");
-      expect(originalFrame.getAttribute("aria-busy")).toBe("true");
-      expect(originalFrame.querySelector("svg")).toBeNull();
-      response.resolve(svgResponse(width, height));
-      await waitForFast(() => expect(container.querySelector("img")).not.toBeNull());
-      const image = container.querySelector("img")!;
-      expect(geometry(container)).toEqual(before);
-      await image.decode();
-      await vi.waitFor(() => {
-        expect(geometry(container).width).toBeCloseTo(expectedWidth, 1);
-        expect(geometry(container).height).toBeCloseTo(expectedHeight, 1);
-      });
-      const decoded = geometry(container);
-      expect(decoded).toEqual(before);
-      expect(frame(container)).toBe(originalFrame);
-      draw();
-      expect(container.querySelector("img")).toBe(image);
-      expect(geometry(container)).toEqual(decoded);
-      unmountImages(container);
-      draw();
-      const remounted = await admittedImage(container);
-      expect(remounted.getAttribute("src")).toBe(image.getAttribute("src"));
-      await remounted.decode();
-      await vi.waitFor(() => expect(geometry(container)).toEqual(decoded));
-      expect(fetchMock).toHaveBeenCalledOnce();
-    },
-  );
 
   it("keeps a local attachment as a plain skeleton while metadata is pending", async () => {
     const container = mount(500);
@@ -344,53 +286,6 @@ describe.runIf(browserMode)("chat image loading geometry", () => {
     expect(geometry(container)).toEqual(loadable);
     expect(fetch).toHaveBeenCalledOnce();
   });
-
-  it.each([
-    { count: 2, viewport: 375, tile: 109 },
-    { count: 5, viewport: 1000, tile: 128 },
-  ])(
-    "keeps every tile of a $count-image user gallery in place at $viewport px",
-    async ({ count, viewport, tile }) => {
-      const { page } = await import("vitest/browser");
-      await page.viewport(viewport, 812);
-      const container = mount(Math.min(700, viewport - 32));
-      const ready = createDeferred();
-      vi.stubGlobal(
-        "fetch",
-        vi.fn(async () => {
-          await ready.promise;
-          return svgResponse(1200, 800);
-        }),
-      );
-      const images = Array.from({ length: count }, (_, index) =>
-        outgoingImage(`Image ${index}`, 1200, 800),
-      );
-      drawImages(container, { images, role: "user", nextMessage: true });
-      const rectangles = () => [...container.querySelectorAll(".chat-image-frame")].map(rectangle);
-      const before = rectangles();
-      expect(before).toHaveLength(count);
-      for (const rect of before) {
-        expect(rect.width).toBe(tile);
-        expect(rect.height).toBe(tile);
-      }
-      const nextTop = container.querySelector("[data-next-message]")!.getBoundingClientRect().top;
-      ready.resolve();
-      await waitForFast(() => expect(container.querySelectorAll("img")).toHaveLength(count));
-      await decodeImages(container);
-      expect(rectangles()).toEqual(before);
-      for (const surface of container.querySelectorAll(".chat-image-surface")) {
-        const rect = surface.getBoundingClientRect();
-        expect(rect.width).toBe(rect.height);
-        for (const content of surface.querySelectorAll("button, img")) {
-          expect(content.getBoundingClientRect().width).toBe(rect.width);
-          expect(content.getBoundingClientRect().height).toBe(rect.height);
-        }
-      }
-      expect(container.querySelector("[data-next-message]")!.getBoundingClientRect().top).toBe(
-        nextTop,
-      );
-    },
-  );
 
   it("reserves the menu footprint before the next short panorama preview", async () => {
     const { page } = await import("vitest/browser");

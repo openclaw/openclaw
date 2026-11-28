@@ -216,6 +216,7 @@ for (const [index, h] of held.entries()) {
   const kept = h.subscription.getKeptAnswer();
   assert(kept);
   assert.equal(kept.assistant.content[0]?.type, "thinking");
+  assert(kept.assistant.usage.cost, "Synthetic live fixture retains recorded cost");
   assert.equal(kept.assistant.usage.cost.total, 0);
   assert.equal(kept.assistant.openclawDelivery?.tts?.text, "Speak fixture.");
   assert.equal(readAgentAssistantSource(kept.assistant), readAgentAssistantSource(completed));

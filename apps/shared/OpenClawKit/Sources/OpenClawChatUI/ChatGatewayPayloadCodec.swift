@@ -262,7 +262,9 @@ public enum OpenClawChatGatewayPayloadCodec {
             thinkingLevels: model.thinkinglevels.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
             thinkingDefault: model.thinkingdefault,
             input: model.input.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
-            agentRuntime: model.agentruntime.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) })
+            agentRuntime: model.agentruntime.map { try GatewayPayloadDecoding.decode(AnyCodable($0)) },
+            providerName: model.providername,
+            serviceTiers: model.servicetiers)
     }
 
     public static func commandChoice(_ entry: CommandEntry) -> OpenClawChatCommandChoice {
@@ -296,6 +298,8 @@ public enum OpenClawChatGatewayPayloadCodec {
             acceptsArgs: entry.acceptsargs)
     }
 
+    private struct PreferencesChangedPayload: Decodable { let keys: [String] }
+
     private struct MetadataChangedPayload: Decodable {
         let modelSelectionChanged: Bool?
         let modelCatalogChanged: Bool?
@@ -309,6 +313,7 @@ public enum OpenClawChatGatewayPayloadCodec {
     private enum EventKind: String {
         case tick
         case chatMetadataChanged = "chat.metadata.changed"
+        case preferencesChanged = "users.prefs.changed"
         case configChanged = "config.changed"
         case sessionsChanged = "sessions.changed"
         case sessionReaction = "session.reaction"
@@ -343,6 +348,9 @@ public enum OpenClawChatGatewayPayloadCodec {
             return payload?.modelSelectionChanged == true ? .modelSelectionChanged : .chatMetadataChanged(
                 modelCatalogChanged: payload?.modelCatalogChanged != false || payload?.authChanged == true,
                 agentID: payload?.agentId)
+        case .preferencesChanged:
+            return decode(PreferencesChangedPayload.self)?.keys
+                .contains("ui.railShortcuts") == true ? .personalPinsChanged : nil
         case .configChanged:
             return .modelSelectionChanged
         case .sessionsChanged:

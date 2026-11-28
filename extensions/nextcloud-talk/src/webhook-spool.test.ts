@@ -11,17 +11,12 @@ import {
   createSignedCreateMessageRequest,
   createVoiceMessageActivityBody,
 } from "./monitor.test-fixtures.js";
-import {
-  migrateNextcloudTalkLegacyReplayState,
-  parseNextcloudTalkFileSharedActivity,
-} from "./webhook-spool-state.js";
 import { createNextcloudTalkWebhookSpool } from "./webhook-spool.js";
 
-type NextcloudTalkIngressQueue = NonNullable<
-  Parameters<typeof createNextcloudTalkWebhookSpool>[0]["queue"]
->;
+type SpoolOptions = Parameters<typeof createNextcloudTalkWebhookSpool>[0];
+type NextcloudTalkIngressQueue = NonNullable<SpoolOptions["queue"]>;
 type NextcloudTalkIngressPayload = Parameters<NextcloudTalkIngressQueue["enqueue"]>[1];
-type NextcloudTalkIngressDeliver = Parameters<typeof createNextcloudTalkWebhookSpool>[0]["deliver"];
+type NextcloudTalkIngressDeliver = SpoolOptions["deliver"];
 const deferredDelivery = () =>
   vi.fn<NextcloudTalkIngressDeliver>(async (_message, lifecycle) => {
     lifecycle.onDeferred();
@@ -78,7 +73,13 @@ function createRawEvent(params?: {
 function startSpool(
   queue: NextcloudTalkIngressQueue,
   deliver: NextcloudTalkIngressDeliver,
-  log = vi.fn(),
+  {
+    log = vi.fn(),
+    legacyReplayStore = null,
+  }: {
+    log?: SpoolOptions["runtime"]["log"];
+    legacyReplayStore?: SpoolOptions["legacyReplayStore"];
+  } = {},
 ) {
   const spool = createNextcloudTalkWebhookSpool({
     accountId: "default",
@@ -87,7 +88,7 @@ function startSpool(
     runtime: { error: vi.fn(), log },
     pollIntervalMs: 60_000,
     adoptionStallTimeoutMs: 5_000,
-    legacyReplayStore: null,
+    legacyReplayStore,
   });
   spools.push(spool);
   return spool;
@@ -174,16 +175,16 @@ describe("Nextcloud Talk durable ingress", () => {
     expect(deliver.mock.calls[0]?.[0]).not.toHaveProperty("quote");
   });
 
-  it("accepts file metadata without the optional hide-download flag", () => {
+  it("delivers file metadata without the optional hide-download flag", async () => {
+    const { deliver, spool } = startDelivery();
     const envelope = JSON.parse(createFileSharedActivityBody()) as { object: { content: string } };
     const content = JSON.parse(envelope.object.content) as {
       parameters: { file: Record<string, unknown> };
     };
     delete content.parameters.file["hide-download"];
     envelope.object.content = JSON.stringify(content);
-    expect(parseNextcloudTalkFileSharedActivity(envelope as Record<string, unknown>)).toEqual(
-      expect.objectContaining({ attachment: expect.objectContaining({ hideDownload: false }) }),
-    );
+    await receive(spool, JSON.stringify(envelope));
+    expectDelivered(deliver, { attachment: expect.objectContaining({ hideDownload: false }) });
   });
 
   it("finishes durable admission for a receive that began before migration-time stop", async () => {
@@ -191,12 +192,7 @@ describe("Nextcloud Talk durable ingress", () => {
     const entries = vi.fn(() => migration.promise);
     const deliver = vi.fn();
     const prune = vi.spyOn(queue, "prune");
-    const spool = createNextcloudTalkWebhookSpool({
-      accountId: "default",
-      queue,
-      deliver,
-      runtime: { error: vi.fn(), log: vi.fn() },
-      pollIntervalMs: 60_000,
+    const spool = startSpool(queue, deliver, {
       legacyReplayStore: { entries, clear: vi.fn(async () => {}) },
     });
 
@@ -218,7 +214,11 @@ describe("Nextcloud Talk durable ingress", () => {
       clear: vi.fn(async () => {}),
     };
 
-    await migrateNextcloudTalkLegacyReplayState({ queue, store });
+    const deliver = adoptedDelivery();
+    const spool = startSpool(queue, deliver, { legacyReplayStore: store });
+    await spool.ready();
+    await receive(spool, createRawEvent({ roomToken: "test-room", messageId: "msg-legacy" }));
+    expect(deliver).not.toHaveBeenCalled();
     expect((await queue.enqueue("msg-legacy", {} as NextcloudTalkIngressPayload)).kind).toBe(
       "completed",
     );
@@ -374,7 +374,7 @@ describe("Nextcloud Talk durable ingress", () => {
   ])("ignores %s without consuming its message id", async (_name, body) => {
     const deliver = vi.fn();
     const log = vi.fn();
-    await expectIgnored(startSpool(queue, deliver, log), body, deliver);
+    await expectIgnored(startSpool(queue, deliver, { log }), body, deliver);
     expect(log).toHaveBeenCalledOnce();
   });
 });

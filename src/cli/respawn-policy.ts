@@ -30,25 +30,7 @@ export function isTerminalInteractiveRespawnArgv(argv: string[]): boolean {
   return invocation.primary === null || INTERACTIVE_TTY_COMMANDS.has(invocation.primary);
 }
 
-export function shouldSkipRespawnForArgv(
-  argv: string[],
-  platform: NodeJS.Platform = process.platform,
-): boolean {
-  const invocation = resolveCliArgvInvocation(argv);
-  const isGatewayStatus =
-    invocation.commandPath.length === 2 &&
-    invocation.commandPath[0] === "gateway" &&
-    invocation.commandPath[1] === "status";
-  return (
-    shouldSkipStartupEnvironmentRespawnForArgv(argv, platform) ||
-    (invocation.primary !== null && INTERACTIVE_TTY_COMMANDS.has(invocation.primary)) ||
-    // Status commonly overlaps the running Gateway; a warning-only wrapper doubles
-    // transient CLI memory. Startup-environment respawn remains separately owned.
-    isGatewayStatus
-  );
-}
-
-/** Returns whether startup-environment respawn should be skipped without suppressing TUI respawn policy. */
+/** Returns whether startup-environment respawn should be skipped. */
 export function shouldSkipStartupEnvironmentRespawnForArgv(
   argv: string[],
   platform: NodeJS.Platform = process.platform,

@@ -197,6 +197,13 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
     .spyOn(attemptTools, "prepareEmbeddedAttemptToolBase")
     .mockImplementation(async (params) => {
       const c = fixture.current;
+      const replayed =
+        c?.original && params.attempt.sessionKey === c.sessionKey
+          ? readAdmittedRunOperatorAuthority(params.attempt.admittedRunContext)
+          : undefined;
+      if (replayed) {
+        c?.replayGrants.push(replayed.grant);
+      }
       if (
         c?.original &&
         (c.row.credential === "live-grant" ||
@@ -223,7 +230,7 @@ export function observeAdmissionFixture(fixture: AdmissionFixture) {
       }
       const result = await prepareTools(params);
       if (
-        (c?.scenario === "mixed-owner-group" || c?.scenario === "owner-revoked-before-start") &&
+        c?.scenario === "mixed-owner-group" &&
         c.original &&
         params.attempt.sessionKey === c.sessionKey &&
         params.attempt.prompt.includes(c.queuedText)

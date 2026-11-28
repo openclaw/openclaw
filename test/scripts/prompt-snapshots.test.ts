@@ -39,6 +39,11 @@ function renderedPromptSection(content: string, heading: string, nextHeading: st
   return content.slice(start, end);
 }
 
+// Codex app-server Telegram turn: the bytes measured on main when set, plus 5%, rounded up to
+// 256 B. Growth within that margin passes; lower a ceiling when a change shrinks its surface.
+const CODEX_APP_SERVER_PROMPT_BUDGET_BYTES = 13_824;
+const CODEX_APP_SERVER_TOOLS_BUDGET_BYTES = 65_792;
+
 let generated: Awaited<ReturnType<typeof createHappyPathPromptSnapshotFiles>>;
 let pluginLoaderCallsBefore: number;
 let pluginLoaderCallsAfter: number;
@@ -137,6 +142,36 @@ describe("happy path prompt snapshots", () => {
         );
       }
     }
+  });
+
+  it("keeps the Codex app-server prompt and tool specs within budget", () => {
+    const content = (fileName: string) => {
+      const file = generated.find((candidate) => path.basename(candidate.path) === fileName);
+      if (!file) {
+        throw new Error(`missing generated ${fileName}`);
+      }
+      return file.content;
+    };
+    // Every model-bound layer is a fenced block after this heading; metadata fences are `json`.
+    const snapshot = content(CODEX_PROMPT_SNAPSHOT_FILES["telegram-direct"]);
+    const layersStart = snapshot.indexOf("## Reconstructed Model-Bound Prompt Layers");
+    if (layersStart === -1) {
+      throw new Error("Missing model-bound prompt layers");
+    }
+    const layers = snapshot.slice(layersStart);
+    let promptBytes = 0;
+    for (const { groups } of layers.matchAll(
+      /^(?<fence>`{3,})(?<info>\w*)\n(?<body>[\s\S]*?)\n\k<fence>$/gmu,
+    )) {
+      if (groups?.info !== "json") {
+        promptBytes += Buffer.byteLength(groups?.body ?? "", "utf8");
+      }
+    }
+    expect.soft(promptBytes).toBeLessThanOrEqual(CODEX_APP_SERVER_PROMPT_BUDGET_BYTES);
+    const tools = JSON.stringify(JSON.parse(content("codex-dynamic-tools.telegram-direct.json")));
+    expect
+      .soft(Buffer.byteLength(tools, "utf8"))
+      .toBeLessThanOrEqual(CODEX_APP_SERVER_TOOLS_BUDGET_BYTES);
   });
 
   it("rejects invalid Codex dynamic-tool materialization scenarios", async () => {
@@ -267,7 +302,7 @@ describe("happy path prompt snapshots", () => {
     expect(stats.additionalContext.chars).toBe(contextTexts.join("\n\n").length);
   });
 
-  it("keeps managed persona outside native collaboration and user-input history", async () => {
+  it("keeps workspace persona on the thread, outside collaboration and user-input history", async () => {
     for (const scenario of ["telegram-direct", "discord-group"]) {
       const snapshot = await materializeCodexPromptSnapshot(scenario);
       const turnSection = renderedPromptSection(
@@ -284,15 +319,16 @@ describe("happy path prompt snapshots", () => {
         "### Request Instructions: OpenClaw Parent-Local Context",
         "### Developer: Codex Permission Instructions",
       );
-      expect(parentLocal).toContain("## OpenClaw Agent Soul");
-      for (const name of ["SOUL.md", "IDENTITY.md", "USER.md"]) {
-        expect(parentLocal).toContain("<" + name + " contents will be here>");
-      }
+      expect(parentLocal).not.toContain("## OpenClaw Agent Soul");
       const shared = renderedPromptSection(
         snapshot,
         "### Developer: OpenClaw Runtime Instructions",
         "### Developer: Codex Collaboration Mode Instructions",
       );
+      expect(shared).toContain("## OpenClaw Agent Soul");
+      for (const name of ["SOUL.md", "IDENTITY.md", "USER.md"]) {
+        expect(shared).toContain("<" + name + " contents will be here>");
+      }
       expect(shared).toContain("<collaboration_mode>");
       expect(shared).toContain("silence is not an answer or approval");
       expect(shared).toContain("```text\n<thread_policy>\n");
@@ -307,7 +343,7 @@ describe("happy path prompt snapshots", () => {
         "### User: Turn Input Text",
         "### Tools: Dynamic Tool Catalog",
       );
-      for (const nativeHistory of [shared, collaboration, input]) {
+      for (const nativeHistory of [collaboration, input]) {
         expect(nativeHistory).not.toContain("<SOUL.md contents will be here>");
         expect(nativeHistory).not.toContain("<IDENTITY.md contents will be here>");
         expect(nativeHistory).not.toContain("<USER.md contents will be here>");

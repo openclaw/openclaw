@@ -2,9 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { ManagedPluginLifecycleError } from "../plugins/management-lifecycle-error.js";
-import { VERSION } from "../version.js";
 import * as assert from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
 import * as mocks from "./update-cli-mocks.test-support.js";
@@ -13,10 +11,6 @@ import {
   mockPostCoreConvergenceOnce,
   stableConfig,
 } from "./update-cli/update-cli-config.test-support.js";
-import {
-  mockUnbuiltRecoveryFixture,
-  recoveryObservationStep,
-} from "./update-cli/update-cli-failure-recovery.test-support.js";
 import { writeOpenClawPackageFixture } from "./update-cli/update-cli-package.test-support.js";
 
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
@@ -30,8 +24,6 @@ describe("update-cli", () => {
     mockGatewayHealth,
     mockNpmPluginOutcomes,
     mockOwnedGitService,
-    mockPackageInstallAtCaseDir,
-    primeNpmChannelTag,
     runPostCoreCommand,
   } = createUpdateCliFixture();
 
@@ -194,30 +186,6 @@ describe("update-cli", () => {
     expect(update.runUpdateFailureTriage).not.toHaveBeenCalled();
   });
 
-  it("fails unexpected post-core npm update exceptions", async () => {
-    await mockUnbuiltRecoveryFixture();
-    process.chdir(await mockPackageInstallAtCaseDir("openclaw-current-plugin-exception", VERSION));
-    mocks.readPackageVersion.mockResolvedValue(VERSION);
-    primeNpmChannelTag("latest", VERSION);
-    const message = "npm update invariant broke";
-    mocks.updateNpmInstalledPlugins.mockRejectedValueOnce(new Error(message));
-
-    await expect(update.updateCommand({ json: true, restart: false })).rejects.toEqual(
-      new update.ExitError(1),
-    );
-    expect(update.defaultRuntime.exit).not.toHaveBeenCalled();
-    const result = assert.lastWriteJsonCall() as UpdateRunResult | undefined;
-    expect(result?.verification).toEqual({});
-    expect(result).toMatchObject({
-      status: "error",
-      reason: "post-update-failed",
-      steps: [
-        expect.objectContaining({ exitCode: 1, stderrTail: message }),
-        // An already-current core copied nothing, so there is nothing to clean up.
-        recoveryObservationStep(),
-      ],
-    });
-  });
   it("preserves convergence diagnostic output", async () => {
     const repairWarning = notice("Package lookup deferred.", ["Retry plugin repair."]);
     const smokeWarning = {

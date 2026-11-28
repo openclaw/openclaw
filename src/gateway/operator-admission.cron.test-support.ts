@@ -79,7 +79,9 @@ export async function runCronAdmissionCase(
         expect([...authority.scopes].toSorted()).toEqual([...WRITER].toSorted());
         if (isOccurrence) {
           expect(params.attempt.runId).not.toBe(creatorRunId);
-          expect(authority.requesterOwner).toBe(true);
+          // The same writer's fresh turn is not the owner; a parent-bound replay matches it.
+          expect(authority.grant.owner).toBe(false);
+          expect(params.attempt.senderIsOwner).toBe(false);
         } else {
           const tool = tools.toolsRaw.find((candidate) => candidate.name === AUTOMATIONS_TOOL_NAME);
           assert(params.attempt.admittedRunContext);
@@ -290,8 +292,7 @@ export async function runCronAdmissionCase(
       c.releaseRecovered.resolve();
     } else if (scenario === "before-start") {
       // This is the receipt capability's next-use boundary, not operator
-      // admission. Its in-flight guards remain in LIFETIME_CHECK_CALLS until
-      // the later lifetime PR; removing a job must retire the receipt.
+      // admission; removing a job must retire the receipt.
       await admin.request("cron.remove", { id: job.id });
       jobRemoved = true;
       assert(standingAuthority);

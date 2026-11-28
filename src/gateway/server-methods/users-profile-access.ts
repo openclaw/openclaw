@@ -1,5 +1,6 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
+import { resolveGatewayPersonalToolParticipant } from "../../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { prepareUserProfileRoleAuthority } from "../../state/user-channel-identity-operations.js";
@@ -112,10 +113,36 @@ export async function prepareUserProfileAdministration(options: GatewayRequestHa
     actor?.kind === "operator" && actor.profileId
       ? await prepareUserProfileRoleAuthority(actor.profileId)
       : undefined;
+  if (
+    client?.connect &&
+    ((client.connect.role ?? "operator") !== "operator" ||
+      !client.connect.scopes?.includes("operator.admin"))
+  ) {
+    throw new Error("Profile administration requires operator.admin");
+  }
+  if (actor?.kind === "operator" && !role) {
+    throw new Error(
+      "Profile administration requires an administrator profile. Sign in and try again.",
+    );
+  }
+  const cfg = context.getRuntimeConfig();
+  const policy =
+    actor?.kind === "system" || currentOwnerDevicePrincipal(client)
+      ? undefined
+      : resolveOperatorRolePolicyForAssignment(
+          sharedOwner ? authenticatedProfileId : role?.profileId,
+          role?.role ?? null,
+          cfg,
+          role?.githubLogin ?? null,
+          operatorRoleSubject(role),
+        );
+  if (policy && !policy.scopes.includes("operator.admin")) {
+    throw new Error("Profile administration requires operator.admin");
+  }
   const assertCurrent = () => {
     assertLifetime();
     if (options.client !== client || options.context !== context) {
-      throw new Error("Gateway requester authority changed");
+      throw new Error("The profile administration request ended. Start a new request to retry.");
     }
     const currentActor = resolveGatewayOperatorRoleActor(client);
     if (
@@ -126,50 +153,45 @@ export async function prepareUserProfileAdministration(options: GatewayRequestHa
     ) {
       throw new Error("Gateway requester profile changed");
     }
-    if (
-      client?.connect &&
-      ((client.connect.role ?? "operator") !== "operator" ||
-        !client.connect.scopes?.includes("operator.admin"))
-    ) {
-      throw new Error("Profile administration requires operator.admin");
-    }
-    if (actor?.kind === "operator" && (!role || !role.isCurrent())) {
-      throw new Error("Gateway administrator profile authority changed");
-    }
     lifetime.expectedProfileBinding?.assertCurrent();
-    const cfg = context.getRuntimeConfig();
-    const policy =
-      actor?.kind === "system" || currentOwnerDevicePrincipal(client)
-        ? undefined
-        : resolveOperatorRolePolicyForAssignment(
-            sharedOwner ? authenticatedProfileId : role?.profileId,
-            role?.role ?? null,
-            cfg,
-            role?.githubLogin ?? null,
-            operatorRoleSubject(role),
-          );
-    if (policy && !policy.scopes.includes("operator.admin")) {
-      throw new Error("Profile administration requires operator.admin");
-    }
   };
   assertCurrent();
   return assertCurrent;
 }
 
+/**
+ * Refuses only unknown roles. An assignment saved before gateway.roles.default exists grants
+ * nothing until a default turns enforcement on, so administrators can be chosen first.
+ */
 export function resolveUserRoleAssignmentError(
   getConfig: () => OpenClawConfig,
   role: string | null,
-  subject?: import("../operator-role-enforcement.js").OperatorRoleSubject,
 ) {
   if (role === null) {
     return undefined;
   }
-  const cfg = getConfig();
-  const definitions = cfg.gateway?.roles?.definitions;
-  if (definitions && cfg.gateway?.roles?.default === undefined && !subject?.openclawIdMember) {
-    return "Named-role assignment requires gateway.roles.default to enable named-role enforcement.";
-  }
+  const definitions = getConfig().gateway?.roles?.definitions;
   return definitions && Object.hasOwn(definitions, role)
     ? undefined
     : `unknown operator role "${role}"; define it under gateway.roles.definitions before assigning it`;
+}
+
+export function preparePersonalPreferences(client: GatewayRequestHandlerOptions["client"]) {
+  const unavailable =
+    "Personal settings are unavailable in this turn. Ask again yourself with a new message in the OpenClaw app.";
+  try {
+    const participant = resolveGatewayPersonalToolParticipant(
+      client?.internal?.agentRuntimeIdentity,
+      { requireSingleParticipant: true },
+    );
+    return () => {
+      try {
+        participant?.assertCurrent();
+      } catch {
+        throw new Error(unavailable);
+      }
+    };
+  } catch {
+    throw new Error(unavailable);
+  }
 }

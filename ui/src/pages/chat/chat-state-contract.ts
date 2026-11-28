@@ -31,7 +31,9 @@ type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
 
 export type ChatHistorySessions = Pick<SessionCapability, "captureReconcile">;
 
-export type ChatHistoryHost = ChatState & { sessions: ChatHistorySessions };
+export type ChatHistoryHost = ChatState & {
+  sessions: ChatHistorySessions & Pick<SessionCapability, "reconcileMutation">;
+};
 
 export type SessionApprovalReplayState = {
   client: GatewayBrowserClient | null;
@@ -109,6 +111,7 @@ export type ChatState = StreamCausalBoundaryState & {
   settings?: {
     chatPersistCommentary?: boolean;
     chatInlineCommands?: boolean;
+    compactSessionOpening?: boolean;
     gatewayUrl?: string | null;
   };
   sessions?: Partial<SessionCapability>;

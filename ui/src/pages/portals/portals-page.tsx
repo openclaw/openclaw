@@ -109,9 +109,7 @@ function EmptyState(props: { model: PortalsModel; mobile?: boolean }) {
               </>
             }
           >
-            <div class="portals-empty__note">
-              {t("sessionsView.actionRequiresScope", { scope: "operator.read" })}
-            </div>
+            <div class="portals-empty__note">{t("portalsPage.readPermissionDenied")}</div>
           </Show>
         </section>
       }
@@ -166,6 +164,9 @@ function PortalPreview(props: {
     return () => observer.disconnect();
   });
   const portalUrl = () => props.portal.url ?? "";
+  const previewError = () =>
+    state().error ??
+    (state().closeFailure?.portalId === props.portal.id ? state().closeFailure?.message : null);
   const origin = () => new URL(props.portal.publicUrl).origin;
   const canLaunch = () => Boolean(props.portal.tokenQuery && portalUrl());
   const displayUrl = () => {
@@ -336,9 +337,9 @@ function PortalPreview(props: {
             />
           </header>
         </Show>
-        <Show when={state().error}>
+        <Show when={previewError()}>
           <InlineAlert tone="danger" class="portals-preview__error" role="alert">
-            {state().error}
+            {previewError()}
           </InlineAlert>
         </Show>
         <Show when={probeRead()} fallback={<PortalProbeLoading />}>

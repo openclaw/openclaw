@@ -268,8 +268,8 @@ describe("prompt phase hooks", () => {
       prependContext: "authorized context",
     });
     const retained = enrichment.mock.calls[0]?.[1].toolAuthority;
-    expect(() => retained?.assertActive()).toThrow("no longer active");
-    expect(() => retained?.list?.()).toThrow("no longer active");
+    expect(() => retained?.assertActive()).toThrow("Prompt build ended.");
+    expect(() => retained?.list?.()).toThrow("Prompt build ended.");
   });
 
   it("enumerates only each finalized turn surface, including an empty surface", async () => {
@@ -556,7 +556,7 @@ describe("prompt hook invocation", () => {
         await expect(run).resolves.toEqual({ prependContext: "live context" });
         expect(isActive(contexts[1]?.hookInvocation)).toBe(false);
         if (phase === "authorized") {
-          expect(() => contexts[0]?.toolAuthority?.list?.()).toThrow("no longer active");
+          expect(() => contexts[0]?.toolAuthority?.list?.()).toThrow("Prompt build ended.");
         }
       } finally {
         firstGate.resolve();
@@ -865,9 +865,9 @@ describe("before_agent_finalize", () => {
       finalize(
         { finalPresentation: first },
         { action: "revise", reason: "Correct the answer" },
-        { action: "finalize", finalPresentation: second },
+        { action: "finalize", reason: "enough", finalPresentation: second },
       ),
-    ).resolves.toEqual({ action: "finalize", finalPresentation: second });
+    ).resolves.toEqual({ action: "finalize", reason: "enough", finalPresentation: second });
   });
 
   it("retains valid retry candidates in order while discarding invalid instructions", async () => {
@@ -905,15 +905,6 @@ describe("before_agent_finalize", () => {
         { instruction: "rerun tests", idempotencyKey: "tests", maxAttempts: 1 },
       ],
     });
-  });
-
-  it("lets finalize override revise decisions", async () => {
-    await expect(
-      finalize(
-        { action: "revise", reason: "keep going" },
-        { action: "finalize", reason: "enough" },
-      ),
-    ).resolves.toEqual({ action: "finalize", reason: "enough" });
   });
 
   it("bounds hung handlers so the original final answer can proceed", async () => {

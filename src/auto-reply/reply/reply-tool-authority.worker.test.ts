@@ -658,7 +658,10 @@ it.each(["current", "revoked policy", "reassigned session"] as const)(
                     toolAuthorityFingerprint: prepared.toolAuthorityFingerprint,
                   });
                   handle.messageInjectionV2 = createSteeredCliMessageInjection({
-                    context: { params: { workspaceDir: state.workspaceDir } },
+                    context: {
+                      params: { workspaceDir: state.workspaceDir },
+                      backendResolved: { id: "claude-cli" },
+                    },
                     signal: source.signal,
                     getInjection: () => ({
                       isAvailable: () => true,

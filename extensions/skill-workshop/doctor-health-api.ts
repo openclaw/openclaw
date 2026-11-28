@@ -1,5 +1,6 @@
 import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { HealthCheck, HealthFinding } from "openclaw/plugin-sdk/health";
+import { resolveEffectiveEnableState } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { resolveSkillWorkshopConfig } from "./src/config.js";
 import {
   detectSkillWorkshopToolPolicyDiagnostic,
@@ -10,7 +11,7 @@ import {
 // plugin is disabled, so it can report that the plugin itself is switched off.
 const SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID = "skill-workshop/tool-policy";
 
-/** Skill Workshop needs its review tool and the skill-workshop plugin that loads learned skills. */
+/** Skill Workshop needs its review tool whenever its plugin is active. */
 function createSkillWorkshopToolPolicyCheck(
   explainToolAvailability: ExplainToolAvailability,
 ): HealthCheck {
@@ -20,7 +21,17 @@ function createSkillWorkshopToolPolicyCheck(
     source: "skill-workshop",
     description: "Autonomous Skill Workshop capture has a callable review tool.",
     async detect(ctx) {
-      const workshopEnabled = resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off";
+      // Plugin activation (plugins.enabled, allow, deny, entries) decides first: an absent
+      // autonomous mode defaults to auto, which is no evidence the operator wants a plugin they
+      // excluded. Findings only apply while the plugin can actually load.
+      const pluginActive = resolveEffectiveEnableState({
+        id: "skill-workshop",
+        origin: "bundled",
+        rootConfig: ctx.cfg,
+        enabledByDefault: true,
+      }).enabled;
+      const workshopEnabled =
+        pluginActive && resolveSkillWorkshopConfig(ctx.cfg).autonomous.mode !== "off";
       const listedAgentIds = listAgentIds(ctx.cfg);
       const diagnostics = (
         await Promise.all(
@@ -34,30 +45,6 @@ function createSkillWorkshopToolPolicyCheck(
           ),
         )
       ).filter((diagnostic) => diagnostic !== null);
-      // Learned skills load through the skill-workshop plugin; these switches keep it off.
-      const plugins = ctx.cfg.plugins;
-      const allowlistExcludes =
-        Array.isArray(plugins?.allow) &&
-        plugins.allow.length > 0 &&
-        !plugins.allow.some((id) => id.trim().toLowerCase() === "skill-workshop");
-      const pluginOff = workshopEnabled && (plugins?.enabled === false || allowlistExcludes);
-      const pluginFinding: HealthFinding[] = pluginOff
-        ? [
-            {
-              checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
-              category: "fix-now",
-              docsUrl: "https://docs.openclaw.ai/tools/skill-workshop",
-              severity: "warning",
-              message: `Skill Workshop is on, but ${plugins?.enabled === false ? "plugins.enabled=false" : "plugins.allow"} keeps the skill-workshop plugin off, so learned skills are not loaded.`,
-              path: plugins?.enabled === false ? "plugins.enabled" : "plugins.allow",
-              requirement: "Learned skills load through the skill-workshop plugin.",
-              fixHint:
-                plugins?.enabled === false
-                  ? "Enable plugins and limit them with plugins.allow, including skill-workshop."
-                  : 'Add "skill-workshop" to plugins.allow.',
-            },
-          ]
-        : [];
       const policyFindings: HealthFinding[] = diagnostics.map((diagnostic) => ({
         checkId: SKILL_WORKSHOP_TOOL_POLICY_CHECK_ID,
         category: "fix-now",
@@ -69,7 +56,7 @@ function createSkillWorkshopToolPolicyCheck(
         requirement: "Autonomous Skill Workshop review requires the skill_workshop tool.",
         fixHint: diagnostic.fix,
       }));
-      return [...pluginFinding, ...policyFindings];
+      return policyFindings;
     },
   };
 }

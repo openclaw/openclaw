@@ -22,6 +22,7 @@ export function cacheRunnerConfig(params: {
   input: Array<"text" | "image">;
   tools: string[];
   modelSettings: ModelSettings;
+  contextWindow?: number;
 }): OpenClawConfig {
   const { api, provider, model, workspaceDir, pluginId, pluginDir, apiKey } = params;
   return {
@@ -47,7 +48,7 @@ export function cacheRunnerConfig(params: {
               api,
               reasoning: false,
               input: params.input,
-              contextWindow: 32_768,
+              contextWindow: params.contextWindow ?? 32_768,
               maxTokens: 1024,
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             },

@@ -158,7 +158,7 @@ function createQuestionFixture(
     scopes: ["operator.admin"],
     gatewayAccessGrant: null,
     modelPolicy: prepareOperatorModelPolicy({ cfg: config, policy: {} }),
-    assertCurrent: () => signal.throwIfAborted(),
+    signal,
   });
   const toolCalls: Promise<unknown>[] = [];
   const resolveTools = toolResolution.resolveGatewayScopedTools;

@@ -67,7 +67,7 @@ import {
   formatContextTokensValue,
   formatEstimatedContextBudgetTokens,
 } from "./status-context-format.js";
-import { formatModelEndpointUrl } from "./status-model-endpoint.js";
+import { formatStatusEndpoint } from "./status-model-endpoint.js";
 import {
   formatTokensPairValue,
   formatCacheHitValue,
@@ -115,6 +115,8 @@ type StatusArgs = StatusMessageUsageArgs & {
   resolvedElevated?: ElevatedLevel;
   modelAuth?: string;
   selectedEndpoint?: string;
+  /** "not sent" when the session's last request to this OpenAI-style route had no prompt cache key. */
+  selectedCacheKey?: string;
   activeModelAuth?: string;
   usageLine?: string;
   uptimeValue?: string;
@@ -642,9 +644,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   const liveSwitchNote = entry?.liveModelSwitchPending ? " · ⏳ live switch pending" : "";
   const modelValue = `${selectedModelLabel}${modelNote}${overrideLabel}${liveSwitchNote}`;
 
-  const selectedEndpoint = args.selectedEndpoint
-    ? formatModelEndpointUrl(args.selectedEndpoint)
-    : undefined;
+  const selectedEndpoint = formatStatusEndpoint(args.selectedEndpoint, args.selectedCacheKey);
   const configuredFallbacks = (() => {
     const modelConfig = args.agent?.model;
     if (typeof modelConfig === "object" && modelConfig) {

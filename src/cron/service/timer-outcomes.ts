@@ -110,6 +110,8 @@ export function applyJobResult(
     pacedNextRunAtMs: job.state.pacedNextRunAtMs,
     forcePreservedNextRunAtMs: job.state.forcePreservedNextRunAtMs,
   };
+  // A provider's stated rate-limit reset bounds every retry: running earlier only hits it again.
+  const retryFloorMs = result.status === "error" ? (result.rateLimitResetAt ?? 0) : 0;
   const previousRunInterruptedByRestart = job.state.lastError === STARTUP_INTERRUPTED_ERROR;
   delete job.state.admissionDeferred;
   job.state.queuedAtMs = undefined;
@@ -176,9 +178,15 @@ export function applyJobResult(
     !result.interruptedByRestart &&
     result.errorClassification?.kind !== "aborted";
   const previousConsecutiveErrors = normalizeConsecutiveErrors(job.state.consecutiveErrors);
-  const computeNaturalNext = (restartInterval: boolean) => {
+  const computeNaturalNext = (
+    restartInterval: boolean,
+    // The first scheduled slot at or after a provider's reset keeps cron expressions on-slot.
+    fromMs = Math.max(result.endedAt, retryFloorMs - 1),
+  ) => {
     try {
-      return computeJobNextRunAtMs(job, result.endedAt, { preserveEveryAnchor: restartInterval });
+      return computeJobNextRunAtMs(job, fromMs, {
+        preserveEveryAnchor: restartInterval,
+      });
     } catch (err) {
       recordScheduleComputeError({
         state,
@@ -310,7 +318,9 @@ export function applyJobResult(
     if (
       result.status === "error" &&
       result.errorClassification?.kind === "permanent" &&
-      (isPluginCommandCronJob(job) || job.operatorSource)
+      (isPluginCommandCronJob(job) || job.operatorSource) &&
+      // Missing account configuration does not revoke the job creator's authority.
+      result.failureNotificationDetail?.kind !== "inference-account-unrecorded"
     ) {
       // A permanent error here means a retired plugin or a refused operator source:
       // the job can never run again as written.
@@ -417,28 +427,42 @@ export function applyJobResult(
       });
       // Within the quick-retry budget the next run is at most minutes away, whether it is the
       // retry itself or an earlier natural slot, so a provider outage holds notifications.
+      // A provider reset moves the quick retry to it, holding no alert once past this backoff.
+      // A reset past the schedule's own next slot skips quick retries for the first slot after
+      // it: an off-slot time there is one schedule maintenance would move earlier again.
       const holdsForRetry =
         retryDecision.retryable &&
         retryDecision.backoffMs !== undefined &&
+        retryFloorMs <= result.endedAt + retryDecision.backoffMs &&
         holdsFailureNotificationForRetry(job, result, retryDecision.retryCategory);
       let normalNext: number | undefined;
       let normalNextComputed = false;
       const computeNormalNext = () => {
         if (!normalNextComputed) {
+          const paced = previousScheduleState.pacedNextRunAtMs;
+          // A paced slot before the provider's reset would only hit the limit again.
           normalNext =
-            previousScheduleState.pacedNextRunAtMs ??
-            computeNaturalNext(retryDecision.retryable || previousConsecutiveErrors > 0);
+            paced !== undefined && paced >= retryFloorMs
+              ? paced
+              : computeNaturalNext(retryDecision.retryable || previousConsecutiveErrors > 0);
           normalNextComputed = true;
         }
         return normalNext;
       };
-      if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
+      if (
+        retryDecision.retryable &&
+        retryDecision.backoffMs !== undefined &&
+        (retryFloorMs <= result.endedAt + retryDecision.backoffMs ||
+          retryFloorMs < (computeNaturalNext(true, result.endedAt) ?? 0))
+      ) {
         normalNext = computeNormalNext();
         if (normalNext === undefined) {
           // Preserve the unresolved-cron guard (#66019): do not synthesize a
           // retry when the schedule cannot produce a next scheduled slot.
         } else {
-          const retryNextRunAtMs = scheduleNextRun(result.endedAt + retryDecision.backoffMs);
+          const retryNextRunAtMs = scheduleNextRun(
+            Math.max(result.endedAt + retryDecision.backoffMs, retryFloorMs),
+          );
           if (retryNextRunAtMs === undefined) {
             return finish();
           }

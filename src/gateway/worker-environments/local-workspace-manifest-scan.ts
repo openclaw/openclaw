@@ -19,7 +19,10 @@ import {
   readLocalWorkspaceSourcePaths,
   readLocalWorkspaceTree,
 } from "./local-workspace-cas.kernel.js";
-import { prepareLocalWorkspaceFingerprints } from "./local-workspace-fingerprints.js";
+import {
+  prepareLocalWorkspaceFingerprints,
+  rebindClonedWorkspaceFingerprints,
+} from "./local-workspace-fingerprints.js";
 import {
   prepareLocalWorkspaceArchive,
   localWorkspaceManifestDocument as manifestDocument,
@@ -350,6 +353,14 @@ export async function executeLocalWorkspaceManifestRead(
       action.buildCacheInputs,
     );
     const records = createLocalWorkspaceBaselineTree(manifest, action.preparedDirectories);
+    if (action.clonedDevice !== undefined) {
+      action.patch.projection_fingerprints = rebindClonedWorkspaceFingerprints(
+        action.patch.projection_fingerprints,
+        action.manifestRef,
+        records.get("")!.treeRef,
+        action.clonedDevice,
+      );
+    }
     const resultingRoot = localWorkspaceManifestRootReference(records, manifest.baseCommit);
     const mutation: LocalWorkspaceMutation = {
       kind: "update",

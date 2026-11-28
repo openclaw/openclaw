@@ -732,7 +732,9 @@ function stagingHandle(root: string, initialReceipt: Receipt, recorded: boolean)
       assertIdentity(root, receipt.rootIdentity);
       const saved = writeArtifactRecord(root, artifacts, receipt.durable);
       update({
-        state: "preserved",
+        // Cleanup also preserves artifacts before admission. Keep that preparation
+        // state so a completed, unused mirror can still finish its idle handoff.
+        state: receipt.users === "settled" ? "preserved" : receipt.state,
         durable: saved.durable && receipt.durable && artifacts.durable,
         artifactManifest: saved.digest,
       });

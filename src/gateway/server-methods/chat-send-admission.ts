@@ -55,6 +55,7 @@ import {
   createChatSessionRoutingAssertion,
   respondChatSendAdmissionError,
   respondChatSessionRoutingChanged,
+  SESSION_INCARNATION_CHANGED,
 } from "./chat-send-admission-errors.js";
 import {
   isLocalChatInputAdmission,
@@ -116,7 +117,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     timeoutMs,
     expectedLeafEntryId,
   } = session;
-  const assertSessionTargetCurrent = createChatSessionRoutingAssertion(session, context);
+  const assertSessionTargetCurrent = createChatSessionRoutingAssertion(
+    session.sessionRoutingChanged,
+    context,
+  );
   const cachedMeta = { cached: true, runId: clientRunId };
   const { chatSendTraceAttributes, originatingRoute } = prepareChatSendAdmissionContext(params);
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -217,7 +221,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
       cfg,
       channel: originatingRoute.originatingChannel,
       sessionEntry: entry,
-      inlineMode: p.queueMode,
+      inlineMode: request.participating ? "followup" : p.queueMode,
     }),
     authority: { assertCurrent: () => assertSourceAuthority?.() },
     runId: clientRunId,
@@ -316,6 +320,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }
         const latestEntry = latestSession.entry;
         const latestSessionId = latestEntry?.sessionId;
+        // A reset between preparation and write admission must leave the replacement untouched.
+        if (request.targetPrecondition?.matches(latestEntry) === false) {
+          throw new Error(SESSION_INCARNATION_CHANGED);
+        }
         admittedSessionEntry = latestEntry;
         const requestConflict = resolveChatSendRequestConflict(
           { ...params, session: { ...session, entry: latestEntry } },
@@ -360,7 +368,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           // A message to people never steers the active run.
           messageInjectionTarget = request.activeSteer
             ? steer.target
-            : p.queueMode === "steer" && !request.humanAddressed
+            : p.queueMode === "steer" && !request.humanAddressed && !request.participating
               ? captureCurrentReplyMessageInjectionTarget(
                   admittedRunAbort.entry?.input.mailbox.owner.id ?? activeRunScopeKey,
                 )
@@ -577,7 +585,6 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     return { ok: false as const };
   }
   assertSourceAuthority = () => {
-    capturedOperator.authority?.assertCurrent();
     assertAcceptedInputAuthority?.();
     assertSessionTargetCurrent();
     if (!gatewayWorkAdmission?.isActive()) {

@@ -418,7 +418,7 @@ describe("workspace evidence through the guest tool and registered publication a
       expect(admission.authorization).toBeDefined();
       admission.authorization!.assertCurrent();
       await expect(f.upload({}, client)).rejects.toThrow(
-        "The original GitHub publication requester is no longer authorized.",
+        "This requester is not authorized to publish from this conversation.",
       );
       expect(f.fetch).not.toHaveBeenCalled();
     } finally {

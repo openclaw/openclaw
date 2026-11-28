@@ -191,13 +191,14 @@ export async function prepareCodexAttemptContext(
     dynamicTools: toolBridge.availableSpecs,
     remoteWorkspaceRoot: connection.appServer.remoteWorkspaceRoot,
   });
-  // This section uses the existing native thread carrier only when there is no
-  // managed parent-local inference route; it is separate from immutable policy.
+  // Session-stable context on the native thread carrier, inside the cached prefix and
+  // separate from immutable policy. Managed relays add only parent-only text per request.
   const refreshableInstructions =
     joinPresentSections(
       skillsInstructions,
       workspaceBootstrapContext.sharedPersonaInstructions,
       workspaceBootstrapContext.memoryInstructions,
+      workspaceBootstrapContext.sessionProjectGuidance,
     ) || undefined;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {

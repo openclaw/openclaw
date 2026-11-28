@@ -18,8 +18,11 @@ export function manifestOwnsStorageProvider(
   manifest: PluginManifestRecord | undefined,
   providerIds: ReadonlySet<string>,
 ): boolean {
-  return normalizeStorageProviderIds(manifest?.contracts?.storageProviders ?? []).some((id) =>
-    providerIds.has(id),
+  return (
+    providerIds.size > 0 &&
+    normalizeStorageProviderIds(manifest?.contracts?.storageProviders ?? []).some((id) =>
+      providerIds.has(id),
+    )
   );
 }
 
@@ -28,6 +31,9 @@ export function listBundledStorageProviderOwners(
   providerIds: readonly string[],
 ): Array<{ pluginId: string; providerId: string }> {
   const selected = new Set(normalizeStorageProviderIds(providerIds));
+  if (selected.size === 0) {
+    return [];
+  }
   return registry.plugins
     .filter((plugin) => plugin.origin === "bundled")
     .flatMap((plugin) =>

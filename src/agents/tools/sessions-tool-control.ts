@@ -27,7 +27,7 @@ type ControlTarget = {
   key: string;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string | null;
-  operation: "archive" | "restore" | "stop" | "resume";
+  operation: "archive" | "restore" | "stop" | "snooze" | "resume";
   restricted: boolean;
 };
 

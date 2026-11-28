@@ -13,6 +13,7 @@ import {
 import { loadPluginMetadataSnapshot as loadMetadata } from "../plugins/plugin-metadata-snapshot.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
+import { augmentModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import { ensureSelectedAgentHarnessPlugin as ensureHarness } from "./harness/runtime-plugin.js";
 import { model, providerConfig } from "./model-catalog-fixtures.test-support.js";
 import { prepareWorkspacePluginRegistries as prepareRegistries } from "./prepared-model-runtime.inbound-registry.js";
@@ -88,5 +89,32 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
   await expect(
     ensureHarness({ ...selection, config, workspaceDir, pluginRegistry: registry }),
   ).resolves.toBeUndefined();
+  const harness = registry?.agentHarnesses[0]?.harness;
+  if (!harness) {
+    throw new Error("Copilot harness was not registered");
+  }
+  const fusion = {
+    provider: "github-copilot",
+    id: "fusion",
+    name: "Copilot Fusion",
+    nativeRuntime: "copilot",
+  };
+  const loadCatalog = vi.spyOn(harness, "loadModelCatalog").mockResolvedValue([fusion]);
+  const catalog = await augmentModelCatalogWithAgentHarness({
+    cfg: config,
+    agentId: "worker",
+    agentDir: workspaceDir,
+    workspaceDir,
+    defaultProvider: "custom-proxy",
+    defaultModel: modelRef,
+    snapshot: { entries: [], routeVariants: [] },
+    pluginRegistry: registry,
+    includePickerRuntimes: true,
+    providerIds: ["github-copilot"],
+  });
+  expect(loadCatalog).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ providerIds: ["github-copilot"] }),
+  );
+  expect(catalog.entries).toContainEqual(expect.objectContaining(fusion));
   expect(openStore).not.toHaveBeenCalled();
 });

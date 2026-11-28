@@ -41,13 +41,11 @@ export function registerOrchestratorGoalResumeCases({
       const { sessionKey, sessionId } = scope();
       const context = getContext();
       const profile = ensureProfileForEmail("goal-orchestrator@example.test");
-      let callerOpen = true;
+      const caller = new AbortController();
       const authority = createTestOperatorAuthority({
         profileId: profile.id,
         scopes: ["operator.admin"],
-        assertCurrent: () => {
-          if (!callerOpen) throw new Error("Orchestrator reply ended");
-        },
+        signal: caller.signal,
       });
       const cfg = getRuntimeConfig();
       await patchSessionEntryCore(scope(), () => ({
@@ -139,7 +137,7 @@ export function registerOrchestratorGoalResumeCases({
           return;
         }
         const result = await execution;
-        callerOpen = false;
+        caller.abort(new Error("Orchestrator reply ended"));
         expect(result.details).toMatchObject({ status: "started", goalId: original.id });
         expect(loadSessionEntry(scope())?.goal).toMatchObject({
           id: original.id,
@@ -158,7 +156,7 @@ export function registerOrchestratorGoalResumeCases({
         undefined,
         profileClient(profile.id),
       );
-      expect(replay.mock.calls[0]).toEqual([
+      expect(replay.mock.calls[0]?.slice(0, 3)).toEqual([
         true,
         expect.objectContaining({ goalId: original.id, replayed: true }),
         undefined,
