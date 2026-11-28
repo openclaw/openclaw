@@ -5,11 +5,13 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 // same config draft, so both stay in sync without narrowing the schema.
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, Loading, Show } from "solid-js";
+import { createMemo, createSignal, Errored, Loading, Show } from "solid-js";
 import type {
   NativeDeviceSettingsSnapshot,
   NativeDeviceSettingsCapability,
 } from "../../app/native-device-settings.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
+import { Checkbox } from "../../components/solid/checkbox.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import {
   SettingsPage,
@@ -19,9 +21,12 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
+import { Tooltip } from "../../components/solid/tooltip.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { projectTheme } from "../../lib/reactive/theme.ts";
 import { SettingsSelectRow } from "./settings-select-row.tsx";
 import { DeviceTalk, VoiceWakeEditor, type VoiceWakeEditorState } from "./talk-device.tsx";
 import { resolveTalkModelFamilySettings, type TalkRealtimeSelection } from "./talk-schema.ts";
@@ -368,6 +373,25 @@ function TalkCatalogRows(props: TalkViewProps) {
 }
 
 export function Talk(props: TalkViewProps) {
+  const chimeLabelStyle = { display: "flex", "align-items": "center", gap: "var(--space-2)" };
+  const chimeCheckboxStyle = {
+    "--check-fill": "color-mix(in srgb, var(--text) 55%, var(--border))",
+    "--check-mark": "var(--field-bg)",
+  };
+  // The application theme owner republishes storage changes, so a second tab stays in sync.
+  const application = useOptionalApplication();
+  const theme = application?.theme ? projectTheme(application.theme) : undefined;
+  const [standalone, setChimes] = createSignal(loadSettings());
+  const chimes = () => (theme ? theme.preferences.read() : standalone());
+  const splitMode = () => props.selection.mode === "stt-tts";
+  const updateChime = (
+    key: "talkChimeStart" | "talkChimeEnd" | "talkChimeReply",
+    enabled: boolean,
+  ) => {
+    const patch = { [key]: enabled };
+    patchSettings(patch);
+    setChimes((current) => ({ ...current, ...patch }));
+  };
   return (
     <section class="talk-page">
       <SettingsPage>
@@ -415,6 +439,48 @@ export function Talk(props: TalkViewProps) {
             </Loading>
           </Errored>
         )}
+        <SettingsSection title={t("talkPage.chimesSection.title")}>
+          <div class="settings-row">
+            <div
+              style={{ display: "flex", "flex-wrap": "wrap", gap: "var(--space-4)" }}
+              role="group"
+              aria-label={t("talkPage.chimesSection.title")}
+            >
+              <label class="settings-row__desc" style={chimeLabelStyle}>
+                <Checkbox
+                  style={chimeCheckboxStyle}
+                  checked={chimes().talkChimeStart === true}
+                  onChange={(event) => updateChime("talkChimeStart", event.currentTarget.checked)}
+                />
+                {t("talkPage.chimeStart")}
+              </label>
+              <label class="settings-row__desc" style={chimeLabelStyle}>
+                <Checkbox
+                  style={chimeCheckboxStyle}
+                  checked={chimes().talkChimeEnd === true}
+                  onChange={(event) => updateChime("talkChimeEnd", event.currentTarget.checked)}
+                />
+                {t("talkPage.chimeEnd")}
+              </label>
+              <Tooltip content={t("talkPage.chimeReplyLive")} disabled={splitMode()}>
+                <span tabindex={splitMode() ? undefined : 0}>
+                  <label class="settings-row__desc" style={chimeLabelStyle}>
+                    <Checkbox
+                      style={chimeCheckboxStyle}
+                      aria-label={t("talkPage.chimeReply")}
+                      checked={splitMode() && chimes().talkChimeReply === true}
+                      disabled={!splitMode()}
+                      onChange={(event) =>
+                        updateChime("talkChimeReply", event.currentTarget.checked)
+                      }
+                    />
+                    {splitMode() ? t("talkPage.chimeReply") : t("talkPage.chimeReplyLiveLabel")}
+                  </label>
+                </span>
+              </Tooltip>
+            </div>
+          </div>
+        </SettingsSection>
       </SettingsPage>
       {props.editor}
     </section>

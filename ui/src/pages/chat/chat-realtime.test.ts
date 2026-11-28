@@ -79,6 +79,7 @@ function preview(nextDeviceId: string, label: string) {
   return stream;
 }
 
+let stopSpy: MockInstance<RealtimeTalkSession["stop"]>;
 let startSpy: MockInstance<RealtimeTalkSession["start"]>;
 let prepareSpy: MockInstance<GatewaySpeechPlayback["prepare"]>;
 
@@ -88,7 +89,7 @@ beforeEach(() => {
     .spyOn(GatewaySpeechPlayback.prototype, "prepare")
     .mockImplementation(() => document.createElement("audio"));
   startSpy = vi.spyOn(RealtimeTalkSession.prototype, "start").mockResolvedValue(undefined);
-  vi.spyOn(RealtimeTalkSession.prototype, "stop").mockResolvedValue(undefined);
+  stopSpy = vi.spyOn(RealtimeTalkSession.prototype, "stop").mockResolvedValue(undefined);
   vi.spyOn(RealtimeTalkSession.prototype, "switchCamera").mockResolvedValue(undefined);
   state = {
     client: {
@@ -221,6 +222,19 @@ it.each([false, true])("launches with persisted devices (blocked storage: %s)", 
   });
   expect(startSpy).toHaveBeenCalledOnce();
 });
+
+it.each([true, false])(
+  "keeps abort separate from the end chime (user stop: %s)",
+  async (userStopped) => {
+    await start();
+    if (userStopped) {
+      await state.toggleRealtimeTalk();
+    } else {
+      stopChatRealtimeTalk(state, { disposition: "abort" });
+    }
+    expect(stopSpy).toHaveBeenCalledExactlyOnceWith({ disposition: "abort" }, userStopped);
+  },
+);
 
 it("requires explicit one-shot consent and preserves the saved microphone for later calls", async () => {
   configure({ realtimeTalkInputDeviceId: "usb-mic" });

@@ -22,7 +22,7 @@ input.oc-checkbox.oc-checkbox,
   border-radius: min(3px, var(--radius-sm));
   background: var(--field-bg);
   box-shadow: none;
-  color: var(--accent-foreground);
+  color: var(--check-mark, var(--accent-foreground));
   vertical-align: middle;
   transition:
     background-color var(--duration-fast) ease,
@@ -46,8 +46,8 @@ input.oc-checkbox.oc-checkbox:indeterminate::before {
 
 input.oc-checkbox.oc-checkbox:is(:checked, :indeterminate),
 :is(.chat-text, .chat-thinking) input.task-list-item-checkbox:checked {
-  border-color: var(--accent);
-  background: var(--accent);
+  border-color: var(--check-fill, var(--accent));
+  background: var(--check-fill, var(--accent));
 }
 
 input.oc-checkbox.oc-checkbox:is(:checked, :indeterminate)::before,

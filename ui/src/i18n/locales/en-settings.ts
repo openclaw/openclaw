@@ -415,6 +415,14 @@ const enSettings = {
     },
   },
   talkPage: {
+    chimesSection: {
+      title: "Status chimes",
+    },
+    chimeStart: "Listening",
+    chimeEnd: "Call end",
+    chimeReply: "Ready for reply",
+    chimeReplyLiveLabel: "Ready for reply - live is always listening",
+    chimeReplyLive: "Live is always listening",
     voiceSection: {
       title: "Realtime voice",
       description: "Continuous speech conversations with your agent.",
