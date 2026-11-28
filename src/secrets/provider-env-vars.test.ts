@@ -38,5 +38,7 @@ describe("provider env vars", () => {
       "ANTHROPIC_API_KEY",
     ]);
     expect(getProviderEnvVarsCore("fal")).toEqual(["FAL_KEY", "FAL_API_KEY"]);
+    expect(getProviderEnvVarsCore("unsloth")).toEqual(["UNSLOTH_API_KEY"]);
+    expect(listKnownProviderAuthEnvVarNamesCore()).toContain("UNSLOTH_API_KEY");
   });
 });

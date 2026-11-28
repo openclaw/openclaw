@@ -76,6 +76,7 @@ function getApiKeyEnvVars(provider: string): readonly string[] | undefined {
     huggingface: "HF_TOKEN",
     fireworks: "FIREWORKS_API_KEY",
     together: "TOGETHER_API_KEY",
+    unsloth: "UNSLOTH_API_KEY",
     opencode: "OPENCODE_API_KEY",
     "opencode-go": "OPENCODE_API_KEY",
     "cloudflare-workers-ai": "CLOUDFLARE_API_KEY",
