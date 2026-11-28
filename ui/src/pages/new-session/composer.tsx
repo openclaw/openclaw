@@ -64,6 +64,7 @@ import {
   prepareComposerWidthEdge,
 } from "../chat/components/chat-composer-width-ref.tsx";
 import { ChatLazyBoundary } from "../chat/components/chat-lazy-boundary.tsx";
+import { ComposerDictationReview } from "../chat/components/chat-voice-activity.tsx";
 import { NewSessionPlusMenu, StartControl } from "./composer-capability-controls.tsx";
 import type { NewSessionComposerOptions } from "./composer-options.ts";
 import { createComposerPlaceholder } from "./composer-placeholder.ts";
@@ -95,8 +96,9 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
   const { skillMenu, slashMenu, mentionMenu, emojiMenu } = textarea;
   const skillMenuState = skillMenu.state;
   const slashMenuState = slashMenu.state;
-  const composerLocked =
+  const isComposerLocked = () =>
     options.submitting || options.messageLocked === true || options.dictationActive === true;
+  const composerLocked = isComposerLocked();
   const skillMenuHost: SkillMenuHost = {
     paneId: "new-session",
     getDraft: () => textarea.getTextarea()?.value ?? options.message,
@@ -121,9 +123,7 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
   const handleComposerKeydown = (event: KeyboardEvent) => {
     if (
       keepMobileReturnNative(event) ||
-      options.dictationActive ||
-      options.submitting ||
-      options.messageLocked ||
+      isComposerLocked() ||
       textarea.composing ||
       isComposingKeyboardEvent(event)
     ) {
@@ -149,7 +149,7 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
     if (!background && (event.shiftKey || (options.requiresModifier && !hasSubmitModifier))) {
       return;
     }
-    if (event.repeat) {
+    if (event.repeat || options.dictationBlocksSubmit) {
       event.preventDefault();
       return;
     }
@@ -218,9 +218,7 @@ function prepareComposer(options: NewSessionComposerOptions, textarea: NewSessio
     uploadConfig: context?.config,
     attachments: attachmentDraft.attachments,
     get disabled() {
-      return (
-        options.submitting || options.messageLocked === true || options.dictationActive === true
-      );
+      return isComposerLocked();
     },
     getAttachments: () => attachmentDraft.attachments,
     draft: options.message,
@@ -348,7 +346,7 @@ function NewSessionComposerInput(props: {
       rows="1"
       autofocus={globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
       disabled={props.options.submitting || props.options.messageLocked}
-      readonly={props.options.dictationActive}
+      readonly={props.options.dictationLocksDraft ?? props.options.dictationActive}
       placeholder={props.placeholder}
       aria-label={props.frame.messagePlaceholder}
       enterkeyhint="enter"
@@ -360,7 +358,7 @@ function NewSessionComposerInput(props: {
       aria-describedby={props.frame.menuAnnouncementId}
       onInput={(event) => {
         handleTextareaOverflowInteraction(event);
-        if (props.options.dictationActive) {
+        if (props.options.dictationLocksDraft ?? props.options.dictationActive) {
           return;
         }
         const target = event.currentTarget;
@@ -654,6 +652,7 @@ export function NewSessionComposer(props: {
             </span>
           </div>
         </div>
+        <ComposerDictationReview readDictation={() => options().readDictation?.()} />
         <div class="agent-chat__composer-footer" ref={(element) => (footer = element)}>
           <div
             class="agent-chat__composer-lead"

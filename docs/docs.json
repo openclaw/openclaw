@@ -2781,6 +2781,7 @@
                       "web/control-ui/connect-and-pair",
                       "web/control-ui/sessions-and-sidebar",
                       "web/control-ui/chat",
+                      "web/control-ui-dictation-formatting",
                       "web/control-ui/panels",
                       "web/control-ui/settings",
                       "web/control-ui/feature-reference",

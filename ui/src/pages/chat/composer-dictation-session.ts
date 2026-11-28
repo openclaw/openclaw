@@ -197,6 +197,22 @@ export class ComposerDictationSession {
   private resumeFinalDrain: (() => void) | null = null;
   private heardSpeech = false;
   private silentSamples = 0;
+  private finalizedRevision = 0;
+  private completeFinalResult = false;
+  private finalizationTimedOut = false;
+
+  get transcriptRevision(): number {
+    return this.finalizedRevision;
+  }
+
+  /** Partial recovery stays usable text, but cannot be labeled finalized refinement. */
+  get finalResultIsComplete(): boolean {
+    return this.completeFinalResult;
+  }
+
+  get finalResultTimedOut(): boolean {
+    return this.finalizationTimedOut;
+  }
 
   constructor(
     private readonly client: GatewayBrowserClient,
@@ -266,6 +282,7 @@ export class ComposerDictationSession {
           this.currentPartial = text;
         } else if (text) {
           this.finalTranscripts.push(text);
+          this.finalizedRevision++;
           this.currentPartial = "";
         }
         this.callbacks.onTranscriptChange();
@@ -451,7 +468,14 @@ export class ComposerDictationSession {
       let partial = this.currentPartial;
       let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
       let unsubscribe = () => {};
-      const finish = (text: string) => {
+      const finish = (text: string, terminalSuccess = false) => {
+        this.completeFinalResult =
+          !this.failed &&
+          !this.gatewayDisconnected &&
+          !this.discarded &&
+          terminalSuccess &&
+          transcripts.length > 0 &&
+          partial.length === 0;
         globalThis.clearTimeout(timer);
         unsubscribe();
         this.settleLateFinalDrain = null;
@@ -462,7 +486,10 @@ export class ComposerDictationSession {
       const transcript = () => [...transcripts, partial].filter(Boolean).join(" ").trim();
       this.pauseFinalDrain = () => globalThis.clearTimeout(timer);
       this.resumeFinalDrain = () => {
-        timer = globalThis.setTimeout(() => finish(transcript()), FINAL_TRANSCRIPT_MAX_WAIT_MS);
+        timer = globalThis.setTimeout(() => {
+          this.finalizationTimedOut = true;
+          finish(transcript());
+        }, FINAL_TRANSCRIPT_MAX_WAIT_MS);
       };
       this.resumeFinalDrain();
       unsubscribe = this.client.addEventListener((frame) => {
@@ -477,6 +504,7 @@ export class ComposerDictationSession {
           payload.text.trim()
         ) {
           transcripts.push(payload.text.trim());
+          this.finalizedRevision++;
           partial = "";
         } else if (payload.type === "error" || payload.type === "close") {
           if (payload.type === "error" || payload.reason === "error") {
@@ -487,7 +515,7 @@ export class ComposerDictationSession {
               ),
             );
           } else {
-            finish(transcript());
+            finish(transcript(), true);
           }
         }
       });

@@ -2,25 +2,27 @@
 
 import { afterEach, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatView } from "./chat-view.test-helpers.ts";
 
 afterEach(() => resetChatViewState());
 
-it("keeps recovered microphone input-loss guidance visible while listening", () => {
+it("keeps recovered microphone input-loss guidance visible while listening", async () => {
+  const recovered = "Microphone input recovered; repeat the last part";
   const onDismissRealtimeTalkInputNotice = vi.fn();
   const container = renderChatView({
     realtimeTalkActive: true,
     realtimeTalkStatus: "listening",
-    realtimeTalkInputNotice: "Microphone input recovered; repeat the last part",
+    realtimeTalkInputNotice: recovered,
     onDismissRealtimeTalkInputNotice,
   });
 
   expect(container.querySelector(".agent-chat__voice-activity")).not.toBeNull();
-  const notice = container.querySelector('[role="status"].agent-chat__composer-alert');
-  expect(notice?.textContent).toContain("Microphone input recovered; repeat the last part");
-  expect(notice?.closest(".sr-only")).toBeNull();
-  const dismiss = notice?.querySelector<HTMLButtonElement>(
+  const notice = () => container.querySelector('[role="status"].agent-chat__composer-alert');
+  await waitForSolid(() => expect(notice()?.textContent).toContain(recovered));
+  expect(notice()?.closest(".sr-only")).toBeNull();
+  const dismiss = notice()?.querySelector<HTMLButtonElement>(
     `[aria-label="${t("chat.composer.dismissVoiceInputError")}"]`,
   );
   dismiss?.click();

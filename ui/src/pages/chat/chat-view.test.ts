@@ -1177,7 +1177,7 @@ describe("chat voice controls", () => {
     }
   });
 
-  it("renders voice errors with the active-session controls", () => {
+  it("renders voice errors with the active-session controls", async () => {
     const detail = "Microphone unavailable";
     const onDismissRealtimeTalkError = vi.fn();
     const container = renderChatView({
@@ -1186,11 +1186,9 @@ describe("chat voice controls", () => {
       realtimeTalkDetail: detail,
       onDismissRealtimeTalkError,
     });
-    expect(
-      container
-        .querySelector('[role="alert"].agent-chat__composer-alert .callout__content')
-        ?.textContent?.trim(),
-    ).toBe(detail);
+    const voiceAlert = () =>
+      container.querySelector('[role="alert"].agent-chat__composer-alert .callout__content');
+    await waitForSolid(() => expect(voiceAlert()?.textContent?.trim()).toBe(detail));
     const stop = requireElement(
       container,
       '[aria-label="Stop voice input"]',

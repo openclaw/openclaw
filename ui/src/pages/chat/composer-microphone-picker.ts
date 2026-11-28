@@ -3,12 +3,8 @@ import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { listen } from "../../lib/reactive/listener.ts";
-import {
-  discoverRealtimeTalkInputs,
-  observeRealtimeTalkDevices,
-  type RealtimeTalkDeviceIssue,
-  type RealtimeTalkInputDevice,
-} from "./talk/input.ts";
+import type { ComposerDictationOwner } from "./composer-dictation.ts";
+import type { RealtimeTalkDeviceIssue, RealtimeTalkInputDevice } from "./talk/input.ts";
 
 /** Per voice surface, the provider whose sign-in doesn't cover it and needs an API key. */
 export type VoiceApiKeyProviders = Partial<Record<"talk" | "dictation" | "speech", string>>;
@@ -45,6 +41,7 @@ export type MicrophonePickerProps = {
   showRealtimeCapability?: boolean;
   realtimeStatus: ComposerTalkCapabilityStatus;
   dictationStatus: ComposerTalkCapabilityStatus;
+  readDictation?: () => ComposerDictationOwner | undefined;
   onOpen: () => void;
   onClose: () => void;
   onSelect: (deviceId: string) => void;
@@ -123,7 +120,6 @@ export class ComposerMicrophoneOwner extends EventTarget {
       return;
     }
     this.open = true;
-    this.deviceWatch ??= observeRealtimeTalkDevices(() => void this.discover());
     void this.discover();
     void this.loadCatalog();
   };
@@ -134,6 +130,7 @@ export class ComposerMicrophoneOwner extends EventTarget {
     }
     this.release();
     this.open = false;
+    this.loading = false;
     this.dispatchEvent(new Event("change"));
   };
 
@@ -165,9 +162,19 @@ export class ComposerMicrophoneOwner extends EventTarget {
     const request = ++this.discoveryRequest;
     this.dispatchEvent(new Event("change"));
     // A closed or replaced picker cannot turn delayed discovery into a prompt.
-    const result = await discoverRealtimeTalkInputs(
-      () => this.open && request === this.discoveryRequest,
-    ).catch(() => ({ devices: [], issue: "failed" as const }));
+    const isCurrent = () => this.open && request === this.discoveryRequest;
+    let result: { devices: RealtimeTalkInputDevice[]; issue: RealtimeTalkDeviceIssue | null };
+    try {
+      const { discoverRealtimeTalkInputs, observeRealtimeTalkDevices } =
+        await import("./talk/input.ts");
+      if (!isCurrent()) {
+        return;
+      }
+      this.deviceWatch ??= observeRealtimeTalkDevices(() => void this.discover());
+      result = await discoverRealtimeTalkInputs(isCurrent);
+    } catch {
+      result = { devices: [], issue: "failed" };
+    }
     if (request !== this.discoveryRequest) {
       return;
     }

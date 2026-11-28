@@ -1521,6 +1521,8 @@ const config = {
         // The generated foreign-locale modules import this factory by absolute path.
         "src/i18n/lib/lazy-catalog.ts!",
         "src/lib/browser-redact.{ts,tsx}!",
+        // The dictation evidence guide invokes this deterministic benchmark by path.
+        "src/lib/dictation/formatting.bench.ts!",
         "vite.config.ts!",
         "vitest*.ts!",
         // The standalone Solid compiler smoke is not a production import.

@@ -1,39 +1,27 @@
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import {
+  loadUiPreferences,
+  patchSettings,
+  readLiveUiPreferences,
+  settingsKeyForGateway,
+  subscribeSettingsChanges,
+} from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
+import type * as formatting from "./composer-dictation-formatting.ts";
 import type {
   ComposerDictationCommits,
   ComposerDictationSession,
   placeComposerDictation,
 } from "./composer-dictation-session.ts";
+import { formattingTargetChanged } from "./composer-dictation-target.ts";
 import type { RealtimeTalkLevelSignal } from "./talk/level.ts";
 
 const HOLD_ARM_DELAY_MS = 150,
   HOLD_PROGRESS_MS = 350;
 
 type DictationPhase = "idle" | "pressing" | "holding" | "connecting" | "recording" | "stopping";
-
-type ComposerDictationFailure = {
-  kind: "interrupted" | "start" | "busy";
-  preservesText: boolean;
-};
-
-type ComposerDictationOwnerOptions = {
-  client: GatewayBrowserClient | null;
-  sessionKey?: string;
-  prepareSession?: () => Promise<string | undefined>;
-  draftKey?: string;
-  connected: boolean;
-  enabled: boolean;
-  dictationAvailable?: boolean;
-  realtimeTalkActive: boolean;
-  onCommit: (text: string, late?: true, preservePreview?: true) => void;
-  onError: (message: string, failure: ComposerDictationFailure) => void;
-  onTap?: () => void;
-  onDictationUnavailable?: () => void;
-};
 
 // Gesture and session admission must remain synchronous across pointer and media callbacks.
 export class ComposerDictationOwner extends EventTarget {
@@ -53,9 +41,26 @@ export class ComposerDictationOwner extends EventTarget {
   // Created with the lazy capture module, before the first transcript exists.
   private commits: ComposerDictationCommits | undefined;
   private disposed = false;
+  private mode: formatting.DictationFormattingMode =
+    readLiveUiPreferences()?.dictationFormatting?.mode ?? "preserve";
+  private captureMode: formatting.DictationFormattingMode = "preserve";
+  private policyRevision = 0;
+  private capturePolicyRevision = 0;
+  private formatting: formatting.ComposerDictationReviewState | undefined;
+  private preparationGeneration = 0;
+  private formattingCapture: formatting.DictationFormattingCapture | undefined;
+  private readonly stopSettings: () => void;
 
-  constructor(private options: ComposerDictationOwnerOptions) {
+  constructor(private options: formatting.ComposerDictationOwnerOptions) {
     super();
+    this.stopSettings = subscribeSettingsChanges((previous, next) => {
+      if (
+        previous.gatewayUrl !== next.gatewayUrl ||
+        previous.dictationFormatting?.mode !== next.dictationFormatting?.mode
+      ) {
+        this.refreshFormattingPolicy();
+      }
+    });
   }
 
   subscribe(listener: () => void) {
@@ -84,7 +89,7 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   get locksComposer(): boolean {
-    return this.phase !== "idle";
+    return this.phase !== "idle" && (this.active ? this.captureMode : this.mode) === "preserve";
   }
 
   /** Places a transcript in a draft; there is nothing to place before capture loads. */
@@ -101,6 +106,84 @@ export class ComposerDictationOwner extends EventTarget {
   get transcript(): string {
     return this.session?.transcriptSnapshot() ?? "";
   }
+
+  get formattingMode(): formatting.DictationFormattingMode {
+    return this.mode;
+  }
+
+  /** Snapshot this before awaiting Stop: a review must never resume an automatic Send. */
+  get requiresFormattingReview(): boolean {
+    return this.captureMode === "explicit" || this.review !== undefined;
+  }
+
+  private get review() {
+    return this.formatting?.current;
+  }
+
+  get formattingReceipt(): formatting.DictationFormattingReceipt {
+    return this.formatting?.receipt ?? "not-committed";
+  }
+
+  get formattingReview() {
+    return this.formatting?.projection;
+  }
+
+  setFormattingMode(mode: formatting.DictationFormattingMode): void {
+    patchSettings({ dictationFormatting: { version: 1, mode } });
+    this.updateFormattingMode(mode);
+  }
+
+  reprocessFormatting(ranges?: readonly { start: number; end: number }[]): void {
+    this.refreshFormattingPolicy();
+    this.formatting?.reprocess(() => ++this.preparationGeneration, ranges);
+  }
+
+  acceptFormatting(choice: "formatted" | "original"): boolean {
+    this.refreshFormattingPolicy();
+    return this.formatting?.accept(choice) ?? false;
+  }
+
+  dismissFormatting(): void {
+    this.formatting?.clear();
+    const generation = ++this.preparationGeneration;
+    this.pendingCommitsChanged();
+    this.restoreFormattingFocus(generation);
+  }
+
+  private sourceIsCurrent(review: formatting.DictationFormattingAuthority): boolean {
+    return (
+      !this.disposed &&
+      this.options.connected &&
+      !this.options.realtimeTalkActive &&
+      this.options.client === review.client &&
+      review.client.auth === review.auth &&
+      review.client.connectionGeneration === review.connection
+    );
+  }
+
+  private refreshFormattingPolicy(): void {
+    this.updateFormattingMode(
+      (readLiveUiPreferences() ?? loadUiPreferences()).dictationFormatting?.mode ?? "preserve",
+    );
+  }
+
+  private updateFormattingMode(mode: formatting.DictationFormattingMode): void {
+    if (mode !== this.mode) {
+      this.mode = mode;
+      this.policyRevision++;
+      this.invalidateFormattingReview();
+    }
+  }
+
+  private readonly handleSettingsStorage = (event: StorageEvent): void => {
+    const { gatewayUrl } = readLiveUiPreferences() ?? loadUiPreferences();
+    if (event.key === null || event.key === settingsKeyForGateway(gatewayUrl)) {
+      // Storage events retain intervening writes even when another tab changes A→B→A.
+      this.policyRevision++;
+      this.refreshFormattingPolicy();
+      this.invalidateFormattingReview();
+    }
+  };
 
   // Returns the stop promise so the confirming control can remain tied to the
   // session that actually inserted text into the draft.
@@ -119,15 +202,20 @@ export class ComposerDictationOwner extends EventTarget {
     return true;
   }
 
-  update(options: ComposerDictationOwnerOptions): void {
+  update(options: formatting.ComposerDictationOwnerOptions): void {
     if (
       this.options.client !== options.client ||
       this.options.sessionKey !== options.sessionKey ||
       this.options.draftKey !== options.draftKey
     ) {
-      this.cancel();
+      this.cancel(false);
     }
     this.options = options;
+    if (this.review && !this.sourceIsCurrent(this.review)) {
+      this.formatting?.clear();
+      this.preparationGeneration++;
+    }
+    this.observeFormattingTarget();
     if (!options.connected) {
       this.commits?.markGatewayDisconnected();
     }
@@ -221,17 +309,36 @@ export class ComposerDictationOwner extends EventTarget {
 
   dispose(): void {
     this.disposed = true;
-    this.cancel();
+    this.stopSettings();
+    this.cancel(false);
   }
 
-  cancel(): void {
+  cancel(restoreFormattingFocus = true): void {
+    const hadReview = this.review !== undefined;
+    const restoreFocus =
+      restoreFormattingFocus &&
+      !this.disposed &&
+      (hadReview || (this.captureMode === "explicit" && this.transcribing));
+    this.formatting?.clear();
+    this.formattingCapture = undefined;
+    const generation = ++this.preparationGeneration;
     this.clearClickSuppression();
     this.playback.stop();
-    if (this.commits?.size) {
-      this.commits.retire();
+    // Capture phases report their own changes; an idle scope change has nothing to publish.
+    if (this.transcribing || hadReview) {
+      this.commits?.retire();
       this.pendingCommitsChanged();
     }
     void this.stop({ commit: false });
+    if (restoreFocus) {
+      this.restoreFormattingFocus(generation);
+    }
+  }
+
+  private restoreFormattingFocus(generation: number): void {
+    if (!this.disposed && generation === this.preparationGeneration) {
+      this.options.onFormattingDismiss?.();
+    }
   }
 
   private readonly handleDocumentPointerMove = (event: PointerEvent): void => {
@@ -279,7 +386,7 @@ export class ComposerDictationOwner extends EventTarget {
   };
 
   private readonly handleDocumentKeyDown = (event: KeyboardEvent): void => {
-    if (event.key !== "Escape" || (this.phase === "idle" && !this.transcribing)) {
+    if (event.key !== "Escape" || (this.phase === "idle" && !this.transcribing && !this.review)) {
       return;
     }
     event.preventDefault();
@@ -297,16 +404,37 @@ export class ComposerDictationOwner extends EventTarget {
     void this.stop({ commit: false });
   };
 
+  private readonly observeFormattingTarget = (event?: Event): void => {
+    const capture = this.formattingCapture;
+    if (
+      (capture || this.review) &&
+      formattingTargetChanged(capture, this.options.readFormattingTarget, this.connecting, event)
+    ) {
+      if (capture) {
+        capture.invalidated = true;
+      }
+      this.invalidateFormattingReview();
+    }
+  };
+
+  private invalidateFormattingReview(): void {
+    this.formatting?.invalidate();
+    this.dispatchEvent(new Event("change"));
+  }
+
   private canHold(): boolean {
     return (
       this.options.enabled &&
       this.options.connected &&
       !this.options.realtimeTalkActive &&
-      this.options.client !== null
+      this.options.client !== null &&
+      this.review === undefined &&
+      !((this.mode === "explicit" || this.captureMode === "explicit") && this.transcribing)
     );
   }
 
   private async start(): Promise<void> {
+    this.refreshFormattingPolicy();
     const client = this.options.client;
     if (this.phase !== "holding" || !client || !this.canHold()) {
       await this.stop({ commit: false });
@@ -325,22 +453,43 @@ export class ComposerDictationOwner extends EventTarget {
     this.clearPointerGesture();
     const captureStart = {};
     this.captureStart = captureStart;
+    this.captureMode = this.mode;
+    this.capturePolicyRevision = this.policyRevision;
+    this.preparationGeneration++;
     this.setPhase("connecting");
+    this.formattingCapture =
+      this.captureMode === "explicit"
+        ? {
+            target: this.options.readFormattingTarget?.(),
+            client,
+            auth: client.auth,
+            connection: client.connectionGeneration,
+            invalidated: false,
+          }
+        : undefined;
     if (this.captureStart !== captureStart) {
       return;
     }
-    let describeStartError = (error: unknown): [string, ComposerDictationFailure["kind"]] => [
-      formatUiError(error),
-      "start",
-    ];
+    let describeStartError = (
+      error: unknown,
+    ): [string, formatting.ComposerDictationFailure["kind"]] => [formatUiError(error), "start"];
     try {
       // Preserve Safari playback activation before the lazy capture module loads.
-      this.playback.prepare(client, () => this.cancel());
+      this.playback.prepare(client, () => this.cancel(false));
       const sessionKey = this.options.prepareSession
         ? await this.options.prepareSession()
         : this.options.sessionKey;
       const { ComposerDictationSession, ComposerDictationCommits, describeDictationStartError } =
         await import("./composer-dictation-session.ts");
+      if (this.captureStart === captureStart && this.formattingCapture && !this.formatting) {
+        const { ComposerDictationReviewState } = await import("./composer-dictation-formatting.ts");
+        this.formatting ??= new ComposerDictationReviewState(
+          () => this.options,
+          () => this.mode,
+          (review) => this.sourceIsCurrent(review),
+          () => this.dispatchEvent(new Event("change")),
+        );
+      }
       if (
         this.captureStart !== captureStart ||
         this.disposed ||
@@ -402,10 +551,22 @@ export class ComposerDictationOwner extends EventTarget {
       this.releasePlayback();
       return Promise.resolve(false);
     }
+    const explicit = this.captureMode === "explicit";
+    const runtime = this.formatting;
+    const preparation =
+      explicit && runtime
+        ? runtime.finalPreparation(
+            this.captureMode,
+            this.preparationGeneration,
+            this.formattingCapture,
+            this.options.client!,
+          )
+        : undefined;
+    const policyRevision = this.capturePolicyRevision;
     this.setPhase("stopping");
     this.session = null;
     this.setPhase("idle");
-    if (!options.commit) {
+    if (!options.commit || (explicit && preparation?.generation !== this.preparationGeneration)) {
       this.releasePlayback();
       void session.cancel().catch(() => undefined);
       return Promise.resolve(false);
@@ -422,6 +583,24 @@ export class ComposerDictationOwner extends EventTarget {
         !this.options.enabled ||
         this.options.realtimeTalkActive
       ) {
+        return false;
+      }
+      if (explicit) {
+        if (
+          !runtime ||
+          !preparation ||
+          preparation.generation !== this.preparationGeneration ||
+          !this.sourceIsCurrent(preparation)
+        ) {
+          return false;
+        }
+        runtime.finalize(
+          lateTranscript,
+          session,
+          preparation,
+          this.policyRevision !== policyRevision,
+        );
+        this.pendingCommitsChanged();
         return false;
       }
       if (this.active) {
@@ -489,13 +668,19 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private syncCancellationListeners(): void {
-    if (this.phase !== "idle" || this.transcribing) {
+    if (this.phase !== "idle" || this.transcribing || this.review) {
       if (this.cancellationListeners) {
         return;
       }
       this.cancellationListeners = new AbortController();
       const options = { signal: this.cancellationListeners.signal };
       listen(document, "keydown", this.handleDocumentKeyDown, options);
+      listen(document, "visibilitychange", this.observeFormattingTarget, options);
+      listen(window, "blur", this.observeFormattingTarget, options);
+      listen(document, "focusin", this.observeFormattingTarget, options);
+      listen(document, "input", this.observeFormattingTarget, options);
+      listen(document, "selectionchange", this.observeFormattingTarget, options);
+      listen(window, "storage", this.handleSettingsStorage, options);
     } else {
       this.cancellationListeners?.abort();
       this.cancellationListeners = null;

@@ -4005,7 +4005,8 @@ html.openclaw-native-web-chrome
   grid-template-columns: minmax(0, 1fr);
 }
 
-.filters {
+.filters,
+.wrap-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;

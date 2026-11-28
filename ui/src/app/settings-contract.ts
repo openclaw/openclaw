@@ -48,6 +48,19 @@ export type CatalogOpenTarget = (typeof CATALOG_OPEN_TARGETS)[number];
 
 export const normalizeCatalogOpenTarget = normalizeChoice(CATALOG_OPEN_TARGETS, "viewer");
 
+export type DictationFormatting = {
+  version: 1;
+  mode: "preserve" | "explicit";
+};
+
+/** Browser-local opt-in; absent or unsupported policies preserve recognized text. */
+export function normalizeDictationFormatting(value: unknown): DictationFormatting | undefined {
+  if (!isRecord(value) || value.version !== 1 || value.mode !== "explicit") {
+    return undefined;
+  }
+  return { version: 1, mode: "explicit" };
+}
+
 const DASHBOARDS_VIEWS = ["grid", "list"] as const;
 const DASHBOARDS_SORTS = ["updated", "title"] as const;
 const DASHBOARDS_GROUPS = ["none", "updated", "author"] as const;
@@ -213,6 +226,8 @@ export type UiSettings = {
   realtimeTalkInputDeviceId?: string;
   realtimeTalkVideoDeviceId?: string;
   composerHoldToRecord?: boolean;
+  // Browser-local opt-in; not synced through config ui.prefs.
+  dictationFormatting?: DictationFormatting;
   // Camera intent is device-local, not per-agent or synced through config ui.prefs.
   talkCameraAutoEnable?: boolean;
   chatSplitLayout?: ChatSplitLayout;

@@ -584,6 +584,31 @@ openclaw-session-owner-chip .viewer-avatar__initials {
     box-shadow var(--duration-fast) var(--ease-out);
 }
 
+/* Dictation review shares the card, field, preview and wrapping action styles. */
+.dictation-formatting {
+  grid-column: 1 / -1;
+  grid-auto-rows: max-content;
+  min-width: 0;
+  max-height: 60dvh;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.dictation-formatting fieldset,
+.dictation-formatting select {
+  min-inline-size: 0;
+  max-inline-size: 100%;
+}
+
+.dictation-formatting .btn {
+  white-space: normal;
+}
+
+.dictation-formatting__preview {
+  width: 100%;
+  white-space: pre-wrap;
+}
+
 /* All states size the same grid cell; only the active one is visible and named. */
 .state-stack {
   display: inline-grid;

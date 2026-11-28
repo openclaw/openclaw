@@ -5,10 +5,13 @@ import { InlineAlert } from "../../../components/solid/inline-alert.tsx";
 import { MenuHeading } from "../../../components/solid/menu-heading.tsx";
 import type { MenuEntry } from "../../../components/solid/menu.tsx";
 import { SwitchIndicator } from "../../../components/solid/switch.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatDictationFormattingEnglish } from "../../../i18n/locales/en-chat-dictation-formatting.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { MicrophonePickerProps } from "../composer-microphone-picker.ts";
 import { type RealtimeTalkDeviceIssue, realtimeTalkDeviceIssueMessage } from "../talk/input.ts";
 import { voiceApiKeyMessage } from "../voice-api-key-notice.tsx";
+
+registerEnglishCatalog(registerChatDictationFormattingEnglish);
 
 export function MicrophoneMenu(props: {
   picker: MicrophonePickerProps;
@@ -228,6 +231,35 @@ export function MicrophoneMenu(props: {
           attributes: { "data-chat-talk-preference": "hold-to-dictate" },
           closeOnSelect: false,
           details: <SwitchIndicator checked={props.picker.holdToDictate !== false} size="sm" />,
+        });
+      }
+      const dictation = props.picker.readDictation?.();
+      if (dictation) {
+        separator("formatting-separator");
+        entries.push({
+          kind: "content",
+          id: "dictation-formatting",
+          content: <MenuHeading label={t("chat.dictationFormatting.mode")} />,
+        });
+        for (const mode of ["preserve", "explicit"] as const) {
+          entries.push({
+            id: mode,
+            label: t(
+              mode === "preserve"
+                ? "chat.dictationFormatting.preserve"
+                : "chat.dictationFormatting.explicit",
+            ),
+            type: "radio",
+            checked: dictation.formattingMode === mode,
+            closeOnSelect: false,
+          });
+        }
+        entries.push({
+          kind: "content",
+          id: "dictation-formatting-hint",
+          content: (
+            <div class="chat-talk-input-picker__note">{t("chat.dictationFormatting.modeHint")}</div>
+          ),
         });
       }
       return entries;

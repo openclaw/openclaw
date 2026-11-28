@@ -11,7 +11,12 @@ export type ComposerEditorBridge = {
   requestSync: () => void;
   focus: (options?: FocusOptions) => void;
   select: (start: number, end: number, direction?: "forward" | "backward" | "none") => void;
-  replace: (text: string, start: number, end: number) => void;
+  replace: (
+    text: string,
+    start: number,
+    end: number,
+    options?: { isolateHistory?: boolean },
+  ) => void;
   /** Replace the whole draft as one isolated history step. */
   replaceAll: (text: string) => void;
   /** Step the editor's own history back, restoring mention identities with the text. */
@@ -31,6 +36,17 @@ export function registerComposerEditor(input: HTMLTextAreaElement, editor: Compo
 export function readComposerEditor(input: HTMLTextAreaElement) {
   return editors.get(input);
 }
+
+/** Reviewed dictation requires an existing undoable text adapter. */
+export function canReplaceComposerInputWithHistory(input: HTMLTextAreaElement): boolean {
+  return (
+    editors.has(input) ||
+    (typeof input.ownerDocument.execCommand === "function" &&
+      typeof input.ownerDocument.queryCommandSupported === "function" &&
+      input.ownerDocument.queryCommandSupported("insertText"))
+  );
+}
+
 export function composerInputElement(input: HTMLElement): HTMLElement {
   return input instanceof HTMLTextAreaElement ? (editors.get(input)?.element ?? input) : input;
 }

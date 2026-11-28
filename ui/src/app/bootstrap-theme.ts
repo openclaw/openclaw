@@ -236,6 +236,7 @@ export function createApplicationTheme(
   };
   const stopPreferences = bindUiPreferences({
     gatewayUrl: () => gateway.connection.gatewayUrl,
+    read: () => settings,
     refresh,
   });
   const onStorage = (event: StorageEvent) => {

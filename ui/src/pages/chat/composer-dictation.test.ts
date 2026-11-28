@@ -1,96 +1,34 @@
 // @vitest-environment jsdom
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createComponent } from "solid-js";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { renderComposerVoiceButtonSolid } from "./components/chat-composer-controls.tsx";
 import { ComposerDictationSession, placeComposerDictation } from "./composer-dictation-session.ts";
-import { ComposerDictationOwner } from "./composer-dictation.ts";
-import { MockDictationAudioContext, type MockAudioProcessor } from "./talk/input.test-support.ts";
-
-type GatewayListener = (event: GatewayEventFrame) => void;
-const listeners = new Set<GatewayListener>();
-const controllers: ComposerDictationOwner[] = [];
-const processors: MockAudioProcessor[] = [];
-const audios: MockAudio[] = [];
-let speechStarted = createDeferred();
-let request: ReturnType<
-  typeof vi.fn<(method: string, params: Record<string, unknown>) => Promise<unknown>>
->;
-let getUserMedia: ReturnType<typeof vi.fn<() => Promise<ReturnType<typeof microphone>>>>;
-
-class MockAudio extends EventTarget {
-  readonly pause = vi.fn();
-  readonly load = vi.fn();
-  readonly removeAttribute = vi.fn();
-  readonly play = vi.fn(async () => {
-    if (this.src.startsWith("blob:")) {
-      speechStarted.resolve();
-    }
-  });
-
-  constructor(public src: string) {
-    super();
-    audios.push(this);
-  }
-}
-
-const microphone = (stop = vi.fn()) => ({
-  getTracks: () => [Object.assign(new EventTarget(), { stop })],
-});
-class MockAudioContext extends MockDictationAudioContext {
-  override createScriptProcessor() {
-    const processor = super.createScriptProcessor();
-    processors.push(processor);
-    return processor;
-  }
-}
-
-function createClient(): GatewayBrowserClient {
-  return {
-    addEventListener: vi.fn((listener: GatewayListener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    }),
-    request,
-  } as unknown as GatewayBrowserClient;
-}
-
-function emit(payload: Record<string, unknown>): void {
-  for (const listener of listeners) {
-    listener({
-      event: "talk.event",
-      payload: { transcriptionSessionId: "dictation-1", ...payload },
-    } as GatewayEventFrame);
-  }
-}
-
-function transcript(text: string, transcriptionSessionId = "dictation-1") {
-  emit({ transcriptionSessionId, type: "transcript", text, final: true });
-}
-
-function sessionResult(sessionId = "dictation-1") {
-  return {
-    sessionId,
-    transcriptionSessionId: sessionId,
-    audio: { inputEncoding: "g711_ulaw", inputSampleRateHz: 8000 },
-  };
-}
-
-function recordRequests(create = async () => sessionResult()) {
-  const order: string[] = [];
-  request.mockImplementation(async (method, params) => {
-    order.push(method);
-    return method === "talk.session.create" ? create() : params;
-  });
-  return order;
-}
+import {
+  audios,
+  controllerFixture,
+  createClient,
+  emit,
+  getUserMedia,
+  installDictationSessionFixtures,
+  listeners,
+  microphone,
+  processors,
+  recordRequests,
+  request,
+  resetSpeechStarted,
+  sessionResult,
+  speechStarted,
+  startDirect,
+  transcript,
+  type ControllerOptions,
+} from "./composer-dictation.test-support.ts";
 
 function expectAppended(sessionId = "dictation-1") {
   expect(request).toHaveBeenCalledWith("talk.session.appendAudio", {
@@ -131,21 +69,6 @@ function pointer(type: string): Event {
   return event;
 }
 
-type ControllerOptions = ConstructorParameters<typeof ComposerDictationOwner>[0];
-function controllerFixture(overrides: Omit<Partial<ControllerOptions>, "client"> = {}) {
-  const callbacks = { onCommit: vi.fn(), onError: vi.fn(), onTap: vi.fn() };
-  const options = {
-    client: createClient(),
-    connected: true,
-    enabled: true,
-    realtimeTalkActive: false,
-    ...callbacks,
-    ...overrides,
-  };
-  const controller = new ComposerDictationOwner(options);
-  controllers.push(controller);
-  return { controller, options, ...callbacks };
-}
 function pointerTarget(target: HTMLElement) {
   target.getBoundingClientRect = () => ({ left: 0, right: 100, top: 0, bottom: 100 }) as DOMRect;
   target.setPointerCapture = vi.fn();
@@ -187,14 +110,6 @@ function createButtonHarness() {
   return { ...harness, target: pointerTarget(target) };
 }
 
-async function startDirect(controller: ComposerDictationOwner) {
-  const start = vi.spyOn(ComposerDictationSession.prototype, "start");
-  expect(controller.startDirect()).toBe(true);
-  await vi.dynamicImportSettled();
-  const started = start.mock.results[0];
-  assert.isDefined(started);
-  await started.value;
-}
 async function startHold(target: HTMLElement): Promise<void> {
   target.dispatchEvent(pointer("pointerdown"));
   await vi.advanceTimersByTimeAsync(500);
@@ -227,49 +142,7 @@ function latestAudio() {
   return audio;
 }
 
-beforeEach(() => {
-  vi.useFakeTimers();
-  listeners.clear();
-  processors.length = 0;
-  audios.length = 0;
-  speechStarted = createDeferred();
-  request = vi.fn(async (method: string) => {
-    if (method === "tts.speak") {
-      return { audioBase64: "UklGRg==", mimeType: "audio/wav", provider: "openai" };
-    }
-    if (method === "talk.session.create") {
-      return sessionResult();
-    }
-    return { ok: true };
-  });
-  getUserMedia = vi.fn(async () => microphone());
-  Object.defineProperty(globalThis.navigator, "mediaDevices", {
-    configurable: true,
-    value: { getUserMedia },
-  });
-  vi.stubGlobal("AudioContext", MockAudioContext);
-  vi.stubGlobal("Audio", MockAudio);
-  vi.stubGlobal(
-    "URL",
-    class extends URL {
-      static override createObjectURL = vi.fn(() => "blob:synthetic-speech");
-      static override revokeObjectURL = vi.fn();
-    },
-  );
-});
-
-afterEach(() => {
-  for (const controller of controllers.splice(0)) {
-    controller.dispose();
-  }
-  cleanupSolid();
-  document.body.replaceChildren();
-  listeners.clear();
-  processors.length = 0;
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-  vi.restoreAllMocks();
-});
+installDictationSessionFixtures();
 
 describe("ComposerDictationOwner", () => {
   it.each(["cancel", "restart", "draft switch"])(
@@ -346,7 +219,7 @@ describe("ComposerDictationOwner", () => {
       await reading;
       expect(controller.active).toBe(true);
       const finished = finalizing ? controller.finishActive() : null;
-      speechStarted = createDeferred();
+      resetSpeechStarted();
       const replacement = next.speak(options.client, "Second message");
       expect(controller.active).toBe(false);
       expect(stopTrack).toHaveBeenCalledOnce();
@@ -446,7 +319,7 @@ describe("ComposerDictationOwner", () => {
     async (transition) => {
       const { promise: close, resolve: resolveClose } = createDeferred();
       let sessionsCreated = 0;
-      request = vi.fn(async (method: string) => {
+      request.mockImplementation(async (method: string) => {
         if (method === "talk.session.create") {
           const sessionId = `dictation-${++sessionsCreated}`;
           return sessionResult(sessionId);
@@ -895,7 +768,7 @@ describe("ComposerDictationOwner", () => {
 
   it("closes late session creation after the bounded Stop wait", async () => {
     const created = createDeferred<ReturnType<typeof sessionResult>>();
-    request = vi.fn(async (method: string) =>
+    request.mockImplementation(async (method: string) =>
       method === "talk.session.create" ? created.promise : { ok: true },
     );
     const { controller, target } = createHarness();

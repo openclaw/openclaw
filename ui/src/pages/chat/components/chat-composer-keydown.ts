@@ -178,6 +178,14 @@ export function createComposerKeyDownHandler({
         event.preventDefault();
         return;
       }
+      const dictation = state.dictation;
+      if (dictation?.requiresFormattingReview && (dictation.active || dictation.transcribing)) {
+        event.preventDefault();
+        if (dictation.active) {
+          void dictation.finishActive();
+        }
+        return;
+      }
       const attachments = props.getAttachments?.() ?? props.attachments ?? [];
       const hasComposedContent = Boolean(target.value.trim() || attachments.length);
       if (!hasComposedContent) {

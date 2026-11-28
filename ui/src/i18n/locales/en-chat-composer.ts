@@ -162,6 +162,8 @@ const catalog = {
       dictationListening: "Listening…",
       dictationStarting: "Starting microphone…",
       dictationStopAndKeep: "Stop and keep text",
+      dictationFinishAndReview: "Finish and review",
+      dictationCancel: "Cancel dictation",
       realtimeTalkCancellationRejected: "Realtime output cancellation was not accepted.",
       realtimeTalkMissingTurnIdentity: "Realtime output is missing its turn identity.",
       realtimeTalkRelayUnresponsive:

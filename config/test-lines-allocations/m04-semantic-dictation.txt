@@ -1,0 +1,12 @@
+# M04 / issue #205634: complete opt-in semantic dictation path.
+# Independent source-map/Markdown/HTML validation; existing owner lifecycle;
+# settings/draft retention; reviewed editor transaction; actual component and
+# direct-owner focus/readonly integration; main/Side chat submission; browser fixture.
+# Follow-up covers exact command confirmation, range/recipient access history,
+# direct Markdown boundaries and one-finish browser consumers.
+# Browser coverage checks WAV capture, native recipient identity and Undo.
+# Each suite protects a separate required boundary; no serializer-only proof.
+# Browser coverage also checks retained drafts during finalization.
+# Net test growth against 2e3d8623b5a40482d8e1e803334727b3c865e128: 2842 LF lines.
+# Requested allocation covers the excess over the 400-line default allowance.
+2442

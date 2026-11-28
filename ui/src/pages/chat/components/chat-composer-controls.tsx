@@ -133,6 +133,8 @@ export function renderMicrophonePickerSolid(props: MicrophonePickerProps) {
             }
           } else if (item.id === "hold-to-dictate") {
             props.onHoldToDictateChange?.(props.holdToDictate === false);
+          } else if (item.id === "preserve" || item.id === "explicit") {
+            props.readDictation?.()?.setFormattingMode(item.id);
           } else if (item.id === "capability:realtime") {
             props.onOpenTalkSettings?.();
           } else if (item.id === "capability:dictation") {
@@ -261,38 +263,57 @@ export function ComposerDictationSendAction(props: {
   readDictation: () => ComposerDictationOwner;
   onSend: (submissionAction?: Event) => void;
   onPointerDown?: (event: PointerEvent) => void;
+  onReleaseFocus?: (source: ComposerDictationOwner) => void;
 }) {
-  const finishAndSend = async (event: MouseEvent) => {
-    const dictation = props.readDictation();
-    const send = props.onSend;
-    if (dictation.finalizing) {
-      return;
-    }
-    await dictation.finishActive();
-    // Keep the initiating input action when asynchronous dictation finishes.
-    send(event);
-  };
   return (
-    <Show when={props.readDictation().active}>
-      {props.readDictation().connecting ? null : (
-        <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
-          {props.readDictation().finalizing
-            ? t("chat.composer.dictationFinalizing")
-            : t("chat.composer.dictationListening")}
-        </span>
-      )}
-      <openclaw-tooltip prop:content={t("chat.runControls.send")}>
-        <button
-          class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
-          type="button"
-          ref={primaryPointerDownRef(() => props.onPointerDown)}
-          onClick={(event: MouseEvent) => void finishAndSend(event)}
-          aria-disabled={props.readDictation().finalizing ? "true" : "false"}
-          aria-label={t("chat.runControls.send")}
-        >
-          <Icon name="arrowUp" />
-        </button>
-      </openclaw-tooltip>
+    <Show when={props.readDictation().active ? props.readDictation() : undefined} keyed>
+      {(source) => {
+        const label = () =>
+          t(
+            props.readDictation().requiresFormattingReview
+              ? "chat.composer.dictationFinishAndReview"
+              : "chat.runControls.send",
+          );
+        let action: HTMLButtonElement | undefined;
+        onSettled(() => {
+          const releaseFocus = props.onReleaseFocus;
+          return () => {
+            if (source.requiresFormattingReview && action?.ownerDocument.activeElement === action) {
+              releaseFocus?.(source);
+            }
+          };
+        });
+        return (
+          <openclaw-tooltip prop:content={label()}>
+            <button
+              class="chat-send-btn chat-send-btn--send chat-send-btn--dictation-commit"
+              type="button"
+              ref={[
+                (element) => {
+                  action = element;
+                },
+                primaryPointerDownRef(() => props.onPointerDown),
+              ]}
+              onClick={(event) => {
+                if (source.finalizing) {
+                  return;
+                }
+                const requiresReview = source.requiresFormattingReview;
+                const send = props.onSend;
+                void source.finishActive().then(() => {
+                  if (!requiresReview) {
+                    send(event);
+                  }
+                });
+              }}
+              aria-disabled={props.readDictation().finalizing ? "true" : "false"}
+              aria-label={label()}
+            >
+              <Icon name={props.readDictation().requiresFormattingReview ? "eye" : "arrowUp"} />
+            </button>
+          </openclaw-tooltip>
+        );
+      }}
     </Show>
   );
 }
@@ -471,6 +492,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
           <ComposerDictationSendAction
             readDictation={props.readDictation}
             onSend={props.onSend}
+            onReleaseFocus={props.onDictationReleaseFocus}
             onPointerDown={(event) => props.onPrimaryActionPointerDown?.(event)}
           />
         ) : (

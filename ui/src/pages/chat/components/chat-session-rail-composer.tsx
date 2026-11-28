@@ -37,7 +37,7 @@ import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ChatModelControls } from "./chat-model-controls.tsx";
 import type { ChatModelControlsProps } from "./chat-model-controls.types.ts";
-import { ComposerDictationStatus } from "./chat-voice-activity.tsx";
+import { ComposerDictationReview, ComposerDictationStatus } from "./chat-voice-activity.tsx";
 import { DirectDictationView } from "./direct-dictation-view.tsx";
 
 registerEnglishCatalog(registerChatSessionOptionalEnglish);
@@ -128,6 +128,7 @@ export function SessionRailComposer(props: {
     }
   };
   const dictationActive = createMemo(() => dictation.read().active);
+  const dictationLocksDraft = createMemo(() => dictation.read().locksDraft);
   // Dictation admission reads these inputs synchronously; a changed input re-prepares it.
   const dictationRevision = createMemo(() => ({
     revision: dictation.revision(),
@@ -142,6 +143,9 @@ export function SessionRailComposer(props: {
   // The dictated preview reaches the draft only on commit, so submission finishes it first.
   const submit = () => {
     const active = dictationControl.dictation;
+    if (active?.transcribing && active.requiresFormattingReview) {
+      return;
+    }
     if (!active?.active) {
       props.submit();
       return;
@@ -150,8 +154,9 @@ export function SessionRailComposer(props: {
       return;
     }
     const sessionKey = props.sessionKey;
+    const requiresReview = active.requiresFormattingReview;
     void active.finishActive().then(() => {
-      if (props.sessionKey === sessionKey) {
+      if (!requiresReview && props.sessionKey === sessionKey) {
         props.submit();
       }
     });
@@ -221,7 +226,7 @@ export function SessionRailComposer(props: {
             aria-activedescendant={emojiMenu.activeId(paneId()) ?? undefined}
             placeholder={t("chat.rail.askPlaceholder")}
             disabled={!props.connected}
-            readonly={dictationActive()}
+            readonly={dictationLocksDraft()}
             onPaste={(event) => {
               if (props.connected) {
                 handleChatAttachmentPaste(event, props.attachmentProps, { imagesOnly: true });
@@ -263,7 +268,7 @@ export function SessionRailComposer(props: {
             }}
             onInput={(event) => {
               handleTextareaOverflowInteraction(event);
-              if (dictationActive()) {
+              if (dictationLocksDraft()) {
                 return;
               }
               adjustTextareaHeight(event.currentTarget);
@@ -283,6 +288,7 @@ export function SessionRailComposer(props: {
           </span>
         </label>
       </div>
+      <ComposerDictationReview readDictation={() => dictation.read().dictation} />
       <div class="agent-chat__composer-footer">
         <div class="agent-chat__composer-lead">
           <ChatComposerPlusMenu
