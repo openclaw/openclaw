@@ -156,7 +156,7 @@ export async function acquireUpdateLock(
 }
 
 type UpdateLockAcquisition =
-  | { acquired: true; lock: UpdateLock; release: () => Promise<void> }
+  | { acquired: true; lock: UpdateLock; release: () => Promise<void>; reclaimedRunId?: string }
   | { acquired: false; lock: UpdateLock };
 
 async function takeUpdateLock(
@@ -167,14 +167,15 @@ async function takeUpdateLock(
   const file = path.join(prefix, "releases", ".update.lock");
   await fs.mkdir(path.dirname(file), { recursive: true });
   const lock: UpdateLock = { ...input, pid: process.pid, startedAt: Date.now() };
-  const canReclaim = (payload: unknown) => {
+  let reclaimedRunId: string | undefined;
+  const reclaimableLock = (payload: unknown) => {
     const incumbent = asNullableRecord(payload);
-    return Boolean(
-      incumbent &&
+    return incumbent &&
       typeof incumbent.pid === "number" &&
       (!expected || Object.entries(expected).every(([key, value]) => incumbent[key] === value)) &&
-      ownerDead({ pid: incumbent.pid }),
-    );
+      ownerDead({ pid: incumbent.pid })
+      ? incumbent
+      : null;
   };
   try {
     // Budget expiry cannot evict a live preparer. The provider serializes dead-owner
@@ -185,12 +186,19 @@ async function takeUpdateLock(
       payload: () => lock,
       retry: { retries: 0 },
       staleRecovery: "remove-if-unchanged",
-      shouldReclaim: ({ payload }) => canReclaim(payload),
-      shouldRemoveStaleLock: ({ payload }) => canReclaim(payload),
+      shouldReclaim: ({ payload }) => Boolean(reclaimableLock(payload)),
+      shouldRemoveStaleLock: ({ payload }) => {
+        const incumbent = reclaimableLock(payload);
+        // Capture under the reclaim guard; an earlier snapshot can miss an exiting owner.
+        if (incumbent && typeof incumbent.runId === "string") {
+          reclaimedRunId = incumbent.runId;
+        }
+        return Boolean(incumbent);
+      },
       // Gateway readiness must still find an interrupted preparer's run after exit.
       retainOnExit: true,
     });
-    return { acquired: true, lock, release: () => held.release() };
+    return { acquired: true, lock, release: () => held.release(), reclaimedRunId };
   } catch (error) {
     if (hasErrnoCode(error, "file_lock_timeout") || hasErrnoCode(error, "file_lock_stale")) {
       const incumbent = await readUpdateLock(prefix);

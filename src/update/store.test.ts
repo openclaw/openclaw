@@ -46,6 +46,7 @@ it("keeps one live owner past its budget and reclaims a dead owner", async () =>
   if (!first.acquired) {
     throw new Error("The first preparation did not acquire custody");
   }
+  expect(first.reclaimedRunId).toBeUndefined();
   try {
     expect((await acquireUpdateLock({ runId: "second", deadlineMs: 60_000 }, dir)).acquired).toBe(
       false,
@@ -61,7 +62,7 @@ it("keeps one live owner past its budget and reclaims a dead owner", async () =>
   await seedDeadLock(dir);
   expect(await readUpdateLock(dir)).toMatchObject({ dead: true });
   const replacement = await acquireUpdateLock({ runId: "replacement", deadlineMs: 60_000 }, dir);
-  expect(replacement.acquired).toBe(true);
+  expect(replacement).toMatchObject({ acquired: true, reclaimedRunId: "dead-pid" });
   if (replacement.acquired) {
     expect(await readUpdateLock(dir)).toMatchObject({ runId: "replacement", dead: false });
     await replacement.release();
