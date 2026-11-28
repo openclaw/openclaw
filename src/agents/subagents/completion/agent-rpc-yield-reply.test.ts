@@ -68,6 +68,7 @@ function parkOriginal(compactedSessionId?: string) {
   vi.useFakeTimers();
   const publish = vi.fn();
   const replay = vi.fn();
+  const releaseReplay = vi.fn();
   const controller = new AbortController();
   const input = reserve();
   const initial = observeAgentRpcYieldExecution({
@@ -81,9 +82,9 @@ function parkOriginal(compactedSessionId?: string) {
   }
   const batch = cohort("original");
   promoteAgentRpcYieldReply(batch, input);
-  expect(initial.retainReplay(replay)).toBe(true);
+  expect(initial.retainReplay(replay, () => releaseReplay)).toBe(true);
   expect(initial.finish(yielded)).toBe(true);
-  return { batch, controller, publish, replay };
+  return { batch, controller, publish, replay, releaseReplay };
 }
 
 afterEach(() => {
@@ -174,8 +175,9 @@ it("drops the observer after timeout without preventing the wake", () => {
 });
 
 it("keeps only replay custody after the original transport disconnects", () => {
-  const { batch, controller, publish, replay } = parkOriginal();
+  const { batch, controller, publish, replay, releaseReplay } = parkOriginal();
   controller.abort();
+  expect(releaseReplay).not.toHaveBeenCalled();
   const input = reserve();
   withAgentRpcYieldSuccessor(batch, input, () => {
     expect(
@@ -189,6 +191,7 @@ it("keeps only replay custody after the original transport disconnects", () => {
   });
   vi.runAllTimers();
   expect(publish).not.toHaveBeenCalled();
+  expect(releaseReplay).toHaveBeenCalledOnce();
   expect(replay).toHaveBeenCalledExactlyOnceWith([
     true,
     { ...final[1], runId: "original" },

@@ -20,6 +20,7 @@ type Reply = {
     | (Omit<AgentRpcYieldReply, "publish"> & { publish?: AgentRpcYieldReply["publish"] })
     | undefined;
   replay?: (frame: AgentTurnFrame) => void;
+  releaseReplay?: () => void;
   address: ChatRef;
   transcript: ReturnType<typeof captureSessionEntryView>;
   close?: () => void;
@@ -81,6 +82,8 @@ function closeReply(reply: Reply) {
   state.replies.delete(reply);
   reply.destination = undefined;
   reply.replay = undefined;
+  reply.releaseReplay?.();
+  reply.releaseReplay = undefined;
   reply.close?.();
   reply.close = undefined;
 }
@@ -172,11 +175,15 @@ export function observeAgentRpcYieldExecution(params: {
     adoptTranscript(next: EntryView) {
       reply.transcript = captureSessionEntryView(next, TRANSCRIPT_FIELDS);
     },
-    retainReplay: (publish: (frame: AgentTurnFrame) => void) => {
-      if (!execution.parked || !original) {
+    retainReplay: (
+      publish: (frame: AgentTurnFrame) => void,
+      retain?: (deadline: number) => () => void,
+    ) => {
+      if (!execution.parked || !original || !reply.destination) {
         return false;
       }
       reply.replay = publish;
+      reply.releaseReplay = retain?.(reply.destination.deadline);
       return true;
     },
     finish(frame: AgentTurnFrame) {
