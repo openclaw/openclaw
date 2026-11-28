@@ -36,5 +36,3 @@
   Runtime workers use separate live/cache slots so they cannot replace that
   full seed. Keep byte, topology, runtime and exact output-path validation, the
   uncached path when no archive arrives, and existing job/worker limits.
-
-When changing one knob, update `docs/ci.md` and the guard test in the same PR.

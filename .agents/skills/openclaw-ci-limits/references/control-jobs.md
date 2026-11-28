@@ -120,4 +120,3 @@
   Canonical fork PRs use the GitHub profile and hosted runners on every attempt,
   even when repository variables are unavailable. Their cache trust stays
   unchanged.
-When changing one knob, update `docs/ci.md` and the guard test in the same PR.

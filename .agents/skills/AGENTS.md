@@ -3,11 +3,11 @@
 Keep OpenClaw contributor workflows here: development, debugging, testing, and
 the repository-specific parts of review and release validation.
 
-| Workflow | Canonical source |
-| --- | --- |
-| Portable review, handoff, transcripts, and remote validation | [openclaw/agent-skills](https://github.com/openclaw/agent-skills) |
-| Team deployment, private release operations, and organization administration | [openclaw/maintainers](https://github.com/openclaw/maintainers) |
-| OpenClaw product and contributor workflows | This directory |
+| Workflow                                                                     | Canonical source                                                  |
+| ---------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Portable review, handoff, transcripts, and remote validation                 | [openclaw/agent-skills](https://github.com/openclaw/agent-skills) |
+| Team deployment, private release operations, and organization administration | [openclaw/maintainers](https://github.com/openclaw/maintainers)   |
+| OpenClaw product and contributor workflows                                   | This directory                                                    |
 
 ## Maintainer setup
 

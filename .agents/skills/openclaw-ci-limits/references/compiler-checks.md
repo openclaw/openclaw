@@ -21,4 +21,3 @@
   20-minute deadline during the candidate render. Keep both complete revision
   renders and the existing eight-CPU/24-GiB floor for two render workers;
   smaller hosts remain serial. Other additional-check groups retain 20 minutes.
-When changing one knob, update `docs/ci.md` and the guard test in the same PR.

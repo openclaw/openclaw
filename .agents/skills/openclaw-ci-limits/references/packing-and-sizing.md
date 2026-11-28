@@ -128,4 +128,3 @@
   not measured file walls. Do not discount them to make row caps pass.
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.
 - heavy retained Linux/Android shards on `blacksmith-8vcpu-ubuntu-2404`.
-When changing one knob, update `docs/ci.md` and the guard test in the same PR.

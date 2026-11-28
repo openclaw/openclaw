@@ -70,15 +70,15 @@ the actual runner and bottleneck before applying provider-specific limits.
 
 Read only the references relevant to the selected change, each in full:
 
-| Surface | Guide |
-| --- | --- |
-| Hosted controls, lint/typecheck placement, backend overrides | [Control jobs](references/control-jobs.md) |
-| Build producers, warming, compile caches, locale sharing | [Build and cache](references/build-and-cache.md) |
-| Matrix coverage, platform tests, UI, Docker, QA | [Test planning](references/test-planning.md) |
-| Compact bins, worker budgets, measured runner sizing | [Packing and sizing](references/packing-and-sizing.md) |
-| SDK boundary and API checks | [Compiler checks](references/compiler-checks.md) |
-| Reconsidering a previous optimization | [Rejected experiments](references/experiments.md) |
-| Checking a change and observing a landed capacity change | [Validation](references/validation.md) |
+| Surface                                                      | Guide                                                  |
+| ------------------------------------------------------------ | ------------------------------------------------------ |
+| Hosted controls, lint/typecheck placement, backend overrides | [Control jobs](references/control-jobs.md)             |
+| Build producers, warming, compile caches, locale sharing     | [Build and cache](references/build-and-cache.md)       |
+| Matrix coverage, platform tests, UI, Docker, QA              | [Test planning](references/test-planning.md)           |
+| Compact bins, worker budgets, measured runner sizing         | [Packing and sizing](references/packing-and-sizing.md) |
+| SDK boundary and API checks                                  | [Compiler checks](references/compiler-checks.md)       |
+| Reconsidering a previous optimization                        | [Rejected experiments](references/experiments.md)      |
+| Checking a change and observing a landed capacity change     | [Validation](references/validation.md)                 |
 
 ## Resolve the active backend
 

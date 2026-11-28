@@ -207,4 +207,3 @@
   and QA; zero failures in 20 Docker and 80 QA main jobs is limited evidence,
   not a measured post-change saving. Keep backend settings, caps, budgets and
   timeouts unchanged, and verify actual emitted rows and timings.
-When changing one knob, update `docs/ci.md` and the guard test in the same PR.

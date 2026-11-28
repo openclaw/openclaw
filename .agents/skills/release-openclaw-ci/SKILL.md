@@ -11,14 +11,14 @@ Read [guardrails](references/guardrails.md) in full before executing this workfl
 They own approval, frozen C/Q/P identities, source isolation, credentials, and
 receipt/attempt rules. Then read the guide for the current phase:
 
-| Task | Guide |
-| --- | --- |
+| Task                                                              | Guide                                                                                          |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | Select validation, reuse nightly proof, or repair release tooling | [Readiness](references/readiness.md), then [recovery](references/recovery.md) for a failed run |
-| Preflight or dispatch a frozen candidate | [Dispatch](references/dispatch.md) |
-| Watch a run or diagnose a failure | [Watch and triage](references/watch-and-triage.md) |
-| Retry, continue, or recover retained evidence | [Recovery](references/recovery.md) |
-| Publish or recover publication | [Publication](references/publication.md) |
-| Validate extended-stable | [Extended-stable](references/extended-stable.md), plus dispatch and guardrails |
+| Preflight or dispatch a frozen candidate                          | [Dispatch](references/dispatch.md)                                                             |
+| Watch a run or diagnose a failure                                 | [Watch and triage](references/watch-and-triage.md)                                             |
+| Retry, continue, or recover retained evidence                     | [Recovery](references/recovery.md)                                                             |
+| Publish or recover publication                                    | [Publication](references/publication.md)                                                       |
+| Validate extended-stable                                          | [Extended-stable](references/extended-stable.md), plus dispatch and guardrails                 |
 
 Read each selected guide in full. Validation never grants publication approval.
 Keep one operator and watcher, preserve frozen inputs and receipts, and diagnose
