@@ -145,7 +145,7 @@ describe("resolveSystemRunExecArgv", () => {
       fs.copyFileSync(path.join(systemRoot, "System32", "where.exe"), shadowExecutable);
       const env = {
         ...process.env,
-        PATH: `${trustedBin}${path.delimiter}${process.env.PATH ?? ""}`,
+        PATH: `${workspace}${path.delimiter}${trustedBin}${path.delimiter}${process.env.PATH ?? ""}`,
         PATHEXT: process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD",
       };
       const shellCommand = "safe /d /s /c echo TRUSTED_EXECUTABLE";
