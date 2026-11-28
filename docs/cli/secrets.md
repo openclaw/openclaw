@@ -46,6 +46,8 @@ Related: [Secrets Management](/gateway/secrets) · [1Password plugin](/plugins/o
 
 `openclaw secrets store` routes writes through the Gateway that owns the local state directory. With the Gateway stopped, it takes exclusive offline ownership until the write and cleanup settle. If the running Gateway is older or cannot be reached, the command refuses without a local fallback; update or stop that Gateway before retrying. The store is Gateway-wide and team-scoped, and `--scope team` is the only accepted value. `--scope me` exits `2` with `Identity scope is not supported yet; use --scope team.`
 
+When a mutation runs locally and commits, a later expired-entry cleanup failure emits one warning on stderr. The command still reports the completed result and exits `0`; a failed mutation remains an error.
+
 Entries also arrive from **Settings -> Secrets** in the Control UI, and from the agent's [`secrets` tool](/tools/secrets). That tool asks you to type a credential into a masked prompt. It stores the credential without the value reaching the model.
 
 ```bash

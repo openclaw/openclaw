@@ -75,6 +75,48 @@ beforeEach(() => {
 });
 
 describe("secrets store CLI", () => {
+  it.each(["set", "rm", "import"] as const)(
+    "keeps committed mutations successful when %s retention cleanup fails",
+    async (operation) => {
+      mocks.purge.mockRejectedValue(new Error("synthetic cleanup unavailable"));
+      const input =
+        operation === "import" ? await inputFile("SERVICE_MODE=debug\nSERVICE_REGION=test\n") : "";
+      const args =
+        operation === "set"
+          ? ["set", "SERVICE_MODE", "--kind", "env", "--value", "debug"]
+          : operation === "rm"
+            ? ["rm", "SERVICE_MODE", "SERVICE_REGION", "--yes"]
+            : ["import", "--from", input, "--yes"];
+
+      await run(...args);
+
+      expect(mocks.runtimeLogs).toEqual([
+        operation === "set"
+          ? "Stored SERVICE_MODE (env)."
+          : operation === "rm"
+            ? "Removed 2 team store entries."
+            : "Imported 2 team store entries.",
+      ]);
+      expect(mocks.runtimeErrors).toHaveLength(1);
+      expect(mocks.runtimeErrors[0]).toContain("expired-entry cleanup failed");
+      expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains primary mutation failure when retention cleanup would also fail", async () => {
+    mocks.write.mockRejectedValue(new Error("synthetic write unavailable"));
+    mocks.purge.mockRejectedValue(new Error("synthetic cleanup unavailable"));
+
+    await expect(run("set", "SERVICE_MODE", "--kind", "env", "--value", "debug")).rejects.toThrow(
+      "__exit__:1",
+    );
+
+    expect(mocks.runtimeLogs).toEqual([]);
+    expect(mocks.runtimeErrors).toHaveLength(1);
+    expect(mocks.runtimeErrors[0]).toContain("synthetic write unavailable");
+    expect(mocks.purge).not.toHaveBeenCalled();
+  });
+
   it.each(["set", "import"])("preserves credentials on redacted %s", async (command) => {
     const file = await inputFile(
       command === "set"

@@ -3,7 +3,7 @@ import type { SecretsStoreMutationResult } from "../../packages/gateway-protocol
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isRedactedSecretValue } from "../config/redact-sentinel.js";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
-import { danger } from "../globals.js";
+import { danger, warn } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { Utf8InputError } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
@@ -92,13 +92,25 @@ function mapStoreError(error: unknown): SecretStoreCliFailure {
 }
 
 async function runStoreAction<T>(
-  action: () => Promise<T>,
+  action: (reportCleanupFailure: (error: unknown) => void) => Promise<T>,
   json?: boolean,
   renderHumanSuccess?: (result: T) => void,
 ): Promise<void> {
+  let cleanupWarningEmitted = false;
+  const reportCleanupFailure = (error: unknown) => {
+    if (cleanupWarningEmitted) {
+      return;
+    }
+    cleanupWarningEmitted = true;
+    defaultRuntime.error(
+      warn(
+        terminalText`Secret store changes were saved, but expired-entry cleanup failed: ${formatErrorMessage(error)}`,
+      ),
+    );
+  };
   const result = await runSecretsCommand(
     json,
-    action,
+    () => action(reportCleanupFailure),
     (error) => defaultRuntime.error(danger(terminalText`${formatErrorMessage(error)}`)),
     (error) => {
       const failure = mapStoreError(error);
@@ -118,6 +130,7 @@ async function mutateStore(
     env: NodeJS.ProcessEnv;
     assertCurrent: () => void;
   }) => Promise<{ kind?: StoreKind } | void>,
+  reportCleanupFailure: (error: unknown) => void,
 ): Promise<SecretsStoreMutationResult> {
   return await runWithLocalStateOwner({
     method,
@@ -128,7 +141,11 @@ async function mutateStore(
       const result = await runLocal(scope);
       const { purgeExpiredSecretStoreEntries } = await import("../secrets/store/secret-store.js");
       scope.assertCurrent();
-      await purgeExpiredSecretStoreEntries({ database: { env: scope.env } });
+      try {
+        await purgeExpiredSecretStoreEntries({ database: { env: scope.env } });
+      } catch (error) {
+        reportCleanupFailure(error);
+      }
       return { ok: true, reloaded: false, ...result };
     },
   });
@@ -215,7 +232,7 @@ export function registerSecretStoreCli(secrets: Command): void {
     .option("--scope <team>", "Store scope", "team")
     .option("--dry-run", "Validate without writing", false)
     .action((name: string, options: SetOptions) =>
-      runStoreAction(async () => {
+      runStoreAction(async (reportCleanupFailure) => {
         assertStoreName(name);
         const scope = teamScope(options.scope);
         const storeModule = await import("../secrets/store/secret-store.js");
@@ -275,6 +292,7 @@ export function registerSecretStoreCli(secrets: Command): void {
                 assertCurrent,
               });
             },
+            reportCleanupFailure,
           );
           defaultRuntime.log(
             allowedHosts.length > 0
@@ -326,6 +344,7 @@ export function registerSecretStoreCli(secrets: Command): void {
               assertCurrent,
             }),
           }),
+          reportCleanupFailure,
         );
         defaultRuntime.log(terminalText`Stored ${name} (${result.kind ?? kind}).`);
       }),
@@ -384,7 +403,7 @@ export function registerSecretStoreCli(secrets: Command): void {
     .option("--dry-run", "Show what would be removed", false)
     .option("--yes", "Skip confirmation", false)
     .action((names: string[], options: RemoveOptions) =>
-      runStoreAction(async () => {
+      runStoreAction(async (reportCleanupFailure) => {
         const scope = teamScope(options.scope);
         for (const name of names) {
           assertStoreName(name);
@@ -408,6 +427,7 @@ export function registerSecretStoreCli(secrets: Command): void {
             async ({ env, assertCurrent }) => {
               await deleteSecretStoreEntry({ scope, name, database: { env }, assertCurrent });
             },
+            reportCleanupFailure,
           );
         }
         defaultRuntime.log(
@@ -425,7 +445,7 @@ export function registerSecretStoreCli(secrets: Command): void {
     .option("--dry-run", "Validate without writing", false)
     .option("--yes", "Skip confirmation", false)
     .action((options: ImportOptions) =>
-      runStoreAction(async () => {
+      runStoreAction(async (reportCleanupFailure) => {
         const scope = teamScope(options.scope);
         if (!options.from && process.stdin.isTTY) {
           throw new SecretStoreCliFailure(2, "Import requires --from <file> or piped stdin.");
@@ -489,6 +509,7 @@ export function registerSecretStoreCli(secrets: Command): void {
               assertCurrent,
             });
           },
+          reportCleanupFailure,
         );
         defaultRuntime.log(`Imported ${writable.length} team store entries.`);
       }),
