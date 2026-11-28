@@ -262,5 +262,4 @@ it("prepares aliases once and rebuilds them when a snapshot remaps its skills", 
       ctx: { skillsSnapshot: remapped },
     }),
   ).toEqual({ skillName: "guide", skillSource: "workspace", activation: "read" });
-  expect(JSON.stringify(snapshot)).toBe(JSON.stringify({ ...snapshot }));
 });

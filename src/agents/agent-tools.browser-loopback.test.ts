@@ -36,7 +36,7 @@ describe("assembled browser loopback authority", () => {
   });
   const policyCase = (
     name: string,
-    options: Options = {},
+    options: Options,
     allowed = false,
     approvals?: execApprovals.ExecApprovalsFile,
   ) => ({ name, options, allowed, approvals });
