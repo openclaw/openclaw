@@ -13,6 +13,7 @@ import {
   SANDBOX_CONTAINERS_DIR,
   SANDBOX_REGISTRY_PATH,
 } from "../agents/sandbox/constants.js";
+import type { SandboxContainerEngine } from "../agents/sandbox/container-engine.js";
 import {
   DOCKER_SANDBOX_ENGINE,
   isDockerDaemonUnavailable,
@@ -177,7 +178,7 @@ type EnabledSandboxBackend = {
   /** Resolved mode; "off" only where a gateway role requires a sandbox anyway. */
   mode: SandboxConfig["mode"];
   backend: string;
-  containerEngine: typeof DOCKER_SANDBOX_ENGINE | typeof PODMAN_SANDBOX_ENGINE | undefined;
+  containerEngine: SandboxContainerEngine | undefined;
   /** The agent this sandbox belongs to; undefined for the defaults. */
   agentId?: string;
 };
