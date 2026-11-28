@@ -3,11 +3,13 @@ summary: "Connect Levanto Sage for native typed decisions"
 read_when:
   - You want to use Sage as a decision model
   - You need Sage's supported operations and billing limitations
+  - You want Levanto's LLMs as a chat model
 title: "Levanto Sage"
 ---
 
 The optional Levanto plugin connects Sage to OpenClaw's [decision model](/concepts/decision-models)
-role. It does not provide chat completions.
+role. It does not provide chat completions; for Levanto's LLMs, see
+[LLMs as a chat model](#llms-as-a-chat-model).
 
 It needs OpenClaw `2026.11.5` or later. Each plugin release requires a host with
 at least its own plugin API version, so install the plugin version that matches
@@ -114,6 +116,40 @@ openclaw mcp set levanto '{"command":"npx","args":["-y","levanto@latest","mcp"],
 isn't stored in config. The server needs Node.js 18 or later. Run
 `openclaw mcp probe levanto` to check that it lists its tools. These calls are
 agent tool calls billed by Levanto; they don't use the decision model role.
+
+## LLMs as a chat model
+
+Levanto's LLM API is OpenAI-compatible, so it works as a
+[custom provider](/concepts/model-providers/custom-providers) without the plugin:
+
+```json5
+{
+  models: {
+    providers: {
+      "levanto-llm": {
+        baseUrl: "https://api.levanto.ai/v1",
+        apiKey: "${LEVANTO_API_KEY}",
+        api: "openai-completions",
+        models: [
+          { id: "auto", name: "Auto", contextWindow: 1048576, maxTokens: 65536 },
+          {
+            id: "deepseek/deepseek-v4-flash",
+            name: "DeepSeek V4 Flash",
+            contextWindow: 1048576,
+            maxTokens: 65536,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+Then select it with `openclaw models set levanto-llm/auto`. `auto` lets Levanto
+pick a model for each request; the reply's `model` names the model that answered.
+Replies report the billed amount in `usage.cost`, so usage shows the provider-billed
+cost even though these model entries carry no prices. `GET https://api.levanto.ai/v1/models`
+lists the other model IDs.
 
 See the vendor [decision documentation](https://docs.levanto.ai/llms.txt),
 [pricing](https://docs.levanto.ai/pricing.md) and [OpenAPI](https://sage.levanto.ai/openapi.json).
