@@ -265,6 +265,14 @@ it.each([
   expect(await withNativeLogin(login, () => resolveAuth())).toEqual({ handled: true });
 });
 
+it.each(["not-installed", "missing", "timeout"])(
+  "reports no native usage when the Claude CLI probe is %s",
+  async (status) => {
+    probeClaudeCliAuthStatus.mockResolvedValue({ status });
+    expect(await resolveAuth()).toEqual({ handled: true });
+  },
+);
+
 it("skips native usage when Claude authenticates with something other than claude.ai", async () => {
   const auth = await withNativeLogin(nativeLogin, () => resolveAuth(), { authMethod: "api_key" });
   expect(auth).toEqual({ handled: true });
