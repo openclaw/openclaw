@@ -135,6 +135,11 @@ export function createRequesterYieldCallback(params: {
             "Background exec is still running or has an uncollected result in this subagent session, and its exit cannot resume this run. Use process to poll and collect it before yielding.",
         };
       }
+      if (claim === "task-children-pending") {
+        // Re-pause the adopted task turn: a later child partition's settle adopts
+        // it again, and only the final partition's turn announces the completion.
+        return true;
+      }
       if (claim !== "nothing-pending") {
         return claim;
       }

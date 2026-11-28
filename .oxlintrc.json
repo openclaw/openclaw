@@ -526,6 +526,13 @@
       }
     },
     {
+      "files": ["src/agents/subagents/registry/subagent-registry.requester-wake.e2e.test.ts"],
+      "rules": {
+        // #207095: nested-partition regressions share the existing requester-wake gateway fixtures.
+        "max-lines": ["error", { "max": 1079, "skipBlankLines": true, "skipComments": true }]
+      }
+    },
+    {
       "files": ["extensions/copilot/src/event-bridge.ts"],
       "rules": {
         "max-lines": ["error", { "max": 950, "skipBlankLines": true, "skipComments": true }]

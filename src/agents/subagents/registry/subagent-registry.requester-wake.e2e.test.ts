@@ -14,9 +14,11 @@ import {
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import type { deliverAgentCommandResult } from "../../command/delivery.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent-runner/types.js";
-import "../spawn/subagent-spawn-model.mocks.shared.js";
+import { createRequesterYieldCallback } from "../../openclaw-tools.requester-yield.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
+import "../spawn/subagent-spawn-model.mocks.shared.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
+import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { testing as subagentAnnounceDeliveryTesting } from "../announce/subagent-announce-delivery.test-support.js";
 import {
   announceTesting as subagentAnnounceTesting,
@@ -26,6 +28,7 @@ import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-
 import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import { registerRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { buildScopedSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
@@ -924,6 +927,215 @@ describe("requester settle wake product flow", () => {
     for (const child of wave) {
       expect(registry.getSubagentRunByRunId(child.runId)?.requesterSettleWake).toBeUndefined();
     }
+  });
+
+  // A task-owned nested requester that re-yields while an earlier partition's
+  // wake-armed children are still pending must re-pause, not finalize an interim
+  // turn as the task's final completion (#207095).
+  describe("nested requester yield partition (#207095)", () => {
+    const NESTED_SESSION_KEY = "agent:main:subagent:nested-task";
+
+    async function armGrandchildWake(runId: string, paused: boolean) {
+      await mutateSubagentRuns(
+        [runId],
+        (rows) => {
+          const next = structuredClone(rows.get(runId)!);
+          next.requesterSettleWake = {
+            status: "pending",
+            attemptCount: 0,
+            batchRunIds: [runId],
+            requesterYieldBatch: true,
+            rearmGeneration: 1,
+          };
+          if (paused) {
+            next.execution = { status: "terminal", endedAt: Date.now() };
+            next.pauseReason = "sessions_yield";
+          }
+          return { value: undefined, postimages: new Map([[runId, next]]) };
+        },
+        { runs: subagentRuns },
+      );
+    }
+
+    it.each([
+      {
+        scenario: "a wake-armed pending grandchild",
+        silent: false,
+        grandchildState: "armed",
+        expected: "task-children-pending",
+      },
+      {
+        scenario: "a silent task row",
+        silent: true,
+        grandchildState: "armed",
+        expected: "nothing-pending",
+      },
+      {
+        scenario: "a paused grandchild",
+        silent: false,
+        grandchildState: "paused",
+        expected: "nothing-pending",
+      },
+      {
+        scenario: "an unarmed grandchild",
+        silent: false,
+        grandchildState: "unarmed",
+        expected: "nothing-pending",
+      },
+      {
+        scenario: "no grandchild",
+        silent: false,
+        grandchildState: "none",
+        expected: "nothing-pending",
+      },
+    ] as const)("claims $scenario as $expected", async ({ silent, grandchildState, expected }) => {
+      const context = createGatewayContext();
+      await registry.initSubagentRegistry();
+      await registry.activateSubagentRegistry(() => context);
+      const nestedSessionEntry = await prepareChildSession(NESTED_SESSION_KEY, "sess-nested-task");
+      const nested = visibleChild("nested-task");
+      await registry.registerSubagentRun(
+        createSubagentRunParams({
+          ...nested,
+          sessionEntry: nestedSessionEntry,
+          requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
+          requesterDisplayKey: "main",
+          expectsCompletionMessage: !silent,
+        }),
+      );
+      if (grandchildState !== "none") {
+        const grandchild = visibleChild("grandchild");
+        await registry.registerSubagentRun(
+          createSubagentRunParams({
+            ...grandchild,
+            sessionEntry: await prepareChildSession(
+              grandchild.childSessionKey,
+              `sess-${grandchild.runId}`,
+            ),
+            requesterSessionKey: NESTED_SESSION_KEY,
+            requesterDisplayKey: "main",
+            requesterTurnRunId: undefined,
+            expectsCompletionMessage: true,
+          }),
+        );
+        if (grandchildState !== "unarmed") {
+          await armGrandchildWake(grandchild.runId, grandchildState === "paused");
+        }
+      }
+
+      const claim = await registry.claimSubagentYield({
+        runId: nested.runId,
+        sessionKey: NESTED_SESSION_KEY,
+        agentId: "main",
+        waitForMessage: false,
+        hasPendingWork: () => false,
+      });
+
+      expect(claim).toBe(expected);
+    });
+
+    it("re-pauses an adopted nested turn so the last partition delivers the final answer", async () => {
+      const context = createGatewayContext();
+      await registry.initSubagentRegistry();
+      await registry.activateSubagentRegistry(() => context);
+
+      // The outer requester yields for its nested child B, arming B's completion wake.
+      const nested = visibleChild("nested-b");
+      await spawnVisibleChild({ ...nested, requesterTurnRunId: "requester-a-turn" });
+      await createRequesterYieldTool(MAIN_REQUESTER_SESSION_KEY, "requester-a-turn").execute(
+        "outer-yield",
+        {},
+      );
+      await settleTurn("requester-a-turn", [nested], true);
+
+      // B's own turn spawns two grandchildren and yields for them.
+      const nestedFixture = createRequesterWakeSessionFixture({
+        requesterSessionKey: nested.childSessionKey,
+        getSessionStore: () => sessionStore,
+        getSessionStorePath: () => sessionStorePath,
+      });
+      const first = visibleChild("c1");
+      await nestedFixture.spawnVisibleChild({ ...first, requesterTurnRunId: nested.runId });
+      const second = visibleChild("c2");
+      await nestedFixture.spawnVisibleChild({ ...second, requesterTurnRunId: nested.runId });
+      const nestedYield = createRequesterYieldCallback({
+        requesterSessionKey: nested.childSessionKey,
+        requesterAgentId: "main",
+        requesterTurnRunId: nested.runId,
+      });
+      const firstYieldResult = await createSessionsYieldTool({
+        sessionId: `sess-${nested.runId}`,
+        claimYield: nestedYield,
+        onYield: () => {},
+      }).execute("nested-first-yield", {});
+      expect(firstYieldResult?.details).toMatchObject({ status: "yielded" });
+      lifecycleHandler?.({
+        stream: "lifecycle",
+        runId: nested.runId,
+        sessionKey: nested.childSessionKey,
+        data: { phase: "end", startedAt: Date.now(), endedAt: Date.now(), yielded: true },
+      });
+      await nestedFixture.settleTurn(nested.runId, [first, second], true);
+      await flushAsync();
+
+      // The first partition settles and wakes B while the second is still running.
+      emitCompleted(first.runId, first.childSessionKey, "first partition result");
+      await flushOwnedWork();
+      const partialWake = getRequesterWakeCalls().find((call) =>
+        call.params.idempotencyKey?.includes(`:${nested.childSessionKey}:`),
+      );
+      expect(partialWake?.params.message).toContain(`still working: ${second.runId}`);
+
+      // B's adopted turn re-yields while the second partition is still pending.
+      const adoptedRunId = "run-nested-b-adopted";
+      expect(
+        await registry.adoptPausedSubagentRunForFollowUp({
+          childSessionKey: nested.childSessionKey,
+          runId: adoptedRunId,
+          task: "First partition settled; second still running",
+        }),
+      ).toBe(true);
+      const reYield = createRequesterYieldCallback({
+        requesterSessionKey: nested.childSessionKey,
+        requesterAgentId: "main",
+        requesterTurnRunId: adoptedRunId,
+      });
+      const reYieldResult = await createSessionsYieldTool({
+        sessionId: `sess-${nested.runId}`,
+        claimYield: reYield,
+        onYield: () => {},
+      }).execute("nested-re-yield", {});
+      expect(reYieldResult?.details).toMatchObject({ status: "yielded" });
+      lifecycleHandler?.({
+        stream: "lifecycle",
+        runId: adoptedRunId,
+        sessionKey: nested.childSessionKey,
+        data: { phase: "end", startedAt: Date.now(), endedAt: Date.now(), yielded: true },
+      });
+      await flushOwnedWork();
+      expect(subagentRuns.get(adoptedRunId)?.pauseReason).toBe("sessions_yield");
+
+      // The last partition settles; its wake adopts the same task lineage again.
+      emitCompleted(second.runId, second.childSessionKey, "second partition result");
+      await flushOwnedWork();
+      const finalRunId = "run-nested-b-final";
+      expect(
+        await registry.adoptPausedSubagentRunForFollowUp({
+          childSessionKey: nested.childSessionKey,
+          runId: finalRunId,
+          task: "Both partitions settled",
+        }),
+      ).toBe(true);
+      emitCompleted(finalRunId, nested.childSessionKey, "final answer");
+      await flushOwnedWork();
+
+      expect(subagentRuns.get(finalRunId)?.execution.status).toBe("terminal");
+      const outerWakes = getRequesterWakeCalls().filter((call) =>
+        call.params.idempotencyKey?.includes(`:${MAIN_REQUESTER_SESSION_KEY}:`),
+      );
+      expect(outerWakes).toHaveLength(1);
+      expect(outerWakes[0]?.params.message).toContain("final answer");
+    });
   });
 
   registerRequesterWakeSettlementBoundaryTests({
