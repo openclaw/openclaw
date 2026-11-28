@@ -9,8 +9,6 @@ import ai.openclaw.app.ui.FoldAwarePrompt
 import ai.openclaw.app.ui.design.ClawTheme
 import android.Manifest
 import android.content.pm.PackageManager
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Mic
@@ -22,12 +20,14 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.launch
 
 internal enum class ChatRealtimeTalkLaunch {
   RequestPermission,
@@ -93,15 +93,17 @@ internal fun rememberChatRealtimeTalkLauncher(viewModel: MainViewModel): () -> U
       },
     )
   }
-  val requestMicPermission =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-      if (!granted) return@rememberLauncherForActivityResult
+  val scope = rememberCoroutineScope()
+  val requestMicPermission = {
+    scope.launch {
+      if (!viewModel.requestRecordAudioPermission()) return@launch
       if (currentTalkSetup.requiresSetup) {
         showSetupMessage()
       } else {
         viewModel.setTalkModeEnabled(true)
       }
     }
+  }
 
   return {
     when (
@@ -110,7 +112,7 @@ internal fun rememberChatRealtimeTalkLauncher(viewModel: MainViewModel): () -> U
         requiresSetup = talkSetupReadiness.launch.requiresSetup,
       )
     ) {
-      ChatRealtimeTalkLaunch.RequestPermission -> requestMicPermission.launch(Manifest.permission.RECORD_AUDIO)
+      ChatRealtimeTalkLaunch.RequestPermission -> requestMicPermission()
       ChatRealtimeTalkLaunch.ShowSetupMessage -> showSetupMessage()
       ChatRealtimeTalkLaunch.StartTalk -> viewModel.setTalkModeEnabled(true)
     }
