@@ -192,8 +192,7 @@ export async function hydrateChatHistory(
     // The snapshot covers activity emitted before the foreground observer was
     // admitted; subsequent activity arrives through its acknowledged full stream.
     const cursor = readChatHistoryCursor(state);
-    const compactReceipt =
-      state.settings?.compactSessionOpening === true && matchesOpeningReceipt(true);
+    const compactReceipt = matchesOpeningReceipt(true);
     const compactOpening = shouldRequestCompactOpening(state, compactReceipt);
     let compactPageRequested = compactOpening && (cursor === undefined || compactReceipt);
     let response = await request(cursor, compactOpening);
@@ -355,9 +354,10 @@ export async function hydrateChatHistory(
       };
     }
     const res = response;
-    if (compactPageRequested && !requests.acceptedHistory && previousMessages.length === 0) {
-      requests.compactOpeningSessionKey = sessionKey;
-    }
+    requests.compactOpeningSessionKey =
+      compactPageRequested && !requests.acceptedHistory && previousMessages.length === 0
+        ? sessionKey
+        : undefined;
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const nextPagination = resolveChatHistoryPagination(res);
     const nextSessionId = historySessionId(res);

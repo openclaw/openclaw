@@ -26,7 +26,6 @@ import type { CompactionAccountingFact } from "./run/internal-params.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let state: OpenClawTestState;
-let InitialAdmissionError: typeof import("../prepared-model-runtime.errors.js").PreparedModelRuntimeInitialRunAdmissionError;
 let OwnerNotPublishedError: typeof import("../prepared-model-runtime.errors.js").PreparedModelRuntimeOwnerNotPublishedError;
 let runAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 let registerHarness: typeof import("../harness/registry.js").registerAgentHarness;
@@ -126,10 +125,8 @@ function settledWrite(): EmbeddedRunAttemptResult["messagesSnapshot"] {
 
 beforeAll(async () => {
   runAgent = await loadSharedRunIntegrationHarness();
-  ({
-    PreparedModelRuntimeInitialRunAdmissionError: InitialAdmissionError,
-    PreparedModelRuntimeOwnerNotPublishedError: OwnerNotPublishedError,
-  } = await import("../prepared-model-runtime.errors.js"));
+  ({ PreparedModelRuntimeOwnerNotPublishedError: OwnerNotPublishedError } =
+    await import("../prepared-model-runtime.errors.js"));
   ({ registerAgentHarness: registerHarness } = await import("../harness/registry.js"));
 });
 
@@ -144,7 +141,7 @@ afterEach(async () => {
 });
 
 it.each([false, true])(
-  "wraps only initial admission refusals (committed: %s)",
+  "rethrows a runtime admission refusal unchanged (committed: %s)",
   async (committed) => {
     const refusal = new OwnerNotPublishedError("Model runtime replacement is in progress", {
       admissionBlocked: true,
@@ -157,14 +154,7 @@ it.each([false, true])(
     }
     acquire.mockRejectedValueOnce(refusal);
     const onAttemptStart = vi.fn();
-    const pending = run({ onAttemptStart });
-    if (committed) {
-      await expect(pending).rejects.toBe(refusal);
-    } else {
-      const error = await pending.catch((caught: unknown) => caught);
-      expect(error).toBeInstanceOf(InitialAdmissionError);
-      expect(error).toMatchObject({ admissionBlocked: true, cause: refusal });
-    }
+    await expect(run({ onAttemptStart })).rejects.toBe(refusal);
     expect(acquire).toHaveBeenCalledTimes(committed ? 2 : 1);
     expectCalls(committed ? 1 : 0, onAttemptStart, attempt);
   },
@@ -207,10 +197,7 @@ it("publishes the persisted writer before initial model admission can fail", asy
     });
     throw refusal;
   });
-  await expect(run({ ...params, onCompactionAccounting: observe })).rejects.toMatchObject({
-    admissionBlocked: true,
-    cause: refusal,
-  });
+  await expect(run({ ...params, onCompactionAccounting: observe })).rejects.toBe(refusal);
   expect(acquire).toHaveBeenCalledOnce();
   expect(attempt).not.toHaveBeenCalled();
 });
