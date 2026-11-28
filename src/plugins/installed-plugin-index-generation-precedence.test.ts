@@ -167,6 +167,7 @@ describe("managed npm generation-dir loader precedence", () => {
       reason: "test-retired-generation",
     });
 
+    orderInstalls(recoveredPackageDir, retiredPackageDir);
     await expectRecovered(stateDir, recoveredPackageDir);
   });
 });
