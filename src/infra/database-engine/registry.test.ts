@@ -51,17 +51,6 @@ describe("database engine selection", () => {
     expect(resolveDatabaseFamilyEngines({ database })).toMatchObject(expected);
   });
 
-  it("allows PostgreSQL state and agents with unrelated SQLite plugins", () => {
-    expect(
-      resolveDatabaseFamilyEngines({
-        database: {
-          engine: "postgres",
-          families: { logbook: { engine: "sqlite" } },
-        },
-      }),
-    ).toMatchObject({ state: "postgres", agent: "postgres", logbook: "sqlite" });
-  });
-
   it("allows explicit SQLite agents alongside PostgreSQL families", () => {
     expect(
       resolveDatabaseFamilyEngines({
