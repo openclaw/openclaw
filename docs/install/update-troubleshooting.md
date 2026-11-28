@@ -158,8 +158,10 @@ native output are excluded.
 
 ## Confirming the Gateway actually stopped
 
-Checking whether the Gateway has stopped by process name is unreliable: a
-pattern match can miss the real process or match unrelated ones. Check the
+On macOS, checking whether the Gateway has stopped by process name is
+unreliable: `pgrep -f` truncates long argument vectors (false negatives) and
+can also match unrelated processes (false positives). This was observed on
+macOS arm64 hosts; behaviour on other platforms was not tested. Check the
 port owner instead:
 
 ```bash
