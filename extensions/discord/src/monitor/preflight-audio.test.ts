@@ -20,13 +20,20 @@ vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal
 import { resolveDiscordPreflightAudioMentionContext } from "./preflight-audio.js";
 
 const cfg = {} as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
+const scopeFacts = {
+  Provider: "discord",
+  Surface: "discord",
+  ChatType: "direct",
+  SessionKey: "agent:main:discord:direct:1",
+};
 
 function preflight(
   message: Parameters<typeof resolveDiscordPreflightAudioMentionContext>[0]["message"],
 ) {
   return resolveDiscordPreflightAudioMentionContext({
     message,
-    isDirectMessage: true,
+    chatType: "direct",
+    sessionKey: scopeFacts.SessionKey,
     shouldRequireMention: false,
     mentionRegexes: [],
     cfg,
@@ -43,7 +50,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     transcribeFirstAudioMock.mockResolvedValue("hello from dm");
     const result = await preflight({ attachments: [{ url, filename: "voice.opus" }] });
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
-      ctx: { media: [{ url, contentType: "audio/opus" }] },
+      ctx: { media: [{ url, contentType: "audio/opus" }], ...scopeFacts },
       cfg,
       agentDir: undefined,
     });
@@ -95,7 +102,7 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     });
 
     expect(transcribeFirstAudioMock).toHaveBeenCalledWith({
-      ctx: { media: [{ url, contentType: "audio/ogg" }] },
+      ctx: { media: [{ url, contentType: "audio/ogg" }], ...scopeFacts },
       cfg,
       agentDir: undefined,
     });

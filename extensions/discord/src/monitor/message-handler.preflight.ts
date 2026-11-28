@@ -446,8 +446,7 @@ export async function preflightDiscordMessage(
     channelConfig,
     guildInfo,
   });
-  const shouldRequireMentionByConfig = mentionPolicy.requireMention;
-  const shouldRequireMention = shouldRequireMentionByConfig && !isBoundThreadSession;
+  const shouldRequireMention = mentionPolicy.requireMention && !isBoundThreadSession;
 
   // Only authorized guild senders should reach the expensive transcription path.
   const { resolveDiscordPreflightAudioMentionContext } = await loadPreflightAudioRuntime();
@@ -457,7 +456,8 @@ export async function preflightDiscordMessage(
   const { hasTypedText, transcript: preflightTranscript } =
     await resolveDiscordPreflightAudioMentionContext({
       message,
-      isDirectMessage,
+      chatType: isGroupDm ? "group" : isDirectMessage ? "direct" : "channel",
+      sessionKey: boundSessionKey || effectiveRoute.sessionKey,
       shouldRequireMention: shouldRequireMention || requiresActiveBotMention,
       mentionRegexes,
       cfg: params.cfg,
@@ -739,7 +739,7 @@ export async function preflightDiscordMessage(
     baseSessionKey,
     channelConfig,
     shouldRequireMention,
-    groupRequireMention: shouldRequireMentionByConfig,
+    groupRequireMention: mentionPolicy.requireMention,
     hasAnyMention,
     hasControlCommand: hasControlCommandInMessage,
     shouldBypassMention: mentionDecision.shouldBypassMention,

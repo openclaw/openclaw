@@ -12,7 +12,7 @@ export function hasWhatsAppAudioBody(msg: AdmittedWebInboundMessage): boolean {
 export async function transcribeWhatsAppAudioMessage(
   cfg: OpenClawConfig,
   msg: AdmittedWebInboundMessage,
-  accountId: string | undefined,
+  route: { accountId?: string; sessionKey: string },
 ): Promise<string | undefined> {
   const { transcribeFirstAudio } = await import("./audio-preflight.runtime.js");
   const media = msg.payload.media;
@@ -26,7 +26,9 @@ export async function transcribeWhatsAppAudioMessage(
       Surface: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: conversationId,
-      AccountId: accountId,
+      AccountId: route.accountId,
+      ChatType: msg.admission.conversation.kind,
+      SessionKey: route.sessionKey,
     },
     cfg,
   });

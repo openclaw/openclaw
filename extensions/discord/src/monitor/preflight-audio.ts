@@ -58,7 +58,8 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
     attachments?: DiscordAudioAttachment[];
     content?: string;
   };
-  isDirectMessage: boolean;
+  chatType: "direct" | "group" | "channel";
+  sessionKey: string;
   shouldRequireMention: boolean;
   mentionRegexes: RegExp[];
   cfg: OpenClawConfig;
@@ -73,7 +74,8 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
     hasAudioAttachment &&
     // Caption text suppresses preflight; media-only messages remain eligible.
     !hasTypedText &&
-    (params.isDirectMessage || (params.shouldRequireMention && params.mentionRegexes.length > 0));
+    (params.chatType === "direct" ||
+      (params.shouldRequireMention && params.mentionRegexes.length > 0));
 
   let transcript: string | undefined;
   if (needsPreflightTranscription) {
@@ -89,7 +91,13 @@ export async function resolveDiscordPreflightAudioMentionContext(params: {
     if (media.length > 0) {
       transcript = await discordPreflightAudio.resolve({
         request: {
-          ctx: { media },
+          ctx: {
+            media,
+            Provider: "discord",
+            Surface: "discord",
+            ChatType: params.chatType,
+            SessionKey: params.sessionKey,
+          },
           cfg: params.cfg,
           agentDir: undefined,
         },

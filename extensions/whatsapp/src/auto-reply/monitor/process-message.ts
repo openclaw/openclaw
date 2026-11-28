@@ -148,11 +148,7 @@ export async function processMessage(params: {
     params.msg.payload.media?.path
   ) {
     try {
-      audioTranscript = await transcribeWhatsAppAudioMessage(
-        params.cfg,
-        params.msg,
-        params.route.accountId,
-      );
+      audioTranscript = await transcribeWhatsAppAudioMessage(params.cfg, params.msg, params.route);
     } catch {
       // Transcription failure is non-fatal: keep the empty caption and structured audio fact.
       if (shouldLogVerbose()) {
