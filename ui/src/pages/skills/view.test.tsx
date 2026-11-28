@@ -227,12 +227,15 @@ describe("renderSkills", () => {
   it("preserves Unicode matches, raw detail targets and retained groups", async () => {
     const { container, render } = createView();
     const report = skillReport([
+      createSkill({ skillKey: "inst", name: "Installed Skill", source: "openclaw-managed" }),
       createSkill({ skillKey: "ws", name: "Workspace Skill", source: "openclaw-workspace" }),
       createSkill({ skillKey: "Cafe\u0301-key", name: "Cafe\u0301", bundled: true }),
-      createSkill({ skillKey: "inst", name: "Installed Skill", source: "openclaw-managed" }),
     ]);
     const onDetailOpen = vi.fn();
     render({ report, onDetailOpen });
+    expect(
+      [...container.querySelectorAll(".skill-inventory-row__name")].map((el) => el.textContent),
+    ).toEqual(["Workspace Skill"]);
     await waitForFast(() =>
       expect(container.querySelector('.skills-group[aria-busy="true"]')).toBeNull(),
     );
