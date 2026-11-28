@@ -141,6 +141,7 @@ struct OpenClawChatComposer: View {
     /// UIKit owns first responder; its bridge needs stored state, not an unbound SwiftUI FocusState.
     @State var isFocused = false
     @Environment(\.isEnabled) var interactionEnabled
+    @Environment(\.openClawChatComposerPanels) var composerPanels
     @State var showsPermissionsSheet = false
     /// Text or an attachment tile keeps the composer open when the keyboard goes down; only an empty
     /// composer closes to one row.
@@ -211,18 +212,23 @@ struct OpenClawChatComposer: View {
                 .foregroundStyle(.secondary)
             }
         }
+        #if os(macOS)
         .sheet(isPresented: Binding(
-            get: { self.signInContext != nil },
-            set: { if !$0 { self.signInContext = nil } }))
-        {
-            if let context = self.signInContext {
-                OpenClawChatModelSignInSheet(context: context) { await self.viewModel.refreshModelSignIn() }
+                get: { self.signInContext != nil },
+                set: {
+                    if !$0 {
+                        self.signInContext = nil
+                    }
+                })) {
+                    if let context = self.signInContext {
+                        OpenClawChatModelSignInSheet(context: context) { await self.viewModel.refreshModelSignIn() }
+                    }
             }
-        }
+        #endif
         #if os(iOS)
         // Presented from here, not from the shield: the shield leaves the hierarchy while capabilities reload.
-        .chatComposerPermissionsSheet(isPresented: self.$showsPermissionsSheet, viewModel: self.viewModel)
-            .modifier(ChatNewDraftFocus(composer: self))
+            .chatComposerPermissionsSheet(isPresented: self.$showsPermissionsSheet, viewModel: self.viewModel)
+        .modifier(ChatNewDraftFocus(composer: self))
         #endif
         .onChange(of: self.presentationOwner) { _, _ in
             self.invalidateModelSignIn()
@@ -236,21 +242,6 @@ struct OpenClawChatComposer: View {
         #else
         false
         #endif
-    }
-
-    var modelSignInButton: some View {
-        Button {
-            self.performModelSignInAction(.open)
-        } label: {
-            HStack(spacing: 6) {
-                if self.modelSignInAction == .open {
-                    ProgressView().controlSize(.small)
-                }
-                Text("Model sign-in").font(OpenClawChatTypography.caption)
-            }
-        }
-        .disabled(self.modelSignInAction != nil)
-        .accessibilityIdentifier("chat-model-sign-in")
     }
 
     func performModelSignInAction(_ action: ModelSignInAction) {
@@ -283,7 +274,7 @@ struct OpenClawChatComposer: View {
         }
     }
 
-    private var modelSignInAction: ModelSignInAction? {
+    var modelSignInAction: ModelSignInAction? {
         self.modelSignInRequest?.action
     }
 
@@ -1389,47 +1380,6 @@ extension OpenClawChatComposer {
 
     private var editorOverlayAlignment: Alignment {
         self.composerChrome == .clean ? .leading : .topLeading
-    }
-
-    var stopButtonFill: Color {
-        #if os(iOS)
-        OpenClawChatTheme.accent
-        #else
-        OpenClawChatTheme.danger
-        #endif
-    }
-
-    var sendButtonFill: Color {
-        #if os(iOS)
-        OpenClawChatTheme.accent
-        #else
-        self.userAccent ?? OpenClawChatTheme.userBubble
-        #endif
-    }
-
-    var disabledSendButtonFill: Color {
-        #if os(iOS)
-        let cleanFill = self.sendButtonFill.opacity(0.4)
-        #else
-        let cleanFill = Color.clear
-        #endif
-        return self.composerChrome == .clean ? cleanFill : Color.secondary.opacity(0.32)
-    }
-
-    var sendButtonForeground: Color {
-        #if os(iOS)
-        return self.canSendMessage || self.composerChrome == .full ? .white : .white.opacity(0.7)
-        #else
-        let disabledInk: Color = self.composerChrome == .full ? .white : .secondary.opacity(0.55)
-        return self.canSendMessage ? OpenClawChatTheme.userText(on: self.userAccent) : disabledInk
-        #endif
-    }
-
-    var sendButtonBorderOpacity: Double {
-        if self.composerChrome == .clean, !self.canSendMessage {
-            return 0
-        }
-        return self.canSendMessage ? 0.18 : 0.08
     }
 
     var canSendMessage: Bool {
