@@ -59,6 +59,16 @@ function loadResolveSecureTempRoot(): ResolveSecureTempRoot {
   return resolveSecureTempRootRuntime;
 }
 
+function isAndroidAppPrivateTempRoot(root: string): boolean {
+  const normalized = path.posix.normalize(root.split(path.sep).join("/"));
+  return (
+    normalized === "/data/user" ||
+    normalized.startsWith("/data/user/") ||
+    normalized === "/data/data" ||
+    normalized.startsWith("/data/data/")
+  );
+}
+
 function assertSafeTempAncestors(
   root: string,
   options: ResolvePreferredOpenClawTmpDirOptions,
@@ -75,6 +85,12 @@ function assertSafeTempAncestors(
     options.lstatSync && options.lstatSync !== fs.lstatSync
       ? path.resolve(root)
       : fs.realpathSync.native(root);
+  // glibc Node on Android reports linux, so the platform skip above does not run.
+  // App-private trees under /data/user and /data/data have system-owned ancestors
+  // that are group-writable and cannot be chmod'd by the app.
+  if (isAndroidAppPrivateTempRoot(canonicalRoot)) {
+    return;
+  }
   for (let directory = path.dirname(canonicalRoot); ; directory = path.dirname(directory)) {
     const stat = lstat(directory);
     const trustedAncestor =

@@ -97,6 +97,39 @@ it("leaves Android ancestor group admission with fs-safe", () => {
     }),
   ).toBe(DEFAULT_POSIX_TMP_ROOT);
 });
+
+function resolveVirtualTempRoot(preferredDir: string, platform: NodeJS.Platform) {
+  return resolvePreferredOpenClawTmpDir({
+    accessSync: vi.fn(),
+    chmodSync: vi.fn(),
+    getuid: () => 501,
+    lstatSync: (directory) =>
+      makeDirStat({
+        uid: directory === preferredDir ? 501 : 0,
+        mode: directory === preferredDir ? 0o40700 : 0o40775,
+      }),
+    mkdirSync: vi.fn(),
+    platform,
+    preferredDir,
+    tmpdir: () => "/var/fallback",
+    warn: vi.fn(),
+  });
+}
+
+it("accepts an Android app-data temp root when Node reports linux", () => {
+  for (const preferredDir of [
+    "/data/user/0/com.openclaw.android/files/tmp/openclaw",
+    "/data/data/com.termux/files/usr/tmp/openclaw",
+  ]) {
+    expect(resolveVirtualTempRoot(preferredDir, "linux")).toBe(preferredDir);
+  }
+});
+
+it("keeps the ancestor check for an ordinary linux temp root", () => {
+  expect(() => resolveVirtualTempRoot("/var/openclaw-app/tmp/openclaw", "linux")).toThrow(
+    "group/world writable",
+  );
+});
 describe.skipIf(process.platform === "win32")("POSIX temp directory admission and repair", () => {
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
     afterEach(() => {
