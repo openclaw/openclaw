@@ -361,17 +361,15 @@ run_update_smoke() {
 }
 
 
-# Published 9.4 continues in its old process after a successful package swap.
-# Accept only the observed 9.4 -> 9.5 warning, after JSON and fresh CLI checks;
-# another executable on PATH or a fresh process warning is still real skew.
+# Only accept observed warnings from an old updater after JSON and fresh CLI
+# checks. Another executable on PATH or a fresh process warning is real skew.
 verify_historical_self_update_warning() {
   local stderr="$1" outcome="$2" updater_status="$3"
-  # Exact published updaters that re-read the candidate-stamped config after the
-  # candidate's Doctor ran: 2026.9.4 (#150757) and 2026.11.10, whose recoverable
-  # post-install Doctor advisory leads to a parent-process config read. Their
-  # shipped bytes cannot be changed; prove the fresh install instead.
+  # These published updaters re-read candidate-stamped config after the package
+  # swap: 2026.9.4 (#150757), and 2026.11.10/2026.11.11 after a recoverable
+  # post-install Doctor advisory. Their shipped bytes cannot be changed.
   case "$UPDATE_BASELINE_VERSION:$UPDATE_EXPECT_VERSION" in
-    2026.9.4:2026.9.5 | 2026.11.10:2026.11.11) ;;
+    2026.9.4:2026.9.5 | 2026.11.10:2026.11.11 | 2026.11.11:2026.11.12) ;;
     *) return 1 ;;
   esac
   [[ "$PACKAGE_NAME" == "openclaw" &&

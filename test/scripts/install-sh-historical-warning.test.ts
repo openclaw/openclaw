@@ -127,6 +127,44 @@ posixIt.each(
   expect(result.status).not.toBe(0);
   expect(result.stderr).not.toContain("fresh PATH and global install verified");
 });
+const stablePatchPair: Fixture = {
+  baseline: "2026.11.11",
+  beforeVersion: "2026.11.11",
+  expectVersion: "2026.11.12",
+  afterVersion: "2026.11.12",
+  manifestVersion: "2026.11.12",
+  freshVersion: "2026.11.12",
+  updateWarning: warning("2026.11.12", "2026.11.11"),
+};
+posixIt(
+  "accepts the exact old-process warning after a verified 2026.11.11 to 2026.11.12 update",
+  () => {
+    const result = runFixture(stablePatchPair);
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain("fresh PATH and global install verified as 2026.11.12");
+  },
+);
+posixIt.each(
+  Object.entries({
+    "a matching-version foreign PATH executable": { foreignPath: true },
+    "a duplicate old-process warning": {
+      updateWarning: [stablePatchPair.updateWarning, stablePatchPair.updateWarning].join("\n"),
+    },
+    "a fresh-process warning": { freshWarning: warning("2026.11.13", "2026.11.12") },
+    "a nonzero updater exit": { updateExit: 7 },
+    "an unverified later target": {
+      expectVersion: "2026.11.13",
+      afterVersion: "2026.11.13",
+      manifestVersion: "2026.11.13",
+      freshVersion: "2026.11.13",
+      updateWarning: warning("2026.11.13", "2026.11.11"),
+    },
+  } satisfies Record<string, Fixture>),
+)("rejects the 2026.11.11 updater warning with %s", (_name, fixture) => {
+  const result = runFixture({ ...stablePatchPair, ...fixture });
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).not.toContain("fresh PATH and global install verified");
+});
 const negatives: Record<string, Fixture> = {
   "stale PATH executable": { freshVersion: "2026.9.4" },
   "foreign PATH executable with matching version": { foreignPath: true },
