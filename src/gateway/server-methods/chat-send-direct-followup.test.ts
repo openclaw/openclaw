@@ -496,16 +496,22 @@ it("preserves opt-in strict refusal and admits an explicit fresh followup", asyn
       total: 1,
       items: [{ runId: fixture.params.idempotencyKey, state: "cancelled" }],
     });
-    expect((await fixture.send()).mock.calls[0]).toMatchObject({
-      0: false,
-      1: { status: "error", summary: refusal },
-    });
+    const expectCancelledRetry = async () => {
+      expect((await fixture.send()).mock.calls).toEqual([
+        [
+          false,
+          undefined,
+          {
+            code: "INVALID_REQUEST",
+            message: "Chat input was cancelled before it ran. Use a new message ID to send again.",
+            details: { reason: "chat-input-cancelled" },
+          },
+        ],
+      ]);
+    };
+    await expectCancelledRetry();
     fixture.context.dedupe.clear();
-    expect((await fixture.send()).mock.calls[0]).toMatchObject({
-      0: true,
-      1: { status: "ok", runId: fixture.params.idempotencyKey },
-      3: { cached: true },
-    });
+    await expectCancelledRetry();
     expect(runtime.execute).not.toHaveBeenCalled();
     expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
 
@@ -571,11 +577,7 @@ it("preserves opt-in strict refusal and admits an explicit fresh followup", asyn
     fixture.params.message = "Raw follow-up awaiting approval.";
     fixture.context.dedupe.clear();
     rotateAgentEventLifecycleGeneration();
-    expect((await fixture.send()).mock.calls[0]).toMatchObject({
-      0: true,
-      1: { status: "ok", runId: fixture.params.idempotencyKey },
-      3: { cached: true },
-    });
+    await expectCancelledRetry();
     expect(runtime.execute).toHaveBeenCalledOnce();
     expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
   } finally {

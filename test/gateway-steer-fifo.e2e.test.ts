@@ -833,10 +833,10 @@ describe("Gateway steer FIFO", () => {
           ),
         ).toEqual([]);
 
-        expect(await client.request("chat.send", steerParams)).toMatchObject({
-          runId: steerRunId,
-          status: "timeout",
-          summary: "aborted",
+        await expect(client.request("chat.send", steerParams)).rejects.toMatchObject({
+          gatewayCode: "INVALID_REQUEST",
+          details: { reason: "chat-input-cancelled" },
+          retryable: false,
         });
         modelServer.releaseSecond();
         await waitForRunTerminal(fixture, firstRunId);
