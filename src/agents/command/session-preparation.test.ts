@@ -400,7 +400,8 @@ const telegramConversation: SessionEntry = {
 it.each([
   { deliver: true, replyAccountId: "rich", markup: "markdown_telegram_rich" },
   { deliver: true, replyAccountId: "plain", markup: "markdown" },
-  { deliver: false, replyAccountId: undefined, markup: undefined },
+  // A private completion keeps the stored conversation's format, like the session's own turns.
+  { deliver: false, replyAccountId: undefined, markup: "markdown_telegram_rich" },
 ])("uses the delivering account's format once ($deliver, $replyAccountId)", async (testCase) => {
   registerTelegramFormatPlugin();
   const ctx: TemplateContext = {
@@ -424,11 +425,9 @@ it.each([
   });
   const prompt = prepared.extraSystemPrompt ?? "";
   expect(prompt).toContain('"account_id": "rich"');
-  expect(prompt.split("### Delivery Format")).toHaveLength(testCase.deliver ? 2 : 1);
-  if (testCase.markup) {
-    expect(prompt).toContain(`"text_markup": "${testCase.markup}"`);
-  }
-  if (testCase.replyAccountId === "rich") {
+  expect(prompt.split("### Delivery Format")).toHaveLength(2);
+  expect(prompt).toContain(`"text_markup": "${testCase.markup}"`);
+  if (testCase.markup === "markdown_telegram_rich") {
     expect(prompt).toBe(
       [
         buildInboundMetaSystemPrompt(ctx, {}),

@@ -252,17 +252,18 @@ export async function prepareEmbeddedSessionState(params: {
     !isSubagentSessionKey(sessionKey) &&
     !isCronSessionKey(sessionKey) &&
     isSyntheticSourceReplyTurn(opts);
-  // sessions_send and subagent completions run on the internal channel, which has no route. Like
-  // other lifecycle turns, their prompt describes the session's own conversation so a resumed
-  // session keeps its system prompt; this turn's routing stays in runContext.
+  const delivering = opts.deliver === true || opts.sourceReplyDeliveryMode === "message_tool_only";
+  // sessions_send and subagent completions run on the internal channel, which has no route, or
+  // keep their reply private. Like other lifecycle turns, their prompt describes the session's
+  // own conversation so a resumed session keeps its system prompt; this turn's routing stays in
+  // runContext.
   const storedRoute =
-    conversationTurn && isInternalMessageChannel(opts.replyChannel ?? runContext.messageChannel)
+    conversationTurn &&
+    (!delivering || isInternalMessageChannel(opts.replyChannel ?? runContext.messageChannel))
       ? deliveryContextFromSession(sessionEntry)
       : undefined;
   const deliveryFormat =
-    (opts.deliver === true ||
-      opts.sourceReplyDeliveryMode === "message_tool_only" ||
-      storedRoute !== undefined) &&
+    (delivering || storedRoute !== undefined) &&
     buildDeliveryFormatPrompt({
       cfg,
       channel: storedRoute ? storedRoute.channel : (opts.replyChannel ?? runContext.messageChannel),
