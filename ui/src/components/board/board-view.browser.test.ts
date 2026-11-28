@@ -275,7 +275,7 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
   );
 
   it("holds a narrow card at its drop target until a newer snapshot arrives", async () => {
-    const saving = createDeferred<void>();
+    const saving = createDeferred();
     const applyOps = vi.fn(() => saving.promise);
     const view = await mount(applyOps);
     view.style.width = "354px";
