@@ -86,6 +86,9 @@ function resolveStoppedGatewayOwnerLease(previous: GatewayOwnerLeaseIdentity | u
   }
   if (
     previous.state === "dead" ||
+    // This runs after the caller has physical Gateway custody. Expiry only makes
+    // the retained SQLite lease eligible for replacement; it never proves that a
+    // namespace-less Linux file-lock holder stopped.
     (process.platform === "linux" &&
       !isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_REQUIRE_NAMESPACE_PROOF) &&
       !isStatePostgres() &&

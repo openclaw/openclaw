@@ -1752,9 +1752,9 @@ changing images or restoring an older OpenClaw version.
 
 ## Upgrading after a legacy Linux Gateway crash
 
-Candidate Doctor can recover namespace-less Gateway locks from 2026.9.7 and later after the lock's recorded creation time is more than five minutes old and its matching SQLite Gateway owner lease is missing or expired. Doctor waits for that shipped lease window; a live Gateway in another container continues renewing its lease and still blocks maintenance. Expired legacy SQLite leases also stop blocking the subsequent maintenance check. The candidate supplies this repair; the published updater needs no change.
+A namespace-less Linux Gateway lock remains an explicit-recovery case. Candidate Doctor may report that it cannot verify Gateway ownership, even when the lock's matching SQLite lease is missing or expired, because lease expiry and host-local PID observations do not prove that a holder in another PID namespace stopped. Follow the [explicit recovery guidance](/gateway/gateway-lock#recovering-an-older-legacy-record) from a current OpenClaw CLI using the same state and profile, then retry the update.
 
-Older records and unreadable lease state retain their refusal, with [explicit recovery guidance](/gateway/gateway-lock#recovering-an-older-legacy-record). Lock-file mtime and local PID observations do not authorize this recovery.
+If the old updater rolls back before the fixed CLI is available, keep the restored installation healthy and use the candidate or next installed CLI only for the inspected `gateway recover-lock` command. Do not remove the record while any container or host process might still be using that state.
 
 ## Upgrading very old versions
 

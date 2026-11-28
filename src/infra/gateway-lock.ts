@@ -32,7 +32,6 @@ import { acquireFileLockSync } from "./file-lock-manager.js";
 import {
   describeGatewayLockHolder,
   GATEWAY_OWNER_HEARTBEAT_STALE_MS,
-  LEGACY_GATEWAY_OWNER_LEASE_TTL_MS,
   GatewayLockNamespaceError,
   type GatewayLockRole,
   type GatewayLockIdentity,
@@ -143,7 +142,6 @@ function resolveGatewayOwnerStatusSync(
     deadlineMs?: number;
     signal?: AbortSignal;
     lockPath?: string;
-    databasePath?: string;
   } = {},
 ): LockOwnerStatus {
   const remainingTimeoutMs = () => {
@@ -156,7 +154,7 @@ function resolveGatewayOwnerStatusSync(
     return Math.max(1, Math.min(CMDLINE_EXEC_TIMEOUT_MS, Math.ceil(remaining)));
   };
   remainingTimeoutMs();
-  const namespace = classifyGatewayLockProcessNamespace(payload, opts.lockPath, opts.databasePath);
+  const namespace = classifyGatewayLockProcessNamespace(payload, opts.lockPath);
   if (namespace !== "same") {
     return namespace;
   }
@@ -324,11 +322,9 @@ async function readVerifiedGatewayLockIdentity(
   ) {
     return undefined;
   }
-  const stateDir = resolveStateDir(opts.env ?? process.env);
-  const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
   if (
     opts.requireInspection &&
-    classifyGatewayLockProcessNamespace(payload, lockPath, databasePath) === "unknown"
+    classifyGatewayLockProcessNamespace(payload, lockPath) === "unknown"
   ) {
     const error = new GatewayLockNamespaceError(payload, lockPath);
     throw new GatewayLockError(error.message, error);
@@ -342,7 +338,6 @@ async function readVerifiedGatewayLockIdentity(
       deadlineMs,
       signal: opts.signal,
       lockPath,
-      databasePath,
     },
   );
   assertActive();
@@ -394,7 +389,7 @@ async function assertHistoricalLockOwnerStopped(
     return;
   }
   const databasePath = path.join(paths.stateDir, "state", "openclaw.sqlite");
-  if (classifyGatewayLockProcessNamespace(payload, lockPath, databasePath) === "unknown") {
+  if (classifyGatewayLockProcessNamespace(payload, lockPath) === "unknown") {
     throw new GatewayLockNamespaceError(payload, lockPath);
   }
   const owner = await resolveGatewayOwnerStatus(
@@ -404,7 +399,6 @@ async function assertHistoricalLockOwnerStopped(
     {
       trustUnknownCmdlineOwner: false,
       lockPath,
-      databasePath,
     },
   );
   if (owner !== "dead") {
@@ -432,13 +426,12 @@ export async function acquireGatewayLock(
   const startedAt = now();
   const heartbeatWaitMs = GATEWAY_OWNER_HEARTBEAT_STALE_MS + 5_000;
   const heartbeatDeadlineMs = startedAt + heartbeatWaitMs;
-  const legacyLeaseDeadlineMs = startedAt + LEGACY_GATEWAY_OWNER_LEASE_TTL_MS + 5_000;
   const timeoutMs = resolveTimerTimeoutMs(
     opts.timeoutMs,
     role === "gateway"
       ? GATEWAY_LIFECYCLE_LOCK_TIMEOUT_MS
       : role === "sqlite-maintenance"
-        ? LEGACY_GATEWAY_OWNER_LEASE_TTL_MS + 5_000
+        ? heartbeatWaitMs
         : 0,
     0,
   );
@@ -559,11 +552,7 @@ export async function acquireGatewayLock(
             (role === "gateway" || role === "sqlite-maintenance")
           ) {
             // A crashed foreign owner's heartbeat goes stale within this wait.
-            const remaining =
-              Math.min(
-                deadlineMs,
-                error.legacyLease ? legacyLeaseDeadlineMs : heartbeatDeadlineMs,
-              ) - now();
+            const remaining = Math.min(deadlineMs, heartbeatDeadlineMs) - now();
             const age = error.heartbeatAgeMs;
             if (remaining <= 0) {
               return false;
@@ -665,7 +654,6 @@ export async function acquireGatewayLock(
         holder !== undefined &&
         resolveGatewayOwnerStatusSync(holder.pid, holder, opts.platform ?? process.platform, {
           lockPath: paths.stateLockPath,
-          databasePath,
         }) === "dead"
       );
     };
