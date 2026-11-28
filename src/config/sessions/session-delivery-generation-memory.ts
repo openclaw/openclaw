@@ -6,26 +6,11 @@ import {
   SessionDeliveryGenerationRevokedError,
   SessionDeliveryGenerationUnavailableError,
 } from "./session-delivery-generation-errors.js";
-import type { LeaseFacts, SessionGenerationEntry } from "./session-delivery-generation.types.js";
-
-/**
- * A chat lease follows the key to the current transcript. A transcript lease holds the
- * writer's transcript, or a scheduled occurrence's incarnation. A null session id leases
- * the row's absence.
- */
-export function matchesSessionGeneration(
-  input: LeaseFacts,
-  entry: Pick<SessionGenerationEntry, "sessionId" | "lifecycleRevision"> | null | undefined,
-): boolean {
-  if (!entry || input.sessionId === null) {
-    return Boolean(entry) !== (input.sessionId === null);
-  }
-  return (
-    !input.exact ||
-    ((input.exact === "lifecycle" || entry.sessionId === input.sessionId) &&
-      (entry.lifecycleRevision ?? null) === (input.lifecycleRevision ?? null))
-  );
-}
+import {
+  matchesSessionGeneration,
+  type LeaseFacts,
+  type SessionGenerationEntry,
+} from "./session-delivery-generation.types.js";
 
 /** Actor close owns revocation; every transport effect still reads current owner-held policy. */
 export async function prepareMemorySessionGeneration(

@@ -1,3 +1,4 @@
+import { readGoalContinuationContext } from "../../auto-reply/reply/goal-continuation-return.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -107,6 +108,8 @@ export function runWithCliTurn(
       }
       const caller = getGatewayToolCallerIdentity();
       try {
+        admittedParams.currentInboundContext =
+          readGoalContinuationContext(params) ?? params.currentInboundContext;
         return await withGatewayToolCallerIdentity(
           caller && { ...caller, watchdogAttempt: diagnosticOwner.watchdogAttempt },
           () =>

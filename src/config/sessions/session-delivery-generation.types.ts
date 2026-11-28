@@ -23,6 +23,25 @@ export type LeaseFacts = Pick<ChatRef, "agentId" | "storePath" | "sessionKey"> &
   exact?: "transcript" | "lifecycle";
 };
 
+/**
+ * A chat lease follows the key to the current transcript. A transcript lease holds the
+ * writer's transcript, or a scheduled occurrence's incarnation. A null session id leases
+ * the row's absence.
+ */
+export function matchesSessionGeneration(
+  input: Pick<LeaseFacts, "sessionId" | "lifecycleRevision" | "exact">,
+  entry: Pick<SessionGenerationEntry, "sessionId" | "lifecycleRevision"> | null | undefined,
+): boolean {
+  if (!entry || input.sessionId === null) {
+    return Boolean(entry) !== (input.sessionId === null);
+  }
+  return (
+    !input.exact ||
+    ((input.exact === "lifecycle" || entry.sessionId === input.sessionId) &&
+      (entry.lifecycleRevision ?? null) === (input.lifecycleRevision ?? null))
+  );
+}
+
 export type SessionGenerationLease = {
   assertCurrent: SessionSourceAssertion;
   assertNativeTransactionCurrent: SessionSourceAssertion;

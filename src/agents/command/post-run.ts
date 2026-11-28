@@ -598,23 +598,13 @@ export async function finalizeEmbeddedAgentCommand(params: {
         }),
       )
     : terminal.outcome;
-  recordGoalContinuationSettlement({
-    runId,
-    sessionKey,
-    result,
-    succeeded:
-      result.meta.agentMeta?.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID &&
-      !hasResultError &&
-      classifyAgentRunTerminalOutcome(outcome) === "success" &&
-      (params.opts.deliver !== true || deliveryResult?.deliverySucceeded === true),
-  });
+  const succeeded =
+    !hasResultError &&
+    classifyAgentRunTerminalOutcome(outcome) === "success" &&
+    (params.opts.deliver !== true || deliveryResult?.deliverySucceeded === true);
+  recordGoalContinuationSettlement({ runId, sessionKey, result, succeeded });
   return {
-    maintenance:
-      classifyAgentRunTerminalOutcome(outcome) === "success" &&
-      !hasResultError &&
-      (params.opts.deliver !== true || deliveryResult?.deliverySucceeded === true)
-        ? maintenanceRequest
-        : undefined,
+    maintenance: succeeded ? maintenanceRequest : undefined,
     deliveryResult: recordAgentRunTerminalOutcome(
       deliveryResult,
       hasResultError || classifyAgentRunTerminalOutcome(outcome) !== "success"
