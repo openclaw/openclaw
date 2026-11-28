@@ -80,7 +80,7 @@ async function fixture({
     },
   };
   const opts = { json: true, yes: true, run };
-  const reportingRow = { status: "running", origin: {} };
+  const reportingRow = { status: "running", origin: {}, verification: {}, steps: [] };
   const assertCurrent = () => run.executorFence.assertCurrent();
   const restartContext = {
     refreshGatewayServiceEnv: false,
@@ -271,7 +271,7 @@ async function fixture({
     readGatewayOwnerLease: async () => undefined,
   };
   const context = vm.createContext({
-    process: { env: {}, stdin: { isTTY: false }, platform: "linux" },
+    process: { env: {}, stdin: { isTTY: false }, platform: "linux", execPath: process.execPath },
     Date,
     Error,
     AggregateError,
@@ -334,8 +334,8 @@ async function fixture({
     "../../shared/state-lease-loss-format",
     "../../shared/update-outcome",
     "../../state/openclaw-state-lease-error",
-    "../../infra/update-run-report",
     "../../infra/update-run-notice",
+    "../quote-cli-arg",
     "../../infra/update-run-record",
     "../../infra/update-run-limits",
     // Post-update state reads and Doctor facts use their production owners,

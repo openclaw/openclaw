@@ -223,7 +223,7 @@ export function listNodeTestConfigFiles(config: string): string[] | undefined {
   return files;
 }
 
-/** Measurement-only ownership; adding it must not change runtime partitioning. */
+/** Effective measurement ownership; timer/isolated runtime exception checks also use it. */
 export function listNodeTestVolumeConfigFiles(config: string): string[] | undefined {
   if (config === "test/vitest/vitest.unit-fast.config.ts") {
     const excluded = new Set([...getUnitFastTimerTestFiles(), ...getUnitFastIsolatedTestFiles()]);
@@ -466,7 +466,10 @@ export function scheduledTrackedTestFiles(): string[] {
   // Coverage itself runs in a complete checkout; retain the existing Git owner.
   const { listGitTrackedFiles }: typeof import("../../src/test-utils/repo-files.ts") =
     createRequire(import.meta.url)("../../src/test-utils/repo-files.ts");
-  const files = listGitTrackedFiles({ pathspecs: "." });
+  // Literal pathspec mode disables Git's glob magic; filter the full inventory instead.
+  const files = listGitTrackedFiles({
+    pathspecs: process.env.GIT_LITERAL_PATHSPECS ? "." : ":(glob)**/*.test.*",
+  });
   if (!files) {
     throw new Error("Scheduled test coverage requires git ls-files");
   }
@@ -490,14 +493,14 @@ export const SCHEDULED_COVERAGE_EXCEPTIONS: Array<{
       "Source inputs for tooling regression suites; shared Vitest configuration deliberately excludes fixtures.",
   },
   {
-    pattern: ".agents/skills/update-team-server/controller/*.test.*",
-    owner: "Team server deployment controller",
-    reason:
-      "Standalone Node/Python controller self-tests use the operator skill's runner, not Vitest; no scheduled controller runner exists.",
-  },
-  {
     pattern: ".agents/skills/plugin-sdk-impact/scripts/*.test.mjs",
     owner: "Plugin SDK impact tooling",
+    reason:
+      "Standalone node:test skill self-tests have no scheduled runner and are not Vitest suites.",
+  },
+  {
+    pattern: ".agents/skills/openclaw-writing/scripts/*.test.mjs",
+    owner: "OpenClaw writing skill tooling",
     reason:
       "Standalone node:test skill self-tests have no scheduled runner and are not Vitest suites.",
   },

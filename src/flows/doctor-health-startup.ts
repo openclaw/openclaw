@@ -6,6 +6,10 @@ import { exitCliAfterOutput, watchCliExitAfterOutput } from "../cli/one-shot-exi
 import { getPendingCliDisposers } from "../cli/runtime-cleanup.js";
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
 import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
+import type {
+  DoctorMaintenancePending,
+  DoctorMaintenancePendingCheck,
+} from "../commands/doctor-maintenance-pending.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import { resolveDoctorRepairMode } from "../commands/doctor-repair-mode.js";
 import { isDefaultInstallIdentity, resolveIsNixMode, resolveStateDir } from "../config/paths.js";
@@ -221,13 +225,18 @@ export async function prepareDoctorInteractiveMaintenance(params: {
   };
 }
 
+/** The contribution pass ended in a refusal that showDoctorRepairRefusal reports. */
+export function isDoctorRepairRefused(ctx: DoctorHealthFlowContext): boolean {
+  return Boolean(ctx.configWriteRefusal) || ctx.postInstallDoctorResult?.status === "error";
+}
+
 export function showDoctorRepairRefusal(
   ctx: DoctorHealthFlowContext,
 ): UpdatePostInstallDoctorResult | undefined {
+  if (!isDoctorRepairRefused(ctx)) {
+    return undefined;
+  }
   if (!ctx.configWriteRefusal) {
-    if (ctx.postInstallDoctorResult?.status !== "error") {
-      return undefined;
-    }
     showDoctorHealthSummary(ctx);
     showDoctorOutro("Doctor blocked; required repairs remain incomplete.");
     return ctx.postInstallDoctorResult;
@@ -276,12 +285,32 @@ export async function prepareDoctorMaintenanceArchives(
   return discovery;
 }
 
+/** Reads only the prepared preflight; the preflight refuses an unreadable state database. */
+export function checkDoctorStateSchemaPending(
+  schemas: DoctorDatabasePreflight,
+): DoctorMaintenancePending {
+  return schemas.pendingMigrations?.some((entry) => entry.kind === "state") ? "work" : "none";
+}
+
+/** Traces each `doctor.config-flow` input, then the step; no work without maintenance. */
+export async function traceDoctorConfigFlowPending(
+  trace: (step: string, check?: DoctorMaintenancePendingCheck) => Promise<boolean> | undefined,
+  options: DoctorOptions,
+): Promise<void> {
+  const { traceConfigFlowPendingInputs } =
+    await import("../commands/doctor-config-flow-pending.js");
+  await traceConfigFlowPendingInputs(trace, {
+    env: process.env,
+    integrityCheck: options.fullIntegrityCheck ? "full" : "quick",
+  });
+}
+
 export async function prepareDoctorStateSchema(
   schemas: DoctorDatabasePreflight,
   shouldRepair: boolean,
   integrityCheck?: "quick" | "full",
 ) {
-  if (!shouldRepair || !schemas.pendingMigrations?.some((entry) => entry.kind === "state")) {
+  if (!shouldRepair || checkDoctorStateSchemaPending(schemas) === "none") {
     return undefined;
   }
   const { prepareLegacyStateDatabaseSchema } = await import("../infra/state-migrations.doctor.js");
@@ -290,6 +319,15 @@ export async function prepareDoctorStateSchema(
   const receipt = await prepareLegacyStateDatabaseSchema(process.env, integrityCheck);
   throwIfDoctorStateMigrationRefused([receipt]);
   return receipt;
+}
+
+/** Read-only: whether {@link repairDoctorStateDatabase} would change the state database. */
+export async function checkDoctorStateDatabaseRepairPending(
+  integrityCheck: "quick" | "full",
+): Promise<DoctorMaintenancePending> {
+  const { checkOpenClawStateDatabaseRepairPending } =
+    await import("../state/openclaw-state-db-repair-pending.js");
+  return checkOpenClawStateDatabaseRepairPending({ env: process.env, integrityCheck });
 }
 
 export async function repairDoctorStateDatabase(
@@ -316,6 +354,48 @@ export async function repairDoctorStateDatabase(
     }
   }
   return repairedState;
+}
+
+/**
+ * Read-only: whether {@link prepareDoctorRuntimeChecks} would write. Its notes (source
+ * install, plugin runtime links, NOCOW inspection, startup hints) never write; the
+ * deletion journal, Control UI assets and the Bun and pnpm launchers answer for themselves.
+ * Under an updater's migration capture it reopens the state database for Doctor.
+ */
+export async function checkDoctorRuntimeChecksPending(
+  preflight: DoctorDatabasePreflight,
+  root: string | null,
+  prompter: Pick<DoctorPrompter, "repairMode">,
+): Promise<DoctorMaintenancePending> {
+  const [{ getOpenClawDatabaseMaintenanceScope }, { hasUpdateDoctorMigrationCapture }] =
+    await Promise.all([
+      import("../state/openclaw-state-maintenance-context.js"),
+      import("../infra/update-doctor-migration-context.js"),
+    ]);
+  if (
+    getOpenClawDatabaseMaintenanceScope()?.ownsSchemaMaintenance &&
+    hasUpdateDoctorMigrationCapture()
+  ) {
+    return "undecidable";
+  }
+  const [
+    { checkDoctorAgentDeletionJournalPending },
+    { checkUiProtocolFreshnessPending },
+    { checkBunCliLauncherPending },
+    { hasPublishedPnpmLauncherRepairWork },
+  ] = await Promise.all([
+    import("../commands/doctor-agent-deletion-journal.js"),
+    import("../commands/doctor-ui.js"),
+    import("../commands/doctor-bun-cli-launcher.js"),
+    import("../infra/update-launcher-repair.js"),
+  ]);
+  const answers = new Set<DoctorMaintenancePending>([
+    checkDoctorAgentDeletionJournalPending({ preflight, env: process.env }),
+    await checkUiProtocolFreshnessPending(prompter.repairMode),
+    checkBunCliLauncherPending({ root, prompter }),
+    root && (await hasPublishedPnpmLauncherRepairWork({ root })) ? "work" : "none",
+  ]);
+  return answers.has("work") ? "work" : answers.has("undecidable") ? "undecidable" : "none";
 }
 
 export async function prepareDoctorRuntimeChecks(
@@ -361,7 +441,8 @@ export async function prepareDoctorRuntimeChecks(
           ).prepareDoctorDatabasePreflight(),
         )
       : preflight;
-  const { inspectDoctorSqliteNoCow } = await import("../commands/doctor-sqlite-nocow.js");
+  const { checkDoctorSqliteNoCowPending, inspectDoctorSqliteNoCow } =
+    await import("../commands/doctor-sqlite-nocow.js");
   const { resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js");
   const nocow = inspectDoctorSqliteNoCow([
     resolveOpenClawStateSqlitePath(),
@@ -413,7 +494,7 @@ export async function prepareDoctorRuntimeChecks(
   noteStartupOptimizationHints();
   return {
     schemas,
-    nocowPaths: nocow.paths,
+    nocow: { paths: nocow.paths, pending: checkDoctorSqliteNoCowPending(nocow) },
     warnings: restartNotice
       ? [...deletionJournal.warnings, restartNotice]
       : deletionJournal.warnings,

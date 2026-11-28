@@ -25,6 +25,8 @@ function normalizeMatrixEntry(raw?: string | null): string | null {
 
 const matrixIngressIdentity = defineStableChannelIngressIdentity({
   key: "sender-id",
+  // The homeserver authenticates event senders (federation signatures); names never match here.
+  authentication: "verified",
   normalize: normalizeMatrixEntry,
   matchEntry({ subject, entry }) {
     const senderId = subject.identifiers[0]?.value;

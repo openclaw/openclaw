@@ -613,14 +613,16 @@ it("validates off-catalog host routes without granting an incompatible runtime",
 });
 
 it.each(["implicit", "configured"] as const)(
-  "admits a %s native-only model for spawn like the turn path",
+  "admits a %s native-only model for spawn with its catalog capabilities",
   async (routing) => {
     // Only the native runtime lists this model; no API row can materialize it.
     const entry: ModelCatalogEntry = {
       provider: "fixture",
       id: "native-only",
       name: "Native only",
-      reasoning: true,
+      reasoning: false,
+      input: ["text"],
+      contextWindow: 65_536,
       nativeRuntime: "native-test",
     };
     const cfg: OpenClawConfig =
@@ -662,7 +664,14 @@ it.each(["implicit", "configured"] as const)(
     ).toMatchObject({
       kind: "resolved",
       ref: { provider: "fixture", model: "native-only" },
-      model: { provider: "fixture", id: "native-only" },
+      model: {
+        provider: "fixture",
+        id: "native-only",
+        reasoning: false,
+        input: ["text"],
+        contextWindow: 65_536,
+        maxTokens: 32_768,
+      },
     });
   },
 );

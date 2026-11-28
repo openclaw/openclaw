@@ -4,6 +4,7 @@ import { kindFromMime } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { extractCanvasShortcodes } from "../chat/canvas-render.js";
+import { isPendingInputVisibleToProfile } from "../config/sessions/session-pending-input-audience.js";
 import { readSessionPendingInput } from "../config/sessions/session-pending-input-history.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import { sameTranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
@@ -171,7 +172,7 @@ async function prepareAssistantMessageMedia(
     const inputId = messageId.slice(CHAT_PENDING_INPUT_MESSAGE_PREFIX.length);
     // Attachment association needs visibility and media, not forwarded sender labels.
     const project = (input: Awaited<ReturnType<typeof readSessionPendingInput>>) =>
-      input
+      input && isPendingInputVisibleToProfile(input, policy.profileId)
         ? projectPendingInputMessage(input, MAX_PAYLOAD_BYTES, undefined, () => undefined)
         : undefined;
     assertAssociation(project(await readSessionPendingInput(scope, inputId)));

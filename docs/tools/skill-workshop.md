@@ -58,8 +58,12 @@ Gateway, see [Personal library authoring](/tools/skill-workshop/personal-library
 - **Skill diet:** once a day, one oversized learned skill is shrunk without
   changing its rules. See [Skill diet](#skill-diet).
 
-Changed skills load in new sessions. A running session keeps the skill snapshot
-it started with.
+When you edit a Workshop skill, the current turn keeps the skill catalog it
+received in its prompt. If the run reads the local file directly, a later
+`skills_read` call in that turn sees the updated `SKILL.md`. A worker that
+received a copy keeps using that copy for the rest of the turn. Once OpenClaw
+publishes the refreshed catalog, the next turn uses it in the same session or
+a new one.
 
 <a id="changes-and-recovery" />
 
@@ -182,8 +186,9 @@ cleanup also diets one oversized learned skill per agent:
 To undo a diet, restore the previous version from the skill's history in the
 Control UI or with `openclaw skills workshop restore <name>`. Restoring also
 removes the reference files the diet added. A skill that cannot be dieted, for
-example one long procedure section, is left unchanged and tried again when its
-turn comes around. A diet makes two to four tool-free model calls on the
+example one long procedure section or a Markdown file outside `assets/`,
+`examples/`, `references/`, `scripts/`, and `templates/`, is left unchanged and
+tried again when its turn comes around. A diet makes two to four tool-free model calls on the
 agent's primary model and sends the skill's text to that provider.
 
 <a id="learn" />

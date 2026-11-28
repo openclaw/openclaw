@@ -202,6 +202,8 @@ When the current session is reset, the TUI reports it after refreshing the trans
 Local mode only:
 
 - `/auth [provider]` opens the provider auth/login flow inside the TUI.
+  After sign-in, the TUI resumes and uses the saved credentials for subsequent
+  messages without changing the selected model. Canceling sign-in returns to the TUI.
 
 Local mode implements the same queue modes inside the embedded runtime. A
 mid-run prompt follows the session's `/queue` policy: `steer` injects when the

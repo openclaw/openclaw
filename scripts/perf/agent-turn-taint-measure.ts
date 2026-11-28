@@ -15,6 +15,7 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -61,12 +62,7 @@ matches = 0;
 globalThis.gc?.();
 const session = new Session();
 if (values.mode === "allocation") {
-  session.connect();
-  await session.post("HeapProfiler.startSampling", {
-    samplingInterval: 32768,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(session, 32768);
 }
 const hostLoad = loadavg();
 const cpu = process.threadCpuUsage();

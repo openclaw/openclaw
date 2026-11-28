@@ -1,6 +1,9 @@
 import { vi } from "vitest";
 import type { DoctorPrompter } from "../commands/doctor-prompter.js";
-import type { DoctorHealthFlowContext as Context } from "./doctor-health-contribution-types.js";
+import type {
+  DoctorHealthContribution,
+  DoctorHealthFlowContext as Context,
+} from "./doctor-health-contribution-types.js";
 
 type ContextFixture = Partial<Omit<Context, "configResult">> & {
   configResult?: Partial<Context["configResult"]>;
@@ -48,4 +51,16 @@ export function createDoctorHealthFlowContext(overrides: ContextFixture = {}): C
     configPath,
     ...contextOverrides,
   };
+}
+
+/** Runs a contribution's owner check, as Doctor traces it under Gateway maintenance. */
+export async function decideDoctorContributionPending(
+  contribution: DoctorHealthContribution,
+  ctx: Context,
+) {
+  const { pending } = contribution;
+  if (typeof pending !== "function") {
+    throw new Error(`${contribution.id} has no owner check`);
+  }
+  return pending(ctx);
 }

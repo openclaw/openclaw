@@ -794,7 +794,8 @@ describe("queued collector session projection", () => {
           await handleChatSend(options);
         }
         const stopped = !foreign && !exact;
-        const collectorStopped = stopped && scenario === "owned";
+        // A parent turn retired by this Stop's own abort does not revoke the admitted Stop.
+        const collectorStopped = stopped && (scenario === "owned" || scenario === "parent-retired");
         expect.soft(respond.mock.calls[0]?.[0]).toBe(collectorStopped);
         if (foreignAdmission) {
           expect(foreignAdmission.activeRunAbort.controller.signal.aborted).toBe(false);

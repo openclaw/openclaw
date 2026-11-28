@@ -17,9 +17,11 @@ export async function prepareChatSendInterruptAdmission(params: {
   abortSignal: AbortSignal;
 }) {
   const { sessionMutationAuthorization, ...source } = params.operator;
-  const sharing = source.client?.internal?.operatorRunAuthority
-    ? undefined
-    : sessionMutationAuthorization;
+  const sharing =
+    source.client?.internal?.operatorRunAuthority &&
+    !sessionMutationAuthorization?.participationCeiling
+      ? undefined
+      : sessionMutationAuthorization;
   const invocationAuthority =
     sharing?.retainForRun?.() ??
     (sharing

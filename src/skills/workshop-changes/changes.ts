@@ -4,7 +4,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import type { WorkshopChange } from "./changes.kernel.js";
 
-const MAX_CHANGES_LIMIT = 500;
+export const WORKSHOP_CHANGES_MAX_LIMIT = 500;
 type Store = { path: string; agents: Map<string, Promise<WorkshopChange[]>> };
 const stores = resolveGlobalMap<string, Store>(
   Symbol.for("openclaw.skillWorkshopChanges"),
@@ -21,6 +21,16 @@ function captureStore() {
     stores.set(key, store);
   }
   return { context, store };
+}
+
+export async function readWorkshopActivity(
+  agentId: string,
+  skillName: string,
+): Promise<number | null> {
+  return await executeOpenClawStateWorker(captureOpenClawStateWorkerContext(), {
+    type: "skills.workshop.activity.read",
+    input: { agentId, skillName },
+  });
 }
 
 export async function recordWorkshopChange(change: WorkshopChange): Promise<void> {
@@ -49,7 +59,7 @@ export async function listWorkshopChanges(
     }
     rows = executeOpenClawStateWorker(context, {
       type: "skills.workshop.changes.list",
-      input: { agentId, limit: MAX_CHANGES_LIMIT },
+      input: { agentId, limit: WORKSHOP_CHANGES_MAX_LIMIT },
     });
     store.agents.set(agentId, rows);
   }
@@ -69,6 +79,6 @@ export async function listWorkshopChanges(
           (options.beforeMs === undefined || change.createdAtMs < options.beforeMs) &&
           (!options.runId || change.runId === options.runId),
       )
-      .slice(0, Math.min(Math.max(Math.trunc(options.limit ?? 50), 1), MAX_CHANGES_LIMIT)),
+      .slice(0, Math.min(Math.max(Math.trunc(options.limit ?? 50), 1), WORKSHOP_CHANGES_MAX_LIMIT)),
   );
 }

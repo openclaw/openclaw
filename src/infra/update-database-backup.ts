@@ -601,7 +601,9 @@ export async function createUpdateDatabaseBackup({
     ? await (await import("./backup-database-discovery.js")).preparePostgresBackupDiscovery(input)
     : {
         // Read legacy SQLite registrations from the private inspection copy, before admission.
-        paths: await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }),
+        paths: await withArtifactPreservingStateReads(() =>
+          discoverBackupDatabasePaths({ ...input, agentRegistry: [] }),
+        ),
         pluginOwners: undefined,
       };
   const additionalPaths = [...(input.additionalPaths ?? []), ...prepared.paths].map((file) =>

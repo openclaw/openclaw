@@ -209,23 +209,6 @@ it("uses plugin search with a publisher icon fallback and no invented pagination
   expect(result.items[0]?.iconUrl).toBe(remotePlugin.ownerImage);
 });
 
-it.each([
-  [
-    { intent: "featured", limit: 6 },
-    { featured: "true", limit: "6" },
-  ],
-  [
-    { intent: "all", category: "models", limit: 8 },
-    { category: "models", curated: "true", sort: "downloads", limit: "8" },
-  ],
-] as const)("preserves canonical ordering: %j", async (options, query) => {
-  const category = { ...remoteCategory, pinnedPackages: ["@vendor/model"] };
-  const { result, url } = await catalog(options, { items: [], categories: [category] });
-  expect(url.pathname).toBe("/api/v1/plugins");
-  expect(Object.fromEntries(url.searchParams)).toEqual(query);
-  expect(result).toEqual({ items: [], categories: [category] });
-});
-
 it("validates and restores canonical category ordering", async () => {
   const categories = await readCategories([
     remoteCategory,

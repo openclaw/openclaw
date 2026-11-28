@@ -85,10 +85,7 @@ it("replaces the canonical failed run row with one line-icon notice and explicit
   const onRetry = vi.fn();
   drawNotice(item, { failureActionsRunId: "run-a", onRetryRun: onRetry });
   expect(container.textContent).toContain("Couldn’t finish this reply");
-  const report = container.querySelector<HTMLAnchorElement>("a.report-issue-link");
-  expect(report?.textContent).toBe("Report a bug");
-  expect(new URL(report!.href).searchParams.get("title")).toBe("[Bug]: Control UI: ");
-  expect(report?.rel).toBe("noopener noreferrer");
+  expect(container.querySelector("a.report-issue-link")).toBeNull();
   expect(container.textContent).not.toContain("⚠");
   expect(part("icon svg")).not.toBeNull();
   expect(query("details")).toBeNull();
@@ -201,12 +198,11 @@ it("names a provider's billing problem with its declared label and sends its fix
     );
   const billing = draw("billing");
   expect(part("title")?.textContent).toBe("Acme Cloud Plan reports a billing problem");
-  const [openModels, tryAgain] = container.querySelectorAll<HTMLButtonElement>(
-    ".chat-run-failure__retry",
-  );
+  const buttons = container.querySelectorAll<HTMLButtonElement>(".chat-run-failure button.btn");
+  const openModels = buttons[0];
+  expect(buttons).toHaveLength(1);
   expect(openModels?.textContent).toBe("Open Models");
   expect(openModels?.classList.contains("primary")).toBe(true);
-  expect(tryAgain?.classList.contains("primary")).toBe(false);
   openModels?.click();
   expect(navigate).toHaveBeenCalledExactlyOnceWith("model-providers", {
     search: "?provider=acme",
@@ -235,9 +231,6 @@ it("starts an OpenClaw update session only for a harness-update failure", async 
       connected: true,
       chatRunId: null,
       chatSending: false,
-      chatMessages: [],
-      chatMessage: "",
-      chatAttachments: [],
       handleSendChat: vi.fn(),
     },
     {
@@ -279,6 +272,7 @@ it("starts an OpenClaw update session only for a harness-update failure", async 
   expect(start()).toBeUndefined();
   drawNotice(updateItem, recovery);
   expect(start()?.classList.contains("primary")).toBe(true);
+  expect(container.querySelectorAll(".chat-run-failure button.btn")).toHaveLength(1);
   start()?.click();
   await waitForSolid(() => expect(open).toHaveBeenCalledExactlyOnceWith("agent:cx:update-session"));
   expect(create).toHaveBeenCalledExactlyOnceWith(

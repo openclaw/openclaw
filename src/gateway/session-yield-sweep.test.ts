@@ -25,7 +25,12 @@ import { captureOperatorToolGatewayContinuationContext } from "./server-plugin-i
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
+import {
+  createSessionRowProjectionFixture,
+  seedProjectionRow,
+  withSessionRowProjectionState,
+} from "./session-row-projection.test-support.js";
+import { sweepUnreachableSessionYields } from "./session-yield-sweep.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 // mock-isolation: This scheduler regression does not own device-pair expiry workers.
@@ -232,3 +237,57 @@ it.for([
     }
   }),
 );
+
+it("revisits parked rows and discovers a wait after final delivery clears", () =>
+  withSessionRowProjectionState(async (create) => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const ordinary = seedProjectionRow("ordinary");
+    const waiter = seedProjectionRow("waiter", {
+      lifecycleRunId: "parked-run",
+      activeWriterRunId: "parked-run",
+      lifecycleRevision: "parked-revision",
+      endedAt: 100,
+      pendingFinalDelivery: { kind: "transport-only", createdAt: 100 },
+    });
+    const projection = await create({ cfg, modelCatalog: [] });
+    const context = createContext([], () => cfg);
+    const resolveGatewayContext = () => context;
+    context.resolveGatewayContext = resolveGatewayContext;
+    bindSessionRowProjection(context, () => projection);
+    const select = vi.spyOn(projection, "selectEntries");
+    const sweep = async () => {
+      select.mockClear();
+      await sweepUnreachableSessionYields(resolveGatewayContext, new AbortController().signal);
+      return select.mock.results.flatMap((result) =>
+        result.type === "return" ? result.value.map(({ key }) => key) : [],
+      );
+    };
+    expect(await sweep()).toEqual(
+      expect.arrayContaining([ordinary.scope.sessionKey, waiter.scope.sessionKey]),
+    );
+    expect(await sweep()).toEqual([]);
+    const retained = await withPluginRuntimeGatewayRequestScope(
+      { context, resolveGatewayContext, isWebchatConnect: () => false },
+      () =>
+        captureOperatorToolGatewayContinuationContext({
+          sessionKey: waiter.scope.sessionKey,
+          agentId: "main",
+        }),
+    );
+    try {
+      await replaceSessionEntry(waiter.target, {
+        ...waiter.entry,
+        pendingFinalDelivery: undefined,
+      });
+      expect(await sweep()).toContain(waiter.scope.sessionKey);
+      expect(await sweep()).toEqual([waiter.scope.sessionKey]);
+      expect(loadExactSessionEntry(waiter.target)?.entry.status).toBeUndefined();
+    } finally {
+      retained?.release();
+    }
+    await sweep();
+    expect(loadExactSessionEntry(waiter.target)?.entry.lastRunError).toContain(
+      "no registered continuation",
+    );
+  }));

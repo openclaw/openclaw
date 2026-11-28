@@ -136,6 +136,10 @@ Gateway relay uses direct Platform-key WebSockets for `gpt-live-1` and
 Gateway-owned WebRTC for `gpt-live-1-codex`. Discord uses these same Gateway
 bridges when configured with the corresponding Live model.
 
+To request GPT-Live-1.1 on the Codex route, select `gpt-live-1.1-codex` in
+**Settings → Talk** or set `talk.realtime.model` to that value. This selector
+requires ChatGPT sign-in and does not fall back to a Platform API key.
+
 Account-issued, unlisted routes can be set in `talk.realtime.model`, but are
 not published through catalogs or diagnostics. They never use OAuth and require
 a Platform key. GPT-Live browser Talk also requires the bundled `openai` plugin

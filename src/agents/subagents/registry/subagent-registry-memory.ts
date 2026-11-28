@@ -20,6 +20,7 @@ import {
   isSubagentCancellationNotice,
   runWithSubagentCompletionBatchAuthority,
   selectCompletionAuthorityBatch,
+  assertRequiredCompletionCustody,
 } from "./subagent-completion-batch-authority.js";
 import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SubagentRunIndex } from "./subagent-registry-memory-index.js";
@@ -37,6 +38,7 @@ import {
 import { bindSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   getSubagentRunRuntimeKey,
   copySubagentRunRuntimeOwner,
@@ -289,6 +291,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const entry = this.currentValue(row);
     const key = getSubagentRunRuntimeKey(entry);
     source.assertCurrent();
+    assertRequiredCompletionCustody(entry, source);
     if (
       this.retiredCompletionEntries.has(key) &&
       !isSameSubagentRunOwner(this.get(entry.runId), entry)
@@ -365,10 +368,14 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     }
   }
 
-  runWithCompletionAuthority<T>(observed: SubagentRunRecord, run: () => T): T {
+  runWithCompletionAuthority<T>(
+    observed: SubagentRunRecord,
+    run: (authority?: SubagentCompletionCustody["authority"]) => T,
+  ): T {
     const entry = this.currentValue(observed);
     this.assertCompletionEntryCurrent(entry);
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
+    assertRequiredCompletionCustody(entry, custody?.authority);
     // Keep the requester's retained authority after child cancellation. Only a notice
     // without that custody uses its independently admitted cancellation caller.
     if (!custody && isSubagentCancellationNotice(entry)) {
@@ -383,7 +390,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       }
       return run();
     }
-    return custody ? custody.authority.run(run) : run();
+    return custody ? custody.authority.run(() => run(custody.authority)) : run();
   }
 
   selectCompletionAuthorityBatch(
@@ -398,7 +405,10 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     );
   }
 
-  runWithCompletionBatchAuthority<T>(observed: readonly SubagentRunRecord[], run: () => T): T {
+  runWithCompletionBatchAuthority<T>(
+    observed: readonly SubagentRunRecord[],
+    run: (authority?: SubagentCompletionCustody["authority"]) => T,
+  ): T {
     return runWithSubagentCompletionBatchAuthority(
       {
         batch: observed.map((entry) => this.currentValue(entry)),
@@ -468,7 +478,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         record.generation !== entry.generation ||
         ((!record.requesterTurnRunId || record.expectsCompletionMessage === false) &&
           !record.requesterSettleWake &&
-          record.pauseReason !== "sessions_yield" &&
+          !isSubagentPausedByYield(record) &&
           (record.cleanupCompletedAt !== undefined ||
             record.delivery?.status === "suspended" ||
             record.delivery?.status === "discarded" ||

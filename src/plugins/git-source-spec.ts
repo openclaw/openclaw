@@ -133,6 +133,12 @@ function normalizeGitLabel(value: string): string {
   return stripGitSuffix(value);
 }
 
+export function formatGitPluginSpec(url: string, ref?: string): string {
+  // A normalized Windows path can make an @ref mistaken for part of a local repository path.
+  const separator = process.platform === "win32" && path.isAbsolute(url) ? "#" : "@";
+  return `git:${url}${ref ? `${separator}${ref}` : ""}`;
+}
+
 export function parseGitPluginSpec(raw: string): ParsedGitPluginSpec | null {
   const trimmed = raw.trim();
   if (!trimmed.toLowerCase().startsWith(GIT_SPEC_PREFIX)) {
@@ -161,11 +167,10 @@ export function parseGitPluginSpec(raw: string): ParsedGitPluginSpec | null {
   } else {
     return null;
   }
-  const refSeparator = localPath && process.platform === "win32" ? "#" : "@";
   return {
     input: trimmed,
     ...normalized,
     ref: split.ref,
-    normalizedSpec: `${GIT_SPEC_PREFIX}${normalized.url}${split.ref ? `${refSeparator}${split.ref}` : ""}`,
+    normalizedSpec: formatGitPluginSpec(normalized.url, split.ref),
   };
 }

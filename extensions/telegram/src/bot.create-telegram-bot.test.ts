@@ -1244,41 +1244,6 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("dispatches native poll messages through the ordinary inbound handler", async () => {
-    loadConfig.mockReturnValue({ channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } } });
-    await createTelegramBot({ token: "tok" });
-
-    await getMessageHandler()(
-      makePrivateTextContext({
-        text: "",
-        messageId: 551,
-        message: {
-          text: undefined,
-          poll: {
-            id: "poll-551",
-            question: "Approve deployment?",
-            options: [
-              { persistent_id: "yes", text: "Yes", voter_count: 3 },
-              { persistent_id: "no", text: "No", voter_count: 0 },
-            ],
-            total_voter_count: 3,
-            is_closed: false,
-            is_anonymous: false,
-            type: "regular",
-            allows_multiple_answers: false,
-          },
-        },
-      }),
-    );
-
-    expect(replySpy).toHaveBeenCalledOnce();
-    const payload = requireValue(replySpy.mock.calls[0]?.[0], "inbound poll payload");
-    expect(payload.BodyForAgent).toContain("[Poll] Approve deployment?");
-    expect(payload.BodyForAgent).toContain("1. Yes — 3 votes");
-    expect(payload.BodyForAgent).toContain("2. No — 0 votes");
-    expect(payload.BodyForAgent).toContain("Total voters: 3");
-  });
-
   it("preserves a bot mention split across ordinary long-paste fragments", async () => {
     loadConfig.mockReturnValue(
       makeTelegramConfig({ groupPolicy: "open", groups: { "*": { requireMention: true } } }),

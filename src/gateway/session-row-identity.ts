@@ -138,3 +138,18 @@ export function captureSessionRowGeneration(rows: GatewaySessionRow[]): SessionR
   }
   return { revision: sessionRowsRevision(rows), ids };
 }
+
+export function sameSessionRowFacts(
+  previous: readonly unknown[] | undefined,
+  current: readonly unknown[],
+) {
+  if (previous?.length !== current.length) {
+    return false;
+  }
+  for (let i = 0; i < current.length; i++) {
+    if (current[i] !== previous[i]) {
+      return false;
+    }
+  }
+  return true;
+}

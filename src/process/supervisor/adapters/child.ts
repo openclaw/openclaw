@@ -100,6 +100,8 @@ const WORKER_START_MESSAGE = { type: "openclaw-worker-start-v1" } as const;
 type ChildAdapterInput = ProcessAdapterConstruction & {
   /** Retain a local tree owner independently of Gateway service markers. */
   ownProcessTree?: true;
+  /** Keep strict native cleanup custody outside the command anchor. */
+  retainNativeCustody?: true;
   /** A tree owner hands off descendants after the root exits normally. */
   releaseOnRootExit?: true;
   terminateOnHostLoss?: true;
@@ -202,6 +204,7 @@ export async function createChildAdapter(
       stdoutConsumption: params.stdoutConsumption,
       terminateOnHostLoss: params.terminateOnHostLoss,
       releaseOnRootExit: params.releaseOnRootExit,
+      retainNativeCustody: params.retainNativeCustody,
     });
   }
 

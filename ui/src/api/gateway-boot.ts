@@ -2,7 +2,7 @@ import type {
   GatewaySessionMessageSubscription,
   GatewaySessionMessageSubscriptionOptions,
 } from "@openclaw/gateway-client/browser";
-import { hasOperatorApprovalsAccess } from "../app/operator-access.ts";
+import { canSubscribeSessionApprovals } from "../app/session-approval-access.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import {
   GatewayBrowserClient,
@@ -141,7 +141,7 @@ export class EarlyGateway {
           })
           .acquire(this.sessionKey, {
             initialHistory: history,
-            includeApprovals: hasOperatorApprovalsAccess(hello.auth ?? null),
+            includeApprovals: canSubscribeSessionApprovals(hello, this.client.instanceId),
           });
       })
       .then((subscription) => {

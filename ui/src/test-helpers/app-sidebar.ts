@@ -342,6 +342,13 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       }
       return scopedSessions!.refreshList(options);
     },
+    wakeList(scope: Parameters<SessionCapability["wakeList"]>[0]) {
+      if (usesPrimarySessionList(scope)) {
+        void refresh({ ...scope, force: true });
+      } else {
+        scopedSessions!.wakeList(scope);
+      }
+    },
     reconcile,
     captureReconcile: () => reconcile,
     describe: (

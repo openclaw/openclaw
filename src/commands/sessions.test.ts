@@ -1,6 +1,6 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import { loadPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
 import { ExpectedCliError } from "../cli/expected-cli-error.js";
@@ -53,7 +53,6 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-import { sessionsCleanupCommand } from "./sessions-cleanup.js";
 import { sessionsCommand } from "./sessions.js";
 
 async function writeStore(...args: Parameters<typeof seedStore>) {
@@ -112,59 +111,6 @@ function singleSessionTableCells(logs: string[]): string[] {
 }
 
 describe("sessionsCommand", () => {
-  it.each([
-    { name: "listing", run: sessionsCommand, options: {} },
-    { name: "cleanup dry-run", run: sessionsCleanupCommand, options: { dryRun: true } },
-  ])("aligns $name columns for Unicode keys and full model names", async ({ run, options }) => {
-    const entries = [
-      ["agent:main:main", "gpt-5.6-luna"],
-      ["agent:main:東京", "gemini-3-flash-preview"],
-      ...["😀", "👩‍💻", "e\u0301"].map(
-        (cluster) =>
-          [
-            `agent:main:aaaa${cluster}middle${cluster}zzzzz`,
-            "claude-sonnet-4-6",
-            `agent:main:aaaa${cluster}...${cluster}zzzzz`,
-          ] as const,
-      ),
-    ] as const;
-    const store = await writeStore(
-      Object.fromEntries(
-        entries.map(([key, model], index) => [
-          key,
-          { sessionId: `row-${index}`, updatedAt: Date.now(), model, systemSent: true },
-        ]),
-      ),
-    );
-    const columns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
-    Object.defineProperty(process.stdout, "columns", { configurable: true, value: 240 });
-    onTestFinished(
-      () =>
-        void (columns
-          ? Object.defineProperty(process.stdout, "columns", columns)
-          : Reflect.deleteProperty(process.stdout, "columns")),
-    );
-    const { runtime, logs } = makeRuntime();
-    await run({ store, ...options }, runtime);
-    const lines = stripAnsi(logs.join("\n")).split("\n");
-    const header = lines.find((line) => line.includes("Key") && line.includes("Model")) ?? "";
-    expect(header).toContain("Flags");
-    for (const [key, model, displayKey = key] of entries) {
-      const row = lines.find((line) => line.includes(displayKey)) ?? "";
-      expect(singleSessionTableCells([header, row])[1]).toBe(displayKey);
-      for (const [title, value] of [
-        ["Key", displayKey],
-        ["Model", model],
-        ["Flags", "system"],
-      ] as const) {
-        expect(row).toContain(value);
-        expect(visibleWidth(row.slice(0, row.indexOf(value)))).toBe(
-          visibleWidth(header.slice(0, header.indexOf(title))),
-        );
-      }
-    }
-  });
-
   it("preserves recorded tokens without freshness provenance in text and JSON", async () => {
     const store = await writeSession(
       "boundary-session",

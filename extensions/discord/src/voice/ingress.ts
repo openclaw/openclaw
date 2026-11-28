@@ -131,7 +131,7 @@ export async function runDiscordVoiceAgentTurn(params: {
         messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
         accountId: params.accountId,
         extraSystemPrompt: context.extraSystemPrompt,
-        senderIsOwner: context.senderIsOwner,
+        runContext: { senderId: params.userId },
         allowModelOverride: Boolean(voiceModel),
         model: voiceModel,
         toolsAllow: params.toolsAllow,

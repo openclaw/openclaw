@@ -929,6 +929,22 @@ final class NodeAppModel {
         await cache.storeSessions(sessions, agentID: agentID)
     }
 
+    func localChatCacheUsage() async throws -> OpenClawClientDatabases.GatewayCacheUsage {
+        try await self.requireChatCacheDatabases().gatewayCacheUsage()
+    }
+
+    func clearLocalChatCache() async throws -> OpenClawClientDatabases.GatewayCacheUsage {
+        try await self.requireChatCacheDatabases().clearGatewayCache()
+    }
+
+    private func requireChatCacheDatabases() throws -> OpenClawClientDatabases {
+        if self.clientDatabases == nil {
+            self.clientDatabases = Self.makeClientDatabases()
+        }
+        guard let clientDatabases else { throw CocoaError(.fileReadUnknown) }
+        return clientDatabases
+    }
+
     /// Delete one forgotten gateway's cache and durable state, or both
     /// installation-wide databases during a full onboarding reset.
     func stageChatOfflineDataRemoval(gatewayID: String) async -> Bool {

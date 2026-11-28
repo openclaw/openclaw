@@ -21,6 +21,7 @@ import {
   projectMcpCallToolResult,
 } from "../../src/agents/mcp-content.js";
 import { snapshotToolSearchTargetTranscriptResult } from "../../src/agents/tool-search-transcript.js";
+import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 
 const { values } = parseArgs({
   options: {
@@ -79,12 +80,7 @@ for (let index = 0; index < 100; index++) {
 global.gc?.();
 const session = new inspector.Session();
 if (values.allocations) {
-  session.connect();
-  await session.post("HeapProfiler.startSampling", {
-    samplingInterval: 4096,
-    includeObjectsCollectedByMajorGC: true,
-    includeObjectsCollectedByMinorGC: true,
-  });
+  await startCollectedHeapSampling(session, 4096);
 }
 const hostLoad = loadavg();
 const cpuStart = process.cpuUsage();

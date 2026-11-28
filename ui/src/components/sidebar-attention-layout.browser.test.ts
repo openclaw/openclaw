@@ -188,16 +188,14 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
   it.each(["system", "mentions", "all"] as const)(
     "dismisses only the selected %s tab without mixing mentions and local snoozes",
     (selectedTab) => {
-      const automation: SidebarAttentionItem = {
+      const secondWarning: SidebarAttentionItem = {
         ...authWarning,
-        category: "automations",
-        kind: "cronFailed",
-        label: "Nightly report",
-        dismissal: { kind: "cronFailed", signature: "nightly-report" },
-        signature: "nightly-report",
+        label: "Anthropic",
+        dismissal: { kind: "modelAuthExpired", signature: "anthropic" },
+        signature: "anthropic",
       };
       const entries = inboxEntries(
-        [authWarning, automation],
+        [authWarning, secondWarning],
         [inboxMention("mention-a"), inboxMention("mention-b")],
       );
       const params = panelParams(entries);
@@ -218,7 +216,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
         selectedTab === "system" ? [] : [[["mention-a"]]],
       );
       expect(vi.mocked(params.onDismiss).mock.calls).toEqual(
-        selectedTab === "mentions" ? [] : [[authWarning.dismissal], [automation.dismissal]],
+        selectedTab === "mentions" ? [] : [[authWarning.dismissal], [secondWarning.dismissal]],
       );
     },
   );
@@ -435,6 +433,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Inbox panel layout", () => {
 
     await page.elementLocator(row).hover();
     await expect.poll(() => style(dismiss).opacity).toBe("1");
+    expect(bounds(dismiss).right).toBe(bounds(part(shell, "mobile-close")).right);
     expect(style(age).visibility).toBe("hidden");
     expect({ row: bounds(row).height, title: bounds(part(shell, "entity")).width }).toEqual(before);
   });

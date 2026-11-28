@@ -398,7 +398,8 @@ Reload debounce and in-flight operation deferral are no longer configurable and 
   and ancestors, bounded by total host RAM. Without a finite readable limit,
   total host RAM is used. Cgroup v1 limits are not detected and fall back to host RAM.
   `memory.high`, swap and current free memory do not select
-  the profile. CPU affinity, not a CPU quota conversion, supplies the CPU count.
+  the profile. The Gateway reports the runtime's available parallelism as the CPU count.
+  On Linux, Node.js can account for both CPU affinity and the cgroup CPU quota.
 - Changing the setting requires a Gateway restart.
 
 `standard` keeps the existing worker layout. `lean` runs the first worker of each core
@@ -411,7 +412,9 @@ qualified to release its native resources (such as Bun on Windows) also keep ded
 workers, because their cleanup relies on worker exit. A failed, cancelled or timed-out hosted task
 replaces the whole shared host: every hosted endpoint's in-flight work fails with an
 explicit error, and the next request starts a new host. Neither profile is a memory cap or
-OOM guarantee.
+OOM guarantee. One-shot CLI commands outside the Gateway, such as `openclaw agent --local`,
+always run every worker of these core kinds, not only the first, in the shared host, whatever
+this setting is.
 
 ### Lean startup
 

@@ -22,11 +22,13 @@ public final class OpenClawChatViewModel {
 
     public var input: String = "" {
         didSet {
-            guard self.input != oldValue else { return }
+            guard !self.input.utf8.elementsEqual(oldValue.utf8) else { return }
             self.noteComposerInputChanged()
         }
     }
 
+    var newChatDraft: NewChatDraft?
+    public var defaultFollowUpMode: OpenClawChatQueueMode?
     public internal(set) var replyTarget: OpenClawChatReplyTarget?
     public let webConversation: OpenClawWebConversation?
     var isApplyingWebSession = false
@@ -190,6 +192,7 @@ public final class OpenClawChatViewModel {
     // Capped or filtered rosters can omit the active row. Reset this projection with session-owned state.
     var retainedActiveSession: OpenClawChatSessionEntry?
     var legacySessions: [OpenClawChatSessionEntry] = []
+    var rosterClock = OpenClawChatSessionSnooze.RosterClock()
 
     public internal(set) var sidebarData: OpenClawChatSessionSidebarData?
 
@@ -1112,6 +1115,7 @@ extension OpenClawChatViewModel {
             }
             if let sidebarData, sidebarRead?.scope != sidebarData.scopeRevision { continue }
             self.latestAppliedSessionsFetchRequestID = sessionsFetchRequestID
+            self.rosterClock = .init(timestamp: res.ts, activityExpiresAt: res.activityExpiresAt)
             let organized = OpenClawChatSessionListOrganizer.organize(res.sessions)
             for session in organized {
                 self.unreadPatchGuard.observe(
@@ -1122,7 +1126,8 @@ extension OpenClawChatViewModel {
                     unread: session.unread)
             }
             if let sidebarData, let sidebarRead {
-                sidebarData.receive(organized, read: sidebarRead, replacingAgent: session.deliveryAgentID ?? "")
+                // Keep wire order in live Mac membership, not in the offline cache.
+                sidebarData.receive(res.sessions, read: sidebarRead, replacingAgent: session.deliveryAgentID ?? "")
             } else {
                 self.sessions = self.applyingLocalUnreadOverrides(to: organized)
             }
@@ -1174,15 +1179,6 @@ extension OpenClawChatViewModel {
                 fastOverrideCleared: self.lastSuccessfulFastOverrideClearedByTarget[target] == true,
                 verboseOverrideCleared: self.lastSuccessfulVerboseOverrideClearedByTarget[target] == true)
         }
-    }
-
-    func invalidateSessionMetadataReadiness() {
-        self.sessionMetadataGeneration &+= 1
-        self.readySessionMetadataGeneration = nil
-    }
-
-    var hasCurrentSessionMetadata: Bool {
-        self.readySessionMetadataGeneration == self.sessionMetadataGeneration
     }
 
     private func applySessionSwitch(
@@ -1479,8 +1475,10 @@ extension OpenClawChatViewModel {
         let previousRouteLeaseTask = previousPatchTail?.routeLeaseTask
         // Task scheduling is not FIFO. Chain lease capture separately so a
         // reconnect cannot give an older mutation a newer route than its successor.
-        let routeLeaseTask = Task { [weak self] in
+        let draftLease = self.newChatDraftSettingsLease(for: target)
+        let routeLeaseTask = Task<OpenClawChatSessionSettingsRouteLease?, Never> { [weak self] in
             _ = await previousRouteLeaseTask?.value
+            if let draftLease { return draftLease }
             return await self?.transport.acquireSessionSettingsRouteLease()
         }
         let task = Task { [weak self] in

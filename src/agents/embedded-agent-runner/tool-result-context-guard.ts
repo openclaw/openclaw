@@ -10,7 +10,6 @@ import { resolveEffectiveCompactionReserveTokens } from "../agent-compaction-con
 import type { Agent, AgentMessage } from "../runtime/index.js";
 import { createFreshLlmBoundaryTokenEstimator } from "../sessions/context-token-pressure.js";
 import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
-import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import {
   TOOL_IMAGE_CHARS,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
@@ -21,7 +20,11 @@ import {
   isToolResultMessage,
 } from "./tool-result-char-estimator.js";
 import { isToolResultTextBlock } from "./tool-result-text-budget.js";
-import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
+import {
+  formatOmittedCharsNotice,
+  truncateToolResultMessage,
+  truncateToolResultText,
+} from "./tool-result-truncation.js";
 
 function replaceToolResultContent(
   msg: AgentMessage,
@@ -121,7 +124,7 @@ function truncateToolResultToChars(
       content.filter(isText),
       imageCount > 0
         ? omissionNotice(0)
-        : formatContextLimitTruncationNotice(
+        : formatOmittedCharsNotice(
             Math.max(1, Math.floor(omittedChars / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE)),
           ),
     ).message;

@@ -1,10 +1,59 @@
 import type { ErrorShape, SessionsPatchParams } from "../../packages/gateway-protocol/src/index.js";
+import { SessionsPatchMutationSchema } from "../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
+import { resolveProtectedSessionVisibilityError } from "./server-methods/sessions-shared.js";
 import { invalidSessionRequest as invalid } from "./session-request-error.js";
 
+export function preservesSessionRecency(patch: SessionsPatchParams): boolean {
+  // Target and compare-and-swap fields in a guarded batch are not mutations.
+  const fields = Object.entries(patch)
+    .filter(
+      ([key, value]) =>
+        value !== undefined && Object.hasOwn(SessionsPatchMutationSchema.properties, key),
+    )
+    .map(([key]) => key);
+  if (fields.length === 1) {
+    const [field] = fields;
+    if (
+      field === "unread" ||
+      field === "pinned" ||
+      (field === "archived" && patch.archived === true)
+    ) {
+      return true;
+    }
+  }
+  return fields.length > 0 && fields.every((field) => field === "icon" || field === "color");
+}
+
+/** Same eligibility decision at tool scheduling and at the sidebar writer's commit. */
+export function resolveSessionSnoozeError(
+  cfg: OpenClawConfig,
+  storeKey: string,
+  entry: SessionEntry,
+  until: number,
+  now: number,
+) {
+  const protectedError = resolveProtectedSessionVisibilityError(cfg, storeKey, "snooze");
+  if (protectedError) {
+    return protectedError;
+  }
+  if (entry.archivedAt !== undefined) {
+    return invalid("cannot snooze an archived session; restore it first").error;
+  }
+  if (!isPinnableSessionEntry(storeKey, entry)) {
+    return invalid("cannot snooze a child session; snooze its parent session instead").error;
+  }
+  if (!(until > now)) {
+    return invalid("snooze wake time must be in the future").error;
+  }
+  return undefined;
+}
+
 export function applySessionPatchLifecycleFlags(params: {
+  cfg: OpenClawConfig;
   patch: SessionsPatchParams;
   next: SessionEntry;
   existingEntry?: SessionEntry;
@@ -58,14 +107,9 @@ export function applySessionPatchLifecycleFlags(params: {
       delete next.snoozedUntil;
       delete next.snoozedAt;
     } else if (snoozedUntil !== undefined) {
-      if (next.archivedAt !== undefined) {
-        return invalid("cannot snooze an archived session; restore it first").error;
-      }
-      if (!pinnable) {
-        return invalid("cannot snooze a child session; snooze its parent session instead").error;
-      }
-      if (!(snoozedUntil > now)) {
-        return invalid("snooze wake time must be in the future").error;
+      const error = resolveSessionSnoozeError(params.cfg, storeKey, next, snoozedUntil, now);
+      if (error) {
+        return error;
       }
       if (next.snoozedUntil !== snoozedUntil) {
         next.snoozedUntil = snoozedUntil;

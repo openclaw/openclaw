@@ -29,6 +29,7 @@ import {
   retireInitialChatSnapshot,
   setChatHistoryLoad,
   setChatHistoryRetrying,
+  shouldRequestCompactOpening,
 } from "./chat-history-state.ts";
 import {
   materializeVisibleAssistantStreamMessages,
@@ -36,7 +37,11 @@ import {
   readRunProjections,
   applyHistoryRun,
 } from "./chat-history-stream.ts";
-import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
+import {
+  applyChatPendingInputs,
+  loadOwnCancelledInputs,
+  mayRestoreOwnCancelledInputs,
+} from "./chat-pending-inputs.ts";
 import { isChatRunRecoveryStatus, reconcileChatRunStartup } from "./chat-run-startup.ts";
 import type { ChatHistoryHost, ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import {
@@ -87,20 +92,30 @@ export async function hydrateChatHistory(
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
   state.resetChatInputHistoryNavigation?.();
   state.chatLoading = true;
-  const request = (cursor?: string) => {
+  const matchesOpeningReceipt = (compactOpening: boolean) => {
+    const receipt = requests.initialHistory;
+    return (
+      method === "chat.startup" &&
+      receipt?.isCurrent() &&
+      receipt.paramsKey ===
+        JSON.stringify(
+          chatHistoryRequestParams(
+            method,
+            sessionKey,
+            requestAgentId,
+            undefined,
+            inputRunIds,
+            undefined,
+            compactOpening,
+          ),
+        )
+    );
+  };
+  const request = (cursor?: string, compactOpening = false) => {
+    // Keep the exact request check: changed input-run receipts need a fresh read.
+    const requestedCursor = matchesOpeningReceipt(compactOpening) ? undefined : cursor;
     const initialHistory = requests.initialHistory;
     delete requests.initialHistory;
-    // A full page already covers a cache restored while its subscription was pending.
-    // Keep the exact request check: changed input-run receipts still need a fresh read.
-    const requestedCursor =
-      method === "chat.startup" &&
-      initialHistory?.isCurrent() &&
-      initialHistory.paramsKey ===
-        JSON.stringify(
-          chatHistoryRequestParams(method, sessionKey, requestAgentId, undefined, inputRunIds),
-        )
-        ? undefined
-        : cursor;
     const historyState = readChatHistoryState(state, requestedCursor);
     const key = `${requestKeyPrefix}${requestedCursor === undefined ? "page" : `cursor:${requestedCursor}`}${JSON.stringify(historyState?.stateRevision ?? null)}`;
     const load = requests.historyLoad;
@@ -130,6 +145,7 @@ export async function hydrateChatHistory(
       inputRunIds,
       historyState,
       initialHistory,
+      compactOpening,
     );
   };
   try {
@@ -147,6 +163,12 @@ export async function hydrateChatHistory(
       }
       if (admission === requests.subscriptionReady) {
         if (!ready) {
+          if (mayRestoreOwnCancelledInputs(state)) {
+            await loadOwnCancelledInputs(state, isCurrent);
+          }
+          if (!isCurrent()) {
+            return undefined;
+          }
           if (requests.subscriptionError) {
             setChatHistoryLoad(state, {
               phase: "failed",
@@ -169,9 +191,32 @@ export async function hydrateChatHistory(
     }
     // The snapshot covers activity emitted before the foreground observer was
     // admitted; subsequent activity arrives through its acknowledged full stream.
-    let response = await request(readChatHistoryCursor(state));
+    const cursor = readChatHistoryCursor(state);
+    const compactReceipt =
+      state.settings?.compactSessionOpening === true && matchesOpeningReceipt(true);
+    const compactOpening = shouldRequestCompactOpening(state, compactReceipt);
+    let compactPageRequested = compactOpening && (cursor === undefined || compactReceipt);
+    let response = await request(cursor, compactOpening);
     if (!isCurrent()) {
       return undefined;
+    }
+    if (
+      compactPageRequested &&
+      cursor !== undefined &&
+      state.chatMessages.length &&
+      !isHistoryCursor(response)
+    ) {
+      const { compactOpeningOverlapsSavedHistory } = await import("./chat-history-held-gap.ts");
+      if (!isCurrent()) {
+        return undefined;
+      }
+      if (!compactOpeningOverlapsSavedHistory(state, response)) {
+        compactPageRequested = false;
+        response = await request(cursor);
+        if (!isCurrent()) {
+          return undefined;
+        }
+      }
     }
     const cursorReset = isHistoryCursor(response) && response.kind === "reset";
     if (cursorReset) {
@@ -310,6 +355,9 @@ export async function hydrateChatHistory(
       };
     }
     const res = response;
+    if (compactPageRequested && !requests.acceptedHistory && previousMessages.length === 0) {
+      requests.compactOpeningSessionKey = sessionKey;
+    }
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const nextPagination = resolveChatHistoryPagination(res);
     const nextSessionId = historySessionId(res);
@@ -467,6 +515,18 @@ export async function hydrateChatHistory(
     if (missingReadScope) {
       resetChatHistoryProjection(state, requestAgentId);
       state.chatVerboseLevel = null;
+    }
+    const failedRead = requests.historyRead;
+    const ownsFailure = () =>
+      requests.historyRead === failedRead &&
+      state.sessionKey === sessionKey &&
+      state.client === client &&
+      state.connectionEpoch === connectionEpoch;
+    if (mayRestoreOwnCancelledInputs(state)) {
+      await loadOwnCancelledInputs(state, ownsFailure);
+    }
+    if (!ownsFailure()) {
+      return undefined;
     }
     setChatHistoryLoad(state, {
       phase: "failed",

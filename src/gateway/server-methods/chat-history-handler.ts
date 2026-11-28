@@ -42,12 +42,12 @@ import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
+import { usesLegacySessionPins } from "../session-pin-compatibility.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { withReadySessionRows, type SessionRowReadView } from "../session-row-prepared-read.js";
 import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveGatewayModelThinkingProfile } from "../session-utils-model.js";
-import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { getSessionDefaults, resolveSessionModelRef } from "../session-utils.js";
 import { withPreparedSessionResolve } from "../sessions-resolve.js";
 import { readChatHistoryDelta } from "./chat-history-delta.js";
@@ -58,6 +58,7 @@ import {
   type ChatHistoryMethod,
 } from "./chat-history-recovery.js";
 import {
+  buildUnsavedHistoryRow,
   prepareChatHistorySessionRead,
   readChatHistoryRequestPage,
 } from "./chat-history-session-read.js";
@@ -188,8 +189,8 @@ export async function handleChatHistoryRequest({
       allowPluginNormalization: false,
     });
     const max = limit ?? 200;
-    const maxHistoryBytes = Math.min(maxBytes ?? Infinity, getMaxChatHistoryMessagesBytes());
     // Bound default responses independently of recovery lookahead and explicit back-scroll budgets.
+    const maxHistoryBytes = Math.min(maxBytes ?? Infinity, getMaxChatHistoryMessagesBytes());
     const maxResponseBytes = Math.min(maxBytes ?? 512 * 1024, maxHistoryBytes);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(maxChars);
     const pendingInputs =
@@ -199,12 +200,12 @@ export async function handleChatHistoryRequest({
               { agentId: sessionAgentId, sessionKey: canonicalKey, sessionId, storePath },
               {
                 before: pendingBefore,
+                audience: { profileId: client?.authenticatedUserProfile?.profileId ?? "" },
                 limit: max,
                 maxChars: effectiveMaxChars,
                 queuedRunIds,
                 cronStorePath: context.cronStorePath,
-                resolveGatewayContext: context.resolveGatewayContext,
-                physicalPaths: rowProjection.physicalPaths,
+                ...runtimeScope,
               },
             ),
           )
@@ -332,8 +333,9 @@ export async function handleChatHistoryRequest({
           }).row ??
           (entry
             ? undefined
-            : buildGatewaySessionRow({
+            : buildUnsavedHistoryRow({
                 ...selectedSession,
+                client,
                 key: canonicalKey,
                 preparedAcpMeta: unsavedAcpMeta ?? null,
                 preparedRuntimeOwnership: null,
@@ -343,12 +345,6 @@ export async function handleChatHistoryRequest({
         { config: cfg, phase: method },
       );
 
-      // Unsaved sessions have no resident row, but their configured defaults use the same wire contract.
-      if (!entry && sessionInfo) {
-        const presentFastMode = prepareSessionFastModePresentation(client);
-        sessionInfo.fastMode = presentFastMode(sessionInfo.fastMode);
-        sessionInfo.effectiveFastMode = presentFastMode(sessionInfo.effectiveFastMode);
-      }
       if (entry && !sessionInfo) {
         respondChatHistoryUnavailable(
           method,
@@ -478,6 +474,7 @@ export async function handleChatHistoryRequest({
           }
           const sessionSnapshot = buildGatewaySessionSnapshot({
             sessionRow: sessionInfo,
+            includeLegacyPins: usesLegacySessionPins(client),
             agentId: sessionAgentId,
             activeRunState,
           });

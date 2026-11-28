@@ -29,6 +29,27 @@ function dispatches(fixture: ReturnType<typeof createDispatchFixture>) {
 }
 
 describe("candidate-owned full release dispatch entry point", () => {
+  it("rejects an invalid frozen mock before dispatch unless the local preflight is skipped", () => {
+    const f = createDispatchFixture({
+      candidateOwned: true,
+      targetSource: {
+        "mock-target.ts": "export const read = () => 1;\n",
+        "mock-target.test.ts": 'vi.mock("./mock-target.js", () => ({ read: vi.fn() }));\n',
+      },
+    });
+    const rejected = f.run();
+    expectDispatchFailure(rejected, "First-party mock factories must preserve real exports");
+    expect(rejected.stderr).toContain("mock-target.test.ts:1");
+    expect(dispatches(f)).toEqual([]);
+
+    const skipped = f.run(["--skip-local-mock-preflight"]);
+    expect(skipped.status, skipped.stderr).toBe(0);
+    expect(skipped.stderr).toContain(
+      `Skipping local mock-export preflight for ${f.targetSha} (--skip-local-mock-preflight)`,
+    );
+    expect(dispatches(f)).toEqual([P, Q]);
+  });
+
   it("admits repaired P while retaining existing Q, original artifacts, and baselines", () => {
     const f = createDispatchFixture({ candidateOwned: true, advanceMainBeforeAdmission: 1 });
     const artifacts = { runId: "51", runAttempt: 1 };
@@ -218,13 +239,7 @@ describe("candidate-owned full release dispatch entry point", () => {
         "-f",
         "validation_purpose=publish",
         "-f",
-        `publication_selection_json=${JSON.stringify({
-          route: "normal",
-          npmDistTag: "latest",
-          publishOpenclawNpm: true,
-          pluginPublishScope: "all-publishable",
-          plugins: [],
-        })}`,
+        `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
       ]);
 
       expect(result.status).toBe(1);
@@ -716,13 +731,7 @@ describe("candidate-owned full release dispatch entry point", () => {
         "-f",
         "validation_purpose=publish",
         "-f",
-        `publication_selection_json=${JSON.stringify({
-          route: "normal",
-          npmDistTag: "latest",
-          publishOpenclawNpm: true,
-          pluginPublishScope: "all-publishable",
-          plugins: [],
-        })}`,
+        `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
       ]);
       expect(prepared.status, prepared.stderr).toBe(78);
       expect(dispatches(f)).toEqual([P]);
@@ -873,6 +882,31 @@ describe("candidate-owned full release dispatch entry point", () => {
       expect(f.record().request.targetSha).toBe(f.targetSha);
     },
   );
+  it("rejects supporting Q with old admission tooling before creating a ref or dispatching", () => {
+    const fixture = createDispatchFixture({ candidateOwned: true });
+    const path = ".github/workflows/openclaw-release-prepare.yml";
+    const original = readFileSync(join(fixture.checkout, path), "utf8");
+    writeFileSync(
+      join(fixture.checkout, path),
+      original.replace('  RELEASE_PREFLIGHT_FIRST_CONTRACT: "1"\n', ""),
+    );
+    runGit(fixture.checkout, ["commit", "-am", "fixture: older admission contract"]);
+    const admissionSha = runGit(fixture.checkout, ["rev-parse", "HEAD"]);
+    runGit(fixture.checkout, ["push", "origin", "main"]);
+    const result = fixture.run([
+      "--admission-workflow-sha",
+      admissionSha,
+      "-f",
+      "preflight_first=true",
+      "-f",
+      "validation_purpose=publish",
+      "-f",
+      `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
+    ]);
+    expectDispatchFailure(result, `Admission SHA ${admissionSha} does not support preflight_first`);
+    expect(fixture.refs()).toEqual([]);
+    expect(dispatches(fixture)).toEqual([]);
+  });
   it("retains publication and lane inputs in the envelope and reopens the same request read-only", () => {
     const fixture = createDispatchFixture({ candidateOwned: true });
     const excluded: string[] = [];
@@ -885,6 +919,8 @@ describe("candidate-owned full release dispatch entry point", () => {
       "validation_purpose=publish",
       "-f",
       `publication_selection_json=${selection}`,
+      "-f",
+      "preflight_first=true",
       "-f",
       `extension_test_exclude_patterns_json=${excludedJson}`,
     ]);
@@ -903,6 +939,7 @@ describe("candidate-owned full release dispatch entry point", () => {
       laneInputs: {
         extension_test_exclude_patterns_json: JSON.stringify(excluded),
         qualification_baselines_json: JSON.stringify(frozenBaselines),
+        preflight_first: "true",
       },
     });
     expect(record.request.inputs.trusted_workflow_json).toBe(wire);
@@ -910,6 +947,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     expect(record.request.inputs).not.toHaveProperty("validation_purpose");
     expect(record.request.wireInputs).not.toHaveProperty("publication_selection_json");
     expect(record.request.wireInputs).not.toHaveProperty("extension_test_exclude_patterns_json");
+    expect(record.request.wireInputs).not.toHaveProperty("preflight_first");
     expect(record.request.wireInputs).not.toHaveProperty("known_flaky_jobs_json");
     expect(Object.keys(fixture.readPayload().body.inputs)).toHaveLength(25);
     const before = readFileSync(fixture.requestPath());
@@ -929,6 +967,10 @@ describe("candidate-owned full release dispatch entry point", () => {
     );
     expect(reopened.status, reopened.stderr).toBe(0);
     expect(readFileSync(fixture.requestPath())).toEqual(before);
+    expectDispatchFailure(
+      fixture.run(["--request-file", fixture.requestPath(), "-f", "preflight_first=false"], true),
+      "conflict with the retained request",
+    );
     const changedExclusion = fixture.run(
       [
         "--request-file",

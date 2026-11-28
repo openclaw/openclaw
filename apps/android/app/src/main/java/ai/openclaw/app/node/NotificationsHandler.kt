@@ -1,6 +1,6 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import ai.openclaw.app.nonBlankString
 import android.content.Context
 import kotlinx.serialization.json.JsonArray
@@ -23,12 +23,12 @@ class NotificationsHandler internal constructor(
   },
 ) {
   /** Lists the current listener snapshot after nudging Android to reconnect if needed. */
-  suspend fun handleNotificationsList(_paramsJson: String?): GatewaySession.InvokeResult {
+  suspend fun handleNotificationsList(_paramsJson: String?): InvokeResult {
     val snapshot = readSnapshotWithRebind()
-    return GatewaySession.InvokeResult.ok(snapshotPayloadJson(snapshot))
+    return InvokeResult.ok(snapshotPayloadJson(snapshot))
   }
 
-  suspend fun handleNotificationsActions(paramsJson: String?): GatewaySession.InvokeResult {
+  suspend fun handleNotificationsActions(paramsJson: String?): InvokeResult {
     readSnapshotWithRebind()
 
     val params =
@@ -63,7 +63,7 @@ class NotificationsHandler internal constructor(
         ),
       )
     if (!result.ok) {
-      return GatewaySession.InvokeResult.error(
+      return InvokeResult.error(
         code = result.code ?: "UNAVAILABLE",
         message = result.message ?: "notification action failed",
       )
@@ -75,7 +75,7 @@ class NotificationsHandler internal constructor(
         put("key", JsonPrimitive(key))
         put("action", JsonPrimitive(actionRaw))
       }.toString()
-    return GatewaySession.InvokeResult.ok(payload)
+    return InvokeResult.ok(payload)
   }
 
   private fun readSnapshotWithRebind(): DeviceNotificationSnapshot {

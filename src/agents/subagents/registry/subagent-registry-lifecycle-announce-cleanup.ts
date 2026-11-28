@@ -8,6 +8,10 @@ import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.
 import { reserveSubagentCompletionControllerSource } from "../announce/subagent-announce-controller-source.js";
 import { loadSessionEntryByKey } from "../announce/subagent-announce-delivery.runtime.js";
 import {
+  acceptsAnnounceDeliveryResult,
+  resolveAnnounceCleanupOutcome,
+} from "../announce/subagent-announce-obligation.js";
+import {
   matchesSubagentChildSessionOwner,
   resolveRecordedRequester,
   resolveSubagentChildAgentId,
@@ -50,6 +54,7 @@ import {
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { observeSubagentRequesterDelivery } from "./subagent-requester-delivery.js";
 import { hasRequesterCompletionCohort } from "./subagent-requester-settle-identity.js";
+import { hasRequesterTurnYielded } from "./subagent-requester-turn-custody.js";
 import { isClaimedByLiveRequesterTurn } from "./subagent-requester-turn-liveness.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
@@ -261,49 +266,45 @@ export const startSubagentAnnounceCleanupFlow = (
         return;
       }
       if (cleanup === "delete" && (await prepareChildSessionEffects())) {
-        const { sessionId, lifecycleRevision } = entry.childSessionIdentity ?? {};
         const currentSession = await loadSessionEntryByKey(
           entry.childSessionKey,
           resolveSubagentChildAgentId(entry),
         );
-        const canDelete = await prepareChildSessionEffects();
-        if (canDelete && !currentSession) {
-          await suppressChildSessionEffects();
-        } else if (
-          canDelete &&
-          resolveSubagentChildAuthority(entry, currentSession).status !== "verified"
-        ) {
-          // Without both lifecycle identities, key-only deletion could remove
-          // a successor that reused this child session after cleanup yielded.
-          await suppressChildSessionEffects();
-        } else if (canDelete && sessionId && lifecycleRevision) {
-          // This durable boundary prevents a late yield from reviving a run
-          // after deletion may already have reached the gateway.
-          await commit((draft) => {
-            draft.deleteCleanupDispatchedAt ??= Date.now();
-          });
-          const sessionCleanup = await deleteSubagentSessionForCleanup({
-            callGateway: params.callGateway,
-            gatewayBinding: { resolveGatewayContext: getGatewayContextResolver(entry) },
-            isCurrent: childSessionEffectsAllowed,
-            prepareCurrent: prepareChildSessionEffects,
-            childSessionKey: entry.childSessionKey,
-            childAgentId: resolveSubagentChildAgentId(entry),
-            spawnMode: entry.spawnMode,
-            expectedSessionId: sessionId,
-            expectedLifecycleRevision: lifecycleRevision,
-            onError: (error) =>
-              params.warn("sessions.delete failed during subagent cleanup", {
-                error: buildSafeLifecycleErrorMeta(error),
-                runId,
-                childSessionKey: entry.childSessionKey,
-              }),
-          });
-          if (sessionCleanup === "failed") {
-            throw new Error("subagent session cleanup did not complete");
-          }
-          if (sessionCleanup === "changed") {
+        if (await prepareChildSessionEffects()) {
+          const childAuthority = resolveSubagentChildAuthority(entry, currentSession ?? null);
+          if (childAuthority.status !== "verified") {
+            // Without both lifecycle identities, key-only deletion could remove
+            // a successor that reused this child session after cleanup yielded.
             await suppressChildSessionEffects();
+          } else {
+            // This durable boundary prevents a late yield from reviving a run
+            // after deletion may already have reached the gateway.
+            await commit((draft) => {
+              draft.deleteCleanupDispatchedAt ??= Date.now();
+            });
+            const sessionCleanup = await deleteSubagentSessionForCleanup({
+              callGateway: params.callGateway,
+              gatewayBinding: { resolveGatewayContext: getGatewayContextResolver(entry) },
+              isCurrent: childSessionEffectsAllowed,
+              prepareCurrent: prepareChildSessionEffects,
+              childSessionKey: entry.childSessionKey,
+              childAgentId: childAuthority.childAgentId,
+              spawnMode: entry.spawnMode,
+              expectedSessionId: childAuthority.sessionIdentity.sessionId,
+              expectedLifecycleRevision: childAuthority.sessionIdentity.lifecycleRevision,
+              onError: (error) =>
+                params.warn("sessions.delete failed during subagent cleanup", {
+                  error: buildSafeLifecycleErrorMeta(error),
+                  runId,
+                  childSessionKey: entry.childSessionKey,
+                }),
+            });
+            if (sessionCleanup === "failed") {
+              throw new Error("subagent session cleanup did not complete");
+            }
+            if (sessionCleanup === "changed") {
+              await suppressChildSessionEffects();
+            }
           }
         }
       }
@@ -322,11 +323,11 @@ export const startSubagentAnnounceCleanupFlow = (
   const requesterSettleGeneration = entry.requesterSettleWake?.rearmGeneration;
   const requesterOwnsCompletion = () => {
     assertCurrent();
-    return entry.requesterTurnYielded === true || hasRequesterCompletionCohort(entry);
+    return hasRequesterTurnYielded(entry) || hasRequesterCompletionCohort(entry);
   };
   // Existing cohort ownership blocks competing sends but does not settle this attempt's delivery.
   const requesterTookCompletion = (current: SubagentRunRecord) =>
-    current.requesterTurnYielded === true ||
+    hasRequesterTurnYielded(current) ||
     (current.completionTarget === "parent" &&
       current.requesterSettleWake?.requesterYieldBatch === true) ||
     current.requesterSettleWake?.rearmGeneration !== requesterSettleGeneration;
@@ -383,7 +384,10 @@ export const startSubagentAnnounceCleanupFlow = (
       context,
       entry,
       cleanup,
-      shouldCreditPriorDelivery ? "delivered" : handedOff ? "requester_waiting" : announceOutcome,
+      resolveAnnounceCleanupOutcome(announceOutcome, {
+        delivered: shouldCreditPriorDelivery,
+        handedOff,
+      }),
       cleanupGeneration,
       stateContext,
     );
@@ -455,21 +459,22 @@ export const startSubagentAnnounceCleanupFlow = (
         return;
       }
       assertCurrent();
-      // A stale announce cannot replace a delivery already committed by requester-settle.
-      if (entry.delivery?.status === "delivered") {
-        return;
-      }
       const delivery = resolveRequesterDeliveryOutcome([entry], observedDelivery);
-      // A late failure cannot rearm an announcement transferred to the batch.
-      // Committed sends still retain their delivery evidence.
-      if (!delivery.delivered && requesterTookCompletion(entry)) {
+      if (
+        !acceptsAnnounceDeliveryResult(delivery, {
+          delivered: entry.delivery?.status === "delivered",
+          handedOff: requesterTookCompletion(entry),
+        })
+      ) {
         return;
       }
       await commit(
         (draft, previous) => {
           if (
-            draft.delivery?.status === "delivered" ||
-            (!delivery.delivered && requesterTookCompletion(draft))
+            !acceptsAnnounceDeliveryResult(delivery, {
+              delivered: draft.delivery?.status === "delivered",
+              handedOff: requesterTookCompletion(draft),
+            })
           ) {
             return false;
           }
@@ -545,21 +550,23 @@ export const startSubagentAnnounceCleanupFlow = (
       }
       // The registry already owns this completion's admitted source. Starting
       // the requester turn inside the announce flow owns its next admission.
-      announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () =>
-        params.runSubagentAnnounceFlow({
-          ...announceParams,
-          controllerInput,
-          childAgentId: entry.childAgentId,
-          childSessionIdentity: entry.childSessionIdentity,
-          signal: deadline.signal,
-          onAccepted: releasePreparation,
-          // Delivery expiry bounds admission; the requester owns its execution budget.
-          onExecutionStarted: () => {
-            releasePreparation();
-            clearTimeout(deadlineTimer);
-          },
-        }),
-      );
+      announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, (authority) => {
+        const deliver = () =>
+          params.runSubagentAnnounceFlow({
+            ...announceParams,
+            controllerInput,
+            childAgentId: entry.childAgentId,
+            childSessionIdentity: entry.childSessionIdentity,
+            signal: deadline.signal,
+            onAccepted: releasePreparation,
+            // Delivery expiry bounds admission; the requester owns its execution budget.
+            onExecutionStarted: () => {
+              releasePreparation();
+              clearTimeout(deadlineTimer);
+            },
+          });
+        return authority?.requesterOrigin ? authority.runWithRequester(deliver) : deliver();
+      });
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         throw error;

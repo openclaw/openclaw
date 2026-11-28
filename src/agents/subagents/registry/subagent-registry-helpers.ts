@@ -26,6 +26,7 @@ import { resolveSubagentChildSessionOwner } from "./subagent-child-session-owner
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentPausedByYield } from "./subagent-requester-turn-custody.js";
 import {
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
@@ -235,7 +236,6 @@ export async function persistSubagentSessionTiming(
       update: ([row]) => {
         if (
           !row ||
-          options?.isCurrentGeneration?.() === false ||
           (expected &&
             (row.entry.sessionId !== expected.sessionId ||
               row.entry.lifecycleRevision !== expected.lifecycleRevision))
@@ -272,15 +272,12 @@ export async function persistSubagentSessionTiming(
     }
   };
   try {
-    if (options?.session) {
-      options.session.assertCurrent();
-      if (options.session.entry) {
-        await persist(options.session.entry, options.session.assertCurrent);
+    const session = options?.session;
+    if (session || options?.sessionEntryCurrent) {
+      session?.assertCurrent();
+      if (!session || session.entry) {
+        await persist(session?.entry, session?.assertCurrent);
       }
-      return;
-    }
-    if (options?.sessionEntryCurrent) {
-      await persist(undefined);
       return;
     }
     await withSessionEntryReadOnlyInWorker(
@@ -355,7 +352,7 @@ export function updateSubagentArchiveAtMs(entry: SubagentRunRecord, cfg?: OpenCl
         ? entry.completion.capturedAt
         : endedAt
     : entry.cleanup === "delete" &&
-        (entry.pauseReason !== "sessions_yield" ||
+        (!isSubagentPausedByYield(entry) ||
           (!entry.waitForMessage && subagentRuns.isCompletionAuthorityRetired(entry)))
       ? entry.delivery?.discardReason === "task-missing"
         ? (entry.delivery.discardedAt ?? endedAt)

@@ -8,16 +8,24 @@ import type * as ConfigMutate from "../config/mutate.js";
 import { GatewayCredentialsRequiredError } from "../gateway/call-device-auth.js";
 import type { CallGatewayOptions } from "../gateway/call-options.js";
 import * as openclawRoot from "../infra/openclaw-root.js";
+import * as updateRunReader from "../infra/update-run-reader.js";
+import type { UpdateRunRecord } from "../infra/update-run-record.js";
+import { createUpdateRunRecordFixture } from "../infra/update-run-record.test-support.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
+import * as stateDatabaseCache from "../state/openclaw-state-db-cache.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { VERSION } from "../version.js";
+import { registerReleaseUpdateGatewayTests } from "./cli.gateway.test-support.js";
 import {
   runReleaseUpdateCli,
   tryAdoptInstalledPackageForGateway,
   waitForReleaseUpdateFailure,
 } from "./cli.js";
-import { createTrialPending, resolvePrefix, switchLink } from "./store.js";
+import * as installationIdentity from "./installation-identity.js";
+import { TRIAL_BUDGET_MS } from "./launcher.js";
+import { createTrialPending, resolvePrefix, switchLink, writeTrial } from "./store.js";
+import * as releaseStore from "./store.js";
 import type * as TargetModule from "./target.js";
 
 let home: TempHomeEnv;
@@ -35,13 +43,23 @@ beforeEach(async () => {
 const sent = vi.hoisted(() => [] as unknown[]);
 const missingCredentials = vi.hoisted(() => ({ enabled: false }));
 const install = vi.hoisted(() => ({ kind: "git" }));
-const localRun = vi.hoisted(() => ({ status: "skipped", phase: "finished" }));
+const localRun = vi.hoisted((): Pick<UpdateRunRecord, "status" | "phase" | "origin"> => ({
+  status: "skipped",
+  phase: "finished",
+  origin: {},
+}));
 const packageTarget = vi.hoisted(() => ({ version: "" }));
 const confirmDowngrade = vi.hoisted(() =>
   vi.fn<() => Promise<"confirmed" | "cancelled" | "confirmation-required">>(),
 );
-const createRun = vi.hoisted(() => vi.fn(async () => ({ runId: "run-cli" })));
+const gatewayRunId = vi.hoisted(() => "e901d247-3929-4f73-94ef-0e54efbcfb73");
+const createRun = vi.hoisted(() => vi.fn(async () => ({ runId: gatewayRunId })));
 const mutateConfig = vi.hoisted(() => vi.fn());
+// Keep ordinary promise timers real; the polling case installs its controlled wait.
+vi.mock("node:timers/promises", async (importOriginal) => {
+  const original = await importOriginal<typeof import("node:timers/promises")>();
+  return { ...original, setTimeout: vi.fn(original.setTimeout) };
+});
 vi.mock("../config/mutate.js", async (importOriginal) => ({
   ...(await importOriginal<typeof ConfigMutate>()),
   mutateConfigFileWithRetry: mutateConfig,
@@ -72,19 +90,15 @@ vi.mock("../infra/update-install-status.js", async (importOriginal) => ({
   }),
 }));
 const prepared = vi.hoisted(() => [] as unknown[]);
-const maintainRuntimes = vi.hoisted(() =>
-  vi.fn(async (_repair: boolean, _authority: { assertCurrent: () => void }) => [] as string[]),
+const prepareReply = vi.hoisted(() =>
+  vi.fn(async () => ({ status: "current" as const, version: "2026.11.6", pluginsChanged: false })),
 );
-// mock-isolation: reclamation scans host temp directories; prepare.test.ts runs it for real.
-vi.mock("../commands/doctor-retained-runtime.js", () => ({
-  prepareRetainedUpdateRuntimeMaintenance: async () => maintainRuntimes,
-}));
 // mock-isolation: preparation builds a real release; this test checks only the channel it is given.
 vi.mock("./run.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./run.js")>()),
   prepareUpdate: async (params: unknown) => {
     prepared.push(params);
-    return { status: "current", version: "2026.11.6", pluginsChanged: false };
+    return prepareReply();
   },
 }));
 vi.mock("../infra/update-run-write.async.js", async (importOriginal) => ({
@@ -93,23 +107,27 @@ vi.mock("../infra/update-run-write.async.js", async (importOriginal) => ({
 }));
 vi.mock("../infra/update-run-reader.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-run-reader.js")>()),
-  getUpdateRunAsync: async () => ({
-    ...localRun,
-    before: { version: "2026.11.8" },
-    runId: "run-cli",
-    reason: "already-current",
-    steps: [],
-    after: {},
-    origin: {},
-  }),
+  getUpdateRunAsync: async () =>
+    createUpdateRunRecordFixture("run-cli", {
+      ...localRun,
+      before: { version: "2026.11.8" },
+      reason: "already-current",
+    }),
 }));
-const runsGet = vi.hoisted(() => [] as Array<() => unknown>);
+const runsGet = vi.hoisted(() => [] as Array<() => { run: Partial<UpdateRunRecord> | null }>);
+const restartReply = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
+const useWireGateway = vi.hoisted(() => ({ enabled: false }));
 vi.mock("../gateway/call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../gateway/call.js")>()),
   callGateway: async (request: CallGatewayOptions) => {
+    if (useWireGateway.enabled) {
+      const actual = await importOriginal<typeof import("../gateway/call.js")>();
+      return actual.callGateway(request);
+    }
     if (request.method === "gateway.restart.request") {
+      await request.prepareDispatchCurrent?.();
       sent.push(request);
-      return { ok: true };
+      return restartReply();
     }
     if (request.method === "update.run") {
       if (missingCredentials.enabled) {
@@ -125,20 +143,26 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
             : [],
         },
       } as Parameters<NonNullable<CallGatewayOptions["onHelloOk"]>>[0]);
+      await request.prepareDispatchCurrent?.();
       request.assertDispatchCurrent?.();
       sent.push(structuredClone(request.params));
       return runsGet.length
-        ? { runId: "run-1", ok: true }
+        ? { runId: gatewayRunId, ok: true }
         : { runId: null, ok: false, message: "refused for the test" };
     }
     if (request.method === "update.runs.get" && runsGet.length) {
-      return runsGet.shift()!();
+      const { run } = runsGet.shift()!();
+      return { run: run ? createUpdateRunRecordFixture(gatewayRunId, run) : null };
     }
     throw new Error(`unexpected ${request.method}`);
   },
 }));
 
 afterEach(async () => {
+  // Wire fixtures restore their clock before closing their peers.
+  if (!useWireGateway.enabled) {
+    vi.useRealTimers();
+  }
   vi.restoreAllMocks();
   await home.restore();
   capabilities.length = 0;
@@ -146,14 +170,17 @@ afterEach(async () => {
   missingCredentials.enabled = false;
   localRun.status = "skipped";
   localRun.phase = "finished";
-  maintainRuntimes.mockReset();
-  maintainRuntimes.mockResolvedValue([]);
+  localRun.origin = {};
+
   confirmDowngrade.mockReset();
   createRun.mockClear();
   mutateConfig.mockClear();
   sent.length = 0;
   prepared.length = 0;
+  prepareReply.mockReset();
   runsGet.length = 0;
+  restartReply.mockReset();
+  useWireGateway.enabled = false;
   process.exitCode = undefined;
 });
 
@@ -179,6 +206,31 @@ it("sends a pinned commit and the --timeout budget that the Gateway protocol acc
   expect(timeoutMs).toBeGreaterThan(0);
   expect(timeoutMs).toBeLessThanOrEqual(5_000);
   expect(validateUpdateRunParams(sent[0])).toBe(true);
+});
+
+it("retires shared-state custody before dispatching an update to the Gateway", async () => {
+  const events: string[] = [];
+  vi.spyOn(stateDatabaseCache, "releaseOpenClawStateDatabaseCustody").mockImplementation(
+    async () => {
+      expect(sent).toEqual([]);
+      events.push("released");
+    },
+  );
+  runsGet.push(() => ({
+    run: { status: "succeeded", steps: [], after: {}, origin: {} },
+  }));
+  await runReleaseUpdateCli({ json: true, restart: true, runningRoot: root });
+  expect(events).toEqual(["released"]);
+});
+
+it("does not dispatch an update if shared-state custody cannot be released", async () => {
+  vi.spyOn(stateDatabaseCache, "releaseOpenClawStateDatabaseCustody").mockRejectedValue(
+    new Error("State custody could not be released"),
+  );
+  await expect(
+    runReleaseUpdateCli({ json: true, restart: true, runningRoot: root }),
+  ).rejects.toThrow("State custody could not be released");
+  expect(sent).toEqual([]);
 });
 
 it("keeps a stable-tag checkout on stable when it updates without the Gateway", async () => {
@@ -222,69 +274,105 @@ it("keeps following the run while the restarting Gateway refuses connections", a
   expect(process.exitCode).toBe(0);
 });
 
-it.each([false, true])(
-  "reclaims earlier updaters' runtimes itself before the Gateway updates (json=%s)",
-  async (json) => {
-    const removed = "Removed abandoned updater runtime: /tmp/openclaw-update-runtime-Gone01";
-    maintainRuntimes.mockImplementation(async () => {
-      // The Gateway's census would count this requesting command as a possible holder.
-      expect(sent).toEqual([]);
-      return [removed];
-    });
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    runsGet.push(() => ({
-      run: {
-        status: "succeeded",
-        phase: "finished",
-        steps: [],
-        after: { version: "2026.11.7" },
-        origin: {},
-      },
-    }));
-    await runReleaseUpdateCli({ json, restart: true, runningRoot: root });
-    expect(maintainRuntimes).toHaveBeenCalledOnce();
-    const lines = (spy: typeof log) => spy.mock.calls.map(([line]) => line);
-    if (json) {
-      // stdout carries only the record.
-      expect(lines(error)).toEqual([removed]);
-      expect(log).not.toHaveBeenCalled();
-      expect(writeJson).toHaveBeenCalledOnce();
+registerReleaseUpdateGatewayTests(() => ({
+  home,
+  root,
+  localRun,
+  useWireGateway,
+  createRun,
+  prepared,
+}));
+
+it.each(["status", "restart"] as const)(
+  "keeps the %s result when RPC cleanup settles after expiry",
+  async (method) => {
+    const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const deadline = Date.now() + 5_000;
+    const record = createUpdateRunRecordFixture(gatewayRunId, { status: "succeeded" });
+    if (method === "status") {
+      runsGet.push(() => {
+        // A captured response survives the RPC owner's joined cleanup.
+        vi.setSystemTime(deadline + 1);
+        return { run: record };
+      });
     } else {
-      expect(lines(log)).toEqual([removed, "finished: finished", "Updated to 2026.11.7."]);
-      expect(error).not.toHaveBeenCalled();
+      localRun.status = "running";
+      localRun.phase = "activating";
+      localRun.origin.releaseAdmission = {
+        owner: "candidate",
+        candidateVersion: VERSION,
+        verdict: "admit",
+        warnings: [],
+      };
+      restartReply.mockImplementationOnce(async () => {
+        vi.setSystemTime(deadline + 1);
+        return { ok: true };
+      });
     }
+    await runReleaseUpdateCli({
+      json: true,
+      restart: true,
+      runningRoot: root,
+      yes: true,
+      tag: method === "restart" ? VERSION : undefined,
+      timeoutMs: 5_000,
+    });
+    expect(json).toHaveBeenCalledWith(
+      method === "status"
+        ? record
+        : expect.objectContaining({
+            status: "running",
+            phase: "activating",
+            origin: localRun.origin,
+          }),
+    );
+    expect(sent).toHaveLength(1);
     expect(process.exitCode).toBe(0);
   },
 );
 
-it("skips cleanup under a short --timeout and gives the update the budget", async () => {
+it("distinguishes completed plugin maintenance from an unconfirmed restart at expiry", async () => {
+  const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const deadline = Date.now() + 5_000;
+  prepareReply.mockImplementationOnce(async () => {
+    vi.setSystemTime(deadline);
+    return { status: "current", version: VERSION, pluginsChanged: true };
+  });
+  await expect(
+    runReleaseUpdateCli({
+      json: true,
+      restart: true,
+      runningRoot: root,
+      yes: true,
+      tag: VERSION,
+      timeoutMs: 5_000,
+    }),
+  ).rejects.toThrow("Plugin maintenance completed, but the Gateway restart could not be confirmed");
+  expect(sent).toEqual([]);
+  expect(json).not.toHaveBeenCalled();
+  expect(prepared).toHaveLength(1);
+});
+
+it("gives a short --timeout budget to the update request", async () => {
   await expect(
     runReleaseUpdateCli({ json: true, restart: true, runningRoot: root, timeoutMs: 5_000 }),
   ).rejects.toThrow("refused for the test");
-  // A census cannot be interrupted, so a 5 s budget does not start one.
-  expect(maintainRuntimes).not.toHaveBeenCalled();
   expect(sent).toEqual([{ timeoutMs: expect.any(Number) }]);
-});
-
-it("leaves kept-runtime lines to the cleanup owner's log", async () => {
-  const removed = "Removed abandoned updater runtime: /tmp/openclaw-update-runtime-Gone01";
-  maintainRuntimes.mockResolvedValue([
-    removed,
-    "Runtime retained at /tmp/openclaw-update-runtime-Held01: still in use",
-  ]);
-  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-  await runReleaseUpdateCli({ json: false, restart: false, runningRoot: root });
-  expect(log.mock.calls.map(([line]) => line)).toEqual([removed, "Already up to date."]);
 });
 
 it("says the update is still running when the --timeout budget ends first", async () => {
   const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-  runsGet.push(() => ({
-    run: { status: "running", phase: "staging", steps: [], after: {}, origin: {} },
-  }));
+  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+  const deadline = Date.now() + 100;
+  runsGet.push(() => {
+    // Reporting requires an observed running record; filesystem setup must not
+    // decide whether this unit control reaches that boundary.
+    vi.setSystemTime(deadline);
+    return { run: { status: "running", phase: "staging", steps: [], after: {}, origin: {} } };
+  });
   await runReleaseUpdateCli({
     json: false,
     restart: true,
@@ -408,15 +496,56 @@ it("refuses --no-restart from another checkout before preparation or creating a 
   );
   await expect(fs.stat(path.join(resolvePrefix(), "releases", ".trial"))).rejects.toThrow();
   expect(prepared).toEqual([]);
-  expect(maintainRuntimes).not.toHaveBeenCalled();
 });
+
+it("lets an accessible Gateway take over an opaque first-conversion owner", async () => {
+  vi.spyOn(installationIdentity, "checkUpdateInstallationSlot").mockRejectedValueOnce(
+    new installationIdentity.UnverifiedForegroundUpdateOwnerError(123),
+  );
+  runsGet.push(() => ({
+    run: { status: "succeeded", phase: "finished", steps: [], after: {}, origin: {} },
+  }));
+  await runReleaseUpdateCli({ json: true, restart: true, runningRoot: root });
+  expect(sent).toEqual([{}]);
+  expect(prepared).toEqual([]);
+});
+
+it.each([{ restart: false }, { restart: true, tag: "beta" }])(
+  "refuses opaque foreground ownership when RPC cannot carry the update: %j",
+  async (opts) => {
+    vi.spyOn(installationIdentity, "checkUpdateInstallationSlot").mockRejectedValueOnce(
+      new installationIdentity.UnverifiedForegroundUpdateOwnerError(123),
+    );
+    await expect(runReleaseUpdateCli({ json: true, runningRoot: root, ...opts })).rejects.toThrow(
+      "operator access",
+    );
+    expect(sent).toEqual([]);
+    expect(prepared).toEqual([]);
+    expect(createRun).not.toHaveBeenCalled();
+  },
+);
 
 it("restarts the local Gateway after preparing an explicit package tag and follows its outcome", async () => {
   install.kind = "package";
   localRun.status = "running";
   localRun.phase = "activating";
+  const releaseAdmission = {
+    owner: "candidate",
+    candidateVersion: "2026.11.6",
+    verdict: "admit",
+    warnings: [{ code: "configured-plugin-path-unavailable", message: "Plugin path is absent" }],
+  } satisfies NonNullable<UpdateRunRecord["origin"]["releaseAdmission"]>;
+  localRun.origin.releaseAdmission = releaseAdmission;
+  const json = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
   runsGet.push(() => ({
-    run: { status: "succeeded", phase: "finished", steps: [], after: {}, origin: {} },
+    run: {
+      runId: gatewayRunId,
+      status: "succeeded",
+      phase: "finished",
+      steps: [],
+      after: { version: "2026.11.6" },
+      origin: {},
+    },
   }));
   await runReleaseUpdateCli({
     json: true,
@@ -431,6 +560,13 @@ it("restarts the local Gateway after preparing an explicit package tag and follo
     }),
   ]);
   expect(process.exitCode).toBe(0);
+  expect(json).toHaveBeenCalledWith(
+    expect.objectContaining({
+      status: "succeeded",
+      after: { version: "2026.11.6" },
+      origin: { releaseAdmission },
+    }),
+  );
 });
 
 it.each([
@@ -560,35 +696,74 @@ it.each([
   },
 );
 
-it("reports the recorded rollback and serving version after native activation", async () => {
-  runsGet.push(() => ({
-    run: {
-      status: "failed",
-      steps: [
-        {
-          step: "outcome",
-          detail: "2026.11.10 failed to start. Restored 2026.11.8; Gateway ready.",
-        },
-      ],
-      origin: { nextAction: "Candidate crashed after migration." },
-      after: { version: "2026.11.8" },
-    },
-  }));
-  expect(await waitForReleaseUpdateFailure("adopted-run")).toBe(
-    "Update failed: 2026.11.10 failed to start. Restored 2026.11.8; Gateway ready.\nCandidate crashed after migration.",
+it.each([
+  { phase: "committed", status: "succeeded", expected: undefined },
+  {
+    phase: "rolled-back",
+    status: "rolled-back",
+    expected: "Update failed: Candidate crashed after migration.",
+  },
+] as const)(
+  "settles adopted $phase trials without opening the ledger or RPC",
+  async ({ phase, status, expected }) => {
+    const trial = await createTrialPending({
+      runId: "adopted-run",
+      target: "releases/new/openclaw",
+      previous: "releases/old/openclaw",
+      version: "2026.11.10",
+    });
+    await writeTrial({
+      ...trial,
+      phase,
+      outcome: { status, reason: "Candidate crashed after migration.", at: Date.now() },
+    });
+    const readRun = vi.spyOn(updateRunReader, "getUpdateRunAsync");
+    runsGet.push(() => {
+      throw new Error("An adoption waiter must not call the Gateway");
+    });
+    expect(await waitForReleaseUpdateFailure()).toBe(expected);
+    expect(readRun).not.toHaveBeenCalled();
+    expect(runsGet).toHaveLength(1);
+  },
+);
+
+it("reports when the sole prepared trial is no longer available", async () => {
+  expect(await waitForReleaseUpdateFailure()).toBe(
+    "The update trial is no longer available. Run `openclaw update status` to see the result.",
   );
 });
 
-it("leaves an unactivated trial pending and names the one activation command", async () => {
-  await createTrialPending({
-    runId: "pending-running-start",
+it.each(["pending", "trial", "restoring"] as const)(
+  "bounds an adopted restart waiting on a %s trial",
+  async (phase) => {
+    const trial = await createTrialPending({
+      runId: "adopted-run",
+      target: "releases/new/openclaw",
+      previous: "releases/old/openclaw",
+      version: "2026.11.10",
+    });
+    const now = Date.now();
+    await writeTrial({ ...trial, phase, createdAt: now - TRIAL_BUDGET_MS - 1 });
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(now)
+      .mockReturnValue(now + TRIAL_BUDGET_MS);
+    expect(await waitForReleaseUpdateFailure()).toBe(
+      "The update did not finish in time. Run `openclaw update status` to see it.",
+    );
+  },
+);
+
+it("waits for activation of an old pending trial instead of expiring its preparation clock", async () => {
+  const trial = await createTrialPending({
+    runId: "delayed-adoption",
     target: "releases/new/openclaw",
     previous: "releases/old/openclaw",
     version: "2026.11.10",
   });
-  const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-  expect(await waitForReleaseUpdateFailure("pending-running-start")).toBeUndefined();
-  expect(error).toHaveBeenCalledWith(
-    "Gateway 2026.11.8 is still running. OpenClaw 2026.11.10 is prepared. Run: openclaw gateway restart",
-  );
+  const readTrial = vi
+    .spyOn(releaseStore, "readTrial")
+    .mockResolvedValueOnce({ ...trial, createdAt: Date.now() - 2 * TRIAL_BUDGET_MS })
+    .mockResolvedValue({ ...trial, phase: "committed" });
+  expect(await waitForReleaseUpdateFailure()).toBeUndefined();
+  expect(readTrial).toHaveBeenCalledTimes(2);
 });

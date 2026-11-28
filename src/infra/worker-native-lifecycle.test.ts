@@ -317,13 +317,15 @@ it("replaces failed retained broker authority after completed source close", asy
 });
 
 it("selects a fresh broker after native disconnect before its callback runs", async () => {
-  const createBroker = spawnBroker.createSpawnBrokerHost;
-  const brokers: spawnBroker.SpawnBrokerHost[] = [];
-  const factory = vi.spyOn(spawnBroker, "createSpawnBrokerHost").mockImplementation((options) => {
-    const broker = createBroker(options);
-    brokers.push(broker);
-    return broker;
-  });
+  const createBroker = spawnBroker.createAttachmentBrokerHost;
+  const brokers: ReturnType<typeof createBroker>[] = [];
+  const factory = vi
+    .spyOn(spawnBroker, "createAttachmentBrokerHost")
+    .mockImplementation((brokerUrl) => {
+      const broker = createBroker(brokerUrl);
+      brokers.push(broker);
+      return broker;
+    });
   await using cleanup = new AsyncDisposableStack();
   cleanup.defer(() => {
     factory.mockRestore();

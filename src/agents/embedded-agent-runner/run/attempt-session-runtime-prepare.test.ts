@@ -62,8 +62,8 @@ const mocks = vi.hoisted(() => ({
   >(async () => "/tmp/trajectory.jsonl"),
   prepareTransport: vi.fn(),
   restoreProjections: vi.fn(),
-  readToolUsage: vi.fn<typeof import("../../../config/sessions/tool-usage.js").readAgentToolUsage>(
-    async () => [],
+  readToolUsage: vi.fn(
+    async (): Promise<{ toolId: string; score: number; updatedAt: number }[]> => [],
   ),
 }));
 
@@ -72,7 +72,7 @@ vi.mock("../../anthropic-payload-log.js", () => ({
 }));
 vi.mock("../../../config/sessions/tool-usage.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../config/sessions/tool-usage.js")>()),
-  readAgentToolUsage: mocks.readToolUsage,
+  readAgentToolUsageForRanking: async () => ({ rows: await mocks.readToolUsage(), firstSeen: {} }),
 }));
 vi.mock("../../cache-trace.js", () => ({ createCacheTrace: mocks.createCacheTrace }));
 vi.mock("../session-prompt-state.js", async (importOriginal) => ({

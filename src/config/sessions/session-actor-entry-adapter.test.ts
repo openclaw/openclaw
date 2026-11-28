@@ -19,6 +19,7 @@ import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
+import { resetSessionEntryLifecycle } from "./session-accessor.sqlite-lifecycle.js";
 import { applySessionEntryExactReplacements as replaceExact } from "./session-accessor.sqlite-replacement-projection.js";
 import type { SessionActor, SessionActorStorage } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
@@ -135,6 +136,26 @@ async function fixture(name: string, stateDir = `/synthetic/actor-entry-adapter/
 }
 
 describe("generic session entry APIs with actor memory storage", () => {
+  it("keeps participant constraints when replacing an incognito child's generation", async () => {
+    const { run, scope, read, patch } = await fixture("participation");
+    const delegatedOperatorSource = { kind: "unavailable" as const, reason: "no-source" as const };
+    await patch({ delegatedOperatorSource });
+    await patch({ delegatedOperatorSource: undefined });
+    await patch({ delegatedOperatorSource: { kind: "unavailable", reason: "unauthenticated" } });
+    expect(read()?.delegatedOperatorSource).toEqual(delegatedOperatorSource);
+    await run(() =>
+      resetSessionEntryLifecycle({
+        ...scope,
+        target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+        buildNextEntry: () => ({ sessionId: "next", updatedAt: 2 }),
+      }),
+    );
+    expect(read()).toMatchObject({
+      sessionId: "next",
+      delegatedOperatorSource,
+    });
+  });
+
   it("merges concurrent fixed patches and exposes detached read-after-write results", async () => {
     const { run, read, patch, scope } = await fixture("fixed-patches");
     await run(async () => {

@@ -46,12 +46,13 @@ const SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY =
   "Save, improve, archive, and restore your learned skills.";
 
 const SKILL_WORKSHOP_DESCRIPTION = `Your learned skills: reusable procedures saved as <name>/SKILL.md that load in future sessions. Changes apply immediately, are versioned, and are shown to the user.
+User-owned skills (repository/workspace skills/, .agents/skills/, configured skill dirs) are ordinary files: edit them directly when asked, never through skill_workshop. Codebase knowledge belongs in that repository's docs or AGENTS.md.
 Actions: list | view name [file_path] [version] | create name content | patch name old_text new_text [file_path] | write_file name file_path content | remove_file name file_path | archive name (absorbed_into or reason) | restore name [version] | draft name content | view draft [file_path] | discard draft.
 - create: content is the full SKILL.md: frontmatter name (= name) and description (aim for ≤160 bytes, triggers first), then the procedure.
 - patch: replaces one exact, unique old_text; view first and copy the text exactly. Prefer patch over rewrites.
 - file_path: SKILL.md or files under references/, templates/, scripts/, assets/. remove_file deletes one of those support files; archive removes a whole skill.
 - reason: one short line saying what changed; shown to the user.
-- restore without version undoes the last change.
+- restore without version undoes the last change. Undo right after a 💾 Learned notice means restore that skill; archive it if the notice says it was created.
 - draft: saves a proposed SKILL.md for the user to review later; skills stay unchanged. list shows waiting drafts. When reviewing drafts with the user, save approved changes with create/patch, then discard the drafts the user decided on.
 
 ${SKILL_AUTHORING_STANDARDS_PROMPT}`;

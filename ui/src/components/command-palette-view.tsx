@@ -69,13 +69,7 @@ registerCommandPaletteEnglish();
 type CommandPaletteProps = ReturnType<CommandPaletteState["readProps"]>;
 
 function groupItems(items: CommandPaletteItem[]): Array<[string, CommandPaletteItem[]]> {
-  const map = new Map<string, CommandPaletteItem[]>();
-  for (const item of items) {
-    const group = map.get(item.category) ?? [];
-    group.push(item);
-    map.set(item.category, group);
-  }
-  return [...map.entries()];
+  return [...Map.groupBy(items, (item) => item.category).entries()];
 }
 
 const paletteListboxId = "cmd-palette-listbox";
@@ -645,12 +639,12 @@ export function CommandPaletteView(props: { readProps: () => CommandPaletteProps
             </Show>
           </div>
           <Show when={error()}>
-            <div
-              class="cmd-palette__creation-error agent-chat__composer-status agent-chat__composer-status-band agent-chat__composer-status-band--wrap"
-              data-tone="danger"
-              role="alert"
-            >
-              {error()}
+            <div class="cmd-palette__creation-error" role="alert">
+              <Icon
+                class="cmd-palette__creation-error-icon"
+                name={current().draft.error ? "circleAlert" : "info"}
+              />
+              <span>{error()}</span>
             </div>
           </Show>
           <CommandPaletteDock

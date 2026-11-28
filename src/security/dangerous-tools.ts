@@ -78,6 +78,53 @@ export const GATEWAY_OWNER_ONLY_CORE_TOOLS = [
   "intent",
 ] as const;
 
+const participantAuthorityMethods = new Set([
+  "config.set",
+  "config.apply",
+  "config.patch",
+  "plugins.install",
+  "plugins.uninstall",
+  "plugins.setEnabled",
+  "plugins.reload",
+  "users.setRole",
+  "session.visibility.set",
+  "session.members.add",
+  "session.members.setAccess",
+  "session.members.remove",
+  "session.publicShare.set",
+  "gateway.restart.request",
+  "gateway.stop.request",
+  "gateway.suspend.prepare",
+  "gateway.suspend.handoff",
+  "gateway.suspend.resume",
+  "update.run",
+  "update.recovery.cleanup",
+]);
+
+/** A participating turn cannot select another admitted person's tool identity. */
+export function assertParticipationToolUser(
+  profileId: string | undefined,
+  authority?: AdmittedRunOperatorAuthority,
+): void {
+  if (
+    authority?.participationCeiling &&
+    profileId !== undefined &&
+    profileId !== authority.profileId
+  ) {
+    throw new Error("Participant tools must use the admitted participant's identity.");
+  }
+}
+
+/** Tool delegation never includes changing the participant's own authority or its host. */
+export function assertParticipationGatewayMethod(
+  method: string,
+  authority?: AdmittedRunOperatorAuthority,
+): void {
+  if (authority?.participationCeiling && participantAuthorityMethods.has(method)) {
+    throw new Error(`Participating tools cannot change Gateway authority (${method}).`);
+  }
+}
+
 const gatewayOwnerOnlyCoreToolNames = new Set<string>(GATEWAY_OWNER_ONLY_CORE_TOOLS);
 // Retained operator custody covers these control-plane paths, not every
 // owner-only executor. Other tools keep their sender or scoped admission.

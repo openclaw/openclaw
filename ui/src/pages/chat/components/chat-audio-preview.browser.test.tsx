@@ -64,7 +64,8 @@ it.each([390, 1100])("plays unflagged incoming audio inline at %s px", async (wi
     expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth);
     await page.screenshot({ path: `.artifacts/audio-preview/${width}-after.png` });
     await userEvent.click(play);
-    await waitForSolid(() => expect(media.currentTime).toBeGreaterThan(0));
+    // Chromium can take several seconds to open its first audio output on CI.
+    await waitForSolid(() => expect(media.currentTime).toBeGreaterThan(0), { timeout: 5_000 });
     await userEvent.click(page.getByRole("button", { name: "Pause", exact: true }));
     expect(media.paused).toBe(true);
     const seek = view.container.querySelector<HTMLInputElement>('input[type="range"]')!;

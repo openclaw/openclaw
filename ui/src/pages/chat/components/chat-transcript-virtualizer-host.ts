@@ -54,6 +54,7 @@ import {
   type TranscriptCallbacks,
   type TranscriptHeader,
   type TranscriptRenderSnapshot,
+  type TranscriptProjectionSource,
 } from "./chat-transcript-session.ts";
 import { TranscriptViewportRect } from "./chat-transcript-viewport-rect.ts";
 
@@ -87,23 +88,21 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.scrollToEnd({ source: "auto", behavior });
   readonly #reconcileCommittedPosition = () => this.#reconcilePosition(true);
   readonly #reconcilePosition = (committed = false) => {
-    if (this.connected && !this.offsetState.pendingInteractionAnchor) {
-      if (
-        !this.offsetState.touchActive &&
-        this.prependAnchor.update(this.virtualizer, this.#readerAnchor.rowsMeasured, committed)
-      ) {
-        this.offsetState.syncNativeOffset?.();
-        this.#presentation.commitChange(this.invalidate, true);
+    const { offsetState, prependAnchor, virtualizer } = this;
+    if (this.connected && !offsetState.pendingInteractionAnchor) {
+      if (!offsetState.touchActive && prependAnchor.messageKey !== null) {
+        // Native movement can precede its scroll event and this queued restoration.
+        offsetState.syncNativeOffset?.();
+        if (prependAnchor.update(virtualizer, this.#readerAnchor.rowsMeasured, committed)) {
+          offsetState.syncNativeOffset?.();
+          this.#presentation.commitChange(this.invalidate, true);
+        }
       }
       this.#commitComposerResize(true);
       // Initial layout owns positioning until the visible range is measured.
       if (!this.initialRange.pending) {
-        this.#endAnchor.reconcile(
-          this.scrollElement,
-          this.canFollowEnd,
-          this.offsetState.pendingScrollOffset !== null || this.offsetState.touchActive,
-          this.#followEnd,
-        );
+        const held = offsetState.pendingScrollOffset !== null || offsetState.touchActive;
+        this.#endAnchor.reconcile(this.scrollElement, this.canFollowEnd, held, this.#followEnd);
       }
     }
   };
@@ -262,7 +261,12 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             onLayoutCorrection: this.#recordEndLayoutCorrection,
             invalidate,
             // Nested or canceled input must not admit offscreen measurements.
-            onOffset: (delta) => void (delta && this.initialRange.recordReaderMovement(delta)),
+            onOffset: (delta) => {
+              if (delta) {
+                this.initialRange.recordReaderMovement(delta);
+                this.prependAnchor.readerMoved(this.offsetState.nativeInputActive);
+              }
+            },
             onWheel: (delta) => this.initialRange.recordWheel(delta),
             onComposerLayout: (changed) => this.#commitComposerResize(changed),
             onReaderScroll: (towardEnd) => this.callbacks.onReaderScroll?.(towardEnd),
@@ -271,6 +275,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
               // Measurement may have consumed this offset before its native event.
               // Commit its queued rows now, ahead of this frame's paint.
               this.#presentation.flushChange();
+              // Native input can cross the measured start without changing the virtual row range.
+              this.#readerAnchor.settle();
               this.#readerAnchor.captureReaderContent();
               callbacks.onNativeScroll?.(event);
             },
@@ -394,6 +400,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     const { _willUpdate: updateVirtualizer } = this.virtualizer;
     updateVirtualizer();
     this.#rowRefs.observeConnected();
+    this.prependAnchor.commitSearchReturn(this.callbacks.onRequestEnd ?? this.#followEnd);
     const interactionResizePending = this.offsetState.pendingInteractionAnchor !== null;
     this.offsetState.reconcileInteractionResize(this.scrollElement, this.virtualizer);
     if (!interactionResizePending && this.prependAnchor.messageKey !== null) {
@@ -545,7 +552,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           this.#scheduleEndReconcile();
         }
         this.headerHeight = header?.height ?? 0;
-        if (rowModelChanged) {
+        if (rowModelChanged || this.prependAnchor.returningReader) {
           this.#rowKeys = nextKeys;
           this.initialRange.updateRows(rows);
           // The header margin must land in the same setOptions as the key change:
@@ -608,16 +615,18 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     return isTranscriptProgrammaticScroll(this.offsetState, this.scrollElement);
   }
 
+  get hasMessageRows(): boolean {
+    return this.#acceptedRows?.some((row) => row.kind === "item") ?? false;
+  }
+
   get isPositionSettled(): boolean {
     return this.layout.ready && !this.initialRange.pending && !this.offsetState.pendingScrollOffset;
   }
 
   preserveReaderPosition(includeAppends = true): void {
-    this.prependAnchor.capture(
-      this.scrollElement,
-      this.offsetState.hasPendingAnchor || Boolean(this.callbacks.hasPendingScrollCommand?.()),
-      includeAppends,
-    );
+    const commanded =
+      this.offsetState.hasPendingAnchor || this.callbacks.hasPendingScrollCommand?.();
+    this.prependAnchor.capture(this.scrollElement, Boolean(commanded), includeAppends);
   }
 
   get canFollowEnd(): boolean {
@@ -681,11 +690,12 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   syncMessageRows(
     messageRowKeysById: ReadonlyMap<string, string>,
     messageRowsByKey: ReadonlyMap<string, string>,
+    source?: TranscriptProjectionSource,
   ): void {
     // The projection hands off finished indexes and never mutates them afterward.
     this.#candidateMessageRowKeysById = messageRowKeysById;
     this.#candidateMessageRowsByKey = messageRowsByKey;
-    this.prependAnchor.messageKeys = messageRowsByKey;
+    this.prependAnchor.project(messageRowsByKey, source, this.scrollElement, this.canFollowEnd);
   }
 
   activeMessageId(messageIds: readonly string[]): string | null {
