@@ -2,6 +2,7 @@ import { hasCompletionMessageSessionSpawn } from "../../agents/accepted-session-
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { accountSessionGoalUsage } from "../../config/sessions/goals-transitions.js";
+import { matchesSessionGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -90,8 +91,7 @@ function isGoalActive(continuation: GoalContinuation, entry: SessionEntry | unde
     goal.status === "active" &&
     !entry.abortedLastRun &&
     (!continuation.nativeReturn ||
-      (entry.sessionId === continuation.sessionId &&
-        entry.lifecycleRevision === continuation.lifecycleRevision)),
+      matchesSessionGeneration({ ...continuation, exact: "transcript" }, entry)),
   );
 }
 

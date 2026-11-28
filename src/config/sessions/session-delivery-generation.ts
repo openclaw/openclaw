@@ -43,18 +43,16 @@ import {
   SessionDeliveryGenerationRevokedError,
   SessionDeliveryGenerationUnavailableError,
 } from "./session-delivery-generation-errors.js";
-import {
-  matchesSessionGeneration,
-  prepareMemorySessionGeneration,
-} from "./session-delivery-generation-memory.js";
+import { prepareMemorySessionGeneration } from "./session-delivery-generation-memory.js";
 import {
   createSessionGenerationReadBatch,
   type GenerationRead,
 } from "./session-delivery-generation-read-batch.js";
-import type {
-  LeaseFacts,
-  SessionGenerationEntry,
-  SessionGenerationLease,
+import {
+  matchesSessionGeneration,
+  type LeaseFacts,
+  type SessionGenerationEntry,
+  type SessionGenerationLease,
 } from "./session-delivery-generation.types.js";
 import { withSessionEntriesFromStoresInWorker } from "./session-entry-read-runtime.js";
 import { captureSessionEntrySourceAssertion } from "./session-entry-source-authority.js";

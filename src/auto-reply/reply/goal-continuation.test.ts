@@ -12,6 +12,7 @@ import {
   createAttemptResult,
   createLifecycleHarness,
 } from "../../agents/harness/lifecycle.test-support.js";
+import type { AgentHarness } from "../../agents/harness/types.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
@@ -124,12 +125,8 @@ const normal: EmbeddedAgentRunResult = {
   meta: { durationMs: 0, stopReason: "end_turn" },
   payloads: [{ text: "More work remains." }],
 };
-const cliSuccess = {
-  meta: {
-    durationMs: 0,
-    completion: { stopReason: "completed", finishReason: "stop", refusal: false },
-  },
-};
+const cliCompletion = { finishReason: "stop", stopReason: "completed" };
+const cliSuccess = { meta: { durationMs: 0, completion: { ...cliCompletion, refusal: false } } };
 const operations = new Set<ReplyOperation>();
 function entry(): SessionEntry {
   return {
@@ -308,13 +305,17 @@ describe("Goal continuation eligibility", () => {
       [{ goal: { ...current.goal!, status: "paused" } }, false],
       [{ sessionId: "replacement" }, true],
       [{ lifecycleRevision: "revision-3" }, true],
+      [{ sessionId: "replacement" }, false, { nativeReturn: true }],
+      [{ lifecycleRevision: "revision-3" }, false, { nativeReturn: true }],
       [{ abortedLastRun: true }, false],
       [{ agentHarnessId: "codex" }, false],
       [{ agentHarnessId: "codex" }, true, { localCodexGoal: true }],
       [{ agentHarnessId: "external" }, false],
       [{ goal: { ...current.goal!, id: "new-goal" } }, false],
       [{ goal: { ...current.goal!, updatedAt: 3000 } }, true],
-    ] satisfies Array<[Partial<SessionEntry>, boolean, { localCodexGoal: true }?]>) {
+    ] satisfies Array<
+      [Partial<SessionEntry>, boolean, ({ localCodexGoal: true } | { nativeReturn: true })?]
+    >) {
       expect(
         isGoalContinuationCurrent({ ...identity, ...continuation }, { ...current, ...patch }),
         JSON.stringify(patch),
@@ -343,12 +344,7 @@ describe("Goal continuation eligibility", () => {
     { meta: { timeoutPhase: "provider" as const } },
     { meta: { error: { kind: "hook_block" as const, message: "Blocked" } } },
     { meta: { pendingToolCalls: [{ id: "tool-1", name: "exec", arguments: "{}" }] } },
-    {
-      meta: {
-        stopReason: "refusal",
-        completion: { finishReason: "stop", stopReason: "completed" },
-      },
-    },
+    { meta: { stopReason: "refusal", completion: cliCompletion } },
     { meta: { completion: { refusal: true } } },
     { didSendDeterministicApprovalPrompt: true },
     {
@@ -702,17 +698,17 @@ describe("Goal return from committed child custody", () => {
   ] as const)(
     "carries Goal context through %s admission for %s and rechecks queue eligibility",
     async (runtime, runId, shouldQueue) => {
-      const f = retainedGoal();
-      f.retain();
-      f.operation.complete();
+      const { child, retain, finish, operation, params: goalParams } = retainedGoal();
+      const { sessionKey } = goalParams;
+      retain();
+      operation.complete();
       const sessionEntry = { ...entry(), agentHarnessId: runtime === "cli" ? undefined : runtime };
       vi.mocked(readSessionEntryReadOnlyInWorker).mockResolvedValue(sessionEntry);
       await withGoalContinuationSettlement(
-        [f.child],
+        [child],
         "settle-run",
         () => true,
         async () => {
-          const sessionKey = f.params.sessionKey;
           prepareGoalContinuationContext({ runId: "settle-run", sessionKey, sessionEntry });
           const params = {
             ...createBaseAttemptParams(),
@@ -724,45 +720,37 @@ describe("Goal return from committed child custody", () => {
           let context: string | undefined;
           let result = normal;
           if (runtime === "cli") {
-            result = await runWithCliTurn(
-              { ...params, provider: "fixture-cli", model: params.modelId },
-              async (attempt) => {
-                context = attempt.currentInboundContext?.text;
-                return cliSuccess;
-              },
-            );
+            const cliParams = { ...params, provider: "fixture-cli", model: params.modelId };
+            result = await runWithCliTurn(cliParams, async (attempt) => {
+              context = attempt.currentInboundContext?.text;
+              return cliSuccess;
+            });
           } else {
+            const embeddedAttempt = vi.mocked(runEmbeddedAttempt).mockClear();
+            const runHarness = vi.fn<AgentHarness["runAttempt"]>(async () => createAttemptResult());
             const harness =
               runtime === "openclaw"
                 ? createOpenClawAgentHarness()
-                : createLifecycleHarness({
-                    id: runtime,
-                    runAttempt: async (attempt) => {
-                      context = attempt.currentInboundContext?.text;
-                      return createAttemptResult();
-                    },
-                  });
-            vi.mocked(runEmbeddedAttempt).mockClear();
+                : createLifecycleHarness({ id: runtime, runAttempt: runHarness });
             await runAgentHarnessLifecycleAttempt(harness, { ...createAttemptParams(), ...params });
-            if (runtime === "openclaw") {
-              context =
-                vi.mocked(runEmbeddedAttempt).mock.calls[0]?.[0].currentInboundContext?.text;
-            }
+            const call =
+              runtime === "openclaw" ? embeddedAttempt.mock.calls[0] : runHarness.mock.lastCall;
+            context = call?.[0].currentInboundContext?.text;
           }
           expect(context).toContain("Preserve the requester context.");
-          expect(context?.includes("Active goal: Finish the checklist")).toBe(
-            runId === "settle-run",
-          );
+          const expectGoalContext = runId === "settle-run";
+          expect(context?.includes("Active goal: Finish the checklist")).toBe(expectGoalContext);
           recordGoalContinuationSettlement({ runId, sessionKey, result, succeeded: true });
         },
       );
-      await f.finish();
+      await finish();
       expect(enqueueFollowupRun).toHaveBeenCalledTimes(Number(shouldQueue));
     },
   );
 
   it("keeps the original route and independently retained operator restriction until queue handoff", async () => {
     const f = retainedGoal();
+    const { base } = f.params;
     let holds = 1;
     const source = createTestOperatorAuthority({
       profileId: "goal-owner",
@@ -774,11 +762,11 @@ describe("Goal return from committed child custody", () => {
         };
       },
     });
-    f.params.base.operatorAuthority = source;
+    base.operatorAuthority = source;
     const released = vi.fn();
-    f.params.base[replyCallbackCustody] = { retain: () => released };
-    f.params.base.originatingThreadId = "original-thread";
-    f.params.base.originatingChannel = "webchat";
+    base[replyCallbackCustody] = { retain: () => released };
+    base.originatingThreadId = "original-thread";
+    base.originatingChannel = "webchat";
     const delivered = vi.fn(async () => ({ kind: "delivered" as const }));
     const sourceReply = createChatSendLateFollowupDisposition({
       runId: "source",
@@ -787,10 +775,7 @@ describe("Goal return from committed child custody", () => {
       deliver: delivered,
     });
     sourceReply.recordQueued();
-    f.params.base.queuedFollowupReplyDisposition = {
-      kind: "deliver",
-      deliver: sourceReply.deliver,
-    };
+    base.queuedFollowupReplyDisposition = { kind: "deliver", deliver: sourceReply.deliver };
     f.retain();
     await sourceReply.deliver({
       kind: "queued-followup",

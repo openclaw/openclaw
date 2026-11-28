@@ -3,6 +3,7 @@ import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/
 import type { CurrentInboundPromptContext } from "../../agents/internal-runtime-context.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "../../agents/subagents/registry/subagent-run-generation.js";
+import { matchesSessionGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { registerAgentEventLifecycleRotationHandler } from "../../infra/agent-events.js";
 import { getAgentRunLifecycleGeneration } from "../../infra/agent-run-registry.js";
@@ -128,17 +129,23 @@ type GoalToolContinuation = {
   goalId: string;
 };
 
-function activeGoalReturnForTool(params: GoalToolContinuation): GoalReturn | undefined {
+function currentGoalExecution(runId: string): GoalReturn | undefined {
   const owner = goalReturns.getStore();
+  return owner &&
+    !owner.closed &&
+    !owner.signal.aborted &&
+    owner.generation === getAgentRunLifecycleGeneration() &&
+    owner.sourceRunId === runId
+    ? owner
+    : undefined;
+}
+
+function activeGoalReturnForTool(params: GoalToolContinuation): GoalReturn | undefined {
+  const owner = params.runId && currentGoalExecution(params.runId);
   if (
     !owner ||
-    owner.closed ||
-    owner.signal.aborted ||
     owner.params.base.run.scheduledAutomation ||
     owner.params.operation.result !== null ||
-    owner.generation !== getAgentRunLifecycleGeneration() ||
-    !params.runId ||
-    owner.sourceRunId !== params.runId ||
     owner.params.sessionKey !== params.sessionKey ||
     owner.params.base.run.agentId !== params.agentId ||
     owner.params.storePath !== params.storePath
@@ -169,12 +176,8 @@ export function readCreatedGoalContinuationId(
   runId: string,
   operation: ReplyOperation,
 ): string | undefined {
-  const owner = goalReturns.getStore();
+  const owner = currentGoalExecution(runId);
   return owner &&
-    !owner.closed &&
-    !owner.signal.aborted &&
-    owner.generation === getAgentRunLifecycleGeneration() &&
-    owner.sourceRunId === runId &&
     owner.params.operation === operation &&
     owner.continuation?.goalId !== owner.params.initialGoalId
     ? owner.continuation?.goalId
@@ -308,8 +311,7 @@ export function deferGoalContinuation(
       input.abortSignal.aborted ||
       barrier.sessionKey !== params.sessionKey ||
       barrier.agentId !== params.base.run.agentId ||
-      barrier.session.sessionId !== continuation.sessionId ||
-      barrier.session.lifecycleRevision !== continuation.lifecycleRevision ||
+      !matchesSessionGeneration({ ...continuation, exact: "transcript" }, barrier.session) ||
       params.operation.sessionId !== continuation.sessionId
     ) {
       return;
@@ -417,19 +419,25 @@ export function withGoalContinuationSettlement<T>(
   return owner ? goalSettlements.run({ owner, runId, isCurrent }, run) : run();
 }
 
+function currentGoalSettlement(params: { runId: string; sessionKey?: string }) {
+  const settlement = goalSettlements.getStore();
+  return settlement &&
+    settlement.runId === params.runId &&
+    settlement.owner.params.sessionKey === params.sessionKey &&
+    !settlement.owner.closed &&
+    settlement.isCurrent()
+    ? settlement
+    : undefined;
+}
+
 /** Command preparation supplies current session facts for runtime admission. */
 export function prepareGoalContinuationContext(params: {
   runId: string;
   sessionKey?: string;
   sessionEntry?: SessionEntry;
 }): void {
-  const settlement = goalSettlements.getStore();
-  if (
-    settlement?.runId === params.runId &&
-    settlement.owner.params.sessionKey === params.sessionKey &&
-    !settlement.owner.closed &&
-    settlement.isCurrent()
-  ) {
+  const settlement = currentGoalSettlement(params);
+  if (settlement) {
     settlement.entry = params.sessionEntry;
   }
 }
@@ -440,14 +448,8 @@ export function readGoalContinuationContext(params: {
   sessionKey?: string;
   currentInboundContext?: CurrentInboundPromptContext;
 }) {
-  const settlement = goalSettlements.getStore();
-  if (
-    !settlement ||
-    settlement.runId !== params.runId ||
-    settlement.owner.params.sessionKey !== params.sessionKey ||
-    settlement.owner.closed ||
-    !settlement.isCurrent()
-  ) {
+  const settlement = currentGoalSettlement(params);
+  if (!settlement) {
     return undefined;
   }
   const continuation = settlement.owner.continuation;
