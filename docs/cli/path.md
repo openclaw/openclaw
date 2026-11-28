@@ -366,8 +366,10 @@ the file extension.
 
 ### Markdown
 
+Save the following as `frontmatter.md` in your current directory. The opening
+`---` must be the first line.
+
 ```text
-<!-- frontmatter.md -->
 ---
 name: drafter
 description: email drafting agent
@@ -380,24 +382,27 @@ tier: core
 ```
 
 ```bash
-$ openclaw path resolve 'oc://x.md/[frontmatter]/tier' --file frontmatter.md --human
+$ openclaw path resolve 'oc://frontmatter.md/[frontmatter]/tier' --human
 leaf @ L4: "core" (string)
 
-$ openclaw path resolve 'oc://x.md/tools/gh/gh' --file frontmatter.md --human
-leaf @ L9: "GitHub CLI" (string)
+$ openclaw path resolve 'oc://frontmatter.md/tools/gh/gh' --human
+leaf @ L7: "GitHub CLI" (string)
 
-$ openclaw path find 'oc://x.md/tools/*' --file frontmatter.md --human
-3 matches for oc://x.md/tools/*:
-  oc://x.md/tools/gh           →  node @ L9 [md-item]
-  oc://x.md/tools/curl         →  node @ L10 [md-item]
-  oc://x.md/tools/send-email   →  node @ L11 [md-item]
+$ openclaw path find 'oc://frontmatter.md/tools/*' --human
+3 matches for oc://frontmatter.md/tools/*:
+  oc://frontmatter.md/tools/gh  →  node @ L7 [md-item]
+  oc://frontmatter.md/tools/curl  →  node @ L8 [md-item]
+  oc://frontmatter.md/tools/send-email  →  node @ L9 [md-item]
 ```
 
-The `[frontmatter]` predicate addresses the YAML frontmatter block; `tools`
-matches the `## Tools` heading via slug, and item leaves keep their slug form
-even when the source uses underscores (`send_email` becomes `send-email`).
+`[frontmatter]` selects the YAML frontmatter block, and `tools` matches the
+`## Tools` heading. The bullet named `send_email` appears as `send-email` in
+item paths. To read its value, use `oc://frontmatter.md/tools/send-email/send_email`:
+the field name keeps the underscore.
 
 ### JSONC
+
+Save this example as `config.jsonc`.
 
 ```text
 // config.jsonc
@@ -413,8 +418,9 @@ even when the source uses underscores (`send_email` becomes `send-email`).
 $ openclaw path resolve 'oc://config.jsonc/plugins/github/enabled' --file config.jsonc --human
 leaf @ L4: "true" (boolean)
 
-$ openclaw path set 'oc://config.jsonc/plugins/slack/enabled' 'true' --file config.jsonc --dry-run
---dry-run: would write 142 bytes to /…/config.jsonc
+$ openclaw path set 'oc://config.jsonc/plugins/slack/enabled' 'true' --file config.jsonc --dry-run --human
+--dry-run: would write 135 bytes to /…/config.jsonc
+// config.jsonc
 {
   "plugins": {
     "github": {"enabled": true, "role": "vcs"},
@@ -434,6 +440,8 @@ consolidate the duplicate parents into one, retaining the last effective value,
 then retry.
 
 ### JSONL
+
+Save these three lines as `session.jsonl`.
 
 ```text
 {"event":"start","userId":"u1","ts":1}
@@ -456,6 +464,8 @@ not know the line number, or by the standard `LN` segment when you do.
 
 ### YAML
 
+Save this example as `workflow.yaml`.
+
 ```text
 # workflow.yaml
 name: inbox-triage
@@ -468,10 +478,11 @@ steps:
 
 ```bash
 $ openclaw path resolve 'oc://workflow.yaml/steps/0/id' --file workflow.yaml --human
-leaf @ L3: "fetch" (string)
+leaf @ L4: "fetch" (string)
 
-$ openclaw path set 'oc://workflow.yaml/steps/$last/id' 'classify-renamed' --file workflow.yaml --dry-run
---dry-run: would write 99 bytes to /…/workflow.yaml
+$ openclaw path set 'oc://workflow.yaml/steps/$last/id' 'classify-renamed' --file workflow.yaml --dry-run --human
+--dry-run: would write 136 bytes to /…/workflow.yaml
+# workflow.yaml
 name: inbox-triage
 steps:
   - id: fetch
