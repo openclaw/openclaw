@@ -652,19 +652,8 @@ export async function ensureOnboardingPluginInstalled(
     configChannel: normalizeUpdateChannel(next.update?.channel),
     currentVersion: VERSION,
   });
-  const clawhubSpecs = clawhubSpec
-    ? await resolveClawHubInstallSpecsForUpdateChannel({
-        spec: clawhubSpec,
-        updateChannel,
-        officialPackageName: entry.trustedSourceLinkedOfficialInstall
-          ? parseClawHubPluginSpec(clawhubSpec)?.name
-          : undefined,
-        coreVersion: VERSION,
-        versionBoundToCore: entry.versionBoundToOpenClaw,
-      })
-    : null;
+  let clawhubSpecs: Awaited<ReturnType<typeof resolveClawHubInstallSpecsForUpdateChannel>> | undefined;
   let npmSpecs: Awaited<ReturnType<typeof resolveNpmInstallSpecsForUpdateChannel>> | undefined;
-  const clawhubInstallSpec = clawhubSpecs?.installSpec ?? clawhubSpec;
   const defaultChoice = ((): InstallChoice => {
     const hasRemoteSpec = Boolean(clawhubSpec) || Boolean(npmSpec);
     const remoteDefault = (): InstallChoice =>
@@ -698,7 +687,7 @@ export async function ensureOnboardingPluginInstalled(
           const label = entry.label;
           const autoConfirmSingleSource = params.autoConfirmSingleSource;
           // Bundled plugins are version-locked; remote specs are fallback metadata only.
-          const promptClawHubSpec = bundledLocalPath ? null : clawhubInstallSpec;
+          const promptClawHubSpec = bundledLocalPath ? null : clawhubSpec;
           const promptNpmSpec = bundledLocalPath ? null : npmSpec;
           const safeLabel = sanitizeTerminalText(label);
           const safeClawHubSpec = promptClawHubSpec
@@ -840,6 +829,18 @@ export async function ensureOnboardingPluginInstalled(
           formatInstallErrorDetail(error.message, params),
         );
       }
+    }
+    // Resolved only once ClawHub is a chosen source: its tag lookup must not delay the menu.
+    if (clawhubSpec && sources.some((source) => source.source === "clawhub")) {
+      clawhubSpecs = await resolveClawHubInstallSpecsForUpdateChannel({
+        spec: clawhubSpec,
+        updateChannel,
+        officialPackageName: entry.trustedSourceLinkedOfficialInstall
+          ? parseClawHubPluginSpec(clawhubSpec)?.name
+          : undefined,
+        coreVersion: VERSION,
+        versionBoundToCore: entry.versionBoundToOpenClaw,
+      });
     }
     const onFallback = async (message: string) => {
       await prompter.note(message, t("wizard.plugins.installTitle"));

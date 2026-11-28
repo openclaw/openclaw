@@ -61,11 +61,12 @@ vi.mock("../plugins/install.js", () => ({
 }));
 
 // mock-isolation: beta-channel tag selection reads ClawHub; offline keeps the @beta attempt.
+const fetchClawHubPackageDetail = vi.hoisted(() =>
+  vi.fn(async () => Promise.reject(new Error("offline"))),
+);
 vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/clawhub-packages.js")>()),
-  fetchClawHubPackageDetail: async () => {
-    throw new Error("offline");
-  },
+  fetchClawHubPackageDetail,
 }));
 // mock-isolation: package lookup and installation use fixtures instead of the live registry.
 vi.mock("../plugins/clawhub.js", () => ({
@@ -655,6 +656,18 @@ describe("ensureOnboardingPluginInstalled", () => {
       expectDiscoveryInvalidated();
     },
   );
+
+  it("opens the source menu without waiting on ClawHub", async () => {
+    const select = vi.fn(async (_input: InstallPrompt) => "skip");
+    const entry = installEntry({ clawhubSpec: "clawhub:demo-plugin" });
+    const cfg = { update: { channel: "beta" as const } };
+
+    const result = await runInstall(entry, { select } as never, { cfg });
+
+    expect(result.status).toBe("skipped");
+    expect(select).toHaveBeenCalledOnce();
+    expect(fetchClawHubPackageDetail).not.toHaveBeenCalled();
+  });
 
   it("retries the operator ClawHub selector when no beta release is published", async () => {
     const spec = "clawhub:demo-plugin@latest";
