@@ -345,21 +345,20 @@ export function hasOnlySessionMutationKindActive(
 }
 /**
  * Kinds of the active mutations on a chat that fence its outbound delivery; a mutation without
- * a kind reports "unlabeled". A background-result append cannot change the chat's generation
- * (it pins the current session and only appends), and the transcript writer orders appends, so
- * it never fences delivery.
+ * a kind reports "unlabeled". A background-result append never changes the chat's sessionId or
+ * lifecycleRevision (it pins both and only touches activity timestamps), and the transcript
+ * writer orders appends, so it never fences delivery.
  */
 export function collectDeliveryFencingMutationKinds(
   scope: string,
   identities: Iterable<string | undefined>,
 ): Array<SessionMutationKind | "unlabeled"> {
-  const kinds = matchingEntries(targetFrom({ scope, identities })).flatMap(
+  return matchingEntries(targetFrom({ scope, identities })).flatMap(
     (entry) =>
       entry.lifecycle?.mutations
         .filter((mutation) => mutation.phase === "active" && mutation.kind !== "background-result")
         .map((mutation) => mutation.kind ?? "unlabeled") ?? [],
   );
-  return [...new Set(kinds)];
 }
 export function collectSessionMutationIdentities(scope: string): string[] {
   const normalizedScope = scope.trim();

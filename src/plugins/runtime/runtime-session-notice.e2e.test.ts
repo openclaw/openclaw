@@ -10,11 +10,13 @@ import {
 import * as deliveryInfo from "../../config/sessions/delivery-info.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import * as deliveryGeneration from "../../config/sessions/session-delivery-generation.js";
 import * as transcriptRuntime from "../../config/sessions/transcript.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deliverOutboundPayloadsInternal } from "../../infra/outbound/deliver.js";
 import { drainPendingDeliveriesCore } from "../../infra/outbound/delivery-queue-recovery.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
+import { getLogger } from "../../logging/logger.js";
 import { readVisibleSessionTranscriptMessageEntries } from "../../plugin-sdk/session-transcript-runtime.js";
 import { commitBackgroundResultToSession } from "../../sessions/background-session-result.js";
 import {
@@ -238,60 +240,90 @@ it("finishes the transcript on retry without sending the channel message again",
 });
 
 // Delivery recovery, as the Gateway runs it a few seconds after a refused send.
-async function drainDeliveryRecovery() {
+async function drainDeliveryRecovery(sessionKey: string) {
   await drainPendingDeliveriesCore(
     {
-      drainKey: "test:session-notice",
+      drainKey: `test:session-notice:${sessionKey}`,
       logLabel: "test notice recovery",
       cfg: { agents: { entries: { main: { workspace: state.workspaceDir } } } },
       log: { info() {}, warn() {}, error() {} },
       deliver: deliverOutboundPayloadsInternal,
-      selectEntry: () => ({ match: true, bypassBackoff: true }),
+      selectEntry: (entry) => ({
+        match: entry.sessionGeneration?.sessionKey === sessionKey,
+        bypassBackoff: true,
+      }),
     },
     deliverOutboundPayloadsInternal,
   );
 }
 
-it("sends a notice while a background result is appended to the same conversation", async () => {
-  const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-10`;
-  await seedSession(sessionKey, PLUGIN_ID);
-  const generation = await capture(sessionKey);
-  // Cron writes its run-outcome row to the owner conversation while it posts the notice.
-  const held = Promise.withResolvers<void>();
-  const holding = Promise.withResolvers<void>();
-  const appended = commitBackgroundResultToSession({
-    agentId: "main",
-    sessionKey,
-    text: 'Automation "Proof" did not start.',
-    idempotencyKey: "proof-run-outcome",
-    config: { agents: { entries: { main: { workspace: state.workspaceDir } } } },
-    prepareDisplayContent: async () => {
-      holding.resolve();
-      await held.promise;
-      return undefined;
-    },
-  });
-  await holding.promise;
-  proof.afterSend = held.resolve;
+it.each([
+  ["commits after the send", "after-send"],
+  ["commits between the delivery lease and the send", "in-lease"],
+] as const)(
+  "sends a notice while a background result appended to the same conversation %s",
+  async (_case, release) => {
+    const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-10-${release}`;
+    await seedSession(sessionKey, PLUGIN_ID);
+    const generation = await capture(sessionKey);
+    // Cron writes its run-outcome row to the owner conversation while it posts the notice.
+    const held = Promise.withResolvers<void>();
+    const holding = Promise.withResolvers<void>();
+    const appended = commitBackgroundResultToSession({
+      agentId: "main",
+      sessionKey,
+      text: 'Automation "Proof" did not start.',
+      idempotencyKey: `proof-run-outcome-${release}`,
+      config: { agents: { entries: { main: { workspace: state.workspaceDir } } } },
+      prepareDisplayContent: async () => {
+        holding.resolve();
+        await held.promise;
+        return undefined;
+      },
+    });
+    await holding.promise;
+    // Which of the two writes reached its effect first: the row commit or the channel send.
+    const order: string[] = [];
+    void appended.then(() => order.push("append"));
+    proof.afterSend = () => {
+      order.push("send");
+      held.resolve();
+    };
+    if (release === "in-lease") {
+      const prepare = deliveryGeneration.prepareChatDeliveryLease;
+      vi.spyOn(deliveryGeneration, "prepareChatDeliveryLease").mockImplementationOnce(
+        async (chat) => {
+          const lease = await prepare(chat);
+          held.resolve();
+          await appended;
+          return lease;
+        },
+      );
+    }
 
-  const result = await post(generation!, "k").finally(held.resolve);
-  const sentWhenPosted = proof.sent.length;
-  await expect(appended).resolves.toEqual({ ok: true });
-  await drainDeliveryRecovery();
+    // Each case posts its own notice; a reused key would replay the first case's retained receipt.
+    const id = `k-${release}`;
+    const result = await post(generation!, id).finally(held.resolve);
+    const sentWhenPosted = proof.sent.length;
+    await expect(appended).resolves.toEqual({ ok: true });
+    await drainDeliveryRecovery(sessionKey);
 
-  // Sent before the post resolves, so the caller's next reply follows it; recovery sends nothing.
-  expect({ result, sentWhenPosted, sent: proof.sent.length }).toEqual({
-    result: { status: "posted", delivered: true },
-    sentWhenPosted: 1,
-    sent: 1,
-  });
-  expect(await notices(sessionKey)).toEqual([{ id: "k" }]);
-});
+    // Sent before the post resolves, so the caller's next reply follows it; recovery sends nothing.
+    expect({ result, sentWhenPosted, sent: proof.sent.length, order }).toEqual({
+      result: { status: "posted", delivered: true },
+      sentWhenPosted: 1,
+      sent: 1,
+      order: release === "in-lease" ? ["append", "send"] : ["send", "append"],
+    });
+    expect(await notices(sessionKey)).toEqual([{ id }]);
+  },
+);
 
-it("still refuses a notice while a reset owns the conversation", async () => {
+it("still refuses a notice while a reset owns the conversation and names the reset", async () => {
   const sessionKey = `agent:main:${PLUGIN_ID}:direct:user-11`;
   await seedSession(sessionKey, PLUGIN_ID);
   const generation = await capture(sessionKey);
+  const warn = vi.spyOn(getLogger(), "warn");
   const held = Promise.withResolvers<void>();
   const holding = Promise.withResolvers<void>();
   const reset = runSessionMutation({
@@ -312,6 +344,9 @@ it("still refuses a notice while a reset owns the conversation", async () => {
   expect(result).toMatchObject({ status: "failed", stage: "delivery" });
   expect(proof.sent).toEqual([]);
   expect(await notices(sessionKey)).toEqual([]);
+  expect(warn.mock.calls.map(([record]) => record)).toContainEqual(
+    expect.objectContaining({ branch: "delivery-mutation", mutationKinds: ["reset"] }),
+  );
 });
 
 it("posts nothing when the plugin is revoked during the awaited route lookup", async () => {
