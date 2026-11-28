@@ -28,7 +28,10 @@ export type CronFormState = {
   description: string;
   agentId: string;
   ownerProfileId: string;
+  sessionKey: string;
   clearAgent: boolean;
+  enabled: boolean;
+  deleteAfterRun: boolean;
   // Process-backed schedules are read-only because the form cannot edit their commands.
   // Preserve their schedule verbatim on save instead of rebuilding it.
   scheduleKind: CronJob["schedule"]["kind"];

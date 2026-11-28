@@ -507,7 +507,7 @@ it.each([
   }
 });
 
-it("keeps the selected automation paused after using the header switch", async () => {
+it("syncs form enabled after header pause", async () => {
   const job = scheduledJob("job-1");
   const paused = { ...job, enabled: false, configRevision: "paused" };
   let current = job;
@@ -524,14 +524,14 @@ it("keeps the selected automation paused after using the header switch", async (
   await harness.openJob(page, job.id);
   await waitFor(() => expect(page.cron.cronEditingJob?.id).toBe("job-1"));
   expect(page.cron.cronRunsScope).toBe("job");
-  expect(page.cron.cronEditingJob?.enabled).toBe(true);
+  expect(page.cron.cronForm.enabled).toBe(true);
   const enabledToggle = await dom.waitForElement<HTMLInputElement>(
     page,
     '[data-test-id="cron-toggle-enabled"] input.settings-toggle__input',
   );
   enabledToggle.checked = false;
   enabledToggle.dispatchEvent(new Event("change", { bubbles: true }));
-  await waitFor(() => expect(page.cron.cronEditingJob?.enabled).toBe(false));
+  await waitFor(() => expect(page.cron.cronForm.enabled).toBe(false));
   expect(request).toHaveBeenCalledWith("cron.update", {
     id: job.id,
     expectedConfigRevision: "config-revision-job-1",

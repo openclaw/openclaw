@@ -152,6 +152,7 @@ suite.define(() => {
         { lastRunStatus: "ok", lastRunAtMs: Date.parse("2026-05-29T08:10:00.000Z") },
       ),
       description: "Explain the nightly digest without granting write access",
+      payload: agentPayload("# Nightly digest"),
     };
     await suite.withPage(contextOptions, async ({ page }) => {
       const gateway = await installCronGateway(
@@ -187,6 +188,11 @@ suite.define(() => {
       await page.getByText("Read-only history remains available", { exact: true }).waitFor();
       await page.locator('[data-test-id="cron-edit"]').click();
       await page.locator("fieldset.cron-editor:disabled").waitFor();
+      await page.getByText("Prompt preview", { exact: true }).click();
+      await page
+        .getByRole("region", { name: "Prompt preview" })
+        .getByRole("heading", { name: "Nightly digest" })
+        .waitFor();
       await expectCount(page, '[data-test-id="cron-submit"]', 0);
 
       const mutationMethods = new Set(["cron.add", "cron.remove", "cron.run", "cron.update"]);

@@ -217,23 +217,23 @@ export function ScheduleSentence(
   const chooseFrequency = (frequency: SentenceFrequency) => {
     props.onFrequencyPreference(frequency === "custom" || frequency === "daily" ? frequency : null);
     if (frequency === "once") {
-      props.onFormChange(scheduleKindPatch("at"));
+      props.onFormChange(scheduleKindPatch(props.form, "at"));
       return;
     }
     if (frequency === "every") {
-      props.onFormChange(scheduleKindPatch("every"));
+      props.onFormChange(scheduleKindPatch(props.form, "every"));
       return;
     }
     if (frequency === "custom") {
       if (props.form.scheduleKind !== "cron") {
-        props.onFormChange(scheduleKindPatch("cron"));
+        props.onFormChange(scheduleKindPatch(props.form, "cron"));
       }
       return;
     }
     const current =
       props.form.scheduleKind === "cron" ? parseCronSentence(props.form.cronExpr) : null;
     props.onFormChange({
-      ...(props.form.scheduleKind === "cron" ? {} : scheduleKindPatch("cron")),
+      ...(props.form.scheduleKind === "cron" ? {} : scheduleKindPatch(props.form, "cron")),
       cronExpr: formatCronSentence(sentenceForFrequency(frequency, current)),
     });
   };
@@ -289,7 +289,7 @@ export function ScheduleSentence(
                 onSelect={() => {
                   if (props.form.scheduleKind !== "event") {
                     props.onFrequencyPreference(null);
-                    props.onFormChange(scheduleKindPatch("event"));
+                    props.onFormChange(scheduleKindPatch(props.form, "event"));
                   }
                   close();
                 }}

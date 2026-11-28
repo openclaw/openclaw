@@ -758,6 +758,11 @@
   tab-size: 2;
 }
 
+.cron-prompt-preview {
+  max-height: 240px;
+  overflow: auto;
+}
+
 .cron-payload-code:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
@@ -1712,9 +1717,16 @@
     width: auto;
   }
 
+  .cron-editor-placement .settings-row:has(.settings-input) {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cron-editor-placement .settings-row:has(.settings-input) .settings-row__control,
+  .cron-editor-placement .settings-row:has(.settings-input) .cron-control,
   .cron-editor-placement .settings-input {
-    width: 12ch;
-    text-align: end;
+    width: 100%;
+    max-width: none;
   }
 
   .cron-editor-placement .picker-select__trigger,

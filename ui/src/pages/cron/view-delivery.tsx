@@ -14,7 +14,7 @@ import {
   inputIdForField,
 } from "./view-fields.tsx";
 import { DurationRow } from "./view-schedule.tsx";
-import type { CronProps } from "./view-types.ts";
+import type { CronProps, CronPanelMode } from "./view-types.ts";
 function buildChannelOptions(data: CronProps): ChannelPickerOption[] {
   return [
     { value: "last", label: "last", kind: "neutral" },
@@ -31,30 +31,12 @@ function buildChannelOptions(data: CronProps): ChannelPickerOption[] {
 function DeliveryRows(
   props: CronProps & {
     isAgentTurn: boolean;
-    supportsAnnounce: boolean;
     selectedDeliveryMode: CronFormState["deliveryMode"];
     channelOptions: readonly ChannelPickerOption[];
   },
 ) {
   return (
     <>
-      <CronSelect
-        {...props}
-        field="deliveryMode"
-        label={t("cron.form.deliveryModeLabel")}
-        value={props.selectedDeliveryMode}
-        errorKey="deliveryMode"
-        options={[
-          ...(props.selectedDeliveryMode === ""
-            ? [{ value: "", label: t("cron.form.selectDeliveryMode"), disabled: true }]
-            : []),
-          ...(props.supportsAnnounce
-            ? [{ value: "announce", label: t("cron.form.announceDefault") }]
-            : []),
-          { value: "webhook", label: t("cron.form.webhookPost") },
-          { value: "none", label: t("cron.form.noneInternal") },
-        ]}
-      />
       {props.selectedDeliveryMode === "announce" ? (
         <>
           <CronSelect
@@ -77,16 +59,6 @@ function DeliveryRows(
               { value: "owner", label: t("cron.form.ownerTarget") },
             ]}
           />
-          {props.form.deliveryTarget !== "owner" ? (
-            <CronInput
-              {...props}
-              field="deliveryTo"
-              label={t("cron.form.to")}
-              help={t("cron.form.toHelp")}
-              list="cron-delivery-to-suggestions"
-              placeholder={t("cron.form.toPlaceholder")}
-            />
-          ) : undefined}
           <CronSelect
             {...props}
             field="deliveryDirectPolicy"
@@ -111,18 +83,6 @@ function DeliveryRows(
           ) : undefined}
         </>
       ) : undefined}
-      {props.selectedDeliveryMode === "webhook" ? (
-        <CronInput
-          {...props}
-          field="deliveryTo"
-          label={t("cron.form.webhookUrl")}
-          required
-          help={t("cron.form.webhookHelp")}
-          errorKey="deliveryTo"
-          list="cron-delivery-to-suggestions"
-          placeholder={t("cron.form.webhookPlaceholder")}
-        />
-      ) : undefined}
       {props.isAgentTurn ? (
         <ToggleRow
           {...props}
@@ -139,6 +99,13 @@ function DeliveryRows(
           help={t("cron.form.bestEffortHelp")}
         />
       ) : undefined}
+      <CronInput
+        {...props}
+        field="sessionKey"
+        label={t("cron.form.sessionKey")}
+        help={t("cron.form.sessionKeyHelp")}
+        placeholder={t("cron.form.sessionKeyPlaceholder")}
+      />
     </>
   );
 }
@@ -149,9 +116,7 @@ const ADVANCED_FIELDS = [
   "activeHoursEnd",
   "activeHoursTimezone",
   "triggerScript",
-  "deliveryMode",
   "deliveryDirectPolicy",
-  "deliveryTo",
   "failureAlertAfter",
   "failureAlertCooldownSeconds",
   "staggerAmount",
@@ -163,11 +128,13 @@ const ADVANCED_FIELDS = [
  */
 export function Advanced(
   props: CronProps & {
+    mode: CronPanelMode;
     isAgentTurn: boolean;
-    supportsAnnounce: boolean;
     selectedDeliveryMode: CronFormState["deliveryMode"];
   },
 ) {
+  const sessionTarget = () => props.form.sessionTarget;
+  const knownSessionTarget = () => sessionTarget() === "main" || sessionTarget() === "isolated";
   const isCronSchedule = () => props.form.scheduleKind === "cron";
   const channelOptions = createMemo(() => buildChannelOptions(props));
   const [open, setOpen] = createSignal(false);
@@ -199,21 +166,39 @@ export function Advanced(
             label={t("cron.form.description")}
             placeholder={t("cron.form.descriptionPlaceholder")}
           />
-          <CronSelect
-            {...props}
-            field="ownerProfileId"
-            label={t("cron.form.humanOwner")}
-            help={t("cron.form.humanOwnerHelp")}
-            disabled={!props.editingJob || !props.canManage}
-            options={
-              props.ownerOptions ?? [
-                {
-                  value: props.form.ownerProfileId,
-                  label: props.form.ownerProfileId || t("cron.form.ownerUnassigned"),
-                },
-              ]
-            }
-          />
+          {props.editingJob ? (
+            <CronSelect
+              {...props}
+              field="ownerProfileId"
+              label={t("cron.form.humanOwner")}
+              help={t("cron.form.humanOwnerHelp")}
+              disabled={!props.canManage}
+              options={
+                props.ownerOptions ?? [
+                  {
+                    value: props.form.ownerProfileId,
+                    label: props.form.ownerProfileId || t("cron.form.ownerUnassigned"),
+                  },
+                ]
+              }
+            />
+          ) : undefined}
+          {props.mode === "create" ? (
+            <ToggleRow
+              {...props}
+              field="enabled"
+              label={t("cron.form.startEnabled")}
+              help={t("cron.form.startEnabledHelp")}
+            />
+          ) : undefined}
+          {props.form.scheduleKind === "at" || props.form.scheduleKind === "on-exit" ? (
+            <ToggleRow
+              {...props}
+              field="deleteAfterRun"
+              label={t("cron.form.deleteAfterRun")}
+              help={t("cron.form.deleteAfterRunHelp")}
+            />
+          ) : undefined}
         </SettingsSection>
         <SettingsSection title={t("cron.form.advancedTask")}>
           {props.form.payloadLocked ? (
@@ -244,6 +229,17 @@ export function Advanced(
               ]}
             />
           )}
+          <CronSelect
+            {...props}
+            field="sessionTarget"
+            label={t("cron.form.runsIn")}
+            help={t("cron.form.sessionHelp")}
+            options={[
+              { value: "main", label: t("cron.form.mainSession") },
+              { value: "isolated", label: t("cron.form.isolatedSession") },
+              ...(knownSessionTarget() ? [] : [{ value: sessionTarget(), label: sessionTarget() }]),
+            ]}
+          />
           {props.isAgentTurn ? (
             <>
               <CronInput

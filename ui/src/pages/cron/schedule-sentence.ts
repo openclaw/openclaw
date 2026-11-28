@@ -211,9 +211,18 @@ export function sentenceForFrequency(
   }
 }
 
-export function scheduleKindPatch(value: CronFormState["scheduleKind"]): Partial<CronFormState> {
+/** The form patch for choosing a schedule kind, with the delete-after-run default each kind carries. */
+export function scheduleKindPatch(
+  form: Pick<CronFormState, "scheduleKind">,
+  value: CronFormState["scheduleKind"],
+): Partial<CronFormState> {
   return {
     scheduleKind: value,
-    ...(value === "event" ? { triggerEnabled: false } : {}),
+    ...(value === "event" ? { triggerEnabled: false, deleteAfterRun: false } : {}),
+    ...(value === "at" && (form.scheduleKind === "every" || form.scheduleKind === "cron")
+      ? { deleteAfterRun: true }
+      : value === "every" || value === "cron"
+        ? { deleteAfterRun: false }
+        : {}),
   };
 }
