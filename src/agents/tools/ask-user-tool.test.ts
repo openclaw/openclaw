@@ -823,7 +823,13 @@ it.each([false, true])(
         : validArgs,
     );
     expect(result.details).toEqual(
-      manual ? { status: "action_unresolved", reason: "cancelled" } : { status: "no_answer" },
+      manual
+        ? {
+            status: "action_unresolved",
+            reason: "cancelled",
+            nextAction: expect.stringContaining("Follow the new message"),
+          }
+        : { status: "no_answer" },
     );
     expect(JSON.stringify(result)).toContain("Follow the new message");
     expect(JSON.stringify(result)).not.toContain("proceed with best judgment");
@@ -892,6 +898,13 @@ it.each([
     expect(result.terminate).toBe(outcome === "ready" && supported ? true : undefined);
     if (outcome === "ready") {
       expect(JSON.stringify(result)).toContain("not proof");
+    } else {
+      // Code Mode returns details, not the tool's display text.
+      expect(result.details).toMatchObject({
+        nextAction: expect.stringContaining(
+          outcome === "declined" ? "Stop this task" : "continue independent authorized work",
+        ),
+      });
     }
   },
 );

@@ -18,6 +18,7 @@ it("keeps ask_user native-control requirements visible to the model", () => {
   expect(description).toContain("Put every selectable choice in `options`");
   expect(description).toContain("Use `multiSelect` only");
   expect(description).toContain("observed external prerequisite");
+  expect(description).toContain("try supported recovery within current permissions before asking");
   expect(description).toContain("Do not invent approval or manual prerequisites");
   expect(description).toContain("not the current user-requested turn");
   expect(description).toContain("finish the turn first");
