@@ -11,7 +11,6 @@ import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import { formatUserFacingAssistantErrorText } from "../../embedded-agent-helpers/error-text.js";
 import { renderAgentHarnessPreflightUserMessage } from "../../embedded-agent-helpers/user-facing-text.js";
-import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
 import { isToolAuthoredSourceReplyForAssistant } from "../../embedded-agent-tool-authored-source-reply.js";
 import { renderAssistantRequestFailureCopy } from "../../failover/assistant-request-failure-copy.js";
 import { resolveReplyFailoverFacts } from "../../failover/request-error-facts.js";
@@ -269,26 +268,19 @@ export function shouldRetryMissingAssistantTurn(params: {
   );
 }
 
-/** Fields needed to determine whether a yielded turn already delivered or can continue. */
+/** Same-attempt evidence that unfinished work can still resume or complete. */
 interface YieldContinuationAttempt {
   clientToolCalls?: readonly unknown[];
   didSendDeterministicApprovalPrompt?: boolean;
-  successfulCronAdds?: number;
   acceptedSessionSpawns?: readonly AcceptedSessionSpawn[];
   runtimeContinuationStarted?: boolean;
   yieldMessageWaitRegistered?: boolean;
   yieldExecWakeArmed?: boolean;
-  messagingToolSentTexts?: readonly string[];
-  messagingToolSentMediaUrls?: readonly string[];
-  messagingToolSentTargets?: readonly MessagingToolSend[];
   toolMetas?: readonly { asyncStarted?: boolean }[];
-  yieldAcknowledgment?: string;
 }
 
 /** Same-attempt work that can resume execution or deliver its completion. */
 export function hasRunContinuationEvidence(attempt: YieldContinuationAttempt): boolean {
-  // Only same-attempt evidence is causal here. Session-wide active descendants may be
-  // stale or unrelated and must not suppress the diagnostic for this yielded turn.
   return (
     (attempt.clientToolCalls?.length ?? 0) > 0 ||
     attempt.didSendDeterministicApprovalPrompt === true ||
@@ -300,23 +292,6 @@ export function hasRunContinuationEvidence(attempt: YieldContinuationAttempt): b
     hasAsyncActivity(attempt.toolMetas)
   );
 }
-
-/**
- * A deliberate yield can also leave accepted work or already-sent output. A waiting
- * acknowledgment is kept only for an armed completion, so that wake is its continuation.
- */
-export function hasYieldContinuationEvidence(attempt: YieldContinuationAttempt): boolean {
-  return (
-    Boolean(attempt.yieldAcknowledgment?.trim()) ||
-    hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
-    hasCommittedMessagingToolDeliveryEvidence(attempt) ||
-    (attempt.successfulCronAdds ?? 0) > 0 ||
-    hasRunContinuationEvidence(attempt)
-  );
-}
-
-export const YIELD_DIAGNOSTIC_TEXT =
-  "⚠️ Turn yielded without a continuation source. Send a message to resume.";
 
 export const TRUNCATED_REPLY_NOTICE_TEXT =
   "⚠️ Reply truncated at the model's output token limit. The text above is partial — ask to continue it.";

@@ -390,28 +390,32 @@ describe("sessions_yield orchestration", () => {
     });
   });
 
-  it("emits diagnostic payload when yieldDetected has no continuation evidence", async () => {
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-      makeAttemptResult({
-        yieldDetected: true,
+  it("does not announce a scheduler-owned yield as the automation's reply", async () => {
+    const { createRequesterYieldCallback } = await import("../openclaw-tools.requester-yield.js");
+    const { createSessionsYieldTool } = await import("../tools/sessions-yield-tool.js");
+    const params = { ...createOverflowRunParams(state), runId: "scheduled-turn" };
+    mockedRunEmbeddedAttempt.mockImplementationOnce(async () => {
+      const onYield = vi.fn();
+      const tool = createSessionsYieldTool({
+        sessionId: params.sessionId,
+        claimYield: createRequesterYieldCallback({
+          requesterSessionKey: params.sessionKey,
+          requesterAgentId: params.agentId,
+          scheduledToolTargets: { placement: "in-session" },
+          claimYieldCompletion: () => true,
+        }),
+        onYield,
+      });
+      const handoff = await tool.execute("yield", {});
+      expect(handoff.details).toMatchObject({ status: "yielded" });
+      return makeAttemptResult({
+        yieldDetected: onYield.mock.calls.length > 0,
         assistantTexts: [],
-      }),
-    );
-
-    const result = await runEmbeddedAgent({
-      ...createOverflowRunParams(state),
-      runId: "run-yield-no-continuation",
+      });
     });
 
-    // yieldDetected without any continuation source → diagnostic payload
-    expect(result.payloads).toHaveLength(1);
-    const diagnosticPayload = expectDefined(result.payloads![0], "diagnostic payload");
-    expect(diagnosticPayload.text).toBe(
-      "⚠️ Turn yielded without a continuation source. Send a message to resume.",
-    );
-    // stopReason is still end_turn (yield semantics preserved)
-    expect(result.meta.stopReason).toBe("end_turn");
-    // No pending tool calls
-    expect(result.meta.pendingToolCalls).toBeUndefined();
+    const result = await runEmbeddedAgent(params);
+    expect(result.meta).toMatchObject({ yielded: true, stopReason: "end_turn" });
+    expect(result.payloads).toBeUndefined();
   });
 });

@@ -96,9 +96,10 @@ then receives its own execution fence, so completing it leaves later user input
 admissible without discarding pending child results.
 
 An explicit `waitFor: "message"` counts as continuation evidence after the
-registry accepts the wait. The attempt carries that fact into terminal reply
-presentation, so a registered message wait does not produce a missing-continuation
-warning. Refused or unregistered waits do not provide that evidence.
+registry accepts the wait. Refused or unregistered waits do not count. A yielded
+turn with no visible output does not generate a fallback chat reply. In an
+automation, the scheduler can deliver child output without resuming the session.
+If a recorded wait becomes unreachable, the Gateway records the failure on that run.
 
 `resolveYieldedRunContinuation` owns whether a paused run can still be continued.
 A collector without a recorded result never can, because an explicit wait reads a

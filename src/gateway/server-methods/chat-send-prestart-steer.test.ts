@@ -141,7 +141,7 @@ test.for(["accepted", "unavailable", "rejected", "withdrawn", "long-tool"] as co
     const steerAccepted = createDeferred();
     const steerDeclined = createDeferred();
     const releaseSteerCommit = createDeferred();
-    const steerTerminal = createDeferred();
+    const steerTerminal = createDeferred<Record<string, unknown>>();
     const followupStarted = createDeferred();
     const releaseFollowup = createDeferred();
     const queuedSettled = createDeferred();
@@ -219,7 +219,7 @@ test.for(["accepted", "unavailable", "rejected", "withdrawn", "long-tool"] as co
           (payload.state === "final" || payload.state === "error" || payload.state === "aborted")
         ) {
           earlyTerminals.push(consumed.length === 0);
-          steerTerminal.resolve();
+          steerTerminal.resolve(payload);
         }
       }),
     };
@@ -477,7 +477,9 @@ test.for(["accepted", "unavailable", "rejected", "withdrawn", "long-tool"] as co
         // Accepted steering retains cancellation custody but is not a follow-up queue item.
         await pendingCustody(false, true);
         releaseSteerCommit.resolve();
-        await withinTest(steerTerminal.promise, signal);
+        const terminal = await withinTest(steerTerminal.promise, signal);
+        expect(terminal.state).toBe("final");
+        expect(terminal.message).toBeUndefined();
         expect(consumed).toEqual([
           { runId: createdSession.runId, text: expect.stringContaining(steerText) },
         ]);

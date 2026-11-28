@@ -11,7 +11,7 @@ import {
   transferCoreTtsToolResultProvenance,
 } from "../../tools/tts-tool-result-provenance.js";
 import { createUsageAccumulator } from "../usage-accumulator.js";
-import { hasRunContinuationEvidence, YIELD_DIAGNOSTIC_TEXT } from "./incomplete-turn-resolution.js";
+import { hasRunContinuationEvidence } from "./incomplete-turn-resolution.js";
 import type { buildEmbeddedRunPayloads } from "./payloads.js";
 import {
   assistantMessage,
@@ -459,7 +459,7 @@ describe("prepareEmbeddedRunTerminal", () => {
       payloadMocks.buildEmbeddedRunPayloads.mockImplementation(actual.buildEmbeddedRunPayloads);
     });
     it.each([true, false])(
-      "preserves paused payloads and reports missing continuation (%s)",
+      "keeps paused turns free of synthetic replies with or without continuation (%s)",
       async (continuation) => {
         const assistant = {
           ...assistantMessage("aborted"),
@@ -507,9 +507,7 @@ describe("prepareEmbeddedRunTerminal", () => {
           livenessState: "paused",
         });
         expect(result.result.meta.error).toBeUndefined();
-        expect(result.result.payloads ?? []).toEqual(
-          continuation ? [] : [{ text: YIELD_DIAGNOSTIC_TEXT }],
-        );
+        expect(result.result.payloads).toBeUndefined();
         expect(terminal.sessionPromptState.activateInternalPrompt).not.toHaveBeenCalled();
       },
     );
@@ -548,9 +546,7 @@ describe("prepareEmbeddedRunTerminal", () => {
         expect(hasRunContinuationEvidence(attempt)).toBe(false);
         const result = await resolveEmbeddedRunTerminal({ ...terminal, prepared });
         expectComplete(result);
-        expect(result.result.payloads ?? []).toEqual(
-          yieldAcknowledgment?.trim() ? [] : [{ text: YIELD_DIAGNOSTIC_TEXT }],
-        );
+        expect(result.result.payloads).toBeUndefined();
         if (yieldAcknowledgment?.trim()) {
           expect(result.result.meta).toMatchObject({ yielded: true, yieldAcknowledgment });
         }
@@ -592,9 +588,7 @@ describe("prepareEmbeddedRunTerminal", () => {
         const result = await resolveEmbeddedRunTerminal({ ...terminal, prepared });
         expectComplete(result);
         expect(result.result.meta).toMatchObject({ yielded: true });
-        expect(result.result.payloads ?? []).toEqual(
-          yieldExecWakeArmed ? [] : [{ text: YIELD_DIAGNOSTIC_TEXT }],
-        );
+        expect(result.result.payloads).toBeUndefined();
       },
     );
     it.each([
