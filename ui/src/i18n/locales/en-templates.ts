@@ -16,7 +16,6 @@ const enTemplates = {
     reviewingArchive: "Reviewing template…",
     importingArchive: "Importing…",
     incompleteImport: "Installation did not complete. Inspect the agent before retrying.",
-    explore: "Templates",
     exploreDescription: "Ready-made Claws that get the job done",
     title: "Templates",
     featured: "Featured",
@@ -70,7 +69,6 @@ const enTemplates = {
       boot: "A startup checklist run when the boot-md hook is enabled.",
       bootstrap: "One-time first-run setup instructions, removed after setup is complete.",
       memory: "Curated long-term facts and decisions for private sessions.",
-      dailyMemory: "Daily memory notes, available for the agent to look up when needed.",
       tools:
         "Retired tool notes. Local tool conventions now belong in the Tools section of AGENTS.md.",
       heartbeat:
@@ -86,7 +84,6 @@ const enTemplates = {
     backToCategory: "Back to {category}",
     description: "Description",
     content: "Content",
-    instructionAdded: "Added to the workspace",
     trustReview: "ClawHub flagged this package for review. Read the warning before adding.",
     reviewTitle: "Review before adding",
     reviewDescription:
@@ -95,7 +92,6 @@ const enTemplates = {
     dependencyClawHub: "ClawHub · Version {version}",
     dependencyBundled: "Bundled with template",
     contentsLoading: "Loading template contents…",
-    noVersion: "This template has no published release yet.",
   },
   templatesTrustWarning: {
     title: "ClawHub security review",
