@@ -25,6 +25,7 @@ import {
 import { readSessionChangedEvent } from "../../lib/sessions/session-row-reconcile.ts";
 import { EXPECTED_CHAT_REFUSAL } from "./chat-error-state.ts";
 import { ChatPaneReactions } from "./chat-pane-reactions.ts";
+import { focusAfterSuggestionDismiss } from "./chat-pane-shared.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   typingActorIdForSessionMessage,
@@ -410,20 +411,9 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     if (editOperation) {
       this.collaboration.editOperation = editOperation;
     }
+    const composer = getChatComposerState(this.presentationId);
     if (operation.hideRow) {
-      const row = this.element.querySelector<HTMLElement>(".session-suggestion:focus-within");
-      if (row?.dataset.suggestionId === suggestion.id) {
-        const neighbor =
-          row.nextElementSibling?.querySelector("summary") ??
-          row.previousElementSibling?.querySelector("summary");
-        if (neighbor) {
-          neighbor.focus({ preventScroll: true });
-        } else {
-          focusComposerInput(getChatComposerState(this.presentationId).composerTextarea, {
-            preventScroll: true,
-          });
-        }
-      }
+      focusAfterSuggestionDismiss(this.element, suggestion.id, composer.composerTextarea);
     }
     this.collaboration.resolutions = new Map(this.collaboration.resolutions).set(
       suggestion.id,
@@ -432,11 +422,7 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     if (resolution === "edit") {
       scope.state.handleChatDraftChange(suggestion.text, []);
       // The native pane hands focus to the composer renderer after publishing the draft.
-      queueMicrotask(() =>
-        focusComposerInput(getChatComposerState(this.presentationId).composerTextarea, {
-          preventScroll: true,
-        }),
-      );
+      queueMicrotask(() => focusComposerInput(composer.composerTextarea, { preventScroll: true }));
     }
     try {
       const result = await scope.client.request<{ suggestion: SessionSuggestion }>(
