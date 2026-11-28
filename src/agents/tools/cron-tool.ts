@@ -670,32 +670,31 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
               return await automation.execute(action, params, callGateway, gatewayOpts);
             case "wake": {
               const text = readToolStringParam(params, "text", { required: true });
-              if (params.mode !== undefined) {
-                throw new Error(
-                  "Wake no longer takes a mode. Use an at automation to resume later.",
-                );
-              }
-              // Gateway owns target validation and authorization.
+              const mode =
+                params.mode === "now" || params.mode === "next-heartbeat"
+                  ? params.mode
+                  : "next-heartbeat";
+              // An omitted target wakes the originating conversation, not the
+              // heartbeat lane. Gateway owns target validation and authorization.
               const explicitSessionKey = readToolStringParam(params, "sessionKey");
+              const explicitAgentId = readToolStringParam(params, "agentId");
               const sessionKey = explicitSessionKey ?? callerSessionKey;
-              if (!sessionKey) {
-                throw new Error("Wake needs a calling session or an explicit sessionKey.");
-              }
               // Pair an explicit session with its own agent; caller defaults must
               // not rewrite that target before the Gateway can validate it.
+              const agentIdFromExplicitSessionKey = explicitSessionKey
+                ? parseAgentSessionKey(explicitSessionKey)?.agentId
+                : undefined;
               const agentId =
-                readToolStringParam(params, "agentId") ??
-                (explicitSessionKey
-                  ? parseAgentSessionKey(explicitSessionKey)?.agentId
-                  : callerAgentId);
+                explicitAgentId ??
+                (explicitSessionKey ? agentIdFromExplicitSessionKey : callerAgentId);
               return jsonResult(
                 await callGateway(
                   "wake",
                   gatewayOpts,
                   {
-                    mode: "now",
+                    mode,
                     text,
-                    sessionKey,
+                    ...(sessionKey ? { sessionKey } : {}),
                     ...(agentId ? { agentId } : {}),
                   },
                   { expectFinal: false },

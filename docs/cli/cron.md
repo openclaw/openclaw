@@ -412,9 +412,10 @@ later Doctor runs do not overwrite edits or recreate a deleted migrated job.
 Use `automations show`, `runs`, `enable`, and `disable` to manage the jobs.
 Legacy `system heartbeat` controls apply only to converted/default jobs. See [Heartbeat migration](/gateway/heartbeat).
 
-Scheduled jobs execute their payload when due. Use the job schedule to control timing.
-The old Wake mode setting and `--wake` flag did not affect job timing and are no longer accepted.
-Doctor removes the old stored field without changing a job's schedule, payload, or enabled state.
+Use the schedule to control when a job runs. Create and edit still accept the deprecated
+`--wake now|next-heartbeat` flag for compatibility with existing scripts.
+The Gateway ignores both values. Doctor removes the stored field and preserves the
+job's schedule, payload, and enabled state.
 
 <Note>
 If you have automation jobs from before the current delivery and store format, run `openclaw doctor --fix`. Doctor normalizes legacy job fields: `jobId`, `schedule.cron`, top-level delivery fields including legacy `threadId`, and payload `provider` delivery aliases. It also migrates `notify: true` webhook fallback jobs from the retired raw `cron.webhook` value to explicit webhook delivery. It removes that config key afterwards. Jobs that already announce to a chat keep that delivery and get a completion webhook destination. Without a legacy webhook, Doctor removes the inert top-level `notify` marker for jobs with no migration target. The existing delivery is preserved unchanged. `doctor --fix` therefore stops re-warning about them.

@@ -224,7 +224,9 @@ describe("cron protocol validators", () => {
   });
 
   it("keeps protocol-v4 wake metadata limited to its released values", () => {
-    expect(Value.Check(CronJobSchema, { ...jobWithState(), wakeMode: "now" })).toBe(true);
+    expect(Value.Check(CronJobSchema, { ...jobWithState(), wakeMode: "next-heartbeat" })).toBe(
+      true,
+    );
     expect(isAdd({ ...minimalAddParams, wakeMode: "later" })).toBe(false);
   });
 

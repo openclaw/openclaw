@@ -110,13 +110,15 @@ const CronRunDiagnosticsSchema = closedObject({
   summary: Type.Optional(Type.String()),
   entries: Type.Array(CronRunDiagnosticSchema),
 });
+const LegacyCronWakeModeSchema = Type.Optional(
+  Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")], {
+    deprecated: true,
+    description:
+      'Protocol-v4 compatibility. The Gateway ignores writes and returns "now" in full job responses.',
+  }),
+);
 const CronCommonOptionalFields = {
-  wakeMode: Type.Optional(
-    Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")], {
-      deprecated: true,
-      description: "Accepted and ignored for released protocol-v4 writers.",
-    }),
-  ),
+  wakeMode: LegacyCronWakeModeSchema,
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   description: Type.Optional(Type.String()),
@@ -544,13 +546,7 @@ export const CronJobSchema = closedObject({
   cyberAccessProgram: Type.Optional(CyberAccessProgramSchema),
   trigger: Type.Optional(CronTriggerSchema),
   sessionTarget: CronSessionTargetSchema,
-  wakeMode: Type.Optional(
-    Type.Literal("now", {
-      deprecated: true,
-      description:
-        "Derived response-only compatibility for released clients; retained until protocol v4 retires.",
-    }),
-  ),
+  wakeMode: LegacyCronWakeModeSchema,
   payload: CronPayloadSchema,
   delivery: Type.Optional(CronDeliverySchema),
   failureAlert: Type.Optional(Type.Union([Type.Literal(false), CronFailureAlertSchema])),
