@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionApprovalReplay } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSessionMessageSubscriberRegistry } from "../server-chat-state.js";
+import { sessionMutationTargetChanged } from "../session-sharing-authorization.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 import type {
@@ -124,6 +125,20 @@ describe("sessions.messages.subscribe approval opt-in", () => {
     expect([...registry.get(key)]).toEqual([client.connId]);
     expect([...registry.getNarration(key)]).toEqual([]);
     expect([...registry.getApprovals(key)]).toEqual([]);
+  });
+
+  it("returns the session-change retry response after rolling back approval replay", async () => {
+    const key = "agent:main:child";
+    const method = "sessions.messages.subscribe";
+    const { registry, request, read } = createContext();
+    const changed = sessionMutationTargetChanged(method, key);
+    read.mockRejectedValueOnce(changed);
+
+    const respond = await request({ key, includeApprovals: true });
+
+    expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, changed.error);
+    expect(registry.get(key)).toEqual(new Set());
+    expect(registry.getApprovals(key)).toEqual(new Set());
   });
 
   it.each(["stale", "missing"])(

@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -222,7 +223,15 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           );
         } catch (error) {
           rollback?.();
-          if (!includeApprovals) {
+          // Let the existing client retry reauthorize this read; leave other replay failures unchanged.
+          if (
+            !includeApprovals ||
+            (error instanceof SessionMutationAuthorizationChangedError &&
+              error.error.code === ErrorCodes.INVALID_REQUEST &&
+              isRecord(error.error.details) &&
+              error.error.details.code === "SESSION_MUTATION_AUTHORIZATION_CHANGED" &&
+              error.error.details.method === "sessions.messages.subscribe")
+          ) {
             throw error;
           }
           context.logGateway.error(`session approval replay failed: ${String(error)}`);
