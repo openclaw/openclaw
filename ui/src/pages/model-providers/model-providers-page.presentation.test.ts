@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import * as providerData from "./data.ts";
+import * as loginData from "./login-providers.ts";
 import {
   appendPage,
   createApiKeyProviderData,
@@ -73,13 +74,15 @@ it.each(["edit", "add"] as const)(
     expect(input.value).toBe("");
     expect(save.disabled).toBe(true);
     const presentation = vi.spyOn(providerData, "buildModelProviderPresentation");
+    const loginCatalog = vi.spyOn(loginData, "buildLoginProviders");
 
     for (const character of "abcdefghij") {
       input.value += character;
       input.dispatchEvent(new Event("input", { bubbles: true }));
       await page.updateComplete;
     }
-    const builds = presentation.mock.calls.length;
+    expect(presentation).not.toHaveBeenCalled();
+    expect(loginCatalog).not.toHaveBeenCalled();
     expect(input.value).toBe("abcdefghij");
     expect(save.disabled).toBe(false);
     save.click();
@@ -92,7 +95,6 @@ it.each(["edit", "add"] as const)(
       expect(page.renderRoot.textContent).toContain("Synthetic credential rejection");
       expect(input).toMatchObject({ value: "abcdefghij", disabled: false });
     });
-    expect(builds).toBe(0);
   },
 );
 
@@ -150,14 +152,23 @@ it("updates rendered facts from accepted catalog, auth, and notified mutable own
     expect(primary.textContent).toContain("Published Second model");
     expect(modelPicker(page, "utility").textContent).toContain("Auto · Published First model");
   });
+  const connect = '[data-models-connect-provider="synthetic-provider"]';
+  expect(page.querySelector(connect)).toBeNull();
   const data = createApiKeyProviderData();
   data.authStatus!.providers[0]!.displayName = "Published provider";
+  data.authStatus!.providerCapabilities!.push({
+    provider: "synthetic-provider",
+    apiKeySupported: true,
+    quickApiKeySetup: true,
+  });
   publishRouteData(page, data);
   await waitForSolid(() =>
     expect(page.querySelector('[data-provider-id="openai"]')?.textContent).toContain(
       "Published provider",
     ),
   );
+
+  expect(page.querySelector(connect)).not.toBeNull();
 
   context.agents.state.agentsList!.agents[0]!.name = "Renamed Main";
   notifyAgents();
