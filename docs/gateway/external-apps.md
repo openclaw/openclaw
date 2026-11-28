@@ -122,8 +122,7 @@ The RPC contract is:
 or `"terminate"` and defaults to `"preserve"`. `drain` defaults to `false`.
 
 With these defaults, preparation returns `busy` for tracked work, including open
-terminals. For a partial preview, run
-`openclaw gateway call gateway.restart.preflight --json`. It can miss open
+terminals. The deprecated `gateway.restart.preflight` preview can miss open
 terminals and pending chat writes. Check that the work you expect has finished,
 then use default preparation to reserve the idle interval.
 
