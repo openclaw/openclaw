@@ -119,6 +119,11 @@ describe("scanSource", () => {
       '\nimport * as proc from "node:child_process";\nproc.exec("node server.js");\n',
       '\nimport * as proc from "node:child_process";\nproc["spawn"]("node", ["server.js"]);\n',
       '\nconst { exec: run } = require("child_process");\nexec("node a.js"); run("node b.js");\n',
+      '\nrequire("child_process").exec("node server.js");\n',
+      '\nrequire("node:child_process").exec("node server.js");\n',
+      '\nprocess.getBuiltinModule("child_process").exec("node server.js");\n',
+      '\nrequire("child_process")["exec"]("node server.js");\n',
+      '\nprocess.getBuiltinModule("child_process")["spawn"]("node", ["server.js"]);\n',
     );
     check(
       { ruleId: "dynamic-code-execution", severity: "critical" },
@@ -164,6 +169,16 @@ describe("scanSource", () => {
   it("does not flag a computed exec-style call on a non-child_process object", () => {
     const source =
       '\nimport { exec } from "child_process";\nconst re = /pattern/;\nre["exec"](value);\n';
+    const findings = scanSource(source, "plugin.ts");
+    expectRulePresence(findings, "dangerous-exec", false);
+  });
+
+  it("does not attribute a child_process load elsewhere on the line to a later .exec", () => {
+    // A require() earlier on the same line is a separate statement; the .exec
+    // receiver here is `getProc()`, which is not a proven child_process
+    // namespace, so provenance scoping must keep this call benign.
+    const source =
+      '\nfunction getProc() { return require("child_process"); }\nconst result = require("child_process"); getProc().exec("node server.js");\n';
     const findings = scanSource(source, "plugin.ts");
     expectRulePresence(findings, "dangerous-exec", false);
   });
