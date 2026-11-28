@@ -147,9 +147,8 @@ export const MANAGED_HANDOFF_RECOVERY_SOURCE = String.raw`async function restore
   });
   if (restored) {
     try {
-      const { waitForGatewayUpdateRecovery } = await import(pathToFileURL(params.recoveryModulePath).href);
       if (!ownsRecovery()) throw new Error("managed update recovery ownership was lost");
-      const health = await waitForGatewayUpdateRecovery(expectedVersion, expectedBuildId, params.recoveryTimeoutMs);
+      const health = await probeInstalledGatewayRecovery(expectedVersion, expectedBuildId, params.recoveryTimeoutMs);
       restored = ownsRecovery() && health.healthy === true &&
         health.runtime?.status === "running" && health.gatewayVersion === expectedVersion &&
         (!expectedBuildId || health.gatewayBuildId === expectedBuildId);

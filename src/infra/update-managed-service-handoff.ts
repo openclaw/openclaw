@@ -1063,6 +1063,7 @@ async function spawnManagedServiceUpdateHandoff(
       metaPath,
       triageInputPath,
       path.join(dir, "terminal-result.json"),
+      path.join(dir, "recovery-probe.json"),
       path.join(dir, "sentinel-operation.json"),
       path.join(dir, "sentinel-result.json"),
     ],
