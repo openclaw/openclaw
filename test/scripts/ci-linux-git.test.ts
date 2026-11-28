@@ -522,6 +522,23 @@ function runDocs(signal: AbortSignal, step: string, options: GitOptions = {}) {
     objects: { [sourceObject]: { text: JSON.stringify({ sha: candidate }) } },
     poisonPython: true,
     ...options,
+    revisions: { main: base, "refs/remotes/origin/main": base, ...options.revisions },
+    commandResults: {
+      ["rev-list --parents -n 1 " + candidate]: { code: 0, output: `${candidate} ${base}\n` },
+      ["diff --no-renames --name-only -z " + base + " " + candidate]: {
+        code: 0,
+        output: "docs/page.mdx\0",
+      },
+      ["ls-tree -r -z " + candidate + " -- docs .openclaw-sync package.json package-lock.json"]: {
+        code: 0,
+        output: "fixture tree",
+      },
+      ["show " + candidate + ":.openclaw-sync/source.json"]: {
+        code: 0,
+        output: JSON.stringify({ repository: "fixture/checkout", sha: candidate }),
+      },
+      ...options.commandResults,
+    },
   });
 }
 
@@ -582,9 +599,11 @@ posixIt.for([125, "hang"] satisfies FetchResult[])(
   async (failure, { signal }) => {
     const report = await runDocs(signal, docsCommit, {
       fetchResults: [failure, 0],
+      readyFetchClockAdvanceSeconds: 120,
     });
     expect(report.code, report.output).toBe(0);
-    expect(report.pushes).toHaveLength(1);
+    expect(report.fetchClockAdvancedSeconds).toBe(failure === "hang" ? 120 : 0);
+    expect(report.pushes).toEqual([]);
     expect(backoffs(report)).toEqual([]);
     expect(
       report.commands.every(
@@ -599,26 +618,23 @@ posixIt.for([125, "hang"] satisfies FetchResult[])(
 );
 
 posixIt.for([
-  { operation: "push", failure: 23, lockChange: true },
-  { operation: "rebase", failure: 125, lockChange: false },
-  { operation: "push", failure: 143, lockChange: false },
+  { failure: 23, lockChange: true },
+  { failure: 125, lockChange: false },
+  { failure: 143, lockChange: false },
 ])(
-  "retries docs $operation ($failure) after aborting the rebase",
-  async ({ operation, failure, lockChange }, { signal }) => {
+  "retries docs preparation after verified rebase failure ($failure)",
+  async ({ failure, lockChange }, { signal }) => {
     const report = await runDocs(signal, docsCommit, {
       env: lockChange ? { FIXTURE_DOCS_LOCK_AFTER_REBASE: "1" } : {},
-      rebaseResults: operation === "rebase" ? [failure, 0] : [],
-      pushResults: operation === "push" ? [failure, 0] : [],
+      rebaseResults: [failure, 0],
     });
     expect(report.code, report.output).toBe(0);
     expect(argsOf(report.rebases)).toEqual([rebase, abort, rebase]);
-    expect(report.pushes).toHaveLength(operation === "push" ? 2 : 1);
+    expect(report.pushes).toEqual([]);
     expect(backoffs(report)).toEqual([2]);
-    expect(report.output).toContain("Publish sync attempt 1 failed; retrying.");
-    expect(report.commands.filter(({ tool }) => tool === "npm")).toHaveLength(lockChange ? 2 : 1);
-    if (operation === "push" && !lockChange) {
-      expect(report.output).toContain("Reused 1 unchanged successful page check(s).");
-    }
+    expect(report.output).toContain("Prepared docs mirror");
+    expect(report.output).not.toContain("Published docs");
+    expect(report.commands.filter(({ tool }) => tool === "npm")).toHaveLength(1);
   },
 );
 
@@ -651,7 +667,7 @@ posixIt.for([docsClone, docsCommit])(
     expect(report.output.trim()).toMatch(
       cloning
         ? /Failed to clone publish repo after retries\.$/u
-        : /Failed to push publish-repo sync after retries\.$/u,
+        : /Failed to prepare publish-repo sync after retries\.$/u,
     );
   },
 );
@@ -702,7 +718,7 @@ posixIt.for([
       ...staleCheck,
       ...staleCheck,
     ]);
-    expect(report.pushes).toHaveLength(1);
+    expect(report.pushes).toEqual([]);
   },
 );
 

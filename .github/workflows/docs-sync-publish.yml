@@ -9,6 +9,7 @@ on:
       - package.json
       - scripts/docs-list.js
       - scripts/docs-sync-publish.mjs
+      - scripts/docs-sync-publish-policy.py
       - scripts/check-docs-mdx.mjs
       - scripts/check-docs-mdx.mts
       - scripts/lib/arg-utils.runtime.mjs
@@ -26,12 +27,10 @@ permissions:
   contents: read
 
 concurrency:
-  # cancel-in-progress starved the mirror: every main push cancelled the in-flight
-  # sync and cancelled runs leave no successor, so under sustained merge velocity
-  # openclaw/docs never advanced. Queue instead — GitHub keeps only the newest
-  # pending run per group, and skip_stale_source keeps completed runs idempotent.
-  group: docs-sync-publish-${{ github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.ref }}
+  # All mirror writers, including manual runs, share one noncanceling queue.
+  group: docs-sync-publish
   cancel-in-progress: false
+  queue: max
 
 jobs:
   sync-publish-repo:
@@ -106,6 +105,13 @@ jobs:
           raise SystemExit(1)
           PYTHON
 
+      - name: Hold unresolved docs mirror candidates
+        if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
+        working-directory: publish
+        run: |
+          set -euo pipefail
+          exec python3 -I -S "$CI_GIT_OWNER" --policy "$GITHUB_WORKSPACE/scripts/docs-sync-publish-policy.py" guard
+
       - name: Sync docs into publish repo
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         run: |
@@ -130,118 +136,20 @@ jobs:
           restore-keys: docs-mdx-v1-${{ runner.os }}-
 
       - name: Commit publish repo sync
+        id: prepare
         if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         working-directory: publish
         run: |
           set -euo pipefail
-          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
-          import json
-          import os
-          import subprocess
-          import tempfile
-          from pathlib import Path
-          from ci_git_owner import run_git, GitFailure, FetchTimeout, backoff
+          exec python3 -I -S "$CI_GIT_OWNER" --policy "$GITHUB_WORKSPACE/scripts/docs-sync-publish-policy.py" prepare
 
-          publish = os.getcwd()
-          workspace = os.environ["GITHUB_WORKSPACE"]
-          source_sha = os.environ["GITHUB_SHA"]
-          installed_inputs = None
-
-          def validate_publish_docs():
-              global installed_inputs
-              current_inputs = tuple(Path(publish, name).read_bytes()
-                                     for name in ("package.json", "package-lock.json"))
-              if installed_inputs != current_inputs:
-                  subprocess.run(["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"],
-                                 cwd=publish, check=True)
-                  installed_inputs = current_inputs
-              # Validate the actual rebased tree before every push attempt.
-              # Node 24 runs this erasable TypeScript closure without an extra loader.
-              subprocess.run(["node", ".openclaw-sync/check-docs-mdx.mts", "docs",
-                              "--cache-file", os.environ["OPENCLAW_DOCS_MDX_CACHE"]],
-                             cwd=publish, check=True)
-
-          def invalid_json_constant(value):
-              raise json.JSONDecodeError("Invalid JSON constant", value, 0)
-
-          def validate_publisher_dependencies():
-              baseline = {}
-              for key, filename in (("packageJson", "package.json"), ("packageLock", "package-lock.json")):
-                  with tempfile.TemporaryFile() as output:
-                      run_git(publish, "show", f"refs/remotes/origin/main:{filename}", stdout=output)
-                      output.seek(0)
-                      baseline[key] = json.loads(output.read().decode("utf-8"),
-                                                 parse_constant=invalid_json_constant)
-              subprocess.run([
-                  "node", "--input-type=module", "-e",
-                  "import fs from 'node:fs'; "
-                  "import { validateDocsSyncDependencies } from './scripts/docs-sync-publish.mjs'; "
-                  "validateDocsSyncDependencies(process.argv[1], JSON.parse(fs.readFileSync(0, 'utf8')));",
-                  publish,
-              ], cwd=workspace, input=json.dumps(baseline), text=True, check=True)
-
-          def remote_source_sha():
-              try:
-                  with tempfile.TemporaryFile() as output:
-                      run_git(publish, "show", "refs/remotes/origin/main:.openclaw-sync/source.json",
-                              stdout=output, stderr=subprocess.DEVNULL)
-                      output.seek(0)
-                      data = json.loads(output.read().decode("utf-8", errors="replace"),
-                                        parse_constant=invalid_json_constant)
-                  sha = data.get("sha") if isinstance(data, dict) else None
-                  return sha.rstrip("\n") if isinstance(sha, str) else ""
-              except (GitFailure, json.JSONDecodeError):
-                  return ""
-
-          def skip_stale_source():
-              current_source_sha = remote_source_sha()
-              if not current_source_sha or current_source_sha == source_sha:
-                  return
-              try:
-                  run_git(workspace, "merge-base", "--is-ancestor", source_sha, current_source_sha)
-              except GitFailure:
-                  return
-              print(f"Skipping stale publish sync for {source_sha}; origin/main already mirrors {current_source_sha}.")
-              raise SystemExit(0)
-
-          try:
-              run_git(publish, "diff", "--quiet", "--", "docs", ".openclaw-sync", "package.json", "package-lock.json")
-          except GitFailure:
-              pass
-          else:
-              print("No publish-repo changes.")
-              raise SystemExit(0)
-
-          try:
-              run_git(publish, "fetch", "origin", "main:refs/remotes/origin/main", timeout=120, reclaim_locks=True)
-          except (GitFailure, FetchTimeout):
-              pass
-          else:
-              skip_stale_source()
-
-          run_git(publish, "config", "user.name", "openclaw-docs-sync[bot]", reclaim_locks=True)
-          run_git(publish, "config", "user.email", "openclaw-docs-sync[bot]@users.noreply.github.com", reclaim_locks=True)
-          run_git(publish, "add", "docs", ".openclaw-sync", "package.json", "package-lock.json", reclaim_locks=True)
-          run_git(publish, "commit", "-m", f"chore(sync): mirror docs from {os.environ['GITHUB_REPOSITORY']}@{source_sha}", reclaim_locks=True)
-          for attempt in range(1, 6):
-              try:
-                  run_git(publish, "fetch", "origin", "main:refs/remotes/origin/main", timeout=120, reclaim_locks=True)
-                  skip_stale_source()
-                  run_git(publish, "rebase", "-X", "theirs", "origin/main", reclaim_locks=True)
-                  validate_publisher_dependencies()
-                  validate_publish_docs()
-                  run_git(publish, "push", "origin", "HEAD:main", reclaim_locks=True)
-                  raise SystemExit(0)
-              except (GitFailure, FetchTimeout):
-                  # Only verified Git failure may reach abort/retry; ownership
-                  # uncertainty and cancellation escape the connected policy.
-                  try:
-                      run_git(publish, "rebase", "--abort", stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL, reclaim_locks=True)
-                  except GitFailure:
-                      pass
-                  print(f"Publish sync attempt {attempt} failed; retrying.", flush=True)
-                  backoff(attempt * 2)
-          print("Failed to push publish-repo sync after retries.")
-          raise SystemExit(1)
-          PYTHON
+      - name: Publish validated docs through a pull request
+        if: steps.prepare.outputs.ready == 'true'
+        working-directory: publish
+        env:
+          DOCS_PUBLISH_HEAD: ${{ steps.prepare.outputs.head }}
+          DOCS_PUBLISH_BASE: ${{ steps.prepare.outputs.base }}
+          DOCS_PUBLISH_TREE: ${{ steps.prepare.outputs.tree }}
+        run: |
+          set -euo pipefail
+          exec python3 -I -S "$CI_GIT_OWNER" --policy "$GITHUB_WORKSPACE/scripts/docs-sync-publish-policy.py" publish
