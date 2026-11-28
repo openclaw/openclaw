@@ -170,8 +170,7 @@ class SharedWorkerHost {
     const url = resolveRuntimeProcessEntrypointUrl("sharedWorkerHost");
     // Plain task pools own no native close of their own; terminal close of the host's native
     // source stops their endpoints, so the host joins before the source checks for live workers.
-    captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }).retain(
-      state,
+    captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }).retainSharedHost(
       stopSharedWorkerHostEndpoints,
     );
     this.worker = createRetainedNativeWorker(url, {

@@ -42,7 +42,6 @@ const closeEmbeddingProviderMock = vi.hoisted(() => vi.fn(async () => {}));
 const mocks = await vi.hoisted(async () => ({
   runtime: (await import("./test-runtime-mock.js")).createInertRuntime(vi),
   loadConfig: vi.fn(() => ({})),
-  getRuntimeConfigSourceSnapshot: vi.fn(() => null),
   setRuntimeConfigSnapshot: vi.fn(),
   loadAuthProfileStoreForRuntime: vi.fn<
     typeof import("../agents/auth-profiles.js").loadAuthProfileStoreForRuntime
@@ -257,7 +256,8 @@ vi.mock("../secrets/provider-env-vars.js", () => ({
 vi.mock("../config/config.js", async () => {
   const { createTestConfigReadMocks } = await import("../commands/test-runtime-config-helpers.js");
   return {
-    getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
+    getRuntimeConfigSnapshot: () => null,
+    getRuntimeConfigSourceSnapshot: () => null,
     ...createTestConfigReadMocks(mocks, "loadConfig"),
     setRuntimeConfigSnapshot: mocks.setRuntimeConfigSnapshot,
   };

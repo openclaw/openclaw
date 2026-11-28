@@ -62,10 +62,10 @@ public enum ChatMessageVisibleText {
             }
             return "<think>\n\(thinking)\n</think>"
         }
-        return OpenClawChatMessage.displayText(
+        return ChatInternalContext.strip(OpenClawChatMessage.displayText(
             contentText: parts.joined(separator: "\n"),
             role: message.role,
             stopReason: message.presentationOwnsFooter ? message.stopReason : nil,
-            errorMessage: message.presentationOwnsFooter ? message.errorMessage : nil)
+            errorMessage: message.presentationOwnsFooter ? message.errorMessage : nil))
     }
 }

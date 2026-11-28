@@ -7,6 +7,7 @@ import {
   responsesPromptObserver,
   type ResponsesPromptObservation,
 } from "@openclaw/ai/internal/openai";
+import { isToolChoiceCacheNeutral } from "@openclaw/ai/internal/shared";
 import { stableStringify } from "@openclaw/normalization-core";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
@@ -81,6 +82,26 @@ export function readSessionForkContext(attempt: {
     promptCacheKey: attempt.promptCacheKey,
     preparedRequest: state && preparedRequests.get(state),
   };
+}
+
+/**
+ * The settled turn's last request, which its NO_REPLY recovery (one more request of the same run)
+ * replays. Only where `tool_choice` is outside the cache key, on the same route, and never when
+ * the provider rejected that request's context.
+ */
+export function readSettledTurnRequest(attempt: {
+  model: Model;
+  runId: string;
+}): Record<string, unknown> | undefined {
+  const state = providerPromptStates.get(attempt.runId);
+  const prepared = state && preparedRequests.get(state);
+  return prepared &&
+    isToolChoiceCacheNeutral(attempt.model.api) &&
+    !(state.lastRejected && state.lastRejected === state.lastAttempt) &&
+    prepared.model.provider === attempt.model.provider &&
+    prepared.model.id === attempt.model.id
+    ? prepared.body
+    : undefined;
 }
 
 export function clearProviderPromptState(runId: string): void {

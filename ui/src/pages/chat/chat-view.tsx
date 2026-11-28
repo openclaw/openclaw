@@ -546,7 +546,10 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                     prop:presented={presented()}
                   />
                 </Show>
-                <TranscriptSearch search={getTranscriptState(input.props.paneId).search} />
+                <TranscriptSearch
+                  search={getTranscriptState(input.props.paneId).search}
+                  chat={input.props}
+                />
                 <div
                   class="chat-main__conversation-frame"
                   ref={[elementRef(input.props.onConversationFrameRef)]}

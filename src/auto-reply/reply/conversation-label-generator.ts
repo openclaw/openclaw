@@ -12,7 +12,10 @@ import {
   runUtilityCompletion,
   type UtilityCompletionAttempt,
 } from "../../agents/utility-completion.js";
-import { resolveAutomaticUtilityRuntimeOverride } from "../../agents/utility-model.js";
+import {
+  resolveAutomaticUtilityRuntimeOverride,
+  resolveUtilityModelSelectionForAgent,
+} from "../../agents/utility-model.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -241,10 +244,19 @@ export async function generateConversationLabel(
   params: ConversationLabelParams,
 ): Promise<string | null> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.cfg);
+  const utility = params.modelRef
+    ? undefined
+    : resolveUtilityModelSelectionForAgent({
+        cfg: params.cfg,
+        agentId,
+        modelPolicy: params.operatorAuthority?.modelPolicy,
+      });
+  // A refusing role gets no utility attempt; the primary pass is its own permitted model.
+  const roleRefusesUtility = utility && "disabled" in utility && utility.disabled === "role-policy";
   const attempts: ConversationLabelAttempt[] = params.modelRef
     ? [{ modelRef: params.modelRef, phase: "primary fallback" }]
     : [
-        { useUtilityModel: true, phase: "utility" },
+        ...(roleRefusesUtility ? [] : [{ useUtilityModel: true, phase: "utility" as const }]),
         { useUtilityModel: false, phase: "primary fallback" },
       ];
   return await runLabelAttempts({ ...params, agentId, attempts });
