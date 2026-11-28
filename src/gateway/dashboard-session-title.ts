@@ -7,7 +7,7 @@ import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { createCrustaceanSlug } from "../agents/session-slug.js";
-import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
+import { resolveUtilityModelSelectionForAgent } from "../agents/utility-model.js";
 import { withWorktreeSourceWait } from "../agents/worktrees/allocation.js";
 import type { WorktreeSourceStage, WorktreeWaitBudget } from "../agents/worktrees/types.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -319,12 +319,16 @@ async function generateDashboardSessionTitle(params: {
   const regularModelRef = `${regularModel.provider}/${regularModel.model}${
     preferredProfile ? `@${preferredProfile}` : ""
   }`;
-  const utilityModelRef = resolveUtilityModelRefForAgent({
+  // A role that refuses every utility model skips the utility pass without an attempt;
+  // the regular pass below is the session's own permitted model.
+  const utility = resolveUtilityModelSelectionForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
     primaryProvider: regularModel.provider,
     primaryModelRef: regularModelRef,
+    modelPolicy: params.operatorAuthority?.modelPolicy,
   });
+  const utilityModelRef = "modelRef" in utility ? utility.modelRef : undefined;
   const generateLabel = async (): Promise<string | null> => {
     try {
       const { generateConversationLabelWithFallback } =
