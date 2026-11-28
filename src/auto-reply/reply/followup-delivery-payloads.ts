@@ -6,6 +6,8 @@ import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+import { normalizeSentMediaUrlsForDedupe } from "./reply-media-dedupe.js";
 import { applyReplyTagsToPayload } from "./reply-payloads-base.js";
 import { filterMessagingToolReplyPayload } from "./reply-payloads-dedupe.js";
 import {
@@ -14,10 +16,24 @@ import {
   resolveReplyToMode,
 } from "./reply-threading.js";
 
+export function resolveFollowupPayloadContext(turn: AdmittedFollowupTurn) {
+  return {
+    cfg: turn.config,
+    messageProvider: turn.queued.run.messageProvider,
+    originatingAccountId: turn.queued.originatingAccountId ?? turn.queued.run.agentAccountId,
+    originatingChannel: turn.queued.originatingChannel,
+    originatingChatType: turn.queued.originatingChatType,
+    originatingReplyToMode: turn.queued.originatingReplyToMode,
+    originatingTo: turn.queued.originatingTo,
+    originatingThreadId: turn.queued.originatingThreadId,
+  };
+}
+
 /** Normalizes delivery content, applies threading, and dedupes message-tool sends. */
-export function resolveFollowupDeliveryPayloads(params: {
+export async function resolveFollowupDeliveryPayloads(params: {
   cfg: OpenClawConfig;
   payloads: ReplyPayload[];
+  normalizePayload?: (payload: ReplyPayload) => Promise<ReplyPayload>;
   messageProvider?: string;
   originatingAccountId?: string;
   originatingChannel?: string;
@@ -31,7 +47,7 @@ export function resolveFollowupDeliveryPayloads(params: {
   sentTargets?: MessagingToolSend[];
   sentTexts?: string[];
   onDeliveredTerminalDuplicate?: () => void;
-}): ReplyPayload[] {
+}): Promise<ReplyPayload[]> {
   const replyMessageProvider = resolveOriginMessageProvider({
     originatingChannel: params.originatingChannel,
     provider: params.messageProvider,
@@ -59,9 +75,14 @@ export function resolveFollowupDeliveryPayloads(params: {
       ? []
       : (normalizeReplyPayload(payload, { applyChannelTransforms: false }) ?? []),
   );
+  // Retain the media owner's source references before deduping against tool sends.
+  const preparedPayloads = params.normalizePayload
+    ? await Promise.all(sanitizedPayloads.map(params.normalizePayload))
+    : sanitizedPayloads;
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
-  return sanitizedPayloads.flatMap((payload) =>
-    filterMessagingToolReplyPayload({
+  const resolvedPayloads: ReplyPayload[] = [];
+  for (const payload of preparedPayloads) {
+    const deduped = await filterMessagingToolReplyPayload({
       payload: applyReplyToMode.preview(
         setReplyPayloadMetadata(applyReplyTagsToPayload({ payload }), {
           replyDelivery,
@@ -77,8 +98,13 @@ export function resolveFollowupDeliveryPayloads(params: {
       sentMediaUrls: params.sentMediaUrls,
       sentTexts: params.sentTexts,
       onDeliveredTerminalDuplicate: params.onDeliveredTerminalDuplicate,
-    })
-      .filter(isRenderablePayload)
-      .map(applyReplyToMode),
-  );
+      normalizeSentMediaUrls: (sentMediaUrls) =>
+        normalizeSentMediaUrlsForDedupe({
+          sentMediaUrls,
+          normalizeMediaPaths: params.normalizePayload,
+        }),
+    });
+    resolvedPayloads.push(...deduped.filter(isRenderablePayload).map(applyReplyToMode));
+  }
+  return resolvedPayloads;
 }
