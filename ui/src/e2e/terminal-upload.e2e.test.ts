@@ -1,5 +1,13 @@
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  controlUiSessionUrl,
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { captureUiProofEnabled } from "./chat-flow.test-support.ts";
+import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   expectRequestCount,
@@ -245,6 +253,108 @@ suite.define(() => {
         });
         await page.waitForTimeout(100);
         expect((await gateway.getRequests("terminal.input")).length).toBe(3);
+      },
+    );
+  });
+
+  it("stages a pasted clipboard image and keeps text pastes native", async () => {
+    const viewport = { width: 1440, height: 900 };
+    await suite.withPage(
+      {
+        serviceWorkers: "block",
+        viewport,
+        permissions: ["clipboard-read", "clipboard-write"],
+        // Opt-in recording so a reviewer can watch the real paste, not only read assertions.
+        ...(captureUiProofEnabled
+          ? { recordVideo: { dir: suite.artifactDir, size: viewport } }
+          : {}),
+      },
+      async ({ context, page }) => {
+        // Real OS-level clipboard, not a constructed ClipboardEvent: write through
+        // navigator.clipboard and deliver with an actual Ctrl+V keystroke.
+        await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+          origin: new URL(suite.server.baseUrl).origin,
+        });
+        const sessionKey = "agent:main:terminal-paste-e2e";
+        const stagedPath = "/tmp/openclaw-terminal-upload/pasted.png";
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessions: [createControlUiSessionRow(sessionKey, "Paste surface", 1_790_000_000_000)],
+          featureMethods: [...defaultControlUiFeatureMethods, "terminal.open", "terminal.upload"],
+          methodResponses: { "terminal.upload": { path: stagedPath, size: 4 } },
+          terminalEnabled: true,
+        });
+
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await waitForControlUiGatewayReady(page);
+        const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+        // The composer only exists on the embedded (chat side panel) surface.
+        const embedded = page.locator('[data-panel-slot="terminal"] openclaw-terminal-panel');
+        await openChatSidePanelType(pane, "Terminal");
+        await gateway.waitForRequest("terminal.open");
+
+        const composer = embedded.locator(".tp-composer input");
+        if (!expectUploadSurface) {
+          expect(await composer.count()).toBe(0);
+
+          return;
+        }
+        // Embedded desktop opens on Sessions; dismissing it reveals the composer.
+        await embedded.locator(".tp-session.is-current").click();
+        await composer.waitFor({ state: "visible" });
+
+        // A text-only clipboard paste stays with the input, not the upload owner.
+        await page.evaluate(() => navigator.clipboard.writeText("plain text paste"));
+        await composer.click();
+        await page.keyboard.press("Control+V");
+        await expect.poll(async () => await composer.inputValue()).toContain("plain text paste");
+        expect((await gateway.getRequests("terminal.upload")).length).toBe(0);
+
+        // Now put a real PNG on the clipboard and paste it with a real keystroke.
+        await gateway.deferNext("terminal.upload");
+        await page.evaluate(async () => {
+          const canvas = document.createElement("canvas");
+          canvas.width = 2;
+          canvas.height = 2;
+          const context2d = canvas.getContext("2d");
+          if (!context2d) {
+            throw new Error("no 2d context for clipboard image");
+          }
+          context2d.fillStyle = "#ff0000";
+          context2d.fillRect(0, 0, 2, 2);
+          const blob = await new Promise<Blob | null>((resolve) => {
+            canvas.toBlob((value) => resolve(value), "image/png");
+          });
+          if (!blob) {
+            throw new Error("canvas produced no PNG blob");
+          }
+          await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+        });
+        await composer.click();
+        await page.keyboard.press("Control+V");
+
+        const upload = await gateway.waitForRequest("terminal.upload");
+        const uploaded = upload.params as {
+          sessionId: string;
+          name: string;
+          contentBase64: string;
+        };
+        expect(uploaded.sessionId).toMatch(/^control-ui-mock-terminal-/u);
+        // The browser names a clipboard PNG itself; assert a PNG payload, not a fixed name.
+        expect(uploaded.name).toMatch(/\.png$/u);
+        expect(uploaded.contentBase64.startsWith("iVBOR")).toBe(true);
+        await gateway.resolveDeferred("terminal.upload", { path: stagedPath, size: 4 });
+
+        await expect
+          .poll(async () => (await embedded.locator(".tp-attachment").textContent()) ?? "")
+          .toMatch(/\.png/u);
+        if (captureUiProofEnabled) {
+          await page.screenshot({
+            path: `${suite.artifactDir}/terminal-composer-pasted-image.png`,
+          });
+        }
+        // Staging is not submission: no PTY input before an explicit Send.
+        expect((await gateway.getRequests("terminal.input")).length).toBe(0);
       },
     );
   });

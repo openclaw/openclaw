@@ -48,6 +48,33 @@ function dropUpload(path: string, shell: string, uploadPathStyle?: "native", ove
   return { upload, terminal, request, arrayBuffer };
 }
 
+/** Same real upload owner as dropUpload, but without first starting a batch. */
+function createUpload(path: string, shell: string) {
+  const base = createApplicationConfigCapability({ resourceBasePath: "" });
+  const config = { ...base, current: { ...base.current, uploadsEnabled: true } };
+  const terminal = createTerminalController();
+  const tab = {
+    gatewaySessionId: "session-1",
+    shell,
+    status: "live",
+    controller: terminal as unknown as GhosttyTerminalController,
+  };
+  const request = vi.fn().mockResolvedValue({ path, size: 4 });
+  let upload!: TerminalPanelUpload;
+  mountSolid(() => {
+    upload = createTerminalPanelUpload({
+      config: () => config,
+      activeTab: () => tab,
+      client: () => ({ request, forceReconnect: () => {}, addEventListener: () => () => {} }),
+      isCurrent: (candidate) => candidate === tab,
+      fileInput: () => null,
+      setError: vi.fn(),
+    });
+    return null;
+  });
+  return { upload, terminal, request };
+}
+
 const expectUploadFailure = (upload: TerminalPanelUpload, error: unknown) =>
   waitForSolid(() =>
     expect(upload.progress()).toMatchObject({ state: "failed", retryable: false, error }),
@@ -102,6 +129,29 @@ it.each([
   const { upload, terminal } = dropUpload(path, shell, style);
   await expectUploadFailure(upload, expect.stringContaining(message));
   expect(terminal.terminal.paste).not.toHaveBeenCalled();
+});
+
+it("admits a WebKit clipboard image that only appears in clipboardData.items", async () => {
+  const { upload, request } = createUpload("/tmp/shot.png", "/bin/zsh");
+  const png = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "shot.png", {
+    type: "image/png",
+  });
+  const paste = new Event("paste", { cancelable: true });
+  // WebKit (the macOS WKWebView host) reports a pasted screenshot through items
+  // while leaving `files` empty; a files-only reader would drop it.
+  Object.defineProperty(paste, "clipboardData", {
+    value: {
+      files: [],
+      items: [{ kind: "file", type: "image/png", getAsFile: () => png }],
+    },
+  });
+
+  upload.handlePaste(paste as ClipboardEvent);
+
+  expect(paste.defaultPrevented).toBe(true);
+  await waitForSolid(() =>
+    expect(request.mock.calls.some(([method]) => method === "terminal.upload")).toBe(true),
+  );
 });
 
 it("localizes validation and rejects files over 16 MiB before reading or sending", async () => {
