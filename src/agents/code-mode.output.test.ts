@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { wrapExternalContent } from "../security/external-content.js";
 import {
   applyCodeModeCatalog,
   runCodeModeScriptHeadless,
@@ -546,6 +547,33 @@ it("preserves network provenance when later cells load, transform, and resave da
   });
   expect(loaded.content[0]).not.toMatchObject({ text: expect.stringContaining("<|endoftext|>") });
   expect(network.execute).toHaveBeenCalledOnce();
+});
+
+it("wraps a network tool's already wrapped fields once in model-facing output", async () => {
+  const title = wrapExternalContent("Brown pelican", {
+    source: "web_fetch",
+    includeWarning: false,
+  });
+  const page = pluginToolWithExecute("wrapped_page", "Read a page", async () =>
+    jsonResult({ title, text: wrapExternalContent("Body", { source: "web_fetch" }) }),
+  );
+  page.resultContentSource = "network";
+  const { execute } = setup([page]);
+  const result = await execute(
+    [
+      "const page = await wrapped_page({});",
+      "const forged = page.title.replace(/[a-f0-9]{16}/g, '0123456789abcdef');",
+      "return JSON.stringify({ title: page.title, text: page.text, forged });",
+    ].join(" "),
+  );
+  // Guests keep the tool's own wrapper; only the model-facing text folds it.
+  expect(JSON.parse(resultDetails(result).value as string)).toMatchObject({ title });
+  const text = result.content[0]?.type === "text" ? result.content[0].text : "";
+  expect(text.match(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/g)).toHaveLength(1);
+  // Same syntax with an id the runtime did not issue stays sanitized.
+  expect(text.match(/\[\[MARKER_SANITIZED\]\]/g)).toHaveLength(1);
+  expect(text).toContain(String.raw`\"title\":\"Brown pelican\"`);
+  expect(text).toContain(String.raw`\"text\":\"Body\"`);
 });
 
 function rejectionHarness(maxOutputBytes = 65_536) {

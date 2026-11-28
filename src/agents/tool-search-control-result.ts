@@ -1,4 +1,5 @@
 import {
+  foldIssuedExternalContent,
   truncateSanitizedExternalContent,
   wrapExternalContent,
 } from "../security/external-content.js";
@@ -22,13 +23,16 @@ export function renderToolSearchControlText(
   if (!networkContent) {
     return { text, truncated: false };
   }
+  // web_fetch and web_search wrap their own fields; fold the envelopes this
+  // process issued so this single wrap does not turn them into [[MARKER_SANITIZED]] text.
+  const source = foldIssuedExternalContent(text, 200_000);
   const budget = options.budget ?? {
     maxChars: DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     maxContextChars: Infinity,
   };
   const { maxChars } = budget;
   const bounded =
-    text.length <= maxChars ? truncateSanitizedExternalContent(text, maxChars) : undefined;
+    source.length <= maxChars ? truncateSanitizedExternalContent(source, maxChars) : undefined;
   if (bounded && !bounded.truncated) {
     const wrapped = wrapExternalContent(bounded.text, { source: "api" });
     if (toolResultFitsBudget(wrapped, budget)) {
@@ -42,7 +46,7 @@ export function renderToolSearchControlText(
     let best = "";
     while (low <= high) {
       const middle = Math.floor((low + high) / 2);
-      const prefix = truncateSanitizedExternalContent(text, middle).text;
+      const prefix = truncateSanitizedExternalContent(source, middle).text;
       const wrapped = wrapExternalContent(`${prefix}\n[truncated]`, { source: "api" });
       if (toolResultFitsBudget(wrapped, budget)) {
         best = wrapped;
