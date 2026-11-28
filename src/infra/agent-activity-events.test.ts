@@ -126,6 +126,7 @@ test("projects Tool Search names for live and history activity without changing 
     call("call", tool.toolCallId, {}, tool.name, args),
     { messageId: "result", message: skipped },
   ]);
+  expect(history.map(({ messageId }) => messageId)).toEqual(["call", "result"]);
   for (const entry of history) {
     expect(entry.items).toMatchObject([
       {
@@ -310,6 +311,7 @@ test("marks only unpaired history calls as provisional, including terminal unkno
       message: makeMissingToolResult({ toolCallId: "command", toolName: "exec", text: "aborted" }),
     },
   ]);
+  expect(repaired.map(({ messageId }) => messageId)).toEqual(["call", "repair"]);
   for (const entry of repaired) {
     expect(entry.items[0]).toMatchObject({ unpairedCall: true });
     expect(entry.items[0]?.status).toBeUndefined();
@@ -322,7 +324,9 @@ test("marks only unpaired history calls as provisional, including terminal unkno
       originalDetailKeys: ["exitReason"],
     },
   });
-  for (const entry of projectAgentHistoryActivity([unpaired, result])) {
+  const terminal = projectAgentHistoryActivity([unpaired, result]);
+  expect(terminal.map(({ messageId }) => messageId)).toEqual(["call", "result"]);
+  for (const entry of terminal) {
     expect(entry.items[0]).toMatchObject({ phase: "end", summary: "Outcome unknown" });
     expect(entry.items[0]?.status).toBeUndefined();
     expect(entry.items[0]).not.toHaveProperty("unpairedCall");
