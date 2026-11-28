@@ -87,8 +87,15 @@ export function ModelProvidersContent(props: {
       failures.every((card) => props.controller.installedAgents.owns(card.id))
     );
   });
+  // The catalog and provider rows show the same ways to connect. Typing doesn't change them.
   const catalogProviders = createMemo(() =>
-    buildLoginProviders({ authStatus: current().props.authStatus, allowQuickApiKey: true }),
+    buildLoginProviders({
+      authStatus: props.controller.mutations.authStatus(),
+      allowQuickApiKey: true,
+    }),
+  );
+  const connectableProviders = createMemo(
+    () => new Set(catalogProviders().flatMap((group) => group.authProviders)),
   );
   // Sign-in sets the agent's own model and leaves the global default alone, so the default row
   // names the model this agent really uses when the two differ.
@@ -122,6 +129,12 @@ export function ModelProvidersContent(props: {
           catalogReceipt={agentFailuresOnly() ? undefined : current().props.catalogReceipt}
           catalogDiscoveryError={agentFailuresOnly() ? null : current().props.catalogDiscoveryError}
           catalogProviders={catalogProviders()}
+          canConnect={(card) => {
+            const providers = connectableProviders();
+            return (
+              providers.has(card.id) || card.credentialProviderIds.some((id) => providers.has(id))
+            );
+          }}
           onCatalogConnect={(providerId) => {
             const { login } = props.controller;
             const group = catalogProviders().find((entry) => entry.id === providerId);

@@ -670,8 +670,6 @@ export function createModelProviderLogin(options: {
         canMutate: options.canStart(),
         loginBusy: busy(),
         onConnect: (card: ModelProviderCard) => open([card.id, ...card.credentialProviderIds]),
-        canConnect: (card: ModelProviderCard) =>
-          loginProviders([card.id, ...card.credentialProviderIds]).length > 0,
       };
     },
     get loginMessage() {
