@@ -220,20 +220,15 @@ function MeetingRow(props: TranscriptsViewProps & { entry: TranscriptSessionSumm
 
 function Library(props: TranscriptsViewProps) {
   const sessions = createProjection(() => props.list?.sessions ?? [], [], { key: "selector" });
-  const days = createMemo(() => {
-    const result = new Map<string, TranscriptSessionSummary[]>();
-    for (const entry of sessions) {
-      const day = new Date(entry.startedAt).toLocaleDateString(undefined, {
+  const days = createMemo(() =>
+    Map.groupBy(sessions, (entry) =>
+      new Date(entry.startedAt).toLocaleDateString(undefined, {
         year: "numeric",
         month: "long",
         day: "numeric",
-      });
-      const entries = result.get(day) ?? [];
-      entries.push(entry);
-      result.set(day, entries);
-    }
-    return [...result].map(([day, entries]) => ({ day, entries }));
-  });
+      }),
+    ),
+  );
   return (
     <>
       {props.listError ? (
@@ -249,15 +244,15 @@ function Library(props: TranscriptsViewProps) {
             <LoadingIndicator label={t("meetings.loadingMeetings")} />
           ) : (
             <>
-              {days().length ? (
+              {days().size ? (
                 <section class="meetings-timeline" aria-label={t("meetings.listLabel")}>
                   <p class="transcripts-caption">{t("meetings.newestFirst")}</p>
-                  <For each={days()} keyed={(day) => day.day}>
+                  <For each={[...days().keys()]}>
                     {(day) => (
                       <section class="meetings-day">
-                        <h2>{day().day}</h2>
+                        <h2>{day}</h2>
                         <ol class="transcripts-list">
-                          <For each={day().entries} keyed={(entry) => entry.selector}>
+                          <For each={days().get(day)} keyed={(entry) => entry.selector}>
                             {(entry) => <MeetingRow {...props} entry={entry()} />}
                           </For>
                         </ol>
