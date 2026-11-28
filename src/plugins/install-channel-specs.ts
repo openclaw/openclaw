@@ -288,18 +288,21 @@ export async function resolveClawHubInstallSpecsForUpdateChannel(params: {
     };
   }
   // Like npm, take the newer of beta and latest, so a stale beta never downgrades.
-  // A failed lookup keeps the @beta attempt; the install owner reports the real error.
   const { fetchClawHubPackageDetail, resolveLatestVersionFromPackage } =
     await import("../infra/clawhub-packages.js");
-  const detail = await fetchClawHubPackageDetail({
-    name: parsed.name,
-    baseUrl: params.baseUrl,
-    timeoutMs: params.timeoutMs,
-  }).catch(() => undefined);
-  const latest = { version: detail ? resolveLatestVersionFromPackage(detail) : null };
-  const beta = { version: detail?.package?.tags?.beta ?? null };
-  if (beta.version && selectNpmChannelVersion(beta, latest) === latest) {
-    return { installSpec: params.spec, recordSpec: params.spec };
+  try {
+    const detail = await fetchClawHubPackageDetail({
+      name: parsed.name,
+      baseUrl: params.baseUrl,
+      timeoutMs: params.timeoutMs,
+    });
+    const latest = { version: resolveLatestVersionFromPackage(detail) };
+    const beta = { version: detail.package?.tags?.beta ?? null };
+    if (beta.version && selectNpmChannelVersion(beta, latest) === latest) {
+      return { installSpec: params.spec, recordSpec: params.spec };
+    }
+  } catch {
+    // A failed lookup keeps the @beta attempt; the install owner reports the real error.
   }
   const betaSpec = `clawhub:${parsed.name}@beta`;
   return {
