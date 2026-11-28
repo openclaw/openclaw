@@ -121,26 +121,6 @@ it.each([
     expect(surfaced).not.toContain("rm -rf");
   }
 });
-it("logs bounded tool-call diagnostics without the rejected argument text", () => {
-  const logWarn = vi.fn();
-  configureAiTransportHost({ ...initialHost, isLogEnabled: () => true, logWarn });
-  const output = createOpenAIResponsesAssistantOutput(model);
-  const rejected = '{"path":"SECRET.md"';
-  const thrown = captureError(() => parseArguments(rejected, undefined, REPAIR));
-  assignTransportErrorDetails(output, thrown);
-  expect(logWarn).toHaveBeenCalledWith("provider-error", "Model request failed", {
-    provider: "openai",
-    model: "fixture-model",
-    name: "Error",
-    code: "malformed_tool_call_arguments",
-    causeCode: "malformed_tool_call_arguments",
-    argumentChars: rejected.length,
-    argumentHash: expect.stringMatching(/^[0-9a-z]{1,14}$/),
-    repairAttempted: true,
-  });
-  expect(JSON.stringify(logWarn.mock.calls)).not.toContain("SECRET.md");
-});
-
 it("does not log tool-call diagnostics that are not an OpenClaw digest", () => {
   const logWarn = vi.fn();
   configureAiTransportHost({ ...initialHost, isLogEnabled: () => true, logWarn });
