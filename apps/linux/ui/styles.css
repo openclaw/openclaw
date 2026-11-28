@@ -354,6 +354,9 @@ button.button-subtle:hover:not(:disabled) {
 .discovery-empty {
   margin: 0;
 }
+.discovery-feedback {
+  margin-top: 10px;
+}
 .log-wrap {
   margin-top: 20px;
   overflow: hidden;
