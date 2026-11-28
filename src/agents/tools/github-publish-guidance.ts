@@ -39,6 +39,7 @@ export function describeGitHubPublishTool(options: {
   }
   lines.push(
     "- inspect, merge, close: full operator write access; merge only on an explicit landing request after review and required checks.",
+    "- add_assignee: add one GitHub login to an open PR without replacing anyone; requires full operator write and the observed expectedHeadCommit.",
   );
   return lines.join("\n");
 }
