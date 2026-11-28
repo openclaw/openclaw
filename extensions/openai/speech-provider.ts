@@ -133,7 +133,7 @@ function normalizeOpenAIProviderConfig(
 const parseDirectiveToken = createSpeechDirectiveParser({
   voice: [
     "allowVoice",
-    ["voice", "openai_voice", "openaivoice"],
+    ["voice", "openai_voice", "openaivoice", "voiceid", "voice_id"],
     {
       parse: (ctx) =>
         isValidOpenAIVoice(ctx.value, normalizeOptionalString(ctx.providerConfig?.baseUrl))

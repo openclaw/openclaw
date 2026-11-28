@@ -314,7 +314,10 @@ function readGoogleTtsOverrides(
 }
 
 const parseDirectiveToken = createSpeechDirectiveParser({
-  voiceName: ["allowVoice", ["voicename", "voice_name", "google_voice", "googlevoice"]],
+  voiceName: [
+    "allowVoice",
+    ["voice", "voiceid", "voice_id", "voicename", "voice_name", "google_voice", "googlevoice"],
+  ],
   model: ["allowModelId", ["google_model", "googlemodel"]],
 });
 
