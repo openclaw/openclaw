@@ -302,6 +302,11 @@ as untrusted.
   not announce a total is delivered with whatever arrived and says nothing
   about the rest, because nothing states how many there were.
 
+`channels.line.responsePrefix` adds a prefix to reply text. Override it for one
+account with `channels.line.accounts.<accountId>.responsePrefix`; set `""` to
+disable an inherited prefix. See [reply prefixes](/concepts/messages#prefixes-threading-and-replies)
+for `"auto"` and template values.
+
 ## Reply quoting
 
 `channels.line.replyToMode` controls native quote replies (an outbound reply
