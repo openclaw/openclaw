@@ -88,6 +88,11 @@ image destinations retain their URL punctuation.
 
 ## Limits and errors
 
+If file pickup rejects a hardlinked attachment, export it as a new standalone file
+from its source app into an allowed media folder, then send the exported file.
+Granting more directory permissions does not resolve a hardlink refusal. Other
+eligible attachments in the same reply can still be sent.
+
 **Outbound send caps (WhatsApp web send)**
 
 - Images: up to `channels.whatsapp.mediaMaxMb` (default 50MB) after optimization.

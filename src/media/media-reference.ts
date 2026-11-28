@@ -1,5 +1,6 @@
 import path from "node:path";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
+import { FsSafeError } from "../infra/fs-safe.js";
 import { realpathViaExistingPrefix } from "../infra/path-containment.js";
 import { relativePathEscapesRoot } from "../infra/path-guards.js";
 import { maybeLocalPathFromSource } from "./inbound-media-path.js";
@@ -137,7 +138,7 @@ async function resolveInboundMediaPath(id: string, source: string): Promise<stri
     return await resolveMediaBufferPath(id, "inbound");
   } catch (err) {
     throw new MediaReferenceError(
-      "invalid-path",
+      err instanceof FsSafeError && err.code === "hardlink" ? "hardlink" : "invalid-path",
       err instanceof Error ? err.message : `Invalid media reference: ${source}`,
       { cause: err },
     );

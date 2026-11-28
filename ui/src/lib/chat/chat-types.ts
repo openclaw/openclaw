@@ -481,6 +481,7 @@ export type MessageContentItem =
       attachment: {
         code:
           | "file-not-found"
+          | "hardlink"
           | "unsupported-format"
           | "file-too-large"
           | "delivery-failed"

@@ -10,6 +10,7 @@ import type { ReplyToMode } from "../config/types.base.js";
 import type { AgentAssistantSourceReceipt } from "../infra/agent-events.types.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
+import { MEDIA_HARDLINK_MESSAGE } from "../media/hardlink-error.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { ReplyPayload, ReplyPayloadTtsSupplement } from "../shared/reply-payload.types.js";
 import type { CommandOwnerAssertion } from "./command-owner-authority.js";
@@ -22,6 +23,7 @@ export type {
 } from "../shared/reply-payload.types.js";
 
 export type ReplyMediaFailureCode =
+  | "hardlink"
   | "file-not-found"
   | "file-too-large"
   | "unsupported-format"
@@ -106,6 +108,7 @@ export type ReplyDeliveryContext = {
 };
 
 const REPLY_MEDIA_FAILURE_MESSAGES: Record<ReplyMediaFailureCode, string> = {
+  hardlink: MEDIA_HARDLINK_MESSAGE,
   "file-not-found": "File not found. Check the path and try again.",
   "file-too-large": "Too large to attach. Look for this file in Files.",
   "unsupported-format": "Rejected by the local attachment allowlist. Send a supported file type.",

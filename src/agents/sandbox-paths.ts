@@ -18,9 +18,11 @@ import {
 } from "@openclaw/fs-safe/advanced";
 import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
 import { isPassThroughRemoteMediaSource } from "@openclaw/media-core/media-source-url";
+import { FsSafeError } from "../infra/fs-safe.js";
 import { respellUnderRoot } from "../infra/path-containment.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { MEDIA_HARDLINK_MESSAGE } from "../media/hardlink-error.js";
 import { resolveConfigDir, shortenHomePath } from "../utils.js";
 import { resolveHostRootAsync } from "./workspace-write-scope.js";
 
@@ -273,6 +275,14 @@ export async function resolveAllowedManagedMediaPath(
     absolutePath: resolved,
     rootPath: managedMediaRoot,
     boundaryLabel: "managed media root",
+  }).catch((error: unknown) => {
+    if (
+      error instanceof Error &&
+      error.message.startsWith("Hardlinked path is not allowed under managed media root (")
+    ) {
+      throw new FsSafeError("hardlink", MEDIA_HARDLINK_MESSAGE, { cause: error });
+    }
+    throw error;
   });
   return resolved;
 }
