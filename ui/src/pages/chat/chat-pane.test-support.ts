@@ -136,6 +136,7 @@ export type TestChatPane = HTMLElement &
     sendTypingState: (typing: boolean, preview?: string, cursor?: number) => void;
     refreshSessionSuggestions: () => Promise<void>;
     resolveCurrentSessionSuggestion: ChatPaneRuntime["resolveCurrentSessionSuggestion"];
+    sessionSuggestionChatProps: ChatPaneRuntime["sessionSuggestionChatProps"];
     deferSessionHydrationUntilTranscript: ChatPaneRuntime["deferSessionHydrationUntilTranscript"];
     catalogItemMessage: ChatPaneRuntime["catalogItemMessage"];
     handleTranscriptScroll: (event: Event) => void;
