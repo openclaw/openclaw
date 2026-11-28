@@ -217,7 +217,6 @@ export async function ensureLoaded(
   const jobs: CronJob[] = [];
   const durableNextRunAtMsByJobId = new Map<string, number | undefined>();
   const quarantinedConfigJobs: QuarantinedCronConfigJob[] = [...loaded.invalidConfigRows];
-  let needsTargetRepair = false;
   for (const [index, raw] of loadedJobs.entries()) {
     if (!hasCanonicalCronDeliveryMode(raw.delivery)) {
       const warningKey = `delivery:${raw.id}`;
@@ -243,12 +242,11 @@ export async function ensureLoaded(
       if (!isInvalidCronSessionTargetIdError(error)) {
         throw error;
       }
+      normalized = null;
       state.deps.log.warn(
         { storePath: state.deps.storePath, jobId: typeof raw.id === "string" ? raw.id : undefined },
         "cron: job has invalid persisted sessionTarget; run openclaw doctor --fix to repair",
       );
-      needsTargetRepair = true;
-      continue;
     }
     const hydratedRaw = normalized ?? raw;
     let invalidReason = rawInvalidReason ?? getInvalidPersistedCronJobReason(hydratedRaw);
@@ -311,7 +309,7 @@ export async function ensureLoaded(
   });
   emitCronDefinitionChanges(state, previousJobs, jobs, loaded.configRevisions);
 
-  if (quarantinedConfigJobs.length > 0 && !opts?.deferQuarantinePersist && !needsTargetRepair) {
+  if (quarantinedConfigJobs.length > 0 && !opts?.deferQuarantinePersist) {
     // Config decoding and runtime validation reject rows in separate passes;
     // restore their original durable order before writing operator-visible quarantine.
     quarantinedConfigJobs.sort((left, right) => left.sourceIndex - right.sourceIndex);

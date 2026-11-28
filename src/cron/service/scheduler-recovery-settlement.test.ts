@@ -94,7 +94,7 @@ it.for(["replacement-loss", "stop-during-launch"] as const)(
         enabled: true,
         deleteAfterRun: true,
         schedule: { kind: "at", at: new Date(Date.now()).toISOString() },
-        sessionTarget: "session:main",
+        sessionTarget: "main",
         wakeMode: "now",
         payload: { kind: "systemEvent", text: "synthetic held startup run" },
       });

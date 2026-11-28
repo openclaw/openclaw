@@ -138,7 +138,7 @@ export function registerCronEditCommand(cron: Command) {
         "--failure-alert-account-id <id>",
         "Account ID for failure alert channel (multi-account setups)",
       )
-      .action(async (idArg, opts: CronEditOptions, command) => {
+      .action(async (idArg, opts: CronEditOptions) => {
         try {
           const id = requireCronJobId(idArg);
           if (opts.clearTools && opts.tools !== undefined) {
@@ -168,7 +168,7 @@ export function registerCronEditCommand(cron: Command) {
               ? normalizeCronSessionTargetOption(opts.session)
               : undefined;
           if (typeof opts.session === "string" && !sessionTarget) {
-            throw new CronCliError("--session must be isolated or session:<key>");
+            throw new CronCliError("--session must be main, isolated, current, or session:<id>");
           }
           const initialPayloadKind = opts.systemEvent
             ? "systemEvent"
@@ -187,9 +187,13 @@ export function registerCronEditCommand(cron: Command) {
             typeof opts.channel === "string" ||
             typeof opts.to === "string" ||
             typeof opts.account === "string";
-          if (typeof opts.systemEvent === "string" && hasExplicitChatDelivery) {
+          if (
+            sessionTarget === "main" &&
+            typeof opts.systemEvent === "string" &&
+            hasExplicitChatDelivery
+          ) {
             throw new CronCliError(
-              "--channel, --to, --account, and --thread-id require an agentTurn job or a command or script job with delivery.",
+              "--channel, --to, --account, and --thread-id require an agentTurn job or a non-main command or script job with delivery.",
             );
           }
           const webhookUrl =
@@ -251,9 +255,6 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (typeof opts.session === "string") {
             patch.sessionTarget = sessionTarget;
-          }
-          if (command.getOptionValueSource("includeRecentChat") === "cli") {
-            patch.includeRecentChat = opts.includeRecentChat === true;
           }
           if (typeof opts.wake === "string") {
             const wakeMode = opts.wake.trim();
@@ -607,12 +608,14 @@ export function registerCronEditCommand(cron: Command) {
               }
               const mode = delivery.mode ?? existing.delivery?.mode;
               if (deliveryPolicy.target === "owner" || deliveryPolicy.directPolicy != null) {
+                const resolvedSessionTarget = sessionTarget ?? existing.sessionTarget;
                 if (
                   hasSystemEventPatch ||
-                  (payloadKind ?? existing.payload.kind) === "systemEvent"
+                  (resolvedSessionTarget === "main" &&
+                    (payloadKind ?? existing.payload.kind) !== "agentTurn")
                 ) {
                   throw new CronCliError(
-                    "--delivery-target/--direct-policy require a job with chat delivery",
+                    "--delivery-target/--direct-policy require an agentTurn job or a non-main job with chat delivery",
                   );
                 }
                 if (mode === "webhook") {

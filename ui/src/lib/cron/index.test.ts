@@ -174,7 +174,6 @@ it("saves exact event timing and clears its owner", async () => {
       clearAgent: true,
       scheduleExact: true,
       payloadKind: "systemEvent",
-      sessionTarget: "session:main",
       payloadText: "updated",
     },
   );
@@ -463,7 +462,7 @@ it.each([
     }
     Object.assign(state.cronForm, {
       payloadKind: target,
-      sessionTarget: target === "systemEvent" ? "session:main" : "isolated",
+      sessionTarget: target === "systemEvent" ? "main" : "isolated",
       payloadText: "New task",
     });
     const submitted = await submit();

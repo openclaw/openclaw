@@ -319,7 +319,7 @@ async function measureLoads(runs: number) {
         name: "Synthetic activity cron",
         enabled: false,
         schedule: { kind: "every", everyMs: 3_600_000 },
-        sessionTarget: "session:main",
+        sessionTarget: "main",
         agentId: cronSession!.agentId,
         sessionKey: values["activity-session"],
         wakeMode: "next-heartbeat",
@@ -1353,7 +1353,7 @@ try {
         name: `Synthetic cron ${String(index).padStart(3, "0")}`,
         enabled: false,
         schedule: { kind: "every", everyMs: 3_600_000 },
-        sessionTarget: "session:main",
+        sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "Synthetic activity measurement" },
       });

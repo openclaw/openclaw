@@ -61,7 +61,7 @@ function agentJob(id: string, timeoutSeconds: number) {
 
 function sessionEventJob(id: string, overrides: Partial<CronJob> = {}) {
   return dueJob(id, {
-    sessionTarget: "session:main",
+    sessionTarget: "main",
     wakeMode: "now",
     payload: { kind: "systemEvent", text: "check scheduled work" },
     schedule: { kind: "every", everyMs: 60_000, anchorMs: SCHEDULED_AT - 60_000 },
@@ -120,7 +120,7 @@ it.each([false, true])(
     let admitLane: (() => void) | undefined;
     let waitAgain: (() => void) | undefined;
     const job = agentJob(`unstarted-session-${waiting}`, 1);
-    job.sessionTarget = "session:main";
+    job.sessionTarget = "main";
     const { state, advance, jobState } = await fixture(job, {
       runSessionEvent: async ({ onLaneWait, onExecutionStarted, abortSignal }) => {
         onLaneWait?.({ waiting });
@@ -386,7 +386,7 @@ it.each(["finite", "unlimited", "trigger evaluating"] as const)(
         ? dueJob(`session-deadline-${mode}`, {
             agentId: "ops",
             sessionKey: "agent:ops:main",
-            sessionTarget: "session:main",
+            sessionTarget: "main",
             wakeMode: "now",
             payload: {
               kind: "agentTurn",

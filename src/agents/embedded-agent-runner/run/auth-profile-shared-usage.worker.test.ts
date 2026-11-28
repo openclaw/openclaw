@@ -21,6 +21,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import { oidcIdentity } from "../../auth-profiles/credential-fixtures.test-support.js";
 import { resolveAuthProfileOrder } from "../../auth-profiles/order.js";
 import { noteCommittedSharedAuthStoreOwnership } from "../../auth-profiles/path-resolve.js";
 import {
@@ -361,7 +362,11 @@ it.each(["unchanged", "credential"] as const)(
           const current = readUserModelAuthProfile(profileId);
           sql = observeHostDataSql();
           response.resolve(
-            new Response(JSON.stringify({ rate_limit: { limit_reached: false } }), { status: 200 }),
+            Response.json({
+              account_id: "team-a",
+              user_id: "member-a",
+              rate_limit: { limit_reached: false },
+            }),
           );
           await failure;
           expect(sql.queries).toEqual([]);
@@ -387,6 +392,9 @@ it.each(["unchanged", "credential"] as const)(
         type: "oauth",
         provider: "openai",
         access: "synthetic-access",
+        accountId: "team-a",
+        idToken: oidcIdentity({ "https://api.openai.com/auth": { chatgpt_user_id: "member-a" } })
+          .idToken,
         refresh: "synthetic-refresh",
         expires: now + 3_600_000,
       },

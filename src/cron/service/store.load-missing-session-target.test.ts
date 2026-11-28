@@ -8,8 +8,6 @@ describe("cron service store load: missing sessionTarget", () => {
       payload: { kind: "agentTurn" as const, message: "ping" },
     } as unknown as Parameters<typeof assertSupportedJobSpec>[0];
 
-    expect(() => assertSupportedJobSpec(bogus)).toThrow(
-      'Expected cron sessionTarget "isolated" or "session:<key>"',
-    );
+    expect(() => assertSupportedJobSpec(bogus)).toThrow(/missing sessionTarget/);
   });
 });

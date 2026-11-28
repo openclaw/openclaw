@@ -97,7 +97,6 @@ export async function planLegacyCronStoreRepair(params: LegacyCronStoreRepairPar
         .map((job) => normalizeOptionalStringifiedId(job.id))
         .filter((id): id is string => id !== undefined),
     ),
-    params.cfg,
   );
   if (quarantineRecovery.recoveredJobs.length > 0) {
     state.rawJobs.push(...quarantineRecovery.recoveredJobs);
@@ -119,12 +118,10 @@ export async function planLegacyCronStoreRepair(params: LegacyCronStoreRepairPar
     params.normalized && quarantineRecovery.recoveredJobs.length === 0
       ? params.normalized
       : normalizeStoredCronJobs(state.rawJobs, {
-          cfg: params.cfg,
           migrateCodexModelRefs: params.migrateCodexModelRefs,
           shouldMigrateCodexRuntimePolicyTarget: (target) =>
             !blockedRuntimePolicyTargets.has(cronCodexRuntimePolicyTargetKey(target)),
         });
-  warnings.push(...normalized.pausedSessionTargetJobs);
   warnings.push(
     ...normalized.unsupportedLegacyTriggerScriptJobs.map(
       (job) =>

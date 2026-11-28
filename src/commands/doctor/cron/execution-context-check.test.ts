@@ -158,10 +158,7 @@ it("accepts a configured channel owner", async () => {
 
 it("continues a read-only parent review after errors and reports only applicable job warnings", async () => {
   const archivedKey = "agent:main:dashboard:archived";
-  const main = {
-    sessionTarget: "session:main",
-    payload: { kind: "systemEvent", text: "x" },
-  } as const;
+  const main = { sessionTarget: "main", payload: { kind: "systemEvent", text: "x" } } as const;
   const command = {
     payload: { kind: "command", argv: ["true"] },
   } satisfies Partial<CronStoredJob>;

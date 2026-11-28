@@ -32,7 +32,6 @@ export function makeBaseParams(overrides: {
   deliveryRequested?: boolean;
   runStartedAt?: number;
   sessionTarget?: string;
-  includeRecentChat?: boolean;
   deliveryBestEffort?: boolean;
   spawnOnlyHandoff?: boolean;
   runSessionKey?: string;
@@ -54,18 +53,20 @@ export function makeBaseParams(overrides: {
       id: "test-job",
       name: "Test Job",
       sessionTarget: overrides.sessionTarget ?? "isolated",
-      includeRecentChat: overrides.includeRecentChat,
-      sessionKey: overrides.includeRecentChat ? "agent:main:webchat:direct:owner" : undefined,
+      sessionKey:
+        overrides.sessionTarget === "current" ? "agent:main:webchat:direct:owner" : undefined,
       deleteAfterRun: false,
       delivery,
       payload: { kind: "agentTurn", message: "hello" },
     } as never,
     agentId: "main",
     agentSessionKey: "agent:main:cron:test-job",
-    sourceSessionKey: overrides.includeRecentChat ? "agent:main:webchat:direct:owner" : undefined,
-    sourceSessionGeneration: overrides.includeRecentChat
-      ? { sessionId: "source-session-id", lifecycleRevision: "source-lifecycle-revision" }
-      : undefined,
+    sourceSessionKey:
+      overrides.sessionTarget === "current" ? "agent:main:webchat:direct:owner" : undefined,
+    sourceSessionGeneration:
+      overrides.sessionTarget === "current"
+        ? { sessionId: "source-session-id", lifecycleRevision: "source-lifecycle-revision" }
+        : undefined,
     runSessionKey: overrides.runSessionKey ?? "agent:main:cron:test-job",
     sessionId: "test-session-id",
     lifecycleRevision: "test-lifecycle-revision",

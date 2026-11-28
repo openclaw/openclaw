@@ -29,7 +29,7 @@ export function normalizeCronSessionTargetOption(
     return undefined;
   }
   const lower = normalizeLowercaseStringOrEmpty(raw);
-  if (lower === "isolated") {
+  if (lower === "main" || lower === "isolated" || lower === "current") {
     return lower;
   }
   if (lower.startsWith("session:")) {

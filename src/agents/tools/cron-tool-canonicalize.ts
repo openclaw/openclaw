@@ -55,7 +55,6 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "cyberAccessProgram",
   "trigger",
   "sessionTarget",
-  "includeRecentChat",
   "wakeMode",
   "payload",
   "delivery",

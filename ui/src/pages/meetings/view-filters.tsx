@@ -77,7 +77,8 @@ function AdvancedFilterFields(props: TranscriptsViewProps & { hint: string }) {
 }
 
 export function Filters(props: TranscriptsViewProps & { phone: boolean; queryTooLong: boolean }) {
-  // The sheet stays inside the form, so its fields submit with the search field.
+  // Search plus one filter button at every width. The sheet stays inside the form, so its fields
+  // submit with the search field.
   let popover: PopoverHandle | undefined;
   const phoneSheet = createPhoneSheetLayout();
   // A memo, so route updates that leave the filters alone don't rewrite a toggled disclosure.
@@ -93,7 +94,10 @@ export function Filters(props: TranscriptsViewProps & { phone: boolean; queryToo
   const triggerClass = () => ["btn transcripts-filters__trigger", { active: advancedActive() }];
   const panel = () => (
     <div class="transcripts-filter-popover__panel">
-      <AdvancedFilterFields {...props} hint={t("transcripts.filterHintShort")} />
+      <AdvancedFilterFields
+        {...props}
+        hint={t(props.phone ? "transcripts.filterHintShort" : "transcripts.filterHint")}
+      />
       <div class="transcripts-filter-popover__actions">
         <button type="button" class="btn" onClick={clear}>
           {t("transcripts.clearFilters")}
@@ -106,7 +110,7 @@ export function Filters(props: TranscriptsViewProps & { phone: boolean; queryToo
   );
   return (
     <form
-      class={["transcripts-filters", { "transcripts-filters--phone": props.phone }]}
+      class="transcripts-filters"
       aria-label={t("transcripts.filters")}
       onSubmit={(event) => {
         event.preventDefault();
@@ -129,35 +133,12 @@ export function Filters(props: TranscriptsViewProps & { phone: boolean; queryToo
         name="query"
         invalid={props.queryTooLong}
         label={t("transcripts.titleFilter")}
-        compact={props.phone}
+        compact
       />
-      {props.phone ? (
-        <Show
-          when={phoneSheet()}
-          fallback={
-            <Popover
-              id="transcripts-filter-popover"
-              triggerClass={triggerClass()}
-              trigger={<Icon name="listFilter" />}
-              triggerTitle={t("transcripts.advancedFilters")}
-              ref={(handle) => {
-                popover = handle;
-              }}
-              label={t("transcripts.advancedFilters")}
-              class="transcripts-filter-popover"
-              placement="bottom-end"
-              onOpenChange={(open) => {
-                // Focus the surface, not the first field, so a tap doesn't raise the keyboard.
-                if (open) {
-                  popover?.overlay.surface.focus({ preventScroll: true });
-                }
-              }}
-            >
-              {panel()}
-            </Popover>
-          }
-        >
-          <PhoneSheet
+      <Show
+        when={phoneSheet()}
+        fallback={
+          <Popover
             id="transcripts-filter-popover"
             triggerClass={triggerClass()}
             trigger={<Icon name="listFilter" />}
@@ -167,27 +148,32 @@ export function Filters(props: TranscriptsViewProps & { phone: boolean; queryToo
             }}
             label={t("transcripts.advancedFilters")}
             class="transcripts-filter-popover"
+            placement="bottom-end"
+            onOpenChange={(open) => {
+              // Focus the surface, not the first field, so a tap doesn't raise the keyboard.
+              if (open) {
+                popover?.overlay.surface.focus({ preventScroll: true });
+              }
+            }}
           >
             {panel()}
-          </PhoneSheet>
-        </Show>
-      ) : (
-        <>
-          <details open={advancedActive()}>
-            <summary>{t("transcripts.advancedFilters")}</summary>
-            <AdvancedFilterFields {...props} hint={t("transcripts.filterHint")} />
-          </details>
-          <div class="transcripts-actions">
-            <button type="submit" class="btn">
-              <Icon name="search" />
-              {t("transcripts.filter")}
-            </button>
-            <button type="button" class="btn" onClick={clear}>
-              {t("transcripts.clearFilters")}
-            </button>
-          </div>
-        </>
-      )}
+          </Popover>
+        }
+      >
+        <PhoneSheet
+          id="transcripts-filter-popover"
+          triggerClass={triggerClass()}
+          trigger={<Icon name="listFilter" />}
+          triggerTitle={t("transcripts.advancedFilters")}
+          ref={(handle) => {
+            popover = handle;
+          }}
+          label={t("transcripts.advancedFilters")}
+          class="transcripts-filter-popover"
+        >
+          {panel()}
+        </PhoneSheet>
+      </Show>
     </form>
   );
 }

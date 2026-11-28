@@ -203,8 +203,7 @@ it.each([
                 job: {
                   name: "Check the deploy",
                   schedule: { kind: "every", everyMs: 180_000 },
-                  sessionTarget: "isolated",
-                  includeRecentChat: true,
+                  sessionTarget: "current",
                   payload: { kind: "agentTurn", message: "Check the deploy" },
                   delivery: { mode: "none" },
                 },
@@ -232,7 +231,7 @@ it.each([
     await creatorCron.waitForIdle();
   }
   const job = expectDefined((await fixture.read())[0], "stored child automation");
-  expect(job).toMatchObject({ sessionTarget: "isolated", includeRecentChat: true });
+  expect(job.sessionTarget).toBe("current");
   expect(job.sourceConversation).toMatchObject({ sessionKey: SESSION, sessionId: SESSION_ID });
   if (scenario === "no operator source") {
     expect(job.operatorSource).toBeUndefined();

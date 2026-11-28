@@ -130,7 +130,7 @@ type ReplayInference =
 
 /**
  * The runtime a bound job's existing run picks from the entry its cron session copies
- * (a recent-chat job's creating conversation or a `session:` job's row). The model comes
+ * (a `current` job's creating conversation, a `session:` job's row). The model comes
  * from the scheduled-model selection owner the run and capture use; when it cannot be
  * resolved for the bound provider, the comparison is reported unresolved. A job with a
  * recorded runtime no longer copies its creating conversation's model, so its scheduled
@@ -147,7 +147,8 @@ export async function replayInferenceRuntimes(
     return undefined;
   }
   const target = resolveCronSessionTargetSessionKey(job.sessionTarget);
-  const currentRow = job.includeRecentChat && job.sessionKey ? readRow(job.sessionKey) : undefined;
+  const currentRow =
+    job.sessionTarget === "current" && job.sessionKey ? readRow(job.sessionKey) : undefined;
   const entry = target
     ? readRow(target)
     : currentRow
@@ -522,7 +523,7 @@ async function main() {
     const rows: ReplayRow[] = [];
     const fixtures = new Map<string, ScheduledContextFixture>();
     for (const job of jobs) {
-      if (job.payload.kind === "systemEvent") {
+      if (job.sessionTarget === "main") {
         continue;
       }
       const agentId = tryResolveCronJobEffectiveAgentId(job, tryResolveAmbientOwnerAgentId(cfg));

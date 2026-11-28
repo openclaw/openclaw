@@ -29,7 +29,7 @@ export function createPage(context: ApplicationContext): TestModelSetupPage {
   let dispose: (() => void) | undefined;
   for (const key of [
     "routeData",
-    "embedded",
+    "discoveryOpen",
     "agentLabel",
     "credentialChoices",
     "onClose",

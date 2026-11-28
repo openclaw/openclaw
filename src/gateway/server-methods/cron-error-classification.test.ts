@@ -8,15 +8,11 @@ describe("isCronInvalidRequestError", () => {
     { sessionTarget: "main", payload: { kind: "command" } },
     { sessionTarget: "isolated", payload: { kind: "systemEvent" } },
     { sessionTarget: "current", payload: { kind: "systemEvent" } },
-    {
-      sessionTarget: "session:agent:main:conversation",
-      includeRecentChat: true,
-      payload: { kind: "script" },
-    },
+    { sessionTarget: "session:agent:main:conversation", payload: { kind: "script" } },
   ] as const)("classifies target/payload guidance as invalid input: $sessionTarget", (job) => {
     let error: unknown;
     try {
-      assertSupportedJobSpec(job as never);
+      assertSupportedJobSpec(job);
     } catch (cause) {
       error = cause;
     }

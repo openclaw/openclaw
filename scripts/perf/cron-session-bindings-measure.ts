@@ -44,7 +44,7 @@ const jobs: CronStoredJob[] = Array.from({ length: 1000 }, (_, index) => ({
   agentId: index % 3 === 0 ? "ops" : undefined,
   sessionKey: index % 5 === 0 ? "shared" : `delivery-${index}`,
   sourceConversation: { sessionKey: `source-${index}`, sessionId: `creator-${index}` },
-  sessionTarget: index % 4 === 0 ? "session:main" : "isolated",
+  sessionTarget: index % 4 === 0 ? "main" : "isolated",
   enabled: true,
   createdAtMs: 1_800_000_000_000,
   updatedAtMs: 1_800_000_000_000,

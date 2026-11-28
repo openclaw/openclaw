@@ -39,10 +39,10 @@ it("returns usage for bare /loop without continuing", async () => {
   });
 });
 
-it("keeps multiline prompts in a fixed-interval loop with recent chat", async () => {
+it("keeps multiline prompts in a current-session fixed-interval loop", async () => {
   const body = await rewrite(normalizeCommandBody("/loop 5m check these:\n- CI\n- deploy"));
   expect(body).toContain('schedule:{kind:"every",everyMs:300000}');
-  expect(body).toContain('sessionTarget:"isolated", includeRecentChat:true');
+  expect(body).toContain('sessionTarget:"current"');
   expect(body).toContain(`name:"${LOOP_PREFIX} check these: - CI - deploy"`);
   expect(body).toContain(
     'message:"[loop check these: - CI - deploy] check these:\\n- CI\\n- deploy\\nDo the task',

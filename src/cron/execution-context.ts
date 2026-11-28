@@ -331,7 +331,8 @@ function resolveAuthority(
 }
 
 function resolvePlacement(job: BuilderJob, principal: ScheduledPrincipal): ScheduledPlacement {
-  if (resolveCronSessionTargetSessionKey(job.sessionTarget)) {
+  // `main` runs as a scheduled turn inside the agent's main session, like `session:<key>`.
+  if (job.sessionTarget === "main" || resolveCronSessionTargetSessionKey(job.sessionTarget)) {
     return "in-session";
   }
   return principal.kind === "parent" ? "child" : "detached";

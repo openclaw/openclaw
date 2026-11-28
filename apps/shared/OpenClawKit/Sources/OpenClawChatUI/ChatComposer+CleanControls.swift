@@ -371,7 +371,7 @@ extension OpenClawChatComposer {
             HStack(spacing: 3) {
                 CleanChatEffortGauge(
                     angle: self.viewModel.composerInlineEffortAngle,
-                    fastModeEnabled: self.viewModel.fastModeIsEnabled,
+                    speedBolt: ChatSpeedBolt(rawValue: self.viewModel.composerSpeedSelection),
                     accentProgress: self.viewModel.thinkingLevel == "ultra",
                     width: CleanChatComposerMetrics.effortGaugeWidth,
                     ink: CleanChatComposerMetrics.footerInk,
@@ -401,7 +401,7 @@ extension OpenClawChatComposer {
         } label: {
             CleanChatEffortGauge(
                 angle: self.viewModel.composerInlineEffortAngle,
-                fastModeEnabled: self.viewModel.fastModeIsEnabled,
+                speedBolt: self.viewModel.fastModeIsEnabled ? .fast : nil,
                 accentProgress: self.viewModel.thinkingLevel == "ultra",
                 width: 20,
                 ink: .secondary,

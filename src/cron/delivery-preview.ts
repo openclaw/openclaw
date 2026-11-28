@@ -29,12 +29,7 @@ import {
 import type { CronDeliveryPreview, CronStoredJob } from "./types.js";
 
 type CronDeliveryPreviewJob = Pick<CronStoredJob, "delivery" | "payload" | "sessionTarget"> &
-  Partial<
-    Pick<
-      CronStoredJob,
-      "agentId" | "sessionKey" | "includeRecentChat" | "sourceConversation" | "createdActor"
-    >
-  >;
+  Partial<Pick<CronStoredJob, "agentId" | "sessionKey" | "sourceConversation" | "createdActor">>;
 
 function formatTarget(channel?: string, to?: string | null): string {
   if (!channel) {
@@ -113,15 +108,7 @@ function prepareCronDeliveryPreview(params: CronDeliveryPreviewParams) {
       : undefined;
   const deliverySessionKey = resolveCronDeliverySessionKey(params.job);
   const sourceConversation = plan.mode === "announce" ? params.job.sourceConversation : undefined;
-  return {
-    plan,
-    requestedChannel,
-    agentId,
-    sessionTarget,
-    deliverySessionKey,
-    sourceConversation,
-    includeRecentChat: params.job.includeRecentChat,
-  };
+  return { plan, requestedChannel, agentId, sessionTarget, deliverySessionKey, sourceConversation };
 }
 
 async function resolvePreparedCronDeliveryPreview(
@@ -133,15 +120,8 @@ async function resolvePreparedCronDeliveryPreview(
   if (prepared.preview) {
     return prepared.preview;
   }
-  const {
-    plan,
-    requestedChannel,
-    agentId,
-    sessionTarget,
-    deliverySessionKey,
-    sourceConversation,
-    includeRecentChat,
-  } = prepared;
+  const { plan, requestedChannel, agentId, sessionTarget, deliverySessionKey, sourceConversation } =
+    prepared;
   let resolved: DeliveryTargetResolution;
   try {
     if (sessionContext && !sessionContext.ok) {
@@ -153,7 +133,6 @@ async function resolvePreparedCronDeliveryPreview(
       {
         ...plan,
         sessionTarget,
-        includeRecentChat,
         sourceConversation,
         sessionKey: deliverySessionKey,
       },
@@ -174,13 +153,13 @@ async function resolvePreparedCronDeliveryPreview(
   }
   if (!resolved.ok) {
     if (
-      (includeRecentChat === true || sourceConversation !== undefined) &&
+      (sessionTarget === "current" || sourceConversation !== undefined) &&
       plan.mode === "announce" &&
       !resolved.sourceConversationUnavailable &&
       !requiresExternalCronDelivery(plan, resolved)
     ) {
       return {
-        label: "announce -> creating conversation",
+        label: `announce -> ${sessionTarget === "current" ? "current session" : "creating conversation"}`,
         detail: "commits to this conversation (no external channel route)",
       };
     }

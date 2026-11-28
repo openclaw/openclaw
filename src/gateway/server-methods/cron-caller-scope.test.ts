@@ -215,7 +215,7 @@ it("uses an admitted local grant over its webchat transport label", () => {
 
 it("uses a scoped session key before the configured default", () => {
   const job = createCronJob({
-    sessionTarget: "session:main",
+    sessionTarget: "main",
     sessionKey: "agent:ops:main",
     agentId: " ",
   });

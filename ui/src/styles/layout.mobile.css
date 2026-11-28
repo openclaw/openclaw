@@ -649,10 +649,6 @@ html.openclaw-native-desktop body .shell--mobile-nav {
     max-height: 380px;
   }
 
-  .list-title {
-    font-size: 13px;
-  }
-
   .code-block {
     padding: 8px;
     border-radius: var(--radius-md);

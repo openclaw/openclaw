@@ -16,7 +16,6 @@ test("explains how to correct an unreadable one-time schedule without changing s
     const job = {
       name: "one-time schedule",
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "session:agent:main:main",
       payload: { kind: "systemEvent", text: "synthetic schedule fixture" },
     };
     const id = expectCronJobIdFromResponse(await request("cron.add", job));

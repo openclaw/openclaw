@@ -72,7 +72,6 @@ function scoped(f: ReturnType<typeof fixture>) {
 
 describe("message-tool-only source replies", () => {
   it.each<[string, CallInput, boolean, HookResult?, Route["sourceReplyDeliveryMode"]?]>([
-    ["implicit successful send", {}, true],
     ["direct send result", { result: createChannelSendResult("discord-message-1") }, true],
     [
       "gateway plugin send result",

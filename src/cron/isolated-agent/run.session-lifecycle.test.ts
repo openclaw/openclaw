@@ -151,8 +151,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         job: makeIsolatedAgentJobFixture({
           id: jobId,
           name: "Daily monitor",
-          sessionTarget: "isolated",
-          includeRecentChat: true,
+          sessionTarget: "current",
           sessionKey: sourceSessionKey,
           payload: { kind: "agentTurn", message: "Read REFRESH.md.\n    Keep indentation." },
         }),

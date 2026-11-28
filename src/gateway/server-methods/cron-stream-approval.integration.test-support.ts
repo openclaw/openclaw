@@ -72,8 +72,7 @@ export function approvedStreamJob() {
       command: [process.execPath, "-e", 'process.stdout.write("synthetic log event\\n")'],
       cwd: stateDir,
     },
-    sessionTarget: "isolated",
-    includeRecentChat: true,
+    sessionTarget: "current",
     payload: { kind: "agentTurn", message: "Summarize the log event" },
     delivery: { mode: "none" },
   };

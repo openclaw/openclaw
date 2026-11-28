@@ -1,7 +1,9 @@
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeSortedUniqueTrimmedStringList,
-  normalizeTrimmedStringList,
+  normalizeUniqueTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
+import { resolveCronDefaultDeliveryDestination } from "../../../../src/cron/delivery-config-defaults.js";
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
@@ -21,9 +23,12 @@ type CronModelSource = {
 export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   const channels = page.inventories.channels.read();
   // Event sources list MCP servers from the runtime config; track its arrival.
-  page.inventories.runtimeConfig.read();
+  const configSnapshot = page.inventories.runtimeConfig.read().configSnapshot;
+  const config = configSnapshot?.runtimeConfig ?? configSnapshot?.config;
   const cron = page.cron();
   const agentsList = page.inventories.agents.read().agentsList;
+  let modelAgentId: string | undefined;
+  let canLinkReport = false;
   let models: CronModelSource = { catalog: undefined, agent: undefined };
   let timezoneSuggestions: string[] = [];
   let accountSuggestions: string[] = [];
@@ -43,7 +48,14 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
         )
       : [];
     const channel = cron.cronForm.deliveryChannel.trim() || "last";
-    const modelAgentId = page.resolveModelAgentId(cron);
+    modelAgentId = page.resolveModelAgentId(cron);
+    if (cron.cronCreateOpen && config) {
+      canLinkReport = !resolveCronDefaultDeliveryDestination({
+        cronConfig: asNullableRecord(config.cron) ?? undefined,
+        agentId: modelAgentId,
+        creatorProfileId: page.context().gateway.snapshot.selfUser?.id,
+      });
+    }
     models = {
       catalog: page.cronModelCatalog(),
       agent: agentsList?.agents.find((entry) => entry.id === modelAgentId),
@@ -55,7 +67,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
       ...savedDeliveryTargets,
       ...(cron.cronForm.deliveryMode === "announce" ? conversationTargets : []),
     ]);
-    const accountTargets = normalizeTrimmedStringList(
+    accountSuggestions = normalizeUniqueTrimmedStringList(
       (channel === "last"
         ? Object.values(channels.channelsSnapshot?.channelAccounts ?? {}).flat()
         : (channels.channelsSnapshot?.channelAccounts?.[channel] ?? [])
@@ -68,7 +80,6 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     timezoneSuggestions = resolveTimezoneSuggestions(
       cron.cronJobs.map((job) => (job.schedule.kind === "cron" ? (job.schedule.tz ?? "") : "")),
     );
-    accountSuggestions = accountTargets;
     failureAlertToSuggestions = forDeliveryMode(savedDeliveryTargets);
     deliveryToSuggestions = forDeliveryMode(deliveryTargets);
   }
@@ -107,14 +118,9 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   return {
     ...page.actions,
     gateway: page.context().gateway,
-    listConversations: (agentId: string, search: string) =>
-      page.context().sessions.list({
-        agentId,
-        search,
-        rowMode: "compact",
-        includeGlobal: true,
-        limit: 50,
-      }),
+    sessions: page.context().sessions,
+    conversationAgentId: modelAgentId,
+    canLinkReport,
     getActionRetired: page.getActionRetired,
     onRunMount: page.registerRun,
     listError: page.cron().cronJobsError,

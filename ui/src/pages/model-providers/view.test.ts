@@ -636,7 +636,13 @@ describe("renderModelProviders", () => {
 
   it("leads a new user with the provider catalog and holds defaults until a model exists", () => {
     const onCatalogConnect = vi.fn();
-    const openai = { id: "openai", label: "OpenAI", choices: [], authProviders: ["openai"] };
+    const openai = {
+      id: "openai",
+      label: "OpenAI",
+      choices: [],
+      authProviders: ["openai"],
+      apiKeyProviders: ["openai"],
+    };
     const container = mount(
       props({
         cards: [],
@@ -644,7 +650,7 @@ describe("renderModelProviders", () => {
         defaultModels: { primary: "", fallbacks: [], utilityModel: null },
         thinkingOverridden: false,
         fastModeOverridden: false,
-        catalogProviders: [{ ...openai, apiKeyProvider: "openai" }],
+        catalogProviders: [openai],
         onCatalogConnect,
       }),
     );

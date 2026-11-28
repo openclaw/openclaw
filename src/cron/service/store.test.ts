@@ -301,7 +301,7 @@ describe("cron service store seam coverage", () => {
     await expectPathMissing(`${storePath}.migrated`);
   });
 
-  it("loads opaque session ids and leaves malformed persisted ids for Doctor", async () => {
+  it("loads opaque session ids and preserves lazy errors for malformed persisted ids", async () => {
     const { storePath } = await makeStorePath();
     const sessionTarget = "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
 
@@ -331,16 +331,13 @@ describe("cron service store seam coverage", () => {
       )
       .run("session:bad\0id", job.id);
     const malformed = createStoreTestState(storePath);
-    await ensureLoaded(malformed);
-    expect(malformed.store?.jobs).toEqual([]);
+    await expect(ensureLoaded(malformed)).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ jobId: job.id }),
       expect.stringContaining("invalid persisted sessionTarget"),
     );
-    await ensureLoaded(malformed, { forceReload: true });
-    expect(malformed.store?.jobs).toEqual([]);
-    expect((await loadCronStore(storePath)).jobs).toMatchObject([
-      { id: job.id, sessionTarget: "session:bad\0id" },
-    ]);
+    await expect(ensureLoaded(malformed, { forceReload: true })).rejects.toThrow(
+      "invalid cron sessionTarget session id",
+    );
   });
 });

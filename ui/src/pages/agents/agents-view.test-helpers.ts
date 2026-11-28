@@ -186,7 +186,7 @@ export function createCronJob(id: string, overrides: Partial<CronJob> = {}): Cro
     createdAtMs: 0,
     updatedAtMs: 0,
     schedule: { kind: "cron", expr: "0 9 * * *" },
-    sessionTarget: "session:main",
+    sessionTarget: "main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "ping" },
     ...overrides,

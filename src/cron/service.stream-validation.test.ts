@@ -416,7 +416,7 @@ describe("cron stream trigger composition", () => {
   });
 });
 
-it("skips command jobs with invalid recent-chat placement loaded from disk", async () => {
+it("skips invalid main jobs with command payloads loaded from disk", async () => {
   const { storePath } = await makeStorePath();
   const enqueueSystemEvent = vi.fn();
   const runCommandJob = vi.fn<NonNullable<CronServiceDeps["runCommandJob"]>>();
@@ -427,14 +427,13 @@ it("skips command jobs with invalid recent-chat placement loaded from disk", asy
       {
         id: "job-1",
         name: "bad",
-        includeRecentChat: true,
         enabled: true,
         createdAtMs: Date.now(),
         updatedAtMs: Date.now(),
         schedule: { kind: "at", at: "2025-12-13T00:00:01.000Z" },
-        sessionTarget: "session:main",
+        sessionTarget: "main",
         wakeMode: "now",
-        payload: { kind: "command", argv: ["echo", "invalid recent chat"] },
+        payload: { kind: "command", argv: ["echo", "invalid main payload"] },
         state: {},
       },
     ],
@@ -454,7 +453,7 @@ it("skips command jobs with invalid recent-chat placement loaded from disk", asy
     expect(runSessionEvent).not.toHaveBeenCalled();
     const [job] = await cron.list({ includeDisabled: true });
     expect(job?.state.lastStatus).toBe("skipped");
-    expect(job?.state.lastError).toMatch(/Include recent chat requires a new-session agent turn/i);
+    expect(job?.state.lastError).toMatch(/sessionTarget "main" requires payload\.kind/i);
   } finally {
     cron.stop();
   }

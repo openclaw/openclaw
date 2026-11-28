@@ -661,8 +661,8 @@ suite.define(() => {
   it("configured duration precision: saves stagger through the real Gateway and CLI readback", async () => {
     await withGatewayCommands(async (cliJson) => {
       const job = await seedCliAutomation(cliJson, "Browser stagger fixture", {
-        session: "isolated",
-        message: "Synthetic paused browser fixture",
+        session: "main",
+        "system-event": "Synthetic paused browser fixture",
         cron: "5 * * * *",
         tz: "UTC",
         stagger: "1001ms",

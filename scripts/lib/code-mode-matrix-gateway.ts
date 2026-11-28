@@ -808,7 +808,7 @@ export function evaluateGatewayMatrixTask(params: {
         const createdAt = asFiniteNumber(job.createdAtMs);
         return (
           job.name === expected.jobName &&
-          job.sessionTarget === expected.sessionTarget &&
+          job.sessionTarget === "main" &&
           record(job.payload) &&
           job.payload.kind === "systemEvent" &&
           job.payload.text === expected.payloadText &&

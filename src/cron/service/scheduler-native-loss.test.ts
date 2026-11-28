@@ -115,7 +115,7 @@ for (const loseReplacement of [false, true]) {
         enabled: true,
         deleteAfterRun: true,
         schedule: { kind: "at", at: new Date(Date.now() + 2_000).toISOString() },
-        sessionTarget: "session:main",
+        sessionTarget: "main",
         wakeMode: "now",
         payload: { kind: "systemEvent", text: "synthetic recovery" },
       });

@@ -169,7 +169,7 @@ async function measure() {
       name: "Synthetic materialization",
       enabled: false,
       schedule: { kind: "every", everyMs: 3_600_000 },
-      sessionTarget: "session:main",
+      sessionTarget: "main",
       sessionKey: keys[0],
       agentId: "main",
       wakeMode: "next-heartbeat",

@@ -77,7 +77,7 @@ function cronJob(id: string, agentId?: string): CronJob {
     createdAtMs: 0,
     updatedAtMs: 0,
     schedule: { kind: "cron", expr: "0 9 * * *" },
-    sessionTarget: "session:main",
+    sessionTarget: "main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "ping" },
     state: {},

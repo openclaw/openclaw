@@ -335,6 +335,9 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     if (!canReadEditorSources()) {
       return;
     }
+    if (cron.cronCreateOpen && canCreateCron()) {
+      void context().runtimeConfig.ensureLoaded();
+    }
     if (editorChannelState !== cron || forceRefresh) {
       editorChannelState = cron;
       void context().acquireChannels(createChannelCapability).refresh(false);

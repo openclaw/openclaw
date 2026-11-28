@@ -460,7 +460,7 @@ export function buildGatewayCronService(params: {
       const completion = await finalizeCronCompletionAnnouncement({
         deliveryAttemptFence,
         job,
-        text: notify,
+        text: job.sessionTarget === "main" ? undefined : notify,
         suppressionReason:
           preparedNotify.terminalReply.disposition === "silent" ? "silent" : undefined,
         runStartedAtMs: job.state.runningAtMs,

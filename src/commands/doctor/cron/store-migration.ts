@@ -10,20 +10,14 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "../../../../packages/normalization-core/src/string-coerce.js";
-import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
-import { resolveCanonicalMainSessionKey } from "../../../config/sessions/main-session-key.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { tryResolveCronJobEffectiveAgentId } from "../../../cron/agent-id.js";
 import { classifyCronAgentTurnShellPrompt } from "../../../cron/agent-turn-command-prompt.js";
-import { hashCronJobDefinition } from "../../../cron/definition-hash.js";
 import { parseAbsoluteTimeMs } from "../../../cron/parse.js";
 import { getInvalidPersistedCronJobReason } from "../../../cron/persisted-shape.js";
 import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
-import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import { inferCronJobName } from "../../../cron/service/normalize.js";
+import { resolveCronCurrentSessionTarget } from "../../../cron/session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
 import { decodeStoredCronJobConfig } from "../../../cron/store/job-config-codec.js";
-import { rowToCronJob } from "../../../cron/store/row-codec.js";
 import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
 import {
   hasLegacyToolNameList,
@@ -60,7 +54,6 @@ type CronStoreIssueKey =
   | "legacyTopLevelPayloadFields"
   | "legacyTopLevelDeliveryFields"
   | "legacyDeliveryMode"
-  | "legacySessionTarget"
   | "migratedScheduledToolPolicy"
   | "reconciledOwnerAccount"
   | "invalidSchedule"
@@ -109,7 +102,6 @@ type NormalizeCronStoreJobsResult = {
   legacyTriggerScriptJobs: string[];
   unsupportedLegacyTriggerScriptJobs: string[];
   unsupportedDeliveryModeJobs: string[];
-  pausedSessionTargetJobs: string[];
   legacyScheduledToolPolicyJobs: string[];
   invalidScheduledToolPolicyJobs: string[];
   legacyGatewayExecJobs: string[];
@@ -162,37 +154,10 @@ export function canRepairCronDeliveryForDoctor(delivery: unknown): boolean {
   );
 }
 
-function hasValidLegacyOperatorSource(job: Record<string, unknown>): boolean {
-  if (job.sessionTarget !== "main" && job.sessionTarget !== "current") {
-    return false;
-  }
-  const source = asNullableRecord(job.operatorSource);
-  if (!source) {
-    return false;
-  }
-  // Captured jobs are already storage projections. Hash their original persisted
-  // inputs: the current runtime normalizer deliberately rejects retired targets.
-  const {
-    operatorSource: _operatorSource,
-    streamOperatorSource: _streamOperatorSource,
-    description: _description,
-    displayName: _displayName,
-    createdActor: _createdActor,
-    ownerProfileId: _ownerProfileId,
-    ownerTransferPending: _ownerTransferPending,
-    toolsAllowProvenance: _toolsAllowProvenance,
-    state: _state,
-    updatedAtMs: _updatedAtMs,
-    ...definition
-  } = job;
-  return source.executionRevision === hashCronJobDefinition({ ...definition, enabled: true });
-}
-
 /** Normalize persisted cron jobs in place and report issues plus rows to quarantine. */
 export function normalizeStoredCronJobs(
   jobs: Array<Record<string, unknown>>,
   options: {
-    cfg?: OpenClawConfig;
     migrateCodexModelRefs?: boolean;
     shouldMigrateCodexRuntimePolicyTarget?: (target: CronCodexRuntimePolicyTarget) => boolean;
   } = {},
@@ -203,7 +168,6 @@ export function normalizeStoredCronJobs(
   const legacyTriggerScriptJobs: string[] = [];
   const unsupportedLegacyTriggerScriptJobs: string[] = [];
   const unsupportedDeliveryModeJobs: string[] = [];
-  const pausedSessionTargetJobs: string[] = [];
   const legacyGatewayExecJobs: string[] = [];
   const legacyScheduledToolPolicyJobs: string[] = [];
   const invalidScheduledToolPolicyJobs: string[] = [];
@@ -222,7 +186,6 @@ export function normalizeStoredCronJobs(
       keptJobs.push(raw);
       continue;
     }
-    const preserveOperatorSource = hasValidLegacyOperatorSource(raw);
     const jobIssues = new Set<CronStoreIssueKey>();
     const trackIssue = (key: CronStoreIssueKey) => {
       if (jobIssues.has(key)) {
@@ -498,65 +461,30 @@ export function normalizeStoredCronJobs(
       payloadKind === "agentTurn" || payloadKind === "command" || payloadKind === "script";
     const rawSessionTarget = normalizeOptionalString(raw.sessionTarget) ?? "";
     const loweredSessionTarget = normalizeLowercaseStringOrEmpty(rawSessionTarget);
-    const wasMain =
-      loweredSessionTarget === "main" || (!rawSessionTarget && payloadKind === "systemEvent");
-    const pause = (reason: string) => {
-      setField(raw, "enabled", false);
-      raw.state = { ...asNullableRecord(raw.state), lastError: reason };
-      pausedSessionTargetJobs.push(`Paused automation ${jobName ?? "(unnamed)"}: ${reason}`);
-    };
-    if (wasMain) {
-      const { cfg } = options;
-      const agentId = tryResolveCronJobEffectiveAgentId(
-        {
-          agentId: normalizeOptionalString(raw.agentId),
-          sessionKey: normalizeOptionalString(raw.sessionKey),
-        },
-        tryResolveAmbientOwnerAgentId(cfg ?? {}),
-      );
-      const sessionKey =
-        agentId &&
-        resolveCanonicalMainSessionKey({
-          agentId,
-          mainKey: cfg?.session?.mainKey,
-          sessionScope: cfg?.session?.scope,
-        });
-      if (sessionKey && agentId) {
-        setField(raw, "agentId", agentId);
-        setField(raw, "sessionTarget", `session:${sessionKey}`);
-      } else {
-        setField(raw, "sessionTarget", "session:main");
-        pause(
-          "The agent for its former main conversation could not be determined. Choose a conversation before re-enabling.",
-        );
-      }
-      trackChange("legacySessionTarget");
-    } else if (loweredSessionTarget === "current") {
-      setField(raw, "sessionTarget", "isolated");
-      const sessionKey = normalizeOptionalString(raw.sessionKey);
-      if (
-        sessionKey &&
-        !sessionKey.includes("\0") &&
-        (payloadKind === "agentTurn" || payloadKind === "command")
-      ) {
-        if (payloadKind === "agentTurn") {
-          setField(raw, "includeRecentChat", true);
-        }
-      } else {
-        pause(
-          "The former current-conversation target has no usable creating conversation for an agent turn. Review where it should run before re-enabling.",
-        );
-      }
-      trackChange("legacySessionTarget");
+    if (
+      loweredSessionTarget === "main" ||
+      loweredSessionTarget === "isolated" ||
+      loweredSessionTarget === "current"
+    ) {
+      const sessionTarget = resolveCronCurrentSessionTarget({
+        sessionTarget: loweredSessionTarget,
+        sessionKey: normalizeOptionalString(raw.sessionKey),
+      });
+      setField(raw, "sessionTarget", sessionTarget);
     } else if (loweredSessionTarget.startsWith("session:")) {
-      const key = rawSessionTarget.slice(8).trim();
-      if (key) {
-        setField(raw, "sessionTarget", `session:${key}`);
+      const customSessionId = rawSessionTarget.slice(8).trim();
+      if (customSessionId) {
+        setField(raw, "sessionTarget", `session:${customSessionId}`);
       }
-    } else if (loweredSessionTarget === "isolated" || !rawSessionTarget) {
-      setField(raw, "sessionTarget", "isolated");
+    } else {
+      setField(raw, "sessionTarget", isRunnablePayload ? "isolated" : "main");
     }
-    const isIsolatedTarget = typeof raw.sessionTarget === "string" && !wasMain;
+
+    const sessionTarget = normalizeOptionalLowercaseString(raw.sessionTarget) ?? "";
+    const isIsolatedTarget =
+      sessionTarget === "isolated" ||
+      sessionTarget === "current" ||
+      sessionTarget.startsWith("session:");
     const normalizedLegacy = normalizeLegacyDeliveryInput({
       delivery,
       payload: payloadRecord,
@@ -564,9 +492,6 @@ export function normalizeStoredCronJobs(
 
     if (!delivery && isIsolatedTarget && isRunnablePayload) {
       raw.delivery = normalizedLegacy.delivery ?? { mode: "announce" };
-      mutated = true;
-    } else if (!delivery && wasMain && isRunnablePayload && !normalizedLegacy.delivery) {
-      raw.delivery = { mode: "none" };
       mutated = true;
     } else if (normalizedLegacy.mutated && normalizedLegacy.delivery) {
       raw.delivery = normalizedLegacy.delivery;
@@ -604,18 +529,6 @@ export function normalizeStoredCronJobs(
       mutated = true;
       continue;
     }
-    if (preserveOperatorSource) {
-      const migrated = rowToCronJob(
-        { job_id: String(raw.id), state_json: "{}", updated_at: 0, runtime_updated_at_ms: 0 },
-        raw,
-      );
-      if (migrated?.operatorSource) {
-        setField(raw, "operatorSource", {
-          ...migrated.operatorSource,
-          executionRevision: resolveCronOperatorExecutionRevision(migrated),
-        });
-      }
-    }
     keptJobs.push(raw);
   }
 
@@ -631,7 +544,6 @@ export function normalizeStoredCronJobs(
     legacyTriggerScriptJobs,
     unsupportedLegacyTriggerScriptJobs,
     unsupportedDeliveryModeJobs,
-    pausedSessionTargetJobs,
     legacyScheduledToolPolicyJobs,
     invalidScheduledToolPolicyJobs,
     legacyGatewayExecJobs,
@@ -655,7 +567,6 @@ function storedCronJobId(job: Record<string, unknown>): string | undefined {
 export function recoverValidQuarantinedCronScheduleJobs(
   entries: ReadonlyArray<QuarantinedCronConfigJob | CronQuarantinedJob>,
   activeJobIds: ReadonlySet<string>,
-  cfg: OpenClawConfig,
 ): QuarantinedCronJobRecovery {
   const recoveredJobs: Array<Record<string, unknown>> = [];
   const recoveredEntries: Array<QuarantinedCronConfigJob | CronQuarantinedJob> = [];
@@ -680,7 +591,7 @@ export function recoverValidQuarantinedCronScheduleJobs(
       candidate.updatedAtMs = entry.updatedAtMs;
     }
 
-    const normalized = normalizeStoredCronJobs([candidate], { cfg });
+    const normalized = normalizeStoredCronJobs([candidate]);
     if (normalized.jobs.length !== 1 || normalized.removedJobs.length !== 0) {
       retainedEntries.push(entry);
       continue;

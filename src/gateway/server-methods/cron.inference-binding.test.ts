@@ -4,7 +4,6 @@ import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.e
 import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import { saveCronJobsStore } from "../../cron/store.js";
 import { recordCronRun } from "../../cron/store/run-history.js";
-import type { CronJobCreate } from "../../cron/types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
   createCronCreatorAuthorityRunScope,
@@ -29,23 +28,15 @@ const it = test.extend<{ fixture: Fixture }>({
 });
 type Caller = Parameters<Fixture["invoke"]>[2];
 const creatorClient = () => createCronCallerClient("main", undefined, sessionKey);
-const freshWithRecentChat = {
-  sessionTarget: "isolated",
-  includeRecentChat: true,
-  sessionKey,
-} as const;
 const addForCreator = (fixture: Fixture) =>
   fixture.invoke("cron.add", createParams(), creatorClient());
 const updateModel = (fixture: Fixture, id: string, model: string, client?: Caller) =>
   fixture.invoke("cron.update", { id, patch: { payload: { kind: "agentTurn", model } } }, client);
-function modelParams(
-  model?: string,
-  placement?: Pick<CronJobCreate, "sessionTarget" | "includeRecentChat" | "sessionKey">,
-) {
+function modelParams(model?: string, sessionTarget?: string) {
   const params = createParams();
   return {
     ...params,
-    ...placement,
+    ...(sessionTarget ? { sessionTarget } : {}),
     payload: { ...params.payload, ...(model ? { model } : {}) },
   };
 }
@@ -167,19 +158,19 @@ describe("cron handler inference binding persistence", () => {
     },
   );
 
-  it.for([freshWithRecentChat, { sessionTarget: `session:${sessionKey}`, sessionKey }] as const)(
-    "rejects native adoption when $sessionTarget selects another runtime after clearing the binding",
-    async (placement, { fixture }) => {
+  it.for(["current", `session:${sessionKey}`])(
+    "rejects native adoption when %s would resume on another runtime after clearing the binding",
+    async (sessionTarget, { fixture }) => {
       await fixture.setCreator(platformId);
       await fixture.setClaudeRuntime("anthropic:work");
-      await fixture.invoke(
-        "cron.add",
-        modelParams("anthropic/claude-opus-4-6@anthropic:work", placement),
-      );
+      await fixture.invoke("cron.add", {
+        ...modelParams("anthropic/claude-opus-4-6@anthropic:work", sessionTarget),
+        sessionKey,
+      });
       const before = await fixture.reload();
-      expect(before).toMatchObject({
-        ...placement,
-        inferenceBinding: { runtime: "claude-cli", provider: "anthropic" },
+      expect(before.inferenceBinding).toMatchObject({
+        runtime: "claude-cli",
+        provider: "anthropic",
       });
       await upsertSessionEntryCore(
         { sessionKey, agentId: "main" },
@@ -579,21 +570,17 @@ describe("cron handler inference binding persistence", () => {
   );
 
   it.for([
-    { placement: { sessionTarget: "isolated" }, explicitModel: false, profileId: subscriptionId },
-    { placement: freshWithRecentChat, explicitModel: false, profileId: subscriptionId },
+    { target: "isolated", explicitModel: false, profileId: subscriptionId },
+    { target: "current", explicitModel: false, profileId: subscriptionId },
+    { target: "session:agent:main:scheduled-target", explicitModel: false, profileId: platformId },
     {
-      placement: { sessionTarget: "session:agent:main:scheduled-target" },
-      explicitModel: false,
-      profileId: platformId,
-    },
-    {
-      placement: { sessionTarget: "session:agent:main:scheduled-target" },
+      target: "session:agent:main:scheduled-target",
       explicitModel: true,
       profileId: subscriptionId,
     },
-  ] as const)(
-    "uses execution overrides only for a continued conversation ($placement, explicit model: $explicitModel)",
-    async ({ placement, explicitModel, profileId }, { fixture }) => {
+  ])(
+    "uses execution overrides only for $target (explicit model: $explicitModel)",
+    async ({ target, explicitModel, profileId }, { fixture }) => {
       await fixture.setCreator(platformId, "openai", "gpt-4.1");
       fixture.setScheduledProfile(subscriptionId, "default", true);
       await upsertSessionEntryCore(
@@ -607,16 +594,13 @@ describe("cron handler inference binding persistence", () => {
       );
       await fixture.invoke(
         "cron.add",
-        modelParams(explicitModel ? "openai/gpt-4o@" + subscriptionId : undefined, placement),
+        modelParams(explicitModel ? "openai/gpt-4o@" + subscriptionId : undefined, target),
         createCronCallerClient("main", undefined, sessionKey),
       );
-      expect(await fixture.reload()).toMatchObject({
-        ...placement,
-        inferenceBinding: {
-          provider: "openai",
-          profileId,
-          authRequirement: profileId === platformId ? "api-key" : "subscription",
-        },
+      expect((await fixture.reload()).inferenceBinding).toMatchObject({
+        provider: "openai",
+        profileId,
+        authRequirement: profileId === platformId ? "api-key" : "subscription",
       });
     },
   );

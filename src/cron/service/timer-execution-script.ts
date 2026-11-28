@@ -3,11 +3,13 @@ import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { cronOperatorSourceRefusal } from "../operator-source-error.js";
 import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
-import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import type { CronStoredJob } from "../types.js";
 import { abortErrorMessage, cronAbortErrorClassification } from "./execution-errors.js";
 import type { CronServiceState } from "./state.js";
-import type { ExecuteJobCoreOptions } from "./timer-execution-timeout.js";
+import {
+  type ExecuteJobCoreOptions,
+  resolveMainSessionCronDeliveryContext,
+} from "./timer-execution-timeout.js";
 import { wake } from "./wake.js";
 
 /** Runs a script payload for an admitted occurrence, then its notify and wake effects. */
@@ -97,33 +99,23 @@ export async function executeScriptCronJob(
     };
   }
 
-  const continuationKey = resolveCronSessionTargetSessionKey(job.sessionTarget);
   const notify = result.notify?.trim() ? result.notify : undefined;
-  const conversationNotify =
-    continuationKey && !result.wake && !result.deliveryAttempted ? notify : undefined;
-  if (conversationNotify || result.wake) {
-    const target = {
-      agentId:
-        expectedTarget?.agentId ??
-        resolveCronJobEffectiveAgentId(
-          job,
-          state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
-        ),
-      sessionKey: continuationKey
-        ? (expectedTarget?.sessionKey ?? continuationKey)
-        : job.sessionKey,
-    };
-    const deliveryContext = conversationNotify
-      ? (expectedTarget?.deliveryContext ??
-        (await state.deps.resolveOriginDeliveryContext?.(target)))
-      : undefined;
+  if ((job.sessionTarget === "main" && notify) || result.wake) {
+    const agentId = resolveCronJobEffectiveAgentId(
+      job,
+      state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
+    );
+    const deliveryContext =
+      job.sessionTarget === "main"
+        ? await resolveMainSessionCronDeliveryContext(state, job)
+        : undefined;
     await options?.assertRunCurrent?.();
     abortSignal?.throwIfAborted();
     options?.deliveryAttemptFence?.assertCurrent();
-    if (conversationNotify) {
-      state.deps.enqueueSystemEvent(conversationNotify, {
-        ...target,
-        ...(deliveryContext ? { deliveryContext } : {}),
+    const eventOptions = { agentId, ...(deliveryContext ? { deliveryContext } : {}) };
+    if (job.sessionTarget === "main" && notify && !result.wake) {
+      state.deps.enqueueSystemEvent(notify, {
+        ...eventOptions,
         contextKey: `cron:${job.id}:script`,
       });
     }
@@ -138,9 +130,8 @@ export async function executeScriptCronJob(
       const wakeResult = await wake(state, {
         mode: result.wake,
         text: notify ?? `script job ${job.name} completed`,
-        agentId: target.agentId,
-        sessionKey:
-          continuationKey && result.wake === "next-heartbeat" ? undefined : target.sessionKey,
+        agentId,
+        sessionKey: job.sessionKey,
         expectedTarget,
         commitGuard: assertCurrent,
       });

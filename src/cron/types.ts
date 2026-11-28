@@ -48,7 +48,7 @@ export type { CronCompletionStatus } from "./completion-status.js";
 export type CronSchedule = CronJobWire["schedule"];
 
 /** Runtime target that decides whether a job joins main, isolated, or a named session. */
-type CronSessionTarget = "isolated" | `session:${string}`;
+type CronSessionTarget = "main" | "isolated" | "current" | `session:${string}`;
 
 /** Wake policy for main-session jobs waiting on heartbeat/user activity. */
 type CronWakeMode = CronJobWire["wakeMode"];

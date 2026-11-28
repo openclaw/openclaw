@@ -226,7 +226,7 @@ conformance("post-ready storage consumers", (fixture) => {
       const job = await original.add({
         ...structuredClone(retained),
         schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "session:main",
+        sessionTarget: "main",
         wakeMode: "next-heartbeat",
       });
       original.stop();

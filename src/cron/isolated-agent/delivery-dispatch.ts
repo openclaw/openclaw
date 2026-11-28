@@ -219,7 +219,7 @@ export async function dispatchCronDelivery(
     !sentByTool &&
     !params.resolvedDelivery.ok &&
     (requiresExternalCronDelivery(params.deliveryPlan, params.resolvedDelivery) ||
-      (!params.sourceSessionKey && !params.job.includeRecentChat))
+      (!params.sourceSessionKey && params.job.sessionTarget !== "current"))
   ) {
     if (params.deliveryBestEffort) {
       record("not-delivered", params.resolvedDelivery.error.message);
@@ -319,7 +319,7 @@ export async function dispatchCronDelivery(
       ? { sessionKey: params.sourceSessionKey }
       : undefined;
   if (!conversation && !params.resolvedDelivery.ok && !sentByTool) {
-    if (params.job.includeRecentChat) {
+    if (params.job.sessionTarget === "current") {
       return failTarget("current cron delivery is missing its source session binding");
     }
     if (params.deliveryBestEffort) {

@@ -172,7 +172,7 @@ it(
         name: "automation",
         enabled: true,
         schedule: { kind: "at", at: new Date(Date.now() + 3_600_000).toISOString() },
-        sessionTarget: "session:main",
+        sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "Future automation evidence" },
       });

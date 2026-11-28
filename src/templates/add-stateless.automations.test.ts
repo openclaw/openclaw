@@ -613,7 +613,7 @@ it.each(["retained", "rollback", "native conflict"])(
               name: "Existing fixture",
               enabled: false,
               declarationKey: `template:${plan.agent.finalId}:existing`,
-              sessionTarget: "session:main",
+              sessionTarget: "main",
               wakeMode: "next-heartbeat",
               schedule: { kind: "every", everyMs: 60000 },
               payload: { kind: "systemEvent", text: "Fixture" },

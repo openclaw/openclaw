@@ -185,8 +185,7 @@ function addJob(
     job: {
       name,
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "isolated",
-      includeRecentChat: true,
+      sessionTarget: "current",
       payload: { kind: "agentTurn", message: "Check status" },
       delivery: { mode: "none" },
       ...overrides,
@@ -195,10 +194,10 @@ function addJob(
 }
 
 it.each([
-  { scope: "operator.cron", ocid: false, target: "isolated" },
-  { scope: "operator.write", ocid: false, target: "isolated" },
+  { scope: "operator.cron", ocid: false, target: "current" },
+  { scope: "operator.write", ocid: false, target: "current" },
   { scope: "operator.write", ocid: true, target: "isolated" },
-  { scope: "operator.write", ocid: true, target: `session:${SESSION}` },
+  { scope: "operator.write", ocid: true, target: "main" },
 ])(
   "admits $scope automation creation without owner authority (OCID=$ocid target=$target)",
   async ({ scope, ocid, target }) => {
@@ -270,8 +269,7 @@ it.each([
                 senderIsOwner: false,
               });
               const result = await addJob(tools, "Restricted caller job", {
-                sessionTarget: target,
-                includeRecentChat: !ocid,
+                ...(ocid ? { sessionTarget: target } : {}),
                 payload: ocid
                   ? { kind: "script", script: "return {}", timeoutSeconds: 30 }
                   : { ...timedPayload },
@@ -324,8 +322,7 @@ it.each(["operator.cron", "operator.write"])(
     const job = {
       name: "Signed requester job",
       schedule: { kind: "every" as const, everyMs: 60_000 },
-      sessionTarget: "isolated" as const,
-      includeRecentChat: true,
+      sessionTarget: "current" as const,
       sessionKey: SESSION,
       wakeMode: "next-heartbeat" as const,
       payload: { ...timedPayload, kind: "agentTurn" as const, toolsAllow: [] },
@@ -497,8 +494,7 @@ it.each([
               name: "Live creator",
               ...ownedJob,
               sessionKey: SESSION,
-              sessionTarget: "isolated",
-              includeRecentChat: true,
+              sessionTarget: "current",
               payload: {
                 kind: "agentTurn",
                 timeoutSeconds: 0,

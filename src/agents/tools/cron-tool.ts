@@ -475,8 +475,8 @@ export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
                 resolvedAuthority?.holdsRuntimeAuthority,
               );
               assertInheritedCronToolCaptureReady(job, creatorToolAllowlistCaptureRef);
-              const fresh = normalizeLowercaseStringOrEmpty(job.sessionTarget) === "isolated";
-              if (callerSessionKey && !("sessionKey" in job) && (!fresh || job.includeRecentChat)) {
+              const sessionTarget = normalizeLowercaseStringOrEmpty(job.sessionTarget);
+              if (!("sessionKey" in job) && callerSessionKey && sessionTarget !== "isolated") {
                 job.sessionKey = callerSessionKey;
               }
 

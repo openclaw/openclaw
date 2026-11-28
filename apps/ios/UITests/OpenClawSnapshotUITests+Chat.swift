@@ -1279,7 +1279,7 @@ extension OpenClawSnapshotUITests {
         self.assertChatCanvasIsNotSolidBlack()
         self.attachScreenshot(named: "chat-dark-layered-canvas")
 
-        self.sendFixtureChatMessage("Check the release status and prepare the next steps.")
+        try self.sendFixtureChatMessage("Check the release status and prepare the next steps.")
         self.attachScreenshot(named: "chat-dark-soft-bottom-edge")
     }
 
@@ -1289,7 +1289,7 @@ extension OpenClawSnapshotUITests {
         self.launchApp(
             for: Self.chatScreenshotTarget,
             additionalArguments: ["--openclaw-no-reactions-fixture"])
-        self.sendFixtureChatMessage(prompt)
+        try self.sendFixtureChatMessage(prompt)
         let before = try XCTUnwrap(self.app)
         XCTAssertFalse(before.descendants(matching: .any).matching(NSPredicate(
             format: "identifier BEGINSWITH %@", "chat-message-reactions-")).firstMatch.exists)
@@ -1303,7 +1303,7 @@ extension OpenClawSnapshotUITests {
             initialDestination: "chat",
             name: "chat-message-reactions"))
         let app = try XCTUnwrap(self.app)
-        self.sendFixtureChatMessage(prompt)
+        try self.sendFixtureChatMessage(prompt)
 
         // All of a message's reactions share one pill; it opens the picker that toggles yours.
         let pill = app.buttons.matching(NSPredicate(

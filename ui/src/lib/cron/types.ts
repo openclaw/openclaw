@@ -59,8 +59,7 @@ export type CronFormState = {
   triggerEnabled: boolean;
   triggerScript: string;
   triggerOnce: boolean;
-  sessionTarget: "isolated" | `session:${string}`;
-  includeRecentChat: boolean;
+  sessionTarget: "main" | "isolated" | "current" | `session:${string}`;
   wakeMode: CronJob["wakeMode"];
   // System-owned payloads are always payloadLocked; the form only
   // displays it, never submits it.
@@ -104,8 +103,6 @@ export type CronFieldKey =
   | "activeHoursEnd"
   | "activeHoursTimezone"
   | "triggerScript"
-  | "executionConversation"
-  | "recentChatConversation"
   | "payloadText"
   | "payloadModel"
   | "payloadThinking"

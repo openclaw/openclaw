@@ -505,12 +505,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
         const resolved = await resolveDeliveryTarget(
           runtimeConfig,
           agentId,
-          {
-            ...route,
-            sessionKey,
-            sessionTarget: params.job.sessionTarget,
-            includeRecentChat: params.job.includeRecentChat,
-          },
+          { ...route, sessionKey, sessionTarget: params.job.sessionTarget },
           { inheritSessionThread: params.inheritSessionThread },
         );
         if (!resolved.ok) {
@@ -518,7 +513,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           // notified in the conversation that created it.
           if (
             requiresExternalCronDelivery(route, resolved) ||
-            !(params.job.sessionTarget === "isolated" && params.job.includeRecentChat) ||
+            params.job.sessionTarget !== "current" ||
             !sessionKey
           ) {
             throw resolved.error;

@@ -184,8 +184,7 @@ describeLive("cron placement identity through production Gateway routing", () =>
             name: "Cron placement authority proof",
             enabled: false,
             schedule: { kind: "every", everyMs: 86_400_000 },
-            sessionTarget: "isolated",
-            includeRecentChat: true,
+            sessionTarget: "current",
             sessionKey: SOURCE_KEY,
             wakeMode: "next-heartbeat",
             payload: {
@@ -196,11 +195,7 @@ describeLive("cron placement identity through production Gateway routing", () =>
             },
             delivery: { mode: "none" },
           });
-          expect(job).toMatchObject({
-            sessionTarget: "isolated",
-            includeRecentChat: true,
-            sessionKey: SOURCE_KEY,
-          });
+          expect(job).toMatchObject({ sessionTarget: "current", sessionKey: SOURCE_KEY });
           const rootKey = `agent:probe:cron:${job.id}`;
           const describeRoot = () =>
             connected.request<{ session: GatewaySessionRow }>("sessions.describe", {

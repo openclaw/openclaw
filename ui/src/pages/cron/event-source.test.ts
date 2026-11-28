@@ -82,11 +82,7 @@ it("round-trips event options through the existing form without synthesizing a t
 it("validates JSON and the selected event schema before allowing a save", () => {
   expect(events.validateCronEventSelection(form, source)).toEqual({});
   expect({
-    payload: validateCronForm({
-      ...form,
-      payloadKind: "systemEvent",
-      sessionTarget: "session:main",
-    }),
+    payload: validateCronForm({ ...form, payloadKind: "systemEvent", sessionTarget: "main" }),
     schema: events.validateCronEventSelection({ ...form, eventArguments: "{}" }, source),
     json: validateCronForm({ ...form, eventArguments: "[]" }),
   }).toMatchObject({

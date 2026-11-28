@@ -514,7 +514,7 @@ it("creates a one-shot webhook system event with an explicit keep policy", async
   );
   expect(params).toMatchObject({
     name: "Reminder",
-    sessionTarget: "session:main",
+    sessionTarget: "main",
     deleteAfterRun: false,
     schedule: { kind: "at", at: "2026-05-25T00:30:00.000Z" },
     payload: { kind: "systemEvent", text: "hi" },
@@ -534,7 +534,7 @@ it("creates exact system events with a tool allowlist", async () => {
   expect(
     await namedAdd("--system-event", "tick", "--exact", "--tools", "read,write"),
   ).toMatchObject({
-    sessionTarget: "session:main",
+    sessionTarget: "main",
     schedule: { kind: "cron", staggerMs: 0 },
     payload: { kind: "systemEvent", text: "tick", toolsAllow: ["read", "write"] },
   });
@@ -559,7 +559,8 @@ it("keeps invalid add target/payload guidance in JSON mode before RPC", async ()
       ok: false,
       error: {
         type: "cli_error",
-        message: "--session must be isolated or session:<key>",
+        message:
+          'cron sessionTarget "current" cannot run systemEvent: systemEvent only runs in the main session; for sessionTarget "current" use payload {kind:"agentTurn",message}',
       },
     });
     expect(callGatewayFromCli).not.toHaveBeenCalled();
@@ -827,8 +828,8 @@ it.each([
   ],
   [[...AGENT_ADD, "--command", "echo ok"], "Choose exactly one payload"],
   [
-    [...ADD, "--session", "session:main", "--system-event", "tick", "--thread-id", "42"],
-    "require an agentTurn job or a command or script job with delivery",
+    [...ADD, "--session", "main", "--system-event", "tick", "--thread-id", "42"],
+    "require an agentTurn job or a non-main command or script job with delivery",
   ],
   [[...AGENT_ADD, "--thread-id", "topic-42"], "--thread-id must be a positive integer"],
   [["cron", "list", "--agent", "   "], "--agent must not be blank"],

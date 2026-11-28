@@ -22,7 +22,7 @@ function createInput(
 
 it.each([
   ["isolated", { kind: "script", script: "return { notify: 'hello' }" }, { mode: "announce" }],
-  ["session:main", { kind: "agentTurn", message: "hello" }, { mode: "announce" }],
+  ["main", { kind: "agentTurn", message: "hello" }, undefined],
   ["isolated", { kind: "systemEvent", text: "tick" }, undefined],
 ] as const)("resolves initial delivery for %s %j", (target, payload, expected) => {
   expect(resolveInitialCronDelivery(createInput(target, payload))).toEqual(expected);
@@ -53,7 +53,7 @@ describe("CronService initial delivery", () => {
     expect(job.delivery).toEqual({ mode: "announce" });
     await expect(cron.readJob(job.id)).resolves.toMatchObject({ delivery: { mode: "announce" } });
   }
-  it.each(["isolated", "session:project-alpha"] as const)(
+  it.each(["current", "session:project-alpha"] as const)(
     "persists announce delivery for direct %s jobs",
     async (sessionTarget) => {
       await expectPersistedAnnounce(await cron.add(createInput(sessionTarget)));

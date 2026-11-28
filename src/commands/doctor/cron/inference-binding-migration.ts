@@ -110,7 +110,7 @@ export async function maybeRepairCronInferenceBindings(params: {
         // Malformed legacy rows must not abandon adoption for unrelated jobs or partitions.
         // Normalize only resolver input; the committed definition retains every authored field.
         const job = normalizeCronJobCreate(definition);
-        if (!job || job.payload.kind !== "agentTurn") {
+        if (!job || job.payload.kind !== "agentTurn" || job.sessionTarget === "main") {
           continue;
         }
         const previous = normalizeCronInferenceBinding(definition.inferenceBinding);

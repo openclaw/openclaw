@@ -135,7 +135,7 @@ describe("cron service timer seam coverage", () => {
     expect(runSessionEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         text: "heartbeat seam tick",
-        job: expect.objectContaining({ id: "main-heartbeat-job", sessionTarget: "session:main" }),
+        job: expect.objectContaining({ id: "main-heartbeat-job", sessionTarget: "main" }),
       }),
     );
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
@@ -252,13 +252,11 @@ describe("cron service timer seam coverage", () => {
 
   it.each([
     { target: "isolated", notify: "queue changed", wake: "now" },
-    { target: "session:agent:ops:reports", notify: undefined, wake: "now" },
-    { target: "session:agent:ops:reports", notify: "queue changed", wake: undefined },
+    { target: "main", notify: undefined, wake: "now" },
   ] as const)(
     "routes $target script side effects (notify=$notify, wake=$wake)",
     async ({ target, notify, wake }) => {
-      const creatorKey = "agent:ops:dashboard:creator";
-      const sessionKey = target === "isolated" ? creatorKey : "agent:ops:reports";
+      const sessionKey = "agent:ops:telegram:group:42:topic:77";
       const deliveryContext = {
         channel: "telegram",
         to: "telegram:42",
@@ -271,34 +269,22 @@ describe("cron service timer seam coverage", () => {
         sessionKey,
         sessionId: "ops-telegram-session",
         generation: "original",
-        deliveryContext: wake ? deliveryContext : undefined,
+        deliveryContext,
       };
       const { state } = scriptFixture(
         { status: "ok", notify, wake },
         {
           resolveDefaultAgentId: () => "other",
           captureSessionEventTarget: async () => expectedTarget,
-          resolveOriginDeliveryContext: ({ sessionKey: key }) =>
-            key === sessionKey ? deliveryContext : undefined,
           enqueueSessionEvent,
         },
       );
       const job = {
         ...createDueScriptJob({ now, sessionTarget: target }),
         agentId: undefined,
-        sessionKey: creatorKey,
+        sessionKey,
       };
       await expect(executeJobCore(state, job)).resolves.toMatchObject({ status: "ok" });
-      if (!wake) {
-        expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(notify, {
-          agentId: "ops",
-          sessionKey,
-          contextKey: `cron:${job.id}:script`,
-          deliveryContext,
-        });
-        expect(enqueueSessionEvent).not.toHaveBeenCalled();
-        return;
-      }
       expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
         notify ?? "script job script job completed",
         expect.objectContaining({ agentId: "ops", sessionKey, expectedTarget, deliveryContext }),
@@ -322,7 +308,7 @@ describe("cron service timer seam coverage", () => {
 
     await expect(
       executeJobCore(state, {
-        ...createDueScriptJob({ now, sessionTarget: "session:main" }),
+        ...createDueScriptJob({ now, sessionTarget: "main" }),
         agentId: undefined,
       }),
     ).resolves.toMatchObject({
@@ -389,8 +375,7 @@ describe("cron service timer seam coverage", () => {
 
     await writeJobs({
       ...createDueIsolatedAgentJob({ now }),
-      sessionTarget: "isolated",
-      includeRecentChat: true,
+      sessionTarget: "current",
       sessionKey: "agent:finn:telegram:direct:42",
     });
 

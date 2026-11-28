@@ -1037,8 +1037,8 @@ source checkouts remain untouched. Failed updates and rollbacks preserve those
 historical backups, and separately retained database snapshots keep their own
 recovery lifetime.
 
-Optional Doctor inspections that have matching lint checks can run after the
-restarted Gateway is ready. The target Doctor reports the checks it actually
+For legacy in-place updates, optional Doctor inspections that have matching lint
+checks can run after the restarted Gateway is ready. The target Doctor reports the checks it actually
 deferred; the updater runs those checks against the updated installation and
 current configuration. Older update parents or targets keep these inspections
 inside Doctor. If the target does not provide a usable report, the updater records

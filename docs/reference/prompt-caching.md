@@ -93,6 +93,9 @@ they do not require replacing the earlier system prompt.
 
 CLI continuations retain the conversation's recorded presentation capabilities,
 including Control UI formatting, without borrowing its delivery route or authority.
+This holds for every turn source: `sessions_send` turns and subagent completions
+run on the internal channel, yet their system prompt still describes the
+session's own conversation, and the turn's routing arrives in its runtime context.
 Scheduled turns inside an existing conversation retain its full automations
 definition; job-scoped execution still rejects actions outside the current job.
 

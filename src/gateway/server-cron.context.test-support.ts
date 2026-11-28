@@ -156,7 +156,7 @@ export function registerGatewayCronContextTests({
       });
       await withCronService(cfg, async (state) => {
         const job = await addSystemEventJob(state, "global", "hello global", {
-          sessionTarget: "session:main",
+          sessionTarget: "main",
           wakeMode,
         });
         await state.cron.run(job.id, "force");
@@ -372,7 +372,7 @@ export function registerGatewayCronContextTests({
       const addJob = mode === "session" ? addSystemEventJob : addAgentTurnJob;
       const job = await addJob(state, name, "run it", {
         ...(clock ? scheduledJob() : { deleteAfterRun: false }),
-        ...(mode === "session" ? { sessionTarget: "session:main", wakeMode: "now" } : {}),
+        ...(mode === "session" ? { sessionTarget: "main", wakeMode: "now" } : {}),
       });
       if (clock) {
         await clock.advanceBy(60_000);

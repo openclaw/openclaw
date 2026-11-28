@@ -1450,7 +1450,7 @@ describe("openclaw state database", () => {
       createdAtMs: 100,
       updatedAtMs: 250,
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "session:main",
+      sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "tick" },
       delivery,

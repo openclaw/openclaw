@@ -88,6 +88,8 @@ Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. 
 
 When an announcement omits `delivery.accountId`, OpenClaw uses the remembered session account, then the agent's channel binding, then the channel's configured default account. Set an explicit account to override this selection.
 
+In the Automations editor, choose **Its own session** under **Runs in** to start with fresh history. When no delivery destination is configured, choose a chat under **Report to** to send the result there. To continue the chat with its history, choose it under **Runs in**. The editor saves the conversation key, so renaming the chat keeps the job linked.
+
 For announce delivery in the Control UI Automations editor, choose a channel and an explicit **Account ID** under **Advanced** to see configured conversation targets in the **To** field. Selecting a target preserves your chosen account and does not infer a topic. Changing the agent, delivery mode, channel, account, or recipient clears the previous topic when you save. These configured suggestions apply only to the primary announce destination; failure-alert routing remains separate. You can still enter a target that is not in the suggestions.
 
 On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <channel-plugin-id>` unless a provider-prefixed `--to` or a preserved session route selects the channel. Use `--best-effort-deliver` only when unresolved fallback delivery is acceptable; it does not choose a channel, and a delivery failure does not fail the job.

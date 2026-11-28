@@ -5,9 +5,9 @@ import { normalizeCronFormState, validateCronForm } from "./form.ts";
 
 describe("cron form validation", () => {
   it.each([
-    ["payloadKind", "isolated", "systemEvent", "session:", "systemEvent"],
-    ["payloadKind", "session:main", "agentTurn", "session:main", "agentTurn"],
-    ["sessionTarget", "session:main", "agentTurn", "session:main", "agentTurn"],
+    ["payloadKind", "isolated", "systemEvent", "main", "systemEvent"],
+    ["payloadKind", "main", "agentTurn", "main", "agentTurn"],
+    ["sessionTarget", "main", "agentTurn", "main", "agentTurn"],
     ["sessionTarget", "isolated", "systemEvent", "isolated", "agentTurn"],
   ] as const)(
     "normalizes a changed %s on %s/%s",
@@ -22,10 +22,10 @@ describe("cron form validation", () => {
   );
 
   it.each([
-    ["session:main", "agentTurn", false, "announce"],
-    ["session:main", "systemEvent", false, "none"],
-    ["session:main", "script", true, "announce"],
-    ["session:main", "command", true, "announce"],
+    ["main", "agentTurn", false, "announce"],
+    ["main", "systemEvent", false, "none"],
+    ["main", "script", true, "none"],
+    ["main", "command", true, "none"],
     ["isolated", "script", true, "announce"],
     ["isolated", "command", true, "announce"],
   ] as const)(

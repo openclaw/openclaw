@@ -79,7 +79,7 @@ const createJob = (index: number, overrides: Partial<CronJob> = {}): CronJob => 
   createdAtMs: index,
   updatedAtMs: index,
   schedule: { kind: "every", everyMs: 60_000 },
-  sessionTarget: "session:main",
+  sessionTarget: "main",
   wakeMode: "next-heartbeat",
   payload: { kind: "systemEvent", text: "scheduled check" },
   state: { nextRunAtMs: index + 1 },

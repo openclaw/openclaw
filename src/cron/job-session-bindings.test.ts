@@ -9,7 +9,7 @@ import type { CronJob, CronStoredJob } from "./types.js";
 test.each([
   [
     "wake/delivery lanes",
-    "session:main",
+    "main",
     "discord:channel:123",
     "main",
     ["agent:main:main", "agent:main:discord:channel:123"],
@@ -35,7 +35,7 @@ test.each([
 );
 
 test("shares binding facts across interleaved session-routing contexts", () => {
-  const definition = { id: "shared", sessionTarget: "session:main" as const };
+  const definition = { id: "shared", sessionTarget: "main" as const };
   const contexts = [
     { cfg: {}, defaultAgentId: "ops" },
     { cfg: {}, defaultAgentId: "research" },
@@ -80,7 +80,7 @@ test("refreshes binding facts after job edits and agent/session routing changes"
   definition.sourceConversation = undefined;
   opts.defaultAgentId = "rebound";
   check(["agent:rebound:other"]);
-  definition.sessionTarget = "session:main";
+  definition.sessionTarget = "main";
   check(["agent:rebound:home"]);
   cfg.session!.mainKey = "inbox";
   check(["agent:rebound:inbox"]);

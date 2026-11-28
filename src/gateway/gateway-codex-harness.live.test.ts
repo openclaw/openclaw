@@ -1639,7 +1639,7 @@ async function verifyCodexCronMcpProbe(params: {
     expectedName: cronProbe.name,
     expectedMessage: cronProbe.message,
     expectedSessionKey: params.sessionKey,
-    expectedPlacement: cronProbe.placement,
+    expectedSessionTarget: "current",
   });
   if (createdJob.id) {
     await runOpenClawCliJson(

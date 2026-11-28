@@ -221,7 +221,7 @@ describe("cron.list scoped SQLite snapshots", () => {
             .prepare(`SELECT ${columns} FROM cron_jobs WHERE store_key = ? AND job_id = 'job-0000'`)
             .get(storeKey);
         update(
-          "UPDATE cron_jobs SET enabled = ?, payload_kind = 'systemEvent', job_json = json_set(job_json, '$.enabled', json(?), '$.delivery.mode', 'not-a-route', '$.sessionTarget', 'session:agent:ops:main', '$.payload', json(?)) WHERE store_key = ? AND job_id = 'job-0000'",
+          "UPDATE cron_jobs SET enabled = ?, payload_kind = 'systemEvent', job_json = json_set(job_json, '$.enabled', json(?), '$.delivery.mode', 'not-a-route', '$.sessionTarget', 'main', '$.payload', json(?)) WHERE store_key = ? AND job_id = 'job-0000'",
           1,
           "true",
           JSON.stringify({ kind: "systemEvent", text: "synthetic legacy job" }),

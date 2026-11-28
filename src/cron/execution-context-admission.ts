@@ -41,6 +41,7 @@ import {
   unadmittedScheduledOccurrence,
 } from "./scheduled-occurrence.js";
 import { resolveCronScheduledToolPolicy } from "./scheduled-tool-policy.js";
+import { resolveCronSessionTargetSessionKey } from "./session-target.js";
 import type { CronParentUnavailable, CronStoredJob } from "./types.js";
 
 type OccurrenceAdmissionParams = {
@@ -219,7 +220,8 @@ export async function admitScheduledOccurrence(
       }
       // A child run takes its parent's persisted workspace binding and never runs
       // looser than its parent; in-session runs keep their own session's binding.
-      const childPlacement = job.sessionTarget === "isolated";
+      const childPlacement =
+        job.sessionTarget !== "main" && !resolveCronSessionTargetSessionKey(job.sessionTarget);
       if (typeof live !== "string" && !pause && childPlacement && parent.entry) {
         const entry = parent.entry;
         childParent = {

@@ -228,11 +228,7 @@ describe("cron session preparation", () => {
     const host = observeHostDataSql();
     try {
       await expect(
-        prepareRun(database.path, sourceKey, {
-          sessionTarget: "isolated",
-          includeRecentChat: true,
-          sessionKey: sourceKey,
-        }),
+        prepareRun(database.path, sourceKey, { sessionTarget: "current", sessionKey: sourceKey }),
       ).rejects.toBe(preparedBoundary);
       for (const calls of host.calls) {
         expect(calls).not.toHaveBeenCalled();

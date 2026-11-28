@@ -330,8 +330,8 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
     });
   });
   it.each([false, true])(
-    "uses source history only when recent chat is enabled (disabled=%s)",
-    async (withoutRecentChat) => {
+    "uses source history only for current targets (isolated=%s)",
+    async (isolated) => {
       h.mockRunCronFallbackPassthrough();
       const sourceGeneration = {
         sessionId: "source-session",
@@ -339,7 +339,7 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
       };
       const source = { sessionKey: "agent:default:telegram:direct:42", ...sourceGeneration };
       const sourceEntry = h.makeCronSessionEntry(
-        withoutRecentChat
+        isolated
           ? {
               sessionId: "replacement-source-session",
               lifecycleRevision: "replacement-source-revision",
@@ -354,14 +354,13 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
       const message = "Summarize the animal fact.";
       const result = await runJob({
         sessionKey: source.sessionKey,
-        sessionTarget: "isolated",
-        includeRecentChat: !withoutRecentChat,
-        ...(withoutRecentChat ? { sourceConversation: source } : {}),
+        sessionTarget: isolated ? "isolated" : "current",
+        ...(isolated ? { sourceConversation: source } : {}),
         payload: { kind: "agentTurn", message },
       });
       expect(result.status).toBe("ok");
       const prompt = h.runEmbeddedAgentMock.mock.calls[0]?.[0]?.prompt;
-      if (withoutRecentChat) {
+      if (isolated) {
         expect(result.sessionKey).not.toBe(source.sessionKey);
         expect(readSessionMessagesAsyncMock).not.toHaveBeenCalled();
         expect(prompt).toContain(message);
@@ -374,7 +373,7 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
       expectCall(h.dispatchCronDeliveryMock, {
         sourceSessionKey: source.sessionKey,
         // A stored creating conversation is key-linked: its revision is not forwarded.
-        sourceSessionGeneration: withoutRecentChat
+        sourceSessionGeneration: isolated
           ? { sessionId: sourceGeneration.sessionId, lifecycleRevision: undefined }
           : sourceGeneration,
       });

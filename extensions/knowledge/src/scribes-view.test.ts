@@ -10,15 +10,13 @@ import {
   reviewSession,
 } from "./scribes-view.test-support.js";
 
-const recentChatPlacement = { sessionTarget: "isolated", includeRecentChat: true } as const;
-
 afterEach(() => document.body.replaceChildren());
 
 it("asks for the Granola plugin before the Granola scribe can start", async () => {
   const { render } = fixture({});
   const view = await render();
   const row = buttonNamed(view, "Install Granola…").closest(".scribe-row")!;
-  expect(row.textContent).toContain("Needs the Granola plugin, which is not installed");
+  expect(row.textContent).toContain("Needs the Granola plugin, which isn’t installed");
   expect(buttonNamed(row, "Set up…").disabled).toBe(true);
 
   const signIn = await fixture({ granola: { installed: true, enabled: true } }).render();
@@ -61,7 +59,7 @@ it("starts the Granola scribe once the plugin is connected", async () => {
         failureAlert: { after: 2 },
         name: "Knowledge scribe · Learn from Granola",
         sessionKey: "agent:main:dock:new",
-        ...recentChatPlacement,
+        sessionTarget: "current",
         enabled: true,
         schedule: { kind: "cron", expr: "0 10,14,18 * * 1-5", tz: timezone },
         agentId: "main",
@@ -106,7 +104,7 @@ it("starts a conversations scribe: creates its titled conversation and sends the
   const view = await render();
   buttonNamed(view, "Set up…").click();
   const dialog = page.querySelector("dialog")!;
-  expect(dialog.textContent).toContain("148 conversations in your sidebar.");
+  expect(dialog.textContent).toContain("148 sessions in your sidebar.");
   (dialog.querySelector("#scribe-often-once") as HTMLInputElement).click();
   (dialog.querySelector("#scribe-which-all") as HTMLInputElement).click();
   const select = dialog.querySelector("select")!;
@@ -152,7 +150,9 @@ it.each([
   expect(dialog.querySelector("legend")?.textContent).toBe("How often");
   expect((dialog.querySelector("#scribe-review-weekly") as HTMLInputElement).checked).toBe(true);
   expect(dialog.textContent).toContain("Sundays at 3:45 AM.");
-  expect(dialog.textContent).toContain("Each run is an agent turn over every unlinked claim");
+  expect(dialog.textContent).toContain(
+    "Each run uses one agent reply to review every unlinked claim",
+  );
   if (pick) {
     (dialog.querySelector(pick) as HTMLInputElement).click();
   }
@@ -229,7 +229,7 @@ it("restarts a turned-off scribe's automation in its existing conversation", asy
   buttonNamed(view, "Set up…").click();
   const dialog = page.querySelector("dialog")!;
   expect(dialog.textContent).toContain("(created if needed)");
-  expect(dialog.textContent).toContain("Runs use the conversation’s model settings.");
+  expect(dialog.textContent).toContain("Runs use the scribe session’s model settings.");
   buttonNamed(dialog, "Start").click();
   await vi.waitFor(() => expect(calls.some(([method]) => method === "cron.run")).toBe(true));
   expect(create).not.toHaveBeenCalled();
@@ -247,8 +247,11 @@ it("keeps the start dialog open with the error when the Gateway rejects the star
   expect(dialog.textContent).toContain("8 KB in Main’s workspace.");
   buttonNamed(dialog, "Start import").click();
   await vi.waitFor(() =>
-    expect(dialog.querySelector(".knowledge-error")?.textContent).toContain("missing scope"),
+    expect(dialog.querySelector(".knowledge-error")?.textContent).toContain(
+      "Couldn’t confirm the scribe started. Your choices and prompt are still here.",
+    ),
   );
+  expect(dialog.textContent).not.toContain("missing scope");
   expect(dialog.open).toBe(true);
 });
 
@@ -262,7 +265,9 @@ it("retries a failed start in the conversation it already created", async () => 
   });
   buttonNamed(dialog, "Turn on").click();
   await vi.waitFor(() =>
-    expect(dialog.querySelector(".knowledge-error")?.textContent).toContain("Gateway restarting"),
+    expect(dialog.querySelector(".knowledge-error")?.textContent).toContain(
+      "Couldn’t confirm the scribe started.",
+    ),
   );
   buttonNamed(dialog, "Turn on").click();
   await vi.waitFor(() => expect(dialog.open).toBe(false));
@@ -324,13 +329,13 @@ it("lets a writer without administrator access run a scribe once, but not schedu
   const view = await render();
   // Without an administrator the page never rewrites earlier automations.
   expect(calls.some(([method]) => method === "cron.remove" || method === "cron.add")).toBe(false);
-  expect(view.textContent).toContain("Scribe automations need a Gateway administrator");
+  expect(view.textContent).toContain("Managing a scribe’s automation requires admin access");
   const setUp = buttonNamed(view, "Set up…");
   expect(setUp.disabled).toBe(false);
   setUp.click();
   const dialog = page.querySelector("dialog")!;
   expect(buttonNamed(dialog, "Start").disabled).toBe(true);
-  expect(dialog.textContent).toContain("needs a Gateway administrator");
+  expect(dialog.textContent).toContain("requires admin access");
   (dialog.querySelector("#scribe-often-once") as HTMLInputElement).click();
   expect(buttonNamed(dialog, "Start").disabled).toBe(false);
   dialog.remove();
@@ -387,7 +392,7 @@ it.each([false, true])(
     expect(calls.filter(([method]) => method === "cron.run")).toHaveLength(1);
     job.enabled = true;
     view = await render();
-    buttonNamed(view, "Open conversation").click();
+    buttonNamed(view, "Open session").click();
     expect(open).toHaveBeenCalledWith({ sessionKey: "s-review", agentId: "main" });
     buttonNamed(view, "Remove automation…").click();
     const confirm = page.querySelector("dialog")!;
@@ -421,7 +426,7 @@ it("upgrades an automation an agent turn created only when the administrator cho
     ...reviewJob,
     enabled: false,
     sessionKey: "s-review",
-    ...recentChatPlacement,
+    sessionTarget: "current",
     scheduledToolPolicy: { mode: "account" },
     payload: {
       kind: "agentTurn",
@@ -470,7 +475,7 @@ it("upgrades an automation an agent turn created only when the administrator cho
         idleOnly: true,
         name: "Knowledge scribe · Knowledge Consolidation",
         sessionKey: "s-review",
-        ...recentChatPlacement,
+        sessionTarget: "current",
         enabled: false,
         schedule: reviewJob.schedule,
         agentId: "main",
@@ -544,7 +549,7 @@ it("updates an administrator's earlier automation in place", async () => {
         patch: {
           name: "Knowledge scribe · Knowledge Consolidation",
           sessionKey: "s-review",
-          ...recentChatPlacement,
+          sessionTarget: "current",
           enabled: true,
           schedule: reviewJob.schedule,
           payload: { kind: "agentTurn", message: currentReview() },
@@ -561,7 +566,7 @@ it("offers an edited run message the current one and replaces it on confirm", as
   const job = {
     ...reviewJob,
     sessionKey: "s-review",
-    ...recentChatPlacement,
+    sessionTarget: "current",
     payload: { kind: "agentTurn", message: differing },
   };
   const { render, ui, calls, page, load } = fixture({
@@ -614,16 +619,22 @@ it("reports a skipped run that could not complete as failed", async () => {
         ts: 1_793_000_000_000,
         status: "skipped",
         completionStatus: "failed",
-        error: "agent tool caller authority is no longer active",
+        error: "agent tool caller authority is no longer active: synthetic-private-detail",
       },
     ],
   });
+  ui.errorText = (error) => String(error).replace("synthetic-private-detail", "[redacted]");
   ui.s.scribe = "claim-consolidation";
   const view = await render();
   expect(view.textContent).toContain("1 of 1 recent run failed");
-  expect(view.querySelector(".scribe-run")?.textContent).toContain(
-    "agent tool caller authority is no longer active",
+  const details = view.querySelector<HTMLDetailsElement>(".scribe-run details")!;
+  expect(details.open).toBe(false);
+  expect(details.querySelector("summary")?.textContent).toBe("Show details");
+  expect(details.querySelector("p")?.textContent).toBe(
+    "agent tool caller authority is no longer active: [redacted]",
   );
+  expect(view.textContent).not.toContain("synthetic-private-detail");
+  expect(view.querySelector(".scribe-run button")).toBeNull();
   expect(view.querySelector(".scribe-run .scribe-chip-warn")?.textContent).toBe("Failing");
 });
 
@@ -634,7 +645,7 @@ it.each([true, false])(
       ...reviewJob,
       enabled: false,
       sessionKey: "s-review",
-      ...recentChatPlacement,
+      sessionTarget: "current",
       payload: { kind: "agentTurn", message: currentReview() },
       state: { ...reviewJob.state, autoDisabled: { reason: "consecutive-failures" } },
     };
@@ -653,7 +664,7 @@ it.each([true, false])(
         patch: {
           name: "Knowledge scribe · Knowledge Consolidation",
           sessionKey: "s-review",
-          ...recentChatPlacement,
+          sessionTarget: "current",
           enabled: true,
           schedule: reviewJob.schedule,
           payload: { kind: "agentTurn", message: currentReview() },
@@ -697,7 +708,7 @@ it("repairs an archived scribe by restoring its conversation and turning it on",
   });
   ui.s.scribe = "claim-consolidation";
   const view = await render();
-  expect(view.querySelector(".scribe-chip-warn")?.textContent).toBe("Conversation not found");
+  expect(view.querySelector(".scribe-chip-warn")?.textContent).toBe("Session not found");
   expect(buttonNamed(view, "Run now")).toBeUndefined();
   buttonNamed(view, "Repair").click();
   await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("cron.update"));
@@ -720,7 +731,7 @@ it("repairs a scribe whose conversation is gone into a new one, replacing a turn
     id: "job-elsewhere",
     enabled: false,
     sessionKey: "s-gone",
-    ...recentChatPlacement,
+    sessionTarget: "current",
     scheduledToolPolicy: { mode: "account" },
   };
   // Its conversation is gone, so the scribe reads as Conversation not found until it starts again.
@@ -825,7 +836,7 @@ it("shows a Run now the scheduler refused instead of reporting it running", asyn
   buttonNamed(view, "Run now").click();
   await vi.waitFor(() =>
     expect(view.querySelector(".knowledge-error")?.textContent).toContain(
-      "the automation lost its owner",
+      "the automation no longer has an owner",
     ),
   );
   expect(ui.announce).not.toHaveBeenCalledWith("Run requested for Knowledge Consolidation.");
@@ -844,9 +855,11 @@ it("keeps failed run-history reads distinct from an empty history and recovers o
   });
   const failed = await render();
   expect(failed.querySelector(".scribe-history")?.textContent).toContain(
-    "Could not load recent runs.",
+    "Couldn’t load recent runs.",
   );
-  expect(failed.querySelector(".scribe-history")?.textContent).not.toContain("No runs yet.");
+  expect(failed.querySelector(".scribe-history")?.textContent).not.toContain(
+    "No recent runs to show.",
+  );
   request.mockImplementation(original);
   expect((await render()).querySelector(".scribe-history")?.textContent).toContain(
     "9 filed · 2 pages created",
@@ -857,7 +870,7 @@ it("keeps failed run-history reads distinct from an empty history and recovers o
 it("changes a scribe's schedule on its automation", async () => {
   const job = {
     ...reviewJob,
-    ...recentChatPlacement,
+    sessionTarget: "current",
     sessionKey: "s-review",
     schedule: { kind: "cron", expr: "45 3 * * 0", tz: "America/Los_Angeles" },
     payload: { kind: "agentTurn", message: currentReview(), model: "provider/model" },
@@ -885,7 +898,7 @@ it("changes a scribe's schedule on its automation", async () => {
         patch: {
           name: "Knowledge scribe · Knowledge Consolidation",
           sessionKey: "s-review",
-          ...recentChatPlacement,
+          sessionTarget: "current",
           enabled: true,
           schedule: { kind: "cron", expr: "45 3 * * *", tz: "America/Los_Angeles" },
           payload: { kind: "agentTurn", message: currentReview("45 3 * * *") },
@@ -912,7 +925,7 @@ const conversationsJob = (message: string) => ({
   ...reviewJob,
   id: "job-conversations",
   declarationKey: "knowledge:scribe:conversations",
-  ...recentChatPlacement,
+  sessionTarget: "current",
   sessionKey: "s-conversations",
   schedule: { kind: "cron", expr: "0 4 * * *", tz: "America/Los_Angeles" },
   payload: { kind: "agentTurn", message },
@@ -924,7 +937,7 @@ const settingsUpdate = (message: string) => [
     patch: {
       name: "Knowledge scribe · Learn from conversations",
       sessionKey: "s-conversations",
-      ...recentChatPlacement,
+      sessionTarget: "current",
       enabled: true,
       schedule: { kind: "cron", expr: "0 4 * * *", tz: "America/Los_Angeles" },
       payload: { kind: "agentTurn", message },

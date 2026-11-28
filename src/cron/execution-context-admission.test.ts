@@ -375,7 +375,7 @@ describe("admitScheduledOccurrence", () => {
   it("gives main-session jobs an in-session context on the main session", async () => {
     const { minted } = await mint(
       job({
-        sessionTarget: "session:main",
+        sessionTarget: "main",
         payload: { kind: "systemEvent", text: "check in" },
         owner: { agentId: "main", sessionKey: "agent:main:main" },
       }),

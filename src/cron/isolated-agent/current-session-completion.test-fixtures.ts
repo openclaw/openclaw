@@ -122,12 +122,7 @@ async function createCompletionFixture(
   await fs.writeFile(imagePath, PNG);
   const payload: ReplyPayload = { text: "Example report", mediaUrl: imagePath };
   const job: CronStoredJob = {
-    ...makeCronJob({
-      id: "report-job",
-      sessionTarget: "isolated",
-      includeRecentChat: sessionTarget === "current",
-      sessionKey,
-    }),
+    ...makeCronJob({ id: "report-job", sessionTarget, sessionKey }),
     ...(sessionTarget === "isolated"
       ? {
           sourceConversation: { sessionKey, ...generation },

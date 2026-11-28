@@ -30,7 +30,7 @@ export function planCronTrustedOwnerTurn(params: {
           name: "Owner redeclaration",
           declarationKey: jobId,
           schedule: { kind: "every", everyMs: 3_600_000 },
-          sessionTarget: "session:main",
+          sessionTarget: "main",
           payload: { kind: "systemEvent", text: "Replaced by the owner conversation." },
         },
       });
@@ -44,10 +44,7 @@ export function planCronTrustedOwnerTurn(params: {
           : action === "realert"
             ? { failureAlert: { after: 1, mode: "webhook", to: "https://alerts.example/cron" } }
             : action === "dormant"
-              ? {
-                  sessionTarget: "session:main",
-                  payload: { kind: "systemEvent", text: "Check status" },
-                }
+              ? { sessionTarget: "main", payload: { kind: "systemEvent", text: "Check status" } }
               : {
                   payload: {
                     kind: "agentTurn",

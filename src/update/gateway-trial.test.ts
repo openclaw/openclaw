@@ -8,9 +8,6 @@ import { withinTest } from "../../test/helpers/promise.js";
 import type * as PluginLifecycleClient from "../cli/plugins-lifecycle-client.js";
 import { resolvePluginBatchReload } from "../cli/plugins-lifecycle-client.js";
 import { createPostCorePluginUpdateResult } from "../cli/update-cli/update-command-plugins-internals.js";
-import type * as InspectionOwner from "../cli/update-cli/update-command-post-activation-inspections.js";
-import { runPostActivationInspections } from "../cli/update-cli/update-command-post-activation-inspections.js";
-import type * as DoctorContributions from "../flows/doctor-health-contributions.js";
 import { logGatewayReady } from "../gateway/server-startup-readiness.js";
 import { createPreparedReadinessFixture } from "../gateway/server/readiness.test-support.js";
 import { registerGatewayInstallationReplacementHandler } from "../gateway/stale-install.js";
@@ -109,19 +106,6 @@ vi.mock("../infra/update-install-status.js", async (importOriginal) => ({
   ...(await importOriginal<typeof UpdateInstallStatus>()),
   resolveStartupInstallStatus: vi.fn(async () => ({ status: { installKind: "package" } })),
 }));
-vi.mock(
-  "../cli/update-cli/update-command-post-activation-inspections.js",
-  async (importOriginal) => ({
-    ...(await importOriginal<typeof InspectionOwner>()),
-    runPostActivationInspections: vi.fn<typeof InspectionOwner.runPostActivationInspections>(
-      async ({ result }) => result,
-    ),
-  }),
-);
-vi.mock("../flows/doctor-health-contributions.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof DoctorContributions>()),
-  resolvePostActivationInspectionCheckIds: async () => ["core/doctor/secrets"],
-}));
 vi.mock("../gateway/update-run-watcher.js", async (importOriginal) => ({
   ...(await importOriginal<typeof watcherModule>()),
   wakeUpdateRunWatcher: (_runId?: string, advisoryWork?: () => Promise<void>) => {
@@ -200,7 +184,6 @@ it.each([undefined, "offline", "pending", "trial", "restoring"] as const)(
       expect(await readTrial()).toBeNull();
       expect(await getUpdateRunStatusAsync()).toEqual({});
     }
-    expect(runPostActivationInspections).not.toHaveBeenCalled();
     expect(notices).toEqual([]);
     if (phase === "offline") {
       expect(maintenanceWarning).toHaveBeenCalledExactlyOnceWith(
@@ -259,7 +242,6 @@ it.each([false, true])(
 
     expect(maintenanceWarning).toHaveBeenCalledExactlyOnceWith(message);
     expect(await listUpdateRunsAsync()).toEqual(before ? [before] : []);
-    expect(runPostActivationInspections).not.toHaveBeenCalled();
     expect(notices).toEqual([]);
   },
 );
@@ -496,7 +478,7 @@ it.each(["pending", "trial", "restoring"] as const)(
   },
 );
 
-it("keeps boot plugin maintenance and inspections when result notice preparation fails", async () => {
+it("keeps boot plugin maintenance when result notice preparation fails", async () => {
   const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-notice-"));
   directories.push(state);
   vi.stubEnv("OPENCLAW_STATE_DIR", state);
@@ -523,7 +505,6 @@ it("keeps boot plugin maintenance and inspections when result notice preparation
     status: "succeeded",
     steps: expect.arrayContaining([
       expect.objectContaining({ step: "plugins", status: "completed" }),
-      expect.objectContaining({ step: "post-activation doctor inspections", status: "completed" }),
     ]),
   });
 });
@@ -631,107 +612,6 @@ it.each(["dead", "same-pid", "own-live", "live"] as const)(
         owner.kill("SIGKILL");
         await exited;
       }
-    }
-  },
-);
-
-it.each(["warning", "error"] as const)(
-  "keeps a committed update successful while background inspections report %s",
-  async (finding) => {
-    const state = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-trial-advice-"));
-    directories.push(state);
-    vi.stubEnv("OPENCLAW_STATE_DIR", state);
-    const options = { env: process.env };
-    openOpenClawStateDatabase(options);
-    const run = await createUpdateRunAsync({ trigger: "control-ui" }, options);
-    const gate = Promise.withResolvers<void>();
-    const entered = Promise.withResolvers<void>();
-    vi.mocked(runPostActivationInspections).mockImplementationOnce(async ({ result }) => {
-      entered.resolve();
-      await gate.promise;
-      if (finding === "error") {
-        throw new Error("inspection process could not start");
-      }
-      return {
-        ...result,
-        steps: [
-          {
-            name: "post-activation doctor inspections",
-            command: "doctor --lint",
-            cwd: state,
-            durationMs: 1,
-            exitCode: 1,
-            advisory: { kind: "recoverable-maintenance", message: "Review plaintext secrets." },
-            warnings: ["Plaintext secret found."],
-            doctorLintFindings: [
-              {
-                checkId: "core/doctor/secrets",
-                severity: "warning",
-                message: "Plaintext secret found.",
-              },
-            ],
-          },
-        ],
-      };
-    });
-    const trial: Trial = {
-      v: 2,
-      runId: run.runId,
-      phase: "committed",
-      target: "releases/new/openclaw",
-      previous: "releases/old/openclaw",
-      version: VERSION,
-      attempts: 1,
-      createdAt: Date.now(),
-      outcome: { status: "succeeded", at: Date.now() },
-    };
-    await writeTrial(trial);
-    const work = new AsyncWorkScope();
-    try {
-      await work.run(() => announceReady(null));
-      await entered.promise;
-      const committed = await getUpdateRunAsync(run.runId, options);
-      expect(committed?.status).toBe("succeeded");
-      expect(committed?.steps).not.toContainEqual(
-        expect.objectContaining({ step: "post-activation doctor inspections" }),
-      );
-      expect(await readTrial()).toMatchObject({ reported: true });
-    } finally {
-      gate.resolve();
-      await Promise.all(backgroundWork);
-      await work.drain();
-    }
-    const inspected = await getUpdateRunAsync(run.runId, options);
-    expect(inspected?.status).toBe("succeeded");
-    expect(inspected?.steps).toContainEqual(
-      expect.objectContaining({
-        step: "post-activation doctor inspections",
-        status: "completed",
-      }),
-    );
-    if (finding === "warning") {
-      expect(inspected?.steps).toContainEqual(
-        expect.objectContaining({
-          step: expect.stringContaining("warning:"),
-          detail: "Plaintext secret found.",
-        }),
-      );
-      const receipt = inspected?.steps.find(
-        ({ step }) => step === "finalize:doctor-lint:post-activation doctor inspections",
-      );
-      expect(receipt?.status).toBe("completed");
-      expect(JSON.parse(receipt!.detail!)).toMatchObject({
-        exitCode: 1,
-        counts: { error: 0, warning: 1, info: 0 },
-      });
-    }
-    if (finding === "error") {
-      expect(inspected?.steps).toContainEqual(
-        expect.objectContaining({
-          step: "warning:post-activation doctor inspections",
-          detail: expect.stringContaining("openclaw doctor --lint --all"),
-        }),
-      );
     }
   },
 );
@@ -868,7 +748,6 @@ it.each([undefined, true, false])(
       }),
     );
     expect(reload).toHaveBeenCalledExactlyOnceWith(targets);
-    expect(runPostActivationInspections).toHaveBeenCalledOnce();
     expect(notices).toEqual([{ runId: run.runId, kind: "finished", status: "succeeded" }]);
     expect(await readTrial()).toMatchObject({ runId: "next-run", phase: "pending" });
     const summary = renderUpdateRunSummary(maintained!);

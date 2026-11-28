@@ -10,7 +10,7 @@ import type { CronServiceDeps } from "./service/state.js";
 import { onTimer, runMissedJobs } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
-import type { CronJob } from "./types.js";
+import type { CronJob, CronStoredJob } from "./types.js";
 
 const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
   prefix: "openclaw-cron-overflow-",
@@ -31,7 +31,7 @@ describe("CronService startup catch-up repair scoping", () => {
     return makeCronJob({
       id,
       schedule,
-      sessionTarget: "session:main",
+      sessionTarget: "main",
       payload: { kind: "systemEvent", text: `tick-${id}` },
       state: { nextRunAtMs },
     });
@@ -103,7 +103,10 @@ describe("CronService startup catch-up repair scoping", () => {
         ...Array.from({ length: 5 }, (_, i) =>
           createHourlyCronJob(`hourly-${i}`, startNow - (14 - i) * 3_600_000),
         ),
-        createDailyCronJob("daily-overflow", Date.parse("2025-12-13T09:00:00.000Z")),
+        {
+          ...createDailyCronJob("daily-overflow", Date.parse("2025-12-13T09:00:00.000Z")),
+          runtimeAuthorityRecoveryRequired: true,
+        },
       ],
     });
 
@@ -113,11 +116,11 @@ describe("CronService startup catch-up repair scoping", () => {
     await start(state);
 
     const deferred = state.store?.jobs.find((job) => job.id === "daily-overflow");
-    const expectDeferred = (job: CronJob | undefined) =>
-      expect([job?.state.nextRunAtMs, job?.state.startupCatchupAtMs]).toEqual([
-        startNow + 145_000,
-        startNow + 145_000,
-      ]);
+    const expectDeferred = (job: CronStoredJob | undefined) =>
+      expect(job).toMatchObject({
+        runtimeAuthorityRecoveryRequired: true,
+        state: { nextRunAtMs: startNow + 145_000, startupCatchupAtMs: startNow + 145_000 },
+      });
     expectDeferred(deferred);
     await status(state);
     expect(deferred?.state.nextRunAtMs).toBe(startNow + 145_000);

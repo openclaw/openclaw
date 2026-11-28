@@ -19,6 +19,8 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
+const gardenKey = "agent:main:dashboard:garden";
+const writerKey = "agent:writer:dashboard:editorial";
 const roster = [
   { id: "main", name: "Clawd" },
   { id: "writer", name: "Writer" },
@@ -32,8 +34,16 @@ const retired = cronJob("retired-owner", "Retired owner digest", {
 
 function installGateway(page: Page, agents = roster, jobs: CronJob[] = [retired]) {
   return installMockGateway(page, {
+    sessions: [
+      { key: gardenKey, label: "Garden planning", kind: "direct" },
+      { key: "agent:main:dashboard:other", label: "Garden planning", kind: "direct" },
+      { key: writerKey, label: "Editorial calendar", kind: "direct" },
+    ],
     featureMethods: cronSidebarFeatureMethods,
     methodResponses: {
+      "config.get": {
+        config: { cron: { agents: { writer: { delivery: { channel: "telegram", to: "team" } } } } },
+      },
       "agents.list": { agents, defaultId: "main", mainKey: "main", scope: "per-sender" },
       "cron.list": cronListResponseFixture(cronList(jobs, "agent-picker-list")),
       "cron.get": { cases: jobs.map((job) => ({ match: { id: job.id }, response: job })) },
@@ -62,9 +72,13 @@ suite.define(() => {
       await expect
         .poll(() => agentPicker(page).locator(".agent-select__label").textContent())
         .toBe("Writer");
+      await page.locator("#cron-session-target").click();
+      await page.getByRole("option", { name: "Editorial calendar", exact: true }).click();
+      expect(await page.getByRole("button", { name: /^Report to:/ }).count()).toBe(0);
       await page.locator('[data-test-id="cron-submit"]').click();
       expect((await gateway.waitForRequest("cron.add")).params).toMatchObject({
         agentId: "writer",
+        sessionTarget: `session:${writerKey}`,
       });
     });
   });
@@ -103,13 +117,25 @@ suite.define(() => {
     });
   });
 
-  it("leaves out the Agent row when the Gateway has one agent", async () => {
+  it("sends an isolated task’s results to the conversation picked by name", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      await installGateway(page, roster.slice(0, 1));
+      const gateway = await installGateway(page, roster.slice(0, 1));
       await page.goto(`${suite.server.baseUrl}cron?new`);
       await page.waitForFunction(() => window.openclawControlUi?.snapshot().rosterReady === true);
-      await page.getByText("Runs in", { exact: true }).waitFor();
+      await page.locator("#cron-payload-text").fill("Check the planting calendar.");
       expect(await agentPicker(page).count()).toBe(0);
+      await page.getByRole("button", { name: /^Report to:/ }).click();
+      await page
+        .getByRole("option")
+        .filter({ hasText: "Garden planning" })
+        .filter({ hasText: gardenKey })
+        .click();
+      await page.locator('[data-test-id="cron-submit"]').click();
+      expect((await gateway.waitForRequest("cron.add")).params).toMatchObject({
+        sessionTarget: "isolated",
+        sessionKey: gardenKey,
+        delivery: { mode: "announce" },
+      });
     });
   });
 });

@@ -23,7 +23,7 @@ function createState(overrides: Partial<CronServiceDeps>) {
 const mainJob = () =>
   makeCronJob({
     payload: { kind: "systemEvent", text: "  check pending work  " },
-    sessionTarget: "session:main",
+    sessionTarget: "main",
   });
 
 it.each(["occurrence revalidation", "session custody"] as const)(
@@ -171,8 +171,6 @@ it("sends an immediate script follow-up to the captured session while scheduling
 
 it("attaches deferred script follow-up only to an enabled ordinary scheduled session job", async () => {
   const { state, job, execute } = scriptFixture("next-heartbeat");
-  job.sessionTarget = "session:agent:finn:main";
-  job.sessionKey = "agent:finn:dashboard:creator";
   const receiver = {
     ...job,
     id: "ordinary-receiver",

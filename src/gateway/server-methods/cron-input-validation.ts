@@ -88,7 +88,7 @@ type InferenceCaller = Pick<
  */
 async function loadCronRuntimeSessionEntry(params: {
   cfg: OpenClawConfig;
-  job: Pick<CronJob, "sessionTarget" | "sessionKey" | "includeRecentChat">;
+  job: Pick<CronJob, "sessionTarget" | "sessionKey">;
   agentId?: string;
   executionEntry?: SessionEntry;
   loaded?: { key: string; entry?: SessionEntry };
@@ -96,7 +96,8 @@ async function loadCronRuntimeSessionEntry(params: {
   if (params.executionEntry) {
     return params.executionEntry;
   }
-  const sourceKey = params.job.includeRecentChat ? params.job.sessionKey?.trim() : undefined;
+  const sourceKey =
+    params.job.sessionTarget === "current" ? params.job.sessionKey?.trim() : undefined;
   if (!sourceKey) {
     return undefined;
   }
@@ -229,7 +230,6 @@ export async function assertValidCronUpdatePatch(params: {
   if (
     "agentId" in params.patch ||
     "sessionTarget" in params.patch ||
-    "includeRecentChat" in params.patch ||
     "sessionKey" in params.patch ||
     "payload" in params.patch ||
     "schedule" in params.patch ||
@@ -297,7 +297,7 @@ export async function assertValidCronSessionTarget(
 ): Promise<void> {
   const targetSessionKey =
     resolveCronSessionTargetSessionKey(input.sessionTarget) ??
-    (input.includeRecentChat ? input.sessionKey?.trim() : undefined);
+    (input.sessionTarget === "current" ? input.sessionKey?.trim() : undefined);
   if (!targetSessionKey) {
     return;
   }
@@ -366,9 +366,10 @@ export async function captureCronCreatorSession(
 ) {
   const inheritedAuthority = caller.client?.internal?.operatorRunAuthority;
   const hasConversationResult =
-    job.payload.kind === "agentTurn" ||
-    job.payload.kind === "script" ||
-    job.payload.kind === "command";
+    job.sessionTarget !== "main" &&
+    (job.payload.kind === "agentTurn" ||
+      job.payload.kind === "script" ||
+      job.payload.kind === "command");
   const sessionKey =
     callerScope?.sessionKey ?? (hasConversationResult ? job.sessionKey : undefined);
   const agentId = callerScope?.agentId ?? job.agentId;
@@ -415,7 +416,7 @@ export async function captureCronCreatorSession(
       : undefined;
   const inference =
     // A creator runtime grant owns its own inference identity. Never bind an ambient host profile.
-    !hasRuntimeAuthority && job.payload.kind === "agentTurn"
+    !hasRuntimeAuthority && job.payload.kind === "agentTurn" && job.sessionTarget !== "main"
       ? await captureCronInferenceForCaller(
           {
             cfg,
@@ -676,6 +677,9 @@ export async function cronRunQueuesBehindCaller(params: {
   if (!caller?.sessionKey) {
     return false;
   }
+  if (job.sessionTarget === "main") {
+    return true;
+  }
   const agentId = normalizeAgentId(job.agentId ?? params.resolveDefaultAgentId());
   const isCallerSession = (sessionKey: string | undefined) => {
     if (sessionKey === undefined) {
@@ -697,7 +701,7 @@ export async function cronRunQueuesBehindCaller(params: {
     );
   };
   if (
-    (job.payload.kind === "agentTurn" || job.payload.kind === "systemEvent") &&
+    job.payload.kind === "agentTurn" &&
     isCallerSession(resolveCronSessionTargetSessionKey(job.sessionTarget))
   ) {
     return true;

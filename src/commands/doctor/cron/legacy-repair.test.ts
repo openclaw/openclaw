@@ -92,7 +92,7 @@ it(
     const canonical: CronJob = {
       ...job("canonical-at"),
       schedule: { kind: "at", at: "2026-04-01T10:00:00.000Z" },
-      sessionTarget: "session:main",
+      sessionTarget: "main",
       payload: { kind: "systemEvent", text: "tick" },
     };
     await saveJobs(storePath, canonical);
@@ -182,8 +182,7 @@ it(
       ...job("current-source"),
       agentId: "main",
       enabled: false,
-      sessionTarget: "isolated",
-      includeRecentChat: true,
+      sessionTarget: "current",
       sessionKey: "agent:main:dashboard:source",
       delivery: { mode: "announce" },
       state: { consecutiveErrors: 2 },
@@ -211,7 +210,7 @@ it(
       schedule: { ...current.schedule, anchorMs: current.createdAtMs },
     });
     await expect(resolveCronDeliveryPreview({ cfg, job: reloaded! })).resolves.toEqual({
-      label: "announce -> creating conversation",
+      label: "announce -> current session",
       detail: "commits to this conversation (no external channel route)",
     });
     expect(reloadedSandbox).toMatchObject(sandbox);
@@ -303,7 +302,7 @@ it(
             ...job("variant-cron"),
             name: "Variant cron",
             schedule: { kind: " CRON ", expr: "0 9 * * *" },
-            sessionTarget: "session:main",
+            sessionTarget: "main",
             payload: { kind: "systemEvent", text: "tick" },
           },
         },
@@ -424,7 +423,7 @@ it(
 const legacyJob = (overrides: Partial<CronJob> = {}) =>
   job("legacy", {
     name: "Legacy",
-    sessionTarget: "session:main",
+    sessionTarget: "main",
     payload: { kind: "systemEvent", text: "keep me" },
     ...overrides,
   });

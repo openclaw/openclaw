@@ -44,7 +44,7 @@ type ManagedCronJobCreate = {
   description: string;
   enabled: boolean;
   schedule: CronSchedule;
-  sessionTarget: "isolated";
+  sessionTarget: "main" | "isolated";
   wakeMode: "now";
   payload: CronPayload;
   delivery?: {

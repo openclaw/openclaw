@@ -1,16 +1,10 @@
 /** Resolves and validates session-target keys used by cron jobs and delivery. */
 
 const INVALID_CRON_SESSION_TARGET_ID_ERROR = "invalid cron sessionTarget session id";
-export const INVALID_CRON_SESSION_TARGET_ERROR =
-  'Expected cron sessionTarget "isolated" or "session:<key>"';
 
 /** Returns whether an error came from cron session target id validation. */
 export function isInvalidCronSessionTargetIdError(error: unknown): boolean {
-  return (
-    error instanceof Error &&
-    (error.message === INVALID_CRON_SESSION_TARGET_ID_ERROR ||
-      error.message === INVALID_CRON_SESSION_TARGET_ERROR)
-  );
+  return error instanceof Error && error.message === INVALID_CRON_SESSION_TARGET_ID_ERROR;
 }
 
 /** Validates the opaque session id portion of a `session:` cron target. */
@@ -45,9 +39,12 @@ export function resolveCronContinuationSessionKey(job: {
   return resolveCronSessionTargetSessionKey(job.sessionTarget);
 }
 
-/** Whether cron executes the job under its own `cron:<jobId>` run key. */
+/**
+ * Returns whether cron executes the job under its own `cron:<jobId>` run key. A
+ * `current` job is still a child of its creating conversation; this decides only the key.
+ */
 export function isDetachedCronSessionTarget(sessionTarget?: string | null): boolean {
-  return sessionTarget === "isolated";
+  return sessionTarget === "isolated" || sessionTarget === "current";
 }
 
 /**
@@ -68,6 +65,18 @@ export function isCronOperatorSourceParent(
     isDetachedCronSessionTarget(job.sessionTarget) &&
     job.sourceConversation?.sessionKey === sessionKey
   );
+}
+
+/** Preserves `current` with a creation-time sessionKey so future active UI state is irrelevant. */
+export function resolveCronCurrentSessionTarget(params: {
+  sessionTarget?: string | null;
+  sessionKey?: string | null;
+}): string | undefined {
+  if (params.sessionTarget !== "current") {
+    return params.sessionTarget ?? undefined;
+  }
+  const sessionKey = params.sessionKey?.trim();
+  return sessionKey ? "current" : "isolated";
 }
 
 /** Result conversation selection is independent from the execution session and channel target. */

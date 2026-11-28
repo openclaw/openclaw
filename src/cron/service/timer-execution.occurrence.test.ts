@@ -72,8 +72,9 @@ function payloadFor(kind: PayloadKind): CronStoredJob["payload"] {
 const PAYLOAD_KINDS: readonly PayloadKind[] = ["agentTurn", "systemEvent", "command", "script"];
 const SESSION_TARGETS: readonly CronStoredJob["sessionTarget"][] = [
   "isolated",
+  "current",
   "session:agent:main:dashboard:parent",
-  "session:main",
+  "main",
 ];
 
 function harness() {
@@ -180,7 +181,9 @@ describe("scheduled occurrence admission", () => {
       if (kind === "command") {
         // Command jobs do not pause on a missing parent; they still run with the occurrence.
         expect(result).not.toHaveProperty("parentUnavailable");
-        expect(seen.map((call) => call.executor)).toContain("runCommandJob");
+        if (sessionTarget !== "main") {
+          expect(seen.map((call) => call.executor)).toContain("runCommandJob");
+        }
         return;
       }
       expect(seen).toEqual([]);

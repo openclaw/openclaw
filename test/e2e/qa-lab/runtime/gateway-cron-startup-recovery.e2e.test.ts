@@ -33,7 +33,7 @@ function cronJob(params: {
     schedule: params.recurring
       ? { kind: "every", everyMs: 60_000, anchorMs: params.startedAtMs }
       : { kind: "at", at: new Date(params.startedAtMs).toISOString() },
-    sessionTarget: "session:main",
+    sessionTarget: "main",
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "Gateway startup recovery proof" },
     state: { runningAtMs: params.startedAtMs, nextRunAtMs: params.nextRunAtMs },

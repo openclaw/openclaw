@@ -137,7 +137,7 @@ flow:
                             kind: at
                             at:
                               ref: scheduledAt
-                          sessionTarget: "session:main"
+                          sessionTarget: main
                           wakeMode: now
                           payload:
                             kind: systemEvent
@@ -145,7 +145,7 @@ flow:
                               ref: eventInstruction
                         - timeoutMs: 30000
                     - assert:
-                        expr: "Boolean(job.id) && job.sessionTarget === 'session:main' && job.payload?.kind === 'systemEvent'"
+                        expr: "Boolean(job.id) && job.sessionTarget === 'main' && job.payload?.kind === 'systemEvent'"
                         message: Cron did not retain the main-session systemEvent contract.
                     - call: waitForCronRunCompletion
                       saveAs: cronRun

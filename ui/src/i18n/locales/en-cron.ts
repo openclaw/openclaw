@@ -32,7 +32,6 @@ const enCron = {
       unknown: "Couldn’t start this automation. Try again.",
     },
     errors: {
-      conversationRequired: "Choose a conversation.",
       activeHoursTime: "Enter HH:MM (24:00 is allowed only for the end).",
       activeHoursTimezone: "Enter a valid IANA time zone, local, or user.",
       scheduleAtInvalid: "Enter a valid date and time.",
@@ -228,14 +227,19 @@ const enCron = {
       timezoneHelp: "Leave blank to use the time zone of the computer running OpenClaw.",
       activeHoursTimezoneHelp: "Leave blank to use your time zone.",
       runsIn: "Runs in",
-      isolatedSession: "New session each time",
-      continueConversation: "Continue a conversation",
-      conversation: "Conversation",
-      mainConversation: "Main conversation",
-      chooseConversation: "Choose a conversation",
-      searchConversations: "Search conversations",
-      includeRecentChat: "Include recent chat",
-      recentChatConversation: "Use recent chat from",
+      mainSession: "Main session",
+      currentSession: "Its own session with recent chat",
+      reportTo: "Report to",
+      defaultDestination: "Default destination",
+      recentChatSource: "Use recent chat from",
+      recentChatSourceHelp:
+        "The automation reads recent messages here. Announcements return here unless another destination is configured.",
+      reportToHelp: "This chat gets the result when no channel destination is configured.",
+      searchConversations: "Find a conversation",
+      conversationSearchFailed: "Couldn’t load conversations. Try searching again.",
+      isolatedSession: "Its own session",
+      sessionHelp:
+        "Main adds the task to the agent’s main session. Isolated starts a reply in a separate session.",
       activeHours: "Only run during set hours",
       activeHoursHelp:
         "Scheduled runs outside these hours are skipped, and one-time runs wait. Manual runs follow it too. Hours can cross midnight.",
@@ -262,7 +266,7 @@ const enCron = {
       script: "Script",
       readOnlyPayloadHelp:
         "This task was created outside the app. You can’t edit its contents here, but saving other changes keeps them.",
-      systemEvent: "Post to a conversation",
+      systemEvent: "Post to main session",
       agentTurn: "Run agent task",
       systemEventHelp: "Adds your text to the agent’s main timeline for reminders.",
       agentTurnHelp: "Starts an agent reply in a separate session using your prompt.",
@@ -270,7 +274,7 @@ const enCron = {
       timeoutPlaceholder: "Default",
       timeoutHelp:
         "Stops the run if it takes longer. Leave blank for the default, or enter 0 for no limit.",
-      mainTimelineMessage: "Conversation message",
+      mainTimelineMessage: "Main timeline message",
       assistantTaskPrompt: "Prompt",
       promptPreview: "Prompt preview",
       deliveryModeLabel: "Send results",
@@ -313,7 +317,7 @@ const enCron = {
         "Removes the automation after one successful run. Good for one-time reminders.",
       sessionKey: "Session key",
       sessionKeyHelp:
-        "The session that gets results when this automation isn’t linked to a chat. Most automations leave this blank.",
+        "Links a new automation to a conversation. Changing this key on a saved automation keeps its original reporting link.",
       sessionKeyPlaceholder: "Default",
       exactTiming: "Run at the exact time",
       exactTimingHelp:

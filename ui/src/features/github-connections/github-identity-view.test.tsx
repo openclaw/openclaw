@@ -108,6 +108,34 @@ describe("GitHub identity view", () => {
     expect(view.getByRole("button", { name: "Continue with GitHub" })).toBeTruthy();
   });
 
+  it("keeps cancellation uncertainty and details separate while allowing another attempt", async () => {
+    const cancel = vi.fn().mockRejectedValueOnce(new Error("Synthetic Gateway detail"));
+    cancel.mockResolvedValueOnce({ cancelled: true });
+    const { identity } = setupRequest({
+      "tools.github.authorize.start": () => authorizationCode,
+      "tools.github.authorize.cancel": cancel,
+    });
+    const view = mountSolid(() => <GitHubConnectionSetup identity={identity} />);
+    await identity.startAuthorization();
+    flush();
+    view.getByRole("button", { name: "Cancel" }).click();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+
+    expect(view.getByText("Couldn’t confirm cancellation")).toBeTruthy();
+    expect(view.getByText("Sign-in may still be active.")).toBeTruthy();
+    const details = view.container.querySelector("details");
+    expect(details?.open).toBe(false);
+    expect(details?.textContent).toContain("Synthetic Gateway detail");
+    expect(view.getByText("Synthetic Gateway detail").closest("details")).toBe(details);
+
+    view.getByRole("button", { name: "Try canceling again" }).click();
+    await vi.advanceTimersByTimeAsync(0);
+    flush();
+    expect(cancel).toHaveBeenCalledTimes(2);
+    expect(view.getByRole("button", { name: "Continue with GitHub" })).toBeTruthy();
+  });
+
   it("retires the owned status request when its view unmounts", async () => {
     const pending = createDeferred<ReturnType<typeof availableStatus>>();
     const client = createTestGatewayClient(vi.fn().mockReturnValue(pending.promise));

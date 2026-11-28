@@ -85,7 +85,7 @@ it.each(["run_settled", "subagent_ended"] as const)(
       name: "Workboard automation",
       enabled: true,
       schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "session:main",
+      sessionTarget: "main",
       wakeMode: "now",
       payload: { kind: "systemEvent", text: "categorize board" },
     });

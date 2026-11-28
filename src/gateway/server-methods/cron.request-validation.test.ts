@@ -86,7 +86,7 @@ it.each([false, true])(
       const capture = captureCronCreatorSession(
         {
           ...createHistoryJob("main", sessionKey),
-          sessionTarget: "session:main",
+          sessionTarget: "main",
           payload: { kind: "systemEvent", text: "Must not escape the original invitation" },
         },
         undefined,

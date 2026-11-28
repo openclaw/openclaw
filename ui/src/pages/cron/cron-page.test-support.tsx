@@ -144,10 +144,10 @@ export function createContext(
       ensureList: vi.fn(async () => undefined),
       subscribe,
     },
-    sessions: { list: vi.fn(async () => null) },
     acquireChannels: () => channels,
     runtimeConfig: {
       state: { configSnapshot: null },
+      ensureLoaded: vi.fn(async () => undefined),
       subscribe,
     },
     agentSelection: {

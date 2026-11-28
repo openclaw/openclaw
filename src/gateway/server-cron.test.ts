@@ -513,11 +513,11 @@ describe("buildGatewayCronService", () => {
       });
       const processJob = await addSystemEventJob(previous, "persisted process", "done", {
         schedule: { kind: "on-exit", command: "sleep 60" },
-        sessionTarget: "session:main",
+        sessionTarget: "main",
       });
       const streamJob = await addSystemEventJob(previous, "persisted stream", "event", {
         schedule: { kind: "stream", command: ["source"] },
-        sessionTarget: "session:main",
+        sessionTarget: "main",
       });
       await previous.cron.stopAndDrain?.();
 
@@ -664,7 +664,7 @@ describe("buildGatewayCronService", () => {
         {
           schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
           trigger: { script: "json({ fire: false })" },
-          sessionTarget: "session:main",
+          sessionTarget: "main",
           wakeMode: "now",
         },
       );
@@ -696,7 +696,7 @@ describe("buildGatewayCronService", () => {
     await withCronService(cfg, async (state) => {
       await addSystemEventJob(state, "restart watched build", "done", {
         schedule: { kind: "on-exit", command: "sleep 60" },
-        sessionTarget: "session:main",
+        sessionTarget: "main",
       });
       await state.reconcileExitWatchers?.();
       await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
@@ -749,7 +749,7 @@ describe("buildGatewayCronService", () => {
         const addJob = (name: string) =>
           addSystemEventJob(previous, name, "done", {
             schedule: { kind: "on-exit", command: "true" },
-            sessionTarget: "session:main",
+            sessionTarget: "main",
             wakeMode: "now",
           });
         await addJob("first");
@@ -846,7 +846,7 @@ describe("buildGatewayCronService", () => {
       try {
         const job = await addSystemEventJob(previous, "watch before restart", "done", {
           schedule: { kind: "on-exit", command: "true" },
-          sessionTarget: "session:main",
+          sessionTarget: "main",
           wakeMode: "now",
         });
         await previous.reconcileExitWatchers();
@@ -903,7 +903,7 @@ describe("buildGatewayCronService", () => {
         const addJob = async () =>
           await addSystemEventJob(state, "Watch concurrent mutation", "done", {
             schedule: { kind: "on-exit", command: "sleep 60" },
-            sessionTarget: "session:main",
+            sessionTarget: "main",
           });
         const existing = mutation === "remove" ? await addJob() : undefined;
         if (existing) {
@@ -981,7 +981,7 @@ describe("buildGatewayCronService", () => {
       try {
         const job = await addSystemEventJob(state, "watch and rearm", "done", {
           schedule: { kind: "on-exit", command: "true" },
-          sessionTarget: "session:main",
+          sessionTarget: "main",
           wakeMode: "now",
         });
         await state.reconcileExitWatchers();
@@ -1069,7 +1069,7 @@ describe("buildGatewayCronService", () => {
     try {
       const job = await addSystemEventJob(state, "watch and drain naturally", "done", {
         schedule: { kind: "on-exit", command: "true" },
-        sessionTarget: "session:main",
+        sessionTarget: "main",
         wakeMode: "now",
       });
       await state.reconcileExitWatchers();
@@ -1098,7 +1098,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it.each(["session:main", "isolated"] as const)(
+  it.each(["main", "isolated"] as const)(
     "retains a watched exit behind an active %s run",
     async (sessionTarget) => {
       const watched = createWatchedRun(false);
@@ -1112,7 +1112,7 @@ describe("buildGatewayCronService", () => {
       const runSessionEvent = vi
         .fn<NonNullable<CronServiceState["deps"]["runSessionEvent"]>>()
         .mockResolvedValue({ status: "ok" });
-      if (sessionTarget === "session:main") {
+      if (sessionTarget === "main") {
         runSessionEvent.mockImplementationOnce(async () => {
           await holdPredecessor();
           return { status: "ok" };
@@ -1136,7 +1136,7 @@ describe("buildGatewayCronService", () => {
         const job = await addCronJob(
           state,
           "watch command while manually running",
-          sessionTarget === "session:main"
+          sessionTarget === "main"
             ? { kind: "systemEvent", text: "manual prompt" }
             : { kind: "agentTurn", message: "manual prompt" },
           {
@@ -1161,7 +1161,7 @@ describe("buildGatewayCronService", () => {
           throw new Error("Expected the watched exit's cron run");
         }
         await completion.value;
-        const payloadRunner = sessionTarget === "session:main" ? runSessionEvent : mocks.runAgent;
+        const payloadRunner = sessionTarget === "main" ? runSessionEvent : mocks.runAgent;
         expect(payloadRunner).toHaveBeenCalledTimes(2);
         expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
         expect(state.cron.getJob(job.id)?.enabled).toBe(false);
@@ -1210,7 +1210,7 @@ describe("buildGatewayCronService", () => {
           enabled: true,
           schedule: { kind: "on-exit" as const, command: "true" },
           payload: { kind: "systemEvent" as const, text: "must not fire" },
-          sessionTarget: "session:main" as const,
+          sessionTarget: "main" as const,
           wakeMode: "now" as const,
         };
         const job = await state.cron.add(input);
@@ -1412,7 +1412,7 @@ describe("buildGatewayCronService", () => {
       const job = await addSystemEventJob(state, "scheduled-hook", "advance external wake", {
         agentId: "main",
         schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
-        sessionTarget: "session:main",
+        sessionTarget: "main",
       });
       const dueAtMs = job.state.nextRunAtMs;
       if (dueAtMs === undefined) {
@@ -1436,7 +1436,7 @@ describe("buildGatewayCronService", () => {
         action: "finished",
         jobId: job.id,
         nextRunAtMs: persistedNextRunAtMs,
-        sessionTarget: "session:main",
+        sessionTarget: "main",
         agentId: "main",
         job: { agentId: "main", state: { nextRunAtMs: persistedNextRunAtMs } },
       });
@@ -1459,7 +1459,7 @@ describe("buildGatewayCronService", () => {
     try {
       await addSystemEventJob(state, "held hook", "hello", {
         schedule: { kind: "every", everyMs: 60_000 },
-        sessionTarget: "session:main",
+        sessionTarget: "main",
       });
       await vi.waitFor(() => expect(mocks.changed).toHaveBeenCalledTimes(1));
       expect(getActiveGatewayRootWorkCount()).toBe(1);
@@ -1509,10 +1509,6 @@ describe("buildGatewayCronService", () => {
 
   registerGatewayCronCompletionTests({
     createCronConfig,
-    createTriggerConfig,
-    withCronService,
-    addScriptJob,
-    enqueueSystemEventMock: mocks.enqueue,
     createCronService,
     getCronDeps,
     loadConfigMock: mocks.config,
@@ -1802,6 +1798,70 @@ describe("buildGatewayCronService", () => {
       expect(finishedEvent(job.id)).toMatchObject({ status: "ok", completionStatus: "failed" });
     });
   });
+
+  it.each([
+    { notify: "queue changed", expected: "queue changed" },
+    { notify: "NO_REPLY", expected: undefined },
+    { notify: "NO_REPLY\nNO_REPLY", expected: "NO_REPLY" },
+    { notify: "NO_REPLY.", expected: "NO_REPLY." },
+  ])(
+    "prepares isolated script notify $notify before announcement",
+    async ({ notify, expected }) => {
+      const cfg = createTriggerConfig("server-cron-script-announce");
+      cfg.gateway = {
+        publicOrigin: "https://gateway.example",
+        controlUi: { basePath: "/control" },
+      };
+
+      mocks.script.mockResolvedValueOnce({
+        kind: "completed",
+        notify,
+        stateChanged: false,
+      });
+
+      await withCronService(cfg, async (state) => {
+        const job = await addScriptJob(
+          state,
+          "script-announce",
+          "return { notify: 'queue changed' }",
+          {
+            deleteAfterRun: false,
+            delivery: { mode: "announce", channel: "telegram", to: "123", threadId: 456 },
+          },
+        );
+
+        await state.cron.run(job.id, "force");
+
+        expect(mocks.script).toHaveBeenCalledWith(
+          expect.objectContaining({
+            job: expect.objectContaining({
+              id: job.id,
+              payload: expect.objectContaining({
+                script: "return { notify: 'queue changed' }",
+                timeoutSeconds: 300,
+                toolBudget: 50,
+              }),
+            }),
+          }),
+        );
+        if (expected === undefined) {
+          expect(mocks.announce).not.toHaveBeenCalled();
+          expect(state.cron.getJob(job.id)?.state.deliverySuppressionReason).toBe("silent");
+        } else {
+          expect(mocks.announce).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              jobId: job.id,
+              payload: [{ text: expected }],
+              inspectionUrl: `https://gateway.example/control/automations?job=${job.id}&run=cron%3A${job.id}%3A${state.cron.getJob(job.id)?.state.lastRunAtMs}`,
+              target: expect.objectContaining({ threadId: 456 }),
+            }),
+          );
+          expect(state.cron.getJob(job.id)?.state.deliverySuppressionReason).toBeUndefined();
+        }
+        expect(state.cron.getJob(job.id)?.state.lastRunStatus).toBe("ok");
+      });
+    },
+  );
 
   it("keeps script failure detail transient while preserving structured error payloads", async () => {
     const cfg = createTriggerConfig("server-cron-script-failure-detail");
@@ -2115,7 +2175,7 @@ describe("buildGatewayCronService", () => {
     try {
       const job = await addSystemEventJob(state, "ssrf-webhook-blocked", "hello", {
         deleteAfterRun: false,
-        sessionTarget: "session:main",
+        sessionTarget: "main",
         delivery: {
           mode: "webhook",
           to: `${origin}/cron-finished`,

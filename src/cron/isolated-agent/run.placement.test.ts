@@ -85,8 +85,7 @@ describe("current-bound cron placement", () => {
           sessionKey: SESSION_KEY,
           job: makeIsolatedAgentJobFixture({
             id: "placement-job",
-            sessionTarget: "isolated",
-            includeRecentChat: true,
+            sessionTarget: "current",
             sessionKey: SESSION_KEY,
             delivery: { mode: "none" },
           }),

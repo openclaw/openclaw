@@ -163,7 +163,7 @@ export async function runCronAdmissionCase(
       });
       const added = await creatorTool.execute(c.id, {
         action: "add",
-        job: { ...definition, sessionTarget: "isolated", includeRecentChat: true },
+        job: { ...definition, sessionTarget: "current" },
       });
       assert(
         added.details &&

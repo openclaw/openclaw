@@ -169,7 +169,7 @@ export class DraftPlaceBrowser {
       canCallGatewayMethod(
         this.read().context?.gateway.snapshot,
         "projects.searchRemote",
-        "operator.read",
+        "operator.write",
       ),
       this.#debouncedProjectQuery,
       this.gateway.connectionEpoch,
@@ -424,7 +424,7 @@ export class DraftPlaceBrowser {
       !this.gateway.connected ||
       !this.gateway.client ||
       !context ||
-      !canCallGatewayMethod(context.gateway.snapshot, "projects.searchRemote", "operator.read")
+      !canCallGatewayMethod(context.gateway.snapshot, "projects.searchRemote", "operator.write")
     ) {
       this.callbacks.changed();
       return;
@@ -437,7 +437,7 @@ export class DraftPlaceBrowser {
         return;
       }
       this.#debouncedProjectQuery = normalized;
-      this.#searchProjects([client, true, normalized, connectionEpoch]);
+      this.#searchProjects();
       this.callbacks.changed();
     }, PICKER_INPUT_DEBOUNCE_MS);
     this.callbacks.changed();

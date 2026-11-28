@@ -254,12 +254,12 @@ async function directCronReq(
 async function addWebhookCronJob(params: {
   ws: WebSocket;
   name: string;
-  sessionTarget?: "session:main" | "isolated";
+  sessionTarget?: "main" | "isolated";
   payloadText?: string;
   delivery: Record<string, unknown>;
   failureAlert?: Record<string, unknown>;
 }) {
-  const { ws, name, sessionTarget = "session:main", payloadText, delivery, failureAlert } = params;
+  const { ws, name, sessionTarget = "main", payloadText, delivery, failureAlert } = params;
   const response = await rpcReq(ws, "cron.add", {
     ...makeCronJob(name, {
       sessionTarget,
@@ -507,9 +507,7 @@ describe("gateway server cron", () => {
     });
 
     expect(updateRes.ok).toBe(false);
-    expect(updateRes.error?.message).toContain(
-      "System event payloads do not support announce delivery",
-    );
+    expect(updateRes.error?.message).toContain("cron channel delivery config");
     expect(await cronState.request("cron.get", { id: jobId })).toEqual(before);
 
     const renamed = await cronState.request("cron.update", {
@@ -521,7 +519,7 @@ describe("gateway server cron", () => {
 
     for (const bindingPatch of [
       { agentId: "ops" },
-      { sessionTarget: "session:main" },
+      { sessionTarget: "main" },
       { payload: { kind: "systemEvent", text: "new work" } },
     ]) {
       const retargeted = await cronState.request("cron.update", {
@@ -532,7 +530,7 @@ describe("gateway server cron", () => {
       expect(retargeted.payload).toMatchObject({
         name: "retained explicit owner",
         agentId: "ops",
-        sessionTarget: "session:main",
+        sessionTarget: "main",
       });
       expect(await cronState.request("cron.get", { id: jobId })).toEqual(retargeted);
     }
@@ -548,7 +546,7 @@ describe("gateway server cron", () => {
 
     disposeCronEventConsumer = await installCronSystemEventConsumer();
 
-    const addRes = await cronState.addJob("log test", { agentId: "main" });
+    const addRes = await cronState.addJob("log test");
     const jobId = expectCronJobIdFromResponse(addRes);
 
     const finishedRun = events.wait(
@@ -626,7 +624,6 @@ describe("gateway server cron", () => {
     // Exercise live dispatch; overdue work at startup intentionally waits for recovery pacing.
     await cronState.cron.start();
     const autoRes = await cronState.addJob("auto run test", {
-      agentId: "main",
       schedule: { kind: "at", at: new Date(Date.now() - 1).toISOString() },
       payload: { kind: "systemEvent", text: "auto" },
     });

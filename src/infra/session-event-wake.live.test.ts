@@ -325,7 +325,7 @@ describeLive("session event wake through a live Gateway", () => {
             agentId: "main",
             name: "Live main-session schedule",
             schedule: { kind: "every", everyMs: 86_400_000 },
-            sessionTarget: "session:main",
+            sessionTarget: "main",
             wakeMode: "now",
             payload: { kind: "systemEvent", text: monitorPrompt },
             delivery: { mode: "none" },
@@ -340,7 +340,7 @@ describeLive("session event wake through a live Gateway", () => {
           }>("cron.list", { includeDisabled: true });
           const monitor = jobs.jobs.find((job) => job.id === scheduled.id);
           expect(monitor).toMatchObject({
-            sessionTarget: "session:main",
+            sessionTarget: "main",
             payload: { kind: "systemEvent", text: monitorPrompt },
           });
           if (!monitor) {

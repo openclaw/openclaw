@@ -107,7 +107,7 @@ describe("Cron mutation outcomes through the in-process router", () => {
         description: "Synthetic timezone regression",
         enabled: true,
         schedule: { kind: "cron", expr: "0 8 * * *", tz: "Asia/Shanghai" },
-        sessionTarget: "session:main",
+        sessionTarget: "main",
         wakeMode: "next-heartbeat",
         payload: { kind: "systemEvent", text: "Synthetic brief" },
       });

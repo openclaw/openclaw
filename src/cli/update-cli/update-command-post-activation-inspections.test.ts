@@ -23,7 +23,6 @@ async function inspectFixture(
   script: string,
   selectors: string[],
   result: Partial<UpdateRunResult> = {},
-  checkIds?: string[],
 ) {
   const root = tempDirs.make(label);
   await fs.mkdir(path.join(root, "dist"));
@@ -31,7 +30,6 @@ async function inspectFixture(
   return runPostActivationInspections({
     root,
     gatewayReady: true,
-    checkIds,
     nodeRunner: process.execPath,
     result: updateResult({
       durationMs: 0,
@@ -52,8 +50,6 @@ it.each(["none", "info", "warning"] as const)(
       ok: ${severity === "none"}, checksRun: 1,
       findings: ${severity === "none" ? "[]" : `[{ checkId: "core/doctor/hooks-model", severity: ${JSON.stringify(severity)}, message: "Review hooks.", target: ${JSON.stringify(target)} }]`}
     })); process.exitCode = ${severity === "none" ? 0 : 1};`,
-      ["core/doctor/hooks-model"],
-      { steps: [] },
       ["core/doctor/hooks-model"],
     );
     expect(observed.status).toBe("ok");

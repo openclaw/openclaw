@@ -140,9 +140,10 @@ sudo openclaw update --yes
 ```
 
 When the installed system unit can be identified as running this package under
-another account, root replaces only the package and restarts that unit. It does
-not read or write OpenClaw state, run Doctor, create a state snapshot, or record
-an update run in either root's home or the service account's state directory.
+another account, root replaces only the package and restarts that unit. This
+package-only branch does not open OpenClaw databases, run Doctor, create a state
+snapshot, or record an update run. CLI bootstrap can still load the selected
+state directory's `.env` before this branch runs.
 The service's own boot, running as `User=`, migrates its state and converges plugins.
 The unit's environment, profile, state selectors, and file ownership stay unchanged.
 
@@ -251,11 +252,7 @@ The Gateway's `update.run` and `openclaw update` both use one path:
    work, and sends the result notice. Restored files alone do not prove that the
    previous Gateway is serving. Startup does not infer a failed update from PID
    reuse or uptime.
-7. After the result is recorded, the serving release runs advisory Doctor inspections
-   in the background. The same update details receive their results without a page
-   reload. Only warning and error findings add advice; inspections do not delay
-   completion, fail the update, or trigger rollback.
-8. Every Gateway boot updates installed plugins in the background after core
+7. Every Gateway boot updates installed plugins in the background after core
    readiness, then reloads changed plugins through the existing runtime lifecycle.
    A pending trial defers this work. The first plugin result and next command appear
    in matching update details while that plugin step is unsettled; later boots do
@@ -318,7 +315,8 @@ owner, then rerun the update. A stopped Gateway remains updatable.
 `discoverDatabases` is the state transaction inventory. Boot uses that inventory
 to plan pending canonical schema steps and their derived minimum reader floors
 before mutating live databases. A schema-version increase alone does not require
-a preimage: compatible steps run in place without one.
+a preimage: compatible steps run in place without one. Update preflight requires
+1.4 GB free on the installation filesystem, not space for a full copy of state.
 
 Shipped copy-based releases can leave a durable `.upgrade-*/plan.json` after an
 interrupted publication. Boot first settles that existing intent under exclusive
@@ -570,7 +568,7 @@ the original history entry unchanged with the healthy release still selected.
 
 The Gateway preserves existing repair acknowledgments, unrelated failures, and
 recovery records. It needs one matching publication receipt before it can record
-success and run advisory Doctor inspections. If the older
+success. If the older
 updater exits because it can't read the migrated schema, its exit status still
 reflects that refusal.
 
@@ -738,7 +736,7 @@ On Gateway startup, older supported database schemas advance through their
 canonical migration owners on the live databases under exclusive custody. Boot
 does not copy configuration into a private tree, run a Doctor chain, or publish
 replacement database files. Existing configuration reading and normalization
-stay with their canonical owners; advisory Doctor inspections run after readiness.
+stay with their canonical owners.
 
 If an earlier upgrade already broke a scheduled job, run `openclaw doctor --fix`.
 While the applied upgrade receipt remains, Doctor can verify the saved account at
@@ -1867,9 +1865,9 @@ openclaw update
 ### Host prerequisites
 
 Before preparing a release, the updater checks that Node satisfies the target's
-requirements, required tools are available (Git and pnpm for source builds, npm
-for packages), and the install and state filesystems have room for the release
-and any required raised-floor preimages. Refusals name what to install or free.
+requirements, required tools are available (Git for source builds, npm for
+packages), and the installation filesystem has at least 1.4 GB free.
+Refusals name what to install or free.
 
 On macOS, if the updater selects `/usr/bin/git` and there is no active
 developer directory, run `xcode-select --install` to install the Command Line

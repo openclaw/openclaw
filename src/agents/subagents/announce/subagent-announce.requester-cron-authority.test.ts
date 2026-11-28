@@ -140,7 +140,7 @@ it("keeps bound automation management after the old cohort is explicitly removed
     id: "existing-maintenance-job",
     agentId: "main",
     sessionKey: REQUESTER,
-    sessionTarget: "session:main",
+    sessionTarget: "main",
     scheduledToolPolicy: { version: 1, mode: "trusted" },
   });
   let canManage = false;

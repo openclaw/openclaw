@@ -274,30 +274,25 @@ export function registerCronAddCommand(cron: Command) {
 
             const sessionSource = cmd.getOptionValueSource("session");
             const isDeliveryPayload = resolvedPayload.kind !== "systemEvent";
-            const inferredSessionTarget = isDeliveryPayload ? "isolated" : "session:main";
+            const inferredSessionTarget = isDeliveryPayload ? "isolated" : "main";
             const sessionTarget =
               sessionSource === "cli"
                 ? normalizeCronSessionTargetOption(opts.session)
                 : inferredSessionTarget;
             if (!sessionTarget) {
-              throw new CronCliError("--session must be isolated or session:<key>");
+              throw new CronCliError("--session must be main, isolated, current, or session:<id>");
             }
             if (opts.deleteAfterRun && opts.keepAfterRun) {
               throw new CronCliError("Choose --delete-after-run or --keep-after-run, not both");
             }
 
-            const sessionKey = normalizeOptionalString(opts.sessionKey);
-            const includeRecentChat = opts.includeRecentChat === true;
-            await assertCronCliJobSpec({
-              sessionTarget,
-              payload: resolvedPayload,
-              sessionKey,
-              includeRecentChat,
-            });
-            const supportsChatDelivery = isDeliveryPayload;
+            await assertCronCliJobSpec({ sessionTarget, payload: resolvedPayload });
+            const supportsChatDelivery =
+              isDeliveryPayload &&
+              (sessionTarget !== "main" || resolvedPayload.kind === "agentTurn");
             if ((opts.announce || typeof opts.deliver === "boolean") && !supportsChatDelivery) {
               throw new CronCliError(
-                "--announce/--no-deliver require an agentTurn job or a command or script job.",
+                "--announce/--no-deliver require an agentTurn job or a non-main command or script job.",
               );
             }
 
@@ -314,7 +309,7 @@ export function registerCronAddCommand(cron: Command) {
 
             if (hasChatDeliveryTarget && !supportsChatDelivery) {
               throw new CronCliError(
-                "--channel, --to, --account, and --thread-id require an agentTurn job or a command or script job with delivery.",
+                "--channel, --to, --account, and --thread-id require an agentTurn job or a non-main command or script job with delivery.",
               );
             }
             if (hasWebhook && hasChatDeliveryTarget) {
@@ -323,7 +318,8 @@ export function registerCronAddCommand(cron: Command) {
 
             const deliveryMode = hasWebhook
               ? "webhook"
-              : supportsChatDelivery
+              : supportsChatDelivery &&
+                  (sessionTarget !== "main" || hasAnnounce || hasNoDeliver || hasChatDeliveryTarget)
                 ? hasNoDeliver
                   ? "none"
                   : "announce"
@@ -347,6 +343,7 @@ export function registerCronAddCommand(cron: Command) {
             const pacingMin = parseCronStringOption(opts.pacingMin, "--pacing-min");
             const pacingMax = parseCronStringOption(opts.pacingMax, "--pacing-max");
 
+            const sessionKey = normalizeOptionalString(opts.sessionKey);
             const triggerScriptPath = readNonBlankString(opts.triggerScript);
             if ((opts.triggerOnce || opts.triggerScript !== undefined) && !triggerScriptPath) {
               throw new CronCliError(
@@ -393,7 +390,6 @@ export function registerCronAddCommand(cron: Command) {
                 : {}),
               trigger,
               sessionTarget,
-              ...(includeRecentChat ? { includeRecentChat } : {}),
               wakeMode,
               payload: resolvedPayload,
               delivery: deliveryMode

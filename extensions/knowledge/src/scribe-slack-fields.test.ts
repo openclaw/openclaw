@@ -100,8 +100,7 @@ it("lets a saved user-token opt-in be turned off after the user token is gone", 
   const job: ScribeJob = {
     id: "job-slack",
     enabled: true,
-    sessionTarget: "isolated",
-    includeRecentChat: true,
+    sessionTarget: "current",
     schedule: { kind: "cron", expr: "0 4 * * *" },
     state: {},
   };

@@ -200,11 +200,7 @@ async function forceHeartbeat(runtime: Runtime, gateway: QaGatewayChild, proof: 
   );
   assert.equal(monitor.agentId, "qa", "Heartbeat monitor changed agent ownership");
   assert.equal(monitor.declarationKey, "heartbeat:qa", "Heartbeat declaration changed");
-  assert.equal(
-    monitor.sessionTarget,
-    `session:${proof.sessionKey}`,
-    "Heartbeat monitor changed its target",
-  );
+  assert.equal(monitor.sessionTarget, "main", "Heartbeat monitor changed its target mode");
   const configuredSession = gateway.cfg.agents?.defaults?.heartbeat?.session;
   assert.equal(
     `agent:qa:${configuredSession}`,

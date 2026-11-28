@@ -42,8 +42,7 @@ function currentJob(id: string, agentId = id) {
   return makeCronJob({
     id,
     agentId,
-    sessionTarget: "isolated",
-    includeRecentChat: true,
+    sessionTarget: "current",
     sessionKey: `agent:${agentId}:dashboard:current-origin`,
     delivery: { mode: "announce" },
   });
@@ -67,7 +66,7 @@ function externalPreview(to: string) {
   };
 }
 
-function conversationPreview(destination = "creating conversation") {
+function conversationPreview(destination = "current session") {
   return {
     label: `announce -> ${destination}`,
     detail: "commits to this conversation (no external channel route)",
@@ -80,8 +79,7 @@ async function withCurrentOrigin(
     channelCount?: number;
     delivery?: CronDelivery;
     source?: DeliveryContext;
-    sessionTarget?: "isolated";
-    includeRecentChat?: boolean;
+    sessionTarget?: "current" | "isolated";
     payload?: CronStoredJob["payload"];
   },
   check: (fixture: {
@@ -118,16 +116,12 @@ async function withCurrentOrigin(
     );
     const job: CronStoredJob = makeCronJob({
       agentId: "main",
-      sessionTarget: "isolated",
-      includeRecentChat:
-        options.includeRecentChat ??
-        (options.sessionTarget === undefined &&
-          (!options.payload || options.payload.kind === "agentTurn")),
+      sessionTarget: options.sessionTarget ?? "current",
       sessionKey,
       delivery: options.delivery ?? { mode: "announce" },
       ...(options.payload ? { payload: options.payload } : {}),
     });
-    if (options.sessionTarget === "isolated" && !job.includeRecentChat) {
+    if (options.sessionTarget === "isolated") {
       job.sourceConversation = { sessionKey, sessionId: "source-session" };
     }
     await check({ cfg, job, preview: () => resolveCronDeliveryPreview({ cfg, job }) });
@@ -258,12 +252,7 @@ it("resolves previews without routing history beside healthy jobs", () =>
     const jobs = [
       { ...job, id: "healthy" },
       missing,
-      {
-        ...missing,
-        id: "missing-last",
-        sessionTarget: "isolated" as const,
-        includeRecentChat: false,
-      },
+      { ...missing, id: "missing-last", sessionTarget: "isolated" as const },
       explicit,
     ];
     const previews = await resolveCronDeliveryPreviews({ cfg, jobs });
@@ -358,7 +347,7 @@ it("shares alias reads across a preview batch and refreshes routes on the next r
       }
     };
     try {
-      await checkBatch("announce -> creating conversation");
+      await checkBatch("announce -> current session");
       // One store-sized read scope, independent of the number of repeated jobs.
       expect(reads.rowCounts.sessions).toBeLessThanOrEqual(4 * 65);
     } finally {
@@ -374,14 +363,8 @@ it("shares alias reads across a preview batch and refreshes routes on the next r
 const unavailableRoute = { channel: "unavailable-plugin", to: "recipient" };
 const commandPayload: CronStoredJob["payload"] = { kind: "command", argv: ["echo", "report"] };
 it.each<[Parameters<typeof withCurrentOrigin>[0], CronDeliveryPreview]>([
-  [
-    { surface: "dashboard", channelCount: 2, sessionTarget: "isolated", includeRecentChat: true },
-    conversationPreview(),
-  ],
-  [
-    { surface: "webchat", sessionTarget: "isolated", includeRecentChat: true },
-    conversationPreview(),
-  ],
+  [{ surface: "dashboard", channelCount: 2, sessionTarget: "current" }, conversationPreview()],
+  [{ surface: "webchat", sessionTarget: "current" }, conversationPreview()],
   [
     { surface: "dashboard", channelCount: 2, sessionTarget: "isolated" },
     conversationPreview("creating conversation"),
@@ -393,10 +376,7 @@ it.each<[Parameters<typeof withCurrentOrigin>[0], CronDeliveryPreview]>([
   ],
   [{ channelCount: 0, delivery: { mode: "announce", accountId: "work" } }, blockedPreview()],
   [{ channelCount: 2, delivery: { mode: "announce", threadId: 0 } }, blockedPreview()],
-  [
-    { sessionTarget: "isolated", includeRecentChat: true, source: unavailableRoute },
-    blockedPreview(),
-  ],
+  [{ sessionTarget: "current", source: unavailableRoute }, blockedPreview()],
   [{ sessionTarget: "isolated", source: unavailableRoute }, blockedPreview()],
   [{ channelCount: 0, payload: commandPayload }, blockedPreview()],
   [{ channelCount: 1, payload: commandPayload }, blockedPreview()],

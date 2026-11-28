@@ -497,7 +497,7 @@ describe("stored session model selections in scheduled session turns", () => {
       const stored: CronStoredJob = makeCronJob({
         id: "session-turn-model",
         agentId: "main",
-        sessionTarget: `session:${sessionKey}`,
+        sessionTarget: params.target === "main" ? "main" : `session:${sessionKey}`,
         wakeMode: "now",
         delivery: { mode: "none" },
         payload:
