@@ -539,9 +539,15 @@ extension OpenClawChatComposer {
                 })
         }
 
+        #if os(iOS)
+        let usesPhonePrimaryControl = true
+        #else
+        let usesPhonePrimaryControl = false
+        #endif
         if let talkControl,
            Self.showsSeparateActiveTalkControl(
                isTalkEnabled: talkControl.isEnabled,
+               usesPhonePrimaryControl: usesPhonePrimaryControl,
                hasDraftToSend: self.viewModel.hasDraftToSend,
                hasBlockingRunActivity: self.viewModel.hasBlockingRunActivity,
                isLocalVoiceCaptureActive: self.isLocalVoiceCaptureActive)

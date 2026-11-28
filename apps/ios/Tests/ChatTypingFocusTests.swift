@@ -139,9 +139,9 @@ final class ChatTypingFocusTests: XCTestCase {
         let cases: [(runActive: Bool, draft: TalkDraft, activeCount: Int, inactiveCount: Int)] = [
             (false, .empty, 1, 1),
             (true, .empty, 2, 2),
-            (false, .text, 2, 1),
+            (false, .text, 1, 1),
             (true, .text, 2, 1),
-            (false, .attachment, 2, 1),
+            (false, .attachment, 1, 1),
             (true, .attachment, 2, 1),
         ]
         for scenario in cases {
@@ -171,23 +171,14 @@ final class ChatTypingFocusTests: XCTestCase {
                     voiceNoteControl: nil)
                 let expected = talkActive ? scenario.activeCount : scenario.inactiveCount
                 let context = "Talk=\(talkActive), run=\(scenario.runActive), draft=\(scenario.draft)"
-                // Exercise the production SwiftUI builders, not their new presentation properties.
-                // With no optional local-capture controls, the extra button must be End Talk. With nothing
-                // to stop or send, Talk is the one primary button itself; otherwise the phone's
-                // one primary button (Talk, Send or Stop) stays beside it.
-                let separateEndTalk = talkActive
-                    ? (scenario.runActive || scenario.draft != .empty)
-                    // A run that outlives End Talk keeps Talk startable beside Stop.
-                    : (scenario.runActive && scenario.draft == .empty)
                 XCTAssertEqual(
                     try Self.renderedControlCount(composer.cleanCaptureAndPrimaryControls.body),
                     expected,
                     context)
                 XCTAssertEqual(
                     try Self.renderedControlCount(composer.cleanTrailingControl),
-                    1,
+                    talkActive && scenario.runActive ? 2 : 1,
                     context)
-                XCTAssertEqual(expected, separateEndTalk ? 2 : 1, context)
             }
         }
     }

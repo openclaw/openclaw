@@ -183,10 +183,12 @@ extension OpenClawChatComposer {
     /// still wins the microphone, and a typed draft keeps Send as the only neighbour.
     nonisolated static func showsSeparateActiveTalkControl(
         isTalkEnabled: Bool,
+        usesPhonePrimaryControl: Bool = false,
         hasDraftToSend: Bool,
         hasBlockingRunActivity: Bool,
         isLocalVoiceCaptureActive: Bool) -> Bool
     {
+        if isTalkEnabled, usesPhonePrimaryControl { return false }
         if self.showsCompactTalkControl(
             hasDraftToSend: hasDraftToSend,
             hasBlockingRunActivity: hasBlockingRunActivity,
