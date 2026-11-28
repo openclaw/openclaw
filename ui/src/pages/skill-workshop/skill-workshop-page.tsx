@@ -1,13 +1,5 @@
 import type { SkillsWorkshopReadResult } from "@openclaw/gateway-protocol";
-import {
-  action,
-  affects,
-  createMemo,
-  createOptimistic,
-  createSignal,
-  onSettled,
-  refresh,
-} from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -29,6 +21,7 @@ import {
   isSkillWorkshopInstalled,
   resolveWorkshopAccess,
 } from "./access.ts";
+import { createWorkshopActionPresentation } from "./action-presentation.ts";
 import { loadWorkshopSnapshot, type WorkshopMutation, type WorkshopSnapshot } from "./api.ts";
 import { SKILL_WORKSHOP_LEARNING_PROMPT } from "./learning-prompt.ts";
 import {
@@ -67,13 +60,20 @@ function resolveWorkshopAgentId(context: ApplicationContext): string {
   );
 }
 
-class SkillWorkshopPageState {
+export class SkillWorkshopPageState {
   scope: WorkshopScope | null = null;
   listRequest: { result: Promise<WorkshopSnapshot | null> } | null = null;
   viewerRequest: { result: Promise<WorkshopViewerResult | null> } | null = null;
   private snapshot: WorkshopSnapshot | null = null;
   private viewer: WorkshopViewer | null = null;
   private pendingAction: string | null = null;
+  private membership: {
+    name: string;
+    destination: WorkshopFilter;
+    rollbackFilter: WorkshopFilter | null;
+  } | null = null;
+  // A Retry that started before an accepted move cannot put its old membership back.
+  private membershipRevision = 0;
   private actionError: string | null = null;
   private modeBusy = false;
   private modeError: string | null = null;
@@ -152,6 +152,7 @@ class SkillWorkshopPageState {
     this.viewerRequest = null;
     this.viewer = null;
     this.pendingAction = null;
+    this.membership = null;
     this.actionError = null;
     this.learningBusy = false;
     this.learningError = null;
@@ -165,16 +166,17 @@ class SkillWorkshopPageState {
     }
   }
 
-  private load(retry = false, appliedDraft?: { draftId: string; name: string }): Promise<void> {
+  private load(retry = false, appliedDraft?: { draftId: string; name: string }): Promise<boolean> {
     const scope = this.scope;
     if (!scope) {
-      return Promise.resolve();
+      return Promise.resolve(false);
     }
     // Retry is the user's explicit reread; ensure waits out a recent failed read.
     void (retry ? this.context.runtimeConfig.refresh() : this.context.runtimeConfig.ensureLoaded());
     const targetAtStart = this.viewer?.target;
+    const membershipRevision = this.membershipRevision;
     const result = loadWorkshopSnapshot(scope.client, scope.agentId).then((snapshot) => {
-      if (this.scope !== scope) {
+      if (this.scope !== scope || this.membershipRevision !== membershipRevision) {
         return null;
       }
       // The first read for this agent; later reads follow mutations and keep the open page.
@@ -240,8 +242,8 @@ class SkillWorkshopPageState {
     this.changed();
     // The rendering read presents rejection; callers only join owner settlement.
     return result.then(
-      () => undefined,
-      () => undefined,
+      () => true,
+      () => false,
     );
   }
 
@@ -298,6 +300,9 @@ class SkillWorkshopPageState {
     const scope = this.scope;
     if (!scope) {
       return;
+    }
+    if (this.membership && (target.name !== this.membership.name || target.draftId)) {
+      this.membership.rollbackFilter = null;
     }
     this.viewer = { target };
     this.syncLocation();
@@ -367,7 +372,9 @@ class SkillWorkshopPageState {
   };
 
   private readonly setFilter = (filter: WorkshopFilter) => {
-    if (filter === this.filter) {
+    if (this.membership) {
+      this.membership.rollbackFilter = null;
+    } else if (filter === this.filter) {
       return;
     }
     this.filter = filter;
@@ -409,11 +416,19 @@ class SkillWorkshopPageState {
     this.changed();
   };
 
-  readonly mutate = async (mutation: WorkshopMutation, key: string) => {
+  readonly mutate = async (
+    mutation: WorkshopMutation,
+    key: string,
+    destination?: WorkshopFilter,
+  ) => {
     const scope = this.scope;
     const access = resolveWorkshopAccess(this.context.gateway.snapshot);
     if (!scope || !canRunWorkshopMutation(access, mutation.method) || this.pendingAction) {
       return;
+    }
+    if (destination) {
+      this.membership = { name: mutation.name, destination, rollbackFilter: this.filter };
+      this.filter = destination;
     }
     this.pendingAction = key;
     this.actionError = null;
@@ -424,8 +439,16 @@ class SkillWorkshopPageState {
       if (this.scope !== scope) {
         return;
       }
+      if (destination) {
+        this.membershipRevision++;
+        if (this.membership) {
+          this.membership.rollbackFilter = null;
+        }
+      }
       const appliedDraft = mutation.method === "skills.workshop.applyDraft" ? mutation : undefined;
-      await this.load(false, appliedDraft);
+      const reload = this.load(false, appliedDraft);
+      const receipt = this.listRequest;
+      const loaded = await reload;
       if (
         this.scope !== scope ||
         appliedDraft ||
@@ -435,16 +458,43 @@ class SkillWorkshopPageState {
       }
       // Archiving or restoring moves the skill between lists; follow it there.
       const live = this.snapshot?.list.skills.some((skill) => skill.name === mutation.name);
-      if (this.viewer?.target.name === mutation.name || this.viewer === null) {
+      if (destination) {
+        // The write was accepted; an unreadable inventory is not a rollback.
+        // Leave the target in the URL so Retry can reopen it from confirmed data.
+        if (!loaded && this.listRequest === receipt) {
+          this.snapshot = null;
+          this.viewer = null;
+          this.viewerRequest = null;
+          return;
+        }
+        const selected = this.viewer?.target;
+        if (
+          readWorkshopPage(this.context).skill === mutation.name &&
+          selected?.name === mutation.name &&
+          !selected.draftId
+        ) {
+          const versionId = live
+            ? undefined
+            : this.snapshot?.list.archived.find((entry) => entry.name === mutation.name)
+                ?.versions[0]?.id;
+          if (live || versionId) {
+            await this.open({ ...selected, versionId });
+          }
+        }
+      } else if (this.viewer?.target.name === mutation.name || this.viewer === null) {
         this.filter = live ? "active" : "archived";
         this.selectSkill(mutation.name);
       }
     } catch (error) {
       if (this.scope === scope) {
+        if (this.membership?.rollbackFilter) {
+          this.filter = this.membership.rollbackFilter;
+        }
         this.actionError = formatUiError(error);
       }
     } finally {
       if (this.scope === scope) {
+        this.membership = null;
         this.pendingAction = null;
         this.changed();
       }
@@ -604,6 +654,7 @@ class SkillWorkshopPageState {
         this.startView ?? (this.snapshot ? defaultStartView(this.snapshot) : ("skills" as const)),
       draftsShown: this.draftsShown(),
       onStartView: this.setStartView,
+      membership: this.membership,
       filter: this.filter,
       sort: this.sort,
       tab: this.tab,
@@ -660,68 +711,7 @@ export function SkillWorkshopPage() {
   const list = createMemo(() => listRequest()?.result ?? Promise.resolve(null));
   const viewer = createMemo(() => viewerRequest()?.result ?? Promise.resolve(null));
   const mode = createMemo(() => ownerView().mode);
-  const presentation = createMemo(() => {
-    const currentScope = scope();
-    const [pendingAction, setPendingAction] = createOptimistic<string | null>(null);
-    const [modeBusy, setModeBusy] = createOptimistic(false);
-    const [learningBusy, setLearningBusy] = createOptimistic(false);
-    const [expectedMode, setExpectedMode] = createOptimistic(() => mode());
-    return {
-      currentScope,
-      pendingAction,
-      setPendingAction,
-      modeBusy,
-      setModeBusy,
-      learningBusy,
-      setLearningBusy,
-      expectedMode,
-      setExpectedMode,
-    };
-  });
-  const present = action(function* (
-    captured: ReturnType<typeof presentation>,
-    result: Promise<void>,
-    kind: "mutation" | "mode" | "learning",
-    expected?: string,
-  ) {
-    if (state.scope === captured.currentScope) {
-      if (kind === "mutation") {
-        captured.setPendingAction(expected ?? null);
-        affects(list);
-      } else if (kind === "mode") {
-        captured.setModeBusy(true);
-        captured.setExpectedMode(expected === "auto" || expected === "propose" ? expected : "off");
-      } else {
-        captured.setLearningBusy(true);
-      }
-    }
-    yield Promise.race([result, captured.currentScope?.retired ?? Promise.resolve()]);
-    if (state.scope === captured.currentScope) {
-      if (kind === "mutation") {
-        // The owner already reloaded; this only reconciles its read receipt.
-        yield refresh(list).catch(() => undefined);
-      } else if (kind === "mode") {
-        yield refresh(mode);
-      }
-    }
-  });
-  const run = async (
-    kind: "mutation" | "mode" | "learning",
-    operation: () => Promise<void>,
-    expected?: string,
-  ) => {
-    const captured = presentation();
-    const result = operation();
-    // Land synchronous owner admission before joining the presentation transition.
-    await Promise.resolve();
-    try {
-      await present(captured, result, kind, expected);
-    } catch (error) {
-      if (state.scope === captured.currentScope) {
-        state.presentationFailed(kind, error);
-      }
-    }
-  };
+  const { presentation, run } = createWorkshopActionPresentation(state, scope, list, mode);
   const view = createMemo(() => {
     return {
       ...ownerView(),
@@ -737,8 +727,12 @@ export function SkillWorkshopPage() {
       get mode() {
         return presentation().expectedMode();
       },
-      onMutate: (mutation: WorkshopMutation, key: string) =>
-        void run("mutation", () => state.mutate(mutation, key), key),
+      // The membership projection already supplies immediate feedback. Joining the
+      // list's transition here would hold navigation behind an outstanding Retry.
+      onMutate: (mutation: WorkshopMutation, key: string, destination?: WorkshopFilter) =>
+        destination
+          ? void state.mutate(mutation, key, destination)
+          : void run("mutation", () => state.mutate(mutation, key), key),
       onModeChange: (next: SkillWorkshopMode) => void run("mode", () => state.setMode(next), next),
       onLearn: () => void run("learning", state.learn),
     };

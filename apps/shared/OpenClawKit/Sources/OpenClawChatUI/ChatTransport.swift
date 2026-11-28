@@ -26,6 +26,7 @@ public enum OpenClawChatTransportEvent: Sendable {
     case sessionReaction(OpenClawChatReactionEvent)
     case agent(OpenClawAgentEventPayload)
     case progressCardChanged(ProgressCardChangedEvent)
+    case sessionPullRequestsChanged(OpenClawSessionPullRequestsChangedEvent)
     case questionRequested(QuestionRecord)
     case questionResolved(OpenClawQuestionResolvedEvent)
     case routeChanged
@@ -598,7 +599,7 @@ public enum OpenClawChatTransportSendError: Error, Sendable {
 
 struct OpenClawChatQueueModeUnsupportedError: LocalizedError, Sendable {
     var errorDescription: String? {
-        String(localized: "This connection cannot send with Steer or Queue. Send normally or reconnect to the gateway.")
+        String(localized: "This connection can’t send with Steer or Queue. Send normally or reconnect.")
     }
 }
 
@@ -612,9 +613,9 @@ public enum OpenClawChatProgressCardError: LocalizedError, Sendable {
 
 public enum OpenClawChatTransportUpgradeMessage {
     public static let progressCardAgentScope =
-        String(localized: "Update the gateway to load progress cards for this agent.")
+        String(localized: "Update OpenClaw to see plans for this agent.")
     public static let routingContract = String(
-        localized: "Update the gateway before sending queued messages. This version requires safe delivery routing.")
+        localized: "Update OpenClaw before sending queued messages.")
 }
 
 public enum OpenClawChatRunTerminalState: Sendable, Equatable {
@@ -914,6 +915,9 @@ public protocol OpenClawChatTransport: Sendable {
         archived: Bool,
         agentID: String?) async throws -> OpenClawChatSessionsListResponse
     func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult
+    /// Watches these sessions' PRs on this connection, replacing the set it watched before. Nil: this
+    /// transport has no PR feed. Snapshots arrive as `.sessionPullRequestsChanged`.
+    func watchSessionPullRequests(sessionKeys: [String]) async throws -> Bool?
     func acquireSwarmRouteLease() async -> OpenClawChatSwarmRouteLease?
     func loadAgents(onUpdate: @escaping OpenClawChatAgentCatalogUpdate) async throws
     func acquireNewSessionRouteLease() async -> OpenClawChatNewSessionRouteLease?
@@ -1251,6 +1255,10 @@ extension OpenClawChatTransport {
         archived _: Bool) async throws -> OpenClawChatSessionsListResponse
     {
         throw Self.unsupportedOperation("sessions.list not supported by this transport")
+    }
+
+    public func watchSessionPullRequests(sessionKeys _: [String]) async throws -> Bool? {
+        nil
     }
 
     public func listChildSessions(parentKey _: String) async throws -> OpenClawChatChildSessionsResult {

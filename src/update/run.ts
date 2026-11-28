@@ -15,7 +15,7 @@ import type { PostCorePluginUpdateResult } from "../cli/update-cli/update-comman
 import { resolveStateDir } from "../config/paths.js";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { hasErrnoCode } from "../infra/errno.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { gitCommitPrefixesMatch, resolveLoadedCommitHash } from "../infra/git-commit.js";
 import { gitCommandArgv } from "../infra/git-exec.js";
 import { resolveNpmCommand } from "../infra/npm-command.js";
@@ -554,7 +554,8 @@ export async function prepareUpdate(params: {
     return await fail(
       "update-failed",
       "The update failed before anything changed. The current version is still running.",
-      error instanceof Error && error.stack ? error.stack : formatErrorMessage(error),
+      // Exceptions put the cause first; fail() retains command-output tails.
+      sliceUtf16Safe(formatUncaughtError(error), 0, UPDATE_RUN_TEXT_LIMIT),
     );
   }
 }

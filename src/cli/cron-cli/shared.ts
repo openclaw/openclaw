@@ -259,7 +259,9 @@ function formatCronStatusForDisplay(job: CronJob) {
     label =
       state.autoDisabled.reason === "schedule-errors"
         ? "disabled (schedule)"
-        : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
+        : state.autoDisabled.reason === "account-unavailable"
+          ? "disabled (account)"
+          : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
   } else if (undelivered) {
     label = suppressed ? "ok (suppressed)" : "ok (not delivered)";
   } else if (deliveryUnknown) {

@@ -3,7 +3,8 @@ import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 
-@MainActor
+/// Session titles and row details shared by the sidebar, All Sessions and search. Nonisolated, as search ranks
+/// titles off the main actor.
 enum SessionPresentation {
     struct WorkItem {
         let icon: String
@@ -34,21 +35,60 @@ enum SessionPresentation {
     }
 
     static func title(_ session: OpenClawChatSessionEntry) -> String {
+        self.title(session, includesRoutingFallback: true) ?? String(localized: "Untitled session")
+    }
+
+    static func title(_ session: OpenClawChatSessionEntry, includesRoutingFallback: Bool) -> String? {
+        func titleFrom(_ value: String) -> String? {
+            guard let placeholder = Self.redactedSessionTitle(for: value) else { return value }
+            return includesRoutingFallback ? placeholder : nil
+        }
+
         // web `resolveSessionDisplayName`: a key copied into a name field is not a name.
         if let label = session.label?.trimmedNonEmpty, label != session.key {
             return label
         }
-        if let displayName = session.displayName?.trimmedNonEmpty, displayName != session.key {
-            return Self.redactedSessionTitle(for: displayName) ?? displayName
+        if let displayName = session.displayName?.trimmedNonEmpty,
+           displayName != session.key,
+           let title = titleFrom(displayName)
+        {
+            return title
         }
-        if let autoLabel = session.autoLabel?.trimmedNonEmpty {
+        if let autoLabel = session.autoLabel?.trimmedNonEmpty, includesRoutingFallback || autoLabel != session.key {
             return autoLabel
         }
-        if let subject = session.subject?.trimmedNonEmpty {
-            return Self.redactedSessionTitle(for: subject) ?? subject
+        if let subject = session.subject?.trimmedNonEmpty,
+           includesRoutingFallback || subject != session.key,
+           let title = titleFrom(subject)
+        {
+            return title
         }
-        // Generic key placeholders only after real topic names are absent.
-        return self.redactedSessionTitle(for: session.key) ?? session.key
+        // ui/src/lib/session-display.ts:308: the Gateway's title derived from the first message. The main
+        // session keeps the name of its sidebar row instead.
+        if let derivedTitle = session.derivedTitle?.trimmedNonEmpty, derivedTitle != session.key,
+           !Self.isMainSessionKey(session.key)
+        {
+            return derivedTitle
+        }
+        // Keep key-based placeholders for lists; an unnamed chat header can show its agent instead.
+        guard includesRoutingFallback else { return nil }
+        return Self.redactedSessionTitle(for: session.key) ?? Self.namedKeyTail(session.key)
+    }
+
+    private static func isMainSessionKey(_ key: String) -> Bool {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed == "main" || trimmed.firstMatch(of: /^agent:[^:]+:main$/) != nil
+    }
+
+    /// ui/src/lib/session-display.ts:259-264: a named subsession (`agent:<id>:iv-lane-1`) reads as its tail.
+    /// A tail holding an opaque id run (the web's `OPAQUE_ID_RUN_RE`, `:30-31`, which it shortens to `…abcd`)
+    /// is not a name: the caller shows "Untitled session" rather than a fragment.
+    static func namedKeyTail(_ key: String) -> String? {
+        let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let match = trimmed.firstMatch(of: /^agent:[^:]+:(?:explicit:)?(.+)$/) else { return nil }
+        let tail = String(match.output.1)
+        let opaqueRun = /(?i)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{10,}/
+        return tail.contains(opaqueRun) ? nil : tail
     }
 
     private static func redactedSessionTitle(for key: String) -> String? {
@@ -66,6 +106,16 @@ enum SessionPresentation {
         }
         if lowercased.hasPrefix("cron:") {
             return Self.humanizedSessionKey(String(trimmed.dropFirst("cron:".count)))
+        }
+        // ui/src/lib/session-display.ts:195: the main session is named, never shown as its key; it carries
+        // the sidebar row's name.
+        if Self.isMainSessionKey(trimmed) {
+            return String(localized: "Main chat")
+        }
+        // ui/src/lib/session-display.ts:255: a dashboard session's title is generated later; its uuid key
+        // must not show meanwhile.
+        if trimmed.range(of: #"^agent:[^:]+:dashboard:"#, options: .regularExpression) != nil {
+            return String(localized: "New session")
         }
         return nil
     }

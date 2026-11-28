@@ -170,7 +170,7 @@ export async function withNativePlugin(
     model?: string;
     nativeEffects?: boolean;
     operatorScopes?: string[];
-    onConsult?: () => void;
+    onConsult?: (completion: Promise<unknown>) => void;
     consultScope?: GatewayContextResolver;
     configure?: (config: OpenClawConfig) => void;
   } = {},
@@ -258,12 +258,13 @@ export async function withNativePlugin(
                   if (original) {
                     request.runAgentConsult = Object.assign(
                       (...args: Parameters<typeof original>) => {
-                        options.onConsult?.();
-                        return options.consultScope
+                        const completion = options.consultScope
                           ? withPluginRuntimeGatewayContextResolver(options.consultScope, () =>
                               original(...args),
                             )
                           : original(...args);
+                        options.onConsult?.(completion);
+                        return completion;
                       },
                       original,
                     );

@@ -82,7 +82,6 @@ const secretDefaults = {
   cfg: {},
   providerHint: "telegram",
   credentialLabel: "Bot token",
-  preferredEnvVar: "TELEGRAM_BOT_TOKEN",
   envPrompt: "use env",
   keepPrompt: "keep",
   inputPrompt: "token",
