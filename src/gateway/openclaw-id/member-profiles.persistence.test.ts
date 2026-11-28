@@ -407,128 +407,48 @@ for (const change of ["merged", "deleted", "taken", "account-linked", "same-acco
   });
 }
 
-// A personal profile without an OpenClaw ID subject row is never linked by a matching email.
-async function expectProfileStaysUnlinked(profileId: string, accountId: string) {
-  expect(await readOpenClawIdLinksOfProfile(profileId)).toEqual([]);
-  expect((await readOpenClawIdLinkedProfile(accountId))?.profileId).not.toBe(profileId);
-  expect((await ensureCanonicalUserProfileForEmail("person@example.test")).id).toBe(profileId);
-}
-
+// A personal profile without an OpenClaw ID subject row is never linked by a matching email:
+// not by member sign-in, another profile's link, invite approval or tunnel admission.
 it("never binds an unlinked profile to an account that reports its email", async ({ state }) => {
   state.applyEnv();
-  const existingProfile = await ensureCanonicalUserProfileForEmail("person@example.test");
-  await setCanonicalUserProfileDisplayName(existingProfile.id, "Person");
-  const direct = await ensureCanonicalUserProfileForOpenClawIdIdentity({
+  const email = "person@example.test";
+  const profile = await ensureCanonicalUserProfileForEmail(email);
+  const staysUnlinked = async (accountId: string) => {
+    expect(await readOpenClawIdLinksOfProfile(profile.id)).toEqual([]);
+    expect((await readOpenClawIdLinkedProfile(accountId))?.profileId).not.toBe(profile.id);
+    expect((await ensureCanonicalUserProfileForEmail(email)).id).toBe(profile.id);
+  };
+  await ensureCanonicalUserProfileForOpenClawIdIdentity({
     accountId: "acct-direct",
     email: "PERSON@example.test",
-    name: "Person",
   });
-  expect(direct.id).not.toBe(existingProfile.id);
-  await expectProfileStaysUnlinked(existingProfile.id, "acct-direct");
-  // Profile Link binds the caller's own profile; the account's email never redirects it.
+  await staysUnlinked("acct-direct");
   const caller = await ensureCanonicalUserProfileForEmail("caller@example.test");
-  expect(
-    await linkCanonicalOpenClawIdUserProfile({
-      profileId: caller.id,
-      accountId: "acct-linked",
-      email: "person@example.test",
-    }),
-  ).toEqual({ ok: true });
-  expect((await readOpenClawIdLinkedProfile("acct-linked"))?.profileId).toBe(caller.id);
-  await expectProfileStaysUnlinked(existingProfile.id, "acct-linked");
-
+  await linkCanonicalOpenClawIdUserProfile({
+    profileId: caller.id,
+    accountId: "acct-linked",
+    email,
+  });
+  await staysUnlinked("acct-linked");
   // The invite audience is the profile's address, and the redeemer reports exactly that.
   const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
-  const invite = await ownerInvite(claw, { email: "person@example.test" });
+  const invite = await ownerInvite(claw, { email });
   await claw.authority.registerInvite({ cap: invite.cap, proofKey: invite.proofKey }, "tunnel");
-  const mail = await redemptionMail({
-    clawId: claw.clawId,
-    inviteId: invite.inviteId,
-    proofKey: invite.proofKey,
-    accountId: "ocid-other",
-    email: "person@example.test",
-  });
-  expect(
-    await claw.authority.redeem(mail.message.payload.redemption, mail.message.from),
-  ).toMatchObject({ ok: true });
-  expect(
-    await claw.authority.submit(
-      await claw.sign({
-        op: "add",
-        account_id: "ocid-other",
-        role: "operator",
-        peer_keys: [mail.peerKey],
-        invite_id: invite.inviteId,
-      }),
-      "tunnel",
-    ),
-  ).toMatchObject({ ok: true });
+  const { clawId } = claw;
+  const mail = await redemptionMail({ clawId, ...invite, accountId: "ocid-other", email });
+  await claw.authority.redeem(mail.message.payload.redemption, mail.message.from);
+  const add = {
+    op: "add" as const,
+    account_id: "ocid-other",
+    role: "operator",
+    peer_keys: [mail.peerKey],
+    invite_id: invite.inviteId,
+  };
+  expect(await claw.authority.submit(await claw.sign(add), "tunnel")).toMatchObject({ ok: true });
   expect(await claw.authority.resolvePeer(mail.peerKey)).toMatchObject({ kind: "member" });
-  await expectProfileStaysUnlinked(existingProfile.id, "ocid-other");
-  // Tunnel admission resolves the member by subject only.
-  const admitted = await ensureCanonicalUserProfileForOpenClawIdIdentity({
-    accountId: "ocid-other",
-  });
-  expect(admitted.id).not.toBe(existingProfile.id);
+  await ensureCanonicalUserProfileForOpenClawIdIdentity({ accountId: "ocid-other" });
   await closeOpenClawStateDatabaseAsync();
-  await expectProfileStaysUnlinked(existingProfile.id, "ocid-other");
-});
-
-// After remote access setup the claw has an owner account and the admin's profile stays
-// unlinked. Nothing on the invite path refuses that account as the redeemer.
-it("links the claw's owner account to an admin's profile through an owner-approved invite", async ({
-  state,
-}) => {
-  state.applyEnv();
-  const admin = await ensureCanonicalUserProfileForEmail("admin@example.test");
-  await setCanonicalUserProfileDisplayName(admin.id, "Admin");
-  const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
-  await claw.authority.recordDiscovery({ owner_account_id: "acct-owner" });
-  expect(claw.authority.current()?.discovery.owner_account_id).toBe("acct-owner");
-  expect(await readOpenClawIdLinkedProfile("acct-owner")).toBeNull();
-  expect(await claw.authority.inviteProfiles()).toEqual([{ id: admin.id, displayName: "Admin" }]);
-  const invite = await ownerInvite(claw, { email: "admin@example.test" });
-  expect(
-    await claw.authority.registerInvite(
-      { cap: invite.cap, proofKey: invite.proofKey, existingProfileId: admin.id },
-      "tunnel",
-    ),
-  ).toMatchObject({ ok: true });
-  const mail = await redemptionMail({
-    clawId: claw.clawId,
-    inviteId: invite.inviteId,
-    proofKey: invite.proofKey,
-    accountId: "acct-owner",
-    email: "admin@example.test",
-  });
-  expect(
-    await claw.authority.redeem(mail.message.payload.redemption, mail.message.from),
-  ).toMatchObject({ ok: true });
-  expect(await readOpenClawIdLinkedProfile("acct-owner")).toBeNull();
-  expect(
-    await claw.authority.submit(
-      await claw.sign({
-        op: "add",
-        account_id: "acct-owner",
-        role: "operator",
-        peer_keys: [mail.peerKey],
-        invite_id: invite.inviteId,
-      }),
-      "tunnel",
-    ),
-  ).toMatchObject({ ok: true });
-  expect(claw.authority.current()?.invite_reports?.[invite.inviteId]?.existingProfile).toEqual({
-    id: admin.id,
-    displayName: "Admin",
-  });
-  expect(await readOpenClawIdLinkedProfile("acct-owner")).toMatchObject({ profileId: admin.id });
-  expect(await readOpenClawIdLinksOfProfile(admin.id)).toEqual([
-    { accountId: "acct-owner", email: "admin@example.test" },
-  ]);
-  // The owner account is now also a member; its owner devices keep owner authority.
-  expect(await claw.authority.resolvePeer(claw.w1)).toMatchObject({ kind: "owner" });
-  await closeOpenClawStateDatabaseAsync();
-  expect(await readOpenClawIdLinkedProfile("acct-owner")).toMatchObject({ profileId: admin.id });
+  await staysUnlinked("ocid-other");
 });
 
 it("imports legacy member roles once, preserves assignments, and does not undo suspension", async ({

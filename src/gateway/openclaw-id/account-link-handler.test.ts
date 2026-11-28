@@ -133,21 +133,6 @@ describe("openclawId.account linking", () => {
     expect(store.link).not.toHaveBeenCalled();
   });
 
-  it("signs in but reports no link until a separate approval links the account", async () => {
-    const started = await call(personal, { action: "device_begin" });
-    const state = (started.payload as { state: string }).state;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5);
-    });
-    store.linkedProfile.mockResolvedValueOnce(null);
-    store.linksOf.mockResolvedValueOnce([]);
-    expect(await call(personal, { action: "device_poll", state, link: true })).toMatchObject({
-      ok: true,
-      payload: { account: { sub: "acct-owner" }, link: "link_approval_required" },
-    });
-    expect(store.link).not.toHaveBeenCalled();
-  });
-
   it("signs in without linking unless asked, and reports and removes only the caller's link", async () => {
     store.link.mockClear();
     const started = await call(personal, { action: "device_begin" });

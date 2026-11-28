@@ -345,27 +345,22 @@ describe("Turn on remote access over a personal sign-in", () => {
 
   it("links the admin's first account at commit only for their own verified email", async () => {
     const josh = admin();
-    try {
-      tokenClaims = { email: "josh@tailnet.example", email_verified: false };
+    for (const email_verified of [false, true]) {
+      tokenClaims = { email: "JOSH@tailnet.example", email_verified };
       store.linkedProfile.mockResolvedValueOnce(null);
-      const unverified = await deviceSignIn(josh);
-      expect(await authority(josh, { ...commitParams, idToken: unverified })).toMatchObject({
-        payload: { linked: true, profileLink: "link_approval_required" },
+      const idToken = await deviceSignIn(josh);
+      expect(await authority(josh, { ...commitParams, idToken })).toMatchObject({
+        payload: {
+          linked: true,
+          profileLink: email_verified ? "linked" : "link_approval_required",
+        },
       });
-      expect(store.link).not.toHaveBeenCalled();
-      tokenClaims = { email: "JOSH@tailnet.example", email_verified: true };
-      store.linkedProfile.mockResolvedValueOnce(null);
-      const verified = await deviceSignIn(josh);
-      expect(await authority(josh, { ...commitParams, idToken: verified })).toMatchObject({
-        payload: { linked: true, profileLink: "linked" },
-      });
-      expect(store.link).toHaveBeenCalledExactlyOnceWith(
-        { profileId: "profile-josh", accountId: "acct-josh", email: "JOSH@tailnet.example" },
-        { assertCurrent: expect.any(Function) },
-      );
-    } finally {
-      tokenClaims = {};
     }
+    tokenClaims = {};
+    expect(store.link).toHaveBeenCalledExactlyOnceWith(
+      { profileId: "profile-josh", accountId: "acct-josh", email: "JOSH@tailnet.example" },
+      { assertCurrent: expect.any(Function) },
+    );
   });
 
   it("links nothing for the loopback operator", async () => {

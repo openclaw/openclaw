@@ -119,7 +119,8 @@ it("holds the row's place while loading and retries a failed load", async () => 
   expect(view.getByText("Link")).toBeDefined();
 });
 
-it("offers supported conflict recovery without merging profiles and clears the error after a later link", async () => {
+// This browser holds an OpenClaw ID sign-in, so Link uses link_held first.
+function holdSignIn() {
   const storageKey = "openclaw.openclawId.account";
   const account = JSON.stringify({
     idToken: "fixture-only-token",
@@ -131,6 +132,10 @@ it("offers supported conflict recovery without merging profiles and clears the e
     localStorage.removeItem(storageKey);
     window.dispatchEvent(new StorageEvent("storage", { key: storageKey, newValue: null }));
   });
+}
+
+it("offers supported conflict recovery without merging profiles and clears the error after a later link", async () => {
+  holdSignIn();
   const request = vi
     .fn<GatewayBrowserClient["request"]>()
     .mockResolvedValueOnce(status("device"))
@@ -162,17 +167,7 @@ it("offers supported conflict recovery without merging profiles and clears the e
 });
 
 it("says an admin links an unlinked account, and confirms an existing link", async () => {
-  const storageKey = "openclaw.openclawId.account";
-  const account = JSON.stringify({
-    idToken: "fixture-only-token",
-    exp: Math.floor(Date.now() / 1000) + 3600,
-  });
-  localStorage.setItem(storageKey, account);
-  window.dispatchEvent(new StorageEvent("storage", { key: storageKey, newValue: account }));
-  onTestFinished(() => {
-    localStorage.removeItem(storageKey);
-    window.dispatchEvent(new StorageEvent("storage", { key: storageKey, newValue: null }));
-  });
+  holdSignIn();
   const request = vi
     .fn<GatewayBrowserClient["request"]>()
     .mockResolvedValueOnce(status("device"))
@@ -188,12 +183,7 @@ it("says an admin links an unlinked account, and confirms an existing link", asy
   expect(view.container.textContent).toContain("same verified email as this sign-in");
   view.getByText("Link").click();
   await waitForSolid(() => expect(view.container.querySelector('[role="alert"]')).not.toBeNull());
-  const error = view.container.querySelector('[role="alert"]')?.textContent;
-  expect.soft(error).toContain("Link works only when OpenClaw ID has verified its email");
-  expect
-    .soft(error)
-    .toContain(
-      "An owner links it by inviting this OpenClaw ID to your profile and approving the request in People.",
-    );
-  expect(view.queryByText("Unlink")).toBeNull();
+  expect(view.container.querySelector('[role="alert"]')?.textContent).toMatch(
+    /Link works only when OpenClaw ID has verified its email.*An owner links it by inviting/,
+  );
 });

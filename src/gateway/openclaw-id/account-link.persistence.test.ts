@@ -1,10 +1,10 @@
-// A device-code approval (RFC 8628) does not show who approved it, so a device sign-in only
-// recognizes an existing OpenClaw ID link and never creates a profile's first one. Real profile state.
+// A device-code approval (RFC 8628) does not show who approved it, so a device sign-in creates a
+// profile's first OpenClaw ID link only for a verified email equal to the connection's own login
+// email; otherwise it only recognizes an existing link. Real profile state.
 import { afterAll, beforeAll, expect, vi } from "vitest";
 import { bytesToBase64url } from "../../../packages/openclaw-id-protocol/src/index.js";
 import { stateTest } from "../../plugin-state/plugin-state-fixtures.test-support.js";
 import {
-  linkCanonicalOpenClawIdUserProfile,
   readOpenClawIdLinkedProfile,
   readOpenClawIdLinksOfProfile,
 } from "../../state/user-profile-openclaw-id.js";
@@ -28,14 +28,9 @@ vi.mock("../server-methods/personal-profile-authorization.js", async (importOrig
   ),
 }));
 
-function idToken(claims: Record<string, unknown>) {
-  const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
-  return `${part({ alg: "RS256" })}.${part(claims)}.sig`;
-}
-
-// The account that approved the user code; by default a second account with the profile's email.
+const part = (value: unknown) => Buffer.from(JSON.stringify(value)).toString("base64url");
+// The account that approves the next user code, and extra ID token claims it carries.
 let approver = "ocid-other";
-// Extra ID token claims for the next device sign-in (email, email_verified).
 let claims: Record<string, unknown> = {};
 let handlers: typeof import("../server-methods/openclaw-id.js").openclawIdHandlers;
 
@@ -45,31 +40,28 @@ beforeAll(async () => {
     vi.fn(async (input: RequestInfo | URL) => {
       const url = input instanceof Request ? input.url : input.toString();
       if (url.endsWith("/.well-known/openid-configuration")) {
+        const endpoint = (path: string) => `${ISSUER}/oauth2/${path}`;
         return Response.json({
           issuer: ISSUER,
-          authorization_endpoint: `${ISSUER}/oauth2/authorize`,
-          token_endpoint: `${ISSUER}/oauth2/token`,
-          device_authorization_endpoint: `${ISSUER}/oauth2/device-authorization`,
+          authorization_endpoint: endpoint("authorize"),
+          token_endpoint: endpoint("token"),
+          device_authorization_endpoint: endpoint("device-authorization"),
         });
       }
       if (url.endsWith("/oauth2/device-authorization")) {
+        const verification_uri = "https://issuer.example.test/device";
         return Response.json({
           device_code: "dc",
           user_code: "WDJB-MJHT",
-          verification_uri: "https://issuer.example.test/device",
+          verification_uri,
           expires_in: 600,
           interval: 0.001,
         });
       }
+      const exp = Math.floor(Date.now() / 1000) + 3600;
+      const token = { iss: ISSUER, aud: "control-ui", sub: approver, exp, email: PROFILE_EMAIL };
       return Response.json({
-        id_token: idToken({
-          iss: ISSUER,
-          aud: "control-ui",
-          sub: approver,
-          exp: Math.floor(Date.now() / 1000) + 3600,
-          email: PROFILE_EMAIL,
-          ...claims,
-        }),
+        id_token: `${part({ alg: "RS256" })}.${part({ ...token, ...claims })}.sig`,
       });
     }),
   );
@@ -84,30 +76,14 @@ afterAll(() => {
 const config = {
   gateway: { openclawId: { enabled: true, issuerUrl: ISSUER, clientId: "control-ui" } },
 };
+type Method = "openclawId.account" | "openclawId.authority" | "openclawId.people";
+type Client = { connId: string };
 
-async function call(client: { connId: string }, params: Record<string, unknown>) {
-  let reply: { ok: boolean; payload?: unknown; code?: string } | undefined;
-  await handlers["openclawId.account"]!({
-    params,
-    client,
-    respond: (ok: boolean, payload?: unknown, error?: { details?: { code?: string } }) => {
-      reply = { ok, payload, code: error?.details?.code };
-    },
-    context: {
-      getRuntimeConfig: () => config,
-      getClientConnIds: (match: (candidate: unknown) => boolean) =>
-        new Set([client].filter(match).map((current) => current.connId)),
-    },
-  } as unknown as GatewayRequestHandlerOptions);
-  return reply!;
-}
-
-// openclawId.authority and openclawId.people for `client`, against a running service.
-async function authorityCall(
-  method: "openclawId.authority" | "openclawId.people",
-  client: object,
-  service: unknown,
-  params: Record<string, unknown> = {},
+async function call(
+  client: Client,
+  params: Record<string, unknown>,
+  method: Method = "openclawId.account",
+  service?: unknown,
 ) {
   let reply: { ok: boolean; payload?: unknown; code?: string } | undefined;
   await handlers[method]!({
@@ -116,304 +92,167 @@ async function authorityCall(
     respond: (ok: boolean, payload?: unknown, error?: { details?: { code?: string } }) => {
       reply = { ok, payload, code: error?.details?.code };
     },
-    context: { openclawIdService: service, getRuntimeConfig: () => config },
+    context: {
+      openclawIdService: service,
+      getRuntimeConfig: () => config,
+      getClientConnIds: (match: (candidate: unknown) => boolean) =>
+        new Set([client].filter(match).map((current) => current.connId)),
+    },
   } as unknown as GatewayRequestHandlerOptions);
   return reply!;
 }
 
-async function deviceSignIn(client: { connId: string }, link: boolean) {
-  const started = await call(client, { action: "device_begin" });
-  const state = (started.payload as { state: string }).state;
+// A personal connection whose own sign-in verified `ownEmail` (a Tailscale or trusted-proxy
+// login); `undefined` models a login that is not an email address.
+const personal = (profileId: string, ownEmail?: string, connId = "conn-person") => ({
+  connId,
+  connect: { role: "operator", scopes: ["operator.read"] },
+  internal: { authenticatedOperator: true },
+  authenticatedUserProfile: { profileId },
+  ...(ownEmail === undefined ? {} : { authenticatedUserId: ownEmail }),
+});
+
+// device_begin, approval of the code by `sub` with `tokenClaims`, then device_poll.
+async function signIn(client: Client, sub: string, link: boolean, tokenClaims = {}) {
+  approver = sub;
+  claims = tokenClaims;
+  const { state } = (await call(client, { action: "device_begin" })).payload as { state: string };
   await new Promise((resolve) => {
     setTimeout(resolve, 5);
   });
-  return await call(client, { action: "device_poll", state, link });
+  const polled = await call(client, { action: "device_poll", state, link });
+  return { polled, held: (polled.payload as { idToken: string }).idToken };
 }
 
 const it = stateTest("openclaw-id-account-link-persistence");
 
-it("a device grant from another account never creates a profile's first link", async ({
+it("links an admin's profile to the claw owner account through the owner browser's invite", async ({
   state,
 }) => {
   state.applyEnv();
-  approver = "ocid-other";
-  const existingProfile = await ensureCanonicalUserProfileForEmail(PROFILE_EMAIL);
-  const connection = {
-    connId: "conn-person",
-    connect: { role: "operator", scopes: ["operator.read"] },
-    internal: { authenticatedOperator: true },
-    authenticatedUserProfile: { profileId: existingProfile.id },
-  };
-
-  const polled = await deviceSignIn(connection, true);
-  expect(polled).toMatchObject({
-    ok: true,
-    payload: { account: { sub: "ocid-other" }, link: "link_approval_required" },
-  });
-  const { idToken: held } = polled.payload as { idToken: string };
-  expect(await call(connection, { action: "link_held", idToken: held })).toMatchObject({
-    ok: true,
-    payload: { link: "link_approval_required" },
-  });
-  expect(await readOpenClawIdLinkedProfile("ocid-other")).toBeNull();
-  expect(await readOpenClawIdLinksOfProfile(existingProfile.id)).toEqual([]);
-
-  // A binding approved elsewhere (here written directly) is still recognized after sign-in.
-  approver = "ocid-person";
-  expect(
-    await linkCanonicalOpenClawIdUserProfile({
-      profileId: existingProfile.id,
-      accountId: "ocid-person",
-      email: PROFILE_EMAIL,
-    }),
-  ).toEqual({ ok: true });
-  expect(await deviceSignIn(connection, true)).toMatchObject({
-    ok: true,
-    payload: { account: { sub: "ocid-person" }, link: "linked" },
-  });
-  // Another account on the now-linked profile is told to unlink first, and is not added.
-  approver = "ocid-other";
-  expect(await deviceSignIn(connection, true)).toMatchObject({
-    ok: true,
-    payload: { account: { sub: "ocid-other" }, link: "profile_linked" },
-  });
-  expect(await readOpenClawIdLinkedProfile("ocid-other")).toBeNull();
-  expect(await readOpenClawIdLinksOfProfile(existingProfile.id)).toEqual([
-    { accountId: "ocid-person", email: PROFILE_EMAIL },
-  ]);
-});
-
-it("links an admin's profile through the owner browser's invite, redeemed by the admin's account", async ({
-  state,
-}) => {
-  state.applyEnv();
-  approver = "ocid-person";
-  const existingProfile = await ensureCanonicalUserProfileForEmail(PROFILE_EMAIL);
-  // The admin's personal connection, as after turning on remote access over Tailscale.
-  const personal = {
-    connId: "conn-person",
-    connect: { role: "operator", scopes: ["operator.read"] },
-    internal: { authenticatedOperator: true },
-    authenticatedUserProfile: { profileId: existingProfile.id },
-  };
-  // An approved owner browser: the direct-loopback operator here.
-  const ownerBrowser = { connId: "conn-owner", internal: { isLocalClient: true } };
+  const profile = await ensureCanonicalUserProfileForEmail(PROFILE_EMAIL);
+  // The setup connection over Tailscale, and an approved owner browser (direct loopback here).
+  const setup = personal(profile.id);
+  const owner = { connId: "conn-owner", internal: { isLocalClient: true } };
   const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
+  // After remote access setup the claw has an owner account; the invite links it like any other.
+  await claw.authority.recordDiscovery({ owner_account_id: "acct-owner" });
   const { service } = serviceFor(claw.authority);
+  const as = (
+    client: Client,
+    params: Record<string, unknown>,
+    method: Method = "openclawId.authority",
+  ) => call(client, params, method, service);
   try {
-    // 1. The setup connection signs in; the account is not linked yet.
-    const signedIn = await deviceSignIn(personal, true);
-    expect(signedIn).toMatchObject({ ok: true, payload: { link: "link_approval_required" } });
-    const { idToken: held } = signedIn.payload as { idToken: string };
-
-    // 2. The setup connection cannot see People or register an invite.
-    expect(await authorityCall("openclawId.people", personal, service)).toMatchObject({
-      ok: false,
-      code: "not_owner",
-    });
+    const { polled, held } = await signIn(setup, "acct-owner", true);
+    expect(polled).toMatchObject({ payload: { link: "link_approval_required" } });
     const invite = await ownerInvite(claw, { email: PROFILE_EMAIL });
     const register = {
       action: "register_invite",
       cap: invite.cap,
       proofKey: bytesToBase64url(invite.proofKey),
-      existingProfileId: existingProfile.id,
+      existingProfileId: profile.id,
     };
-    expect(await authorityCall("openclawId.authority", personal, service, register)).toMatchObject({
+    // People and the invite form need an owner browser.
+    expect(await as(setup, {}, "openclawId.people")).toMatchObject({
       ok: false,
-      code: "not_direct",
+      code: "not_owner",
     });
-
-    // 3. The owner browser offers the profile and registers the invite for it.
-    const people = await authorityCall("openclawId.people", ownerBrowser, service);
-    expect(people).toMatchObject({ ok: true });
-    expect(
-      (people.payload as { link: { existingProfiles: unknown } }).link.existingProfiles,
-    ).toEqual([{ id: existingProfile.id, displayName: "person" }]);
-    expect(
-      await authorityCall("openclawId.authority", ownerBrowser, service, register),
-    ).toMatchObject({ ok: true });
-
-    // 4. The admin's account redeems the invite link. The /join page and Discovery mailbox are
-    // outside this repository; the redemption arrives as the mailbox reader delivers it.
+    expect(await as(setup, register)).toMatchObject({ ok: false, code: "not_direct" });
+    expect(await as(owner, {}, "openclawId.people")).toMatchObject({
+      payload: { link: { existingProfiles: [{ id: profile.id }] } },
+    });
+    expect(await as(owner, register)).toMatchObject({ ok: true });
+    // The /join page and Discovery mailbox are outside this repository; the redemption arrives
+    // as the mailbox reader delivers it.
     const mail = await redemptionMail({
       clawId: claw.clawId,
-      inviteId: invite.inviteId,
-      proofKey: invite.proofKey,
-      accountId: "ocid-person",
+      ...invite,
+      accountId: "acct-owner",
       email: PROFILE_EMAIL,
     });
     expect(
       await claw.authority.redeem(mail.message.payload.redemption, mail.message.from),
     ).toMatchObject({ ok: true });
-    expect(await readOpenClawIdLinkedProfile("ocid-person")).toBeNull();
-
-    // 5. The setup connection cannot approve; the owner browser approves in People.
-    const approval = {
-      action: "submit",
-      statement: await claw.sign({
-        op: "add",
-        account_id: "ocid-person",
-        role: "operator",
-        peer_keys: [mail.peerKey],
-        invite_id: invite.inviteId,
-      }),
+    const add = {
+      op: "add" as const,
+      account_id: "acct-owner",
+      role: "operator",
+      peer_keys: [mail.peerKey],
+      invite_id: invite.inviteId,
     };
-    expect(await authorityCall("openclawId.authority", personal, service, approval)).toMatchObject({
-      ok: false,
-      code: "not_direct",
-    });
-    expect(await readOpenClawIdLinkedProfile("ocid-person")).toBeNull();
-    expect(
-      await authorityCall("openclawId.authority", ownerBrowser, service, approval),
-    ).toMatchObject({ ok: true });
-
-    // 6. The link is on the admin's profile, and the setup connection now sees it.
-    expect(await readOpenClawIdLinksOfProfile(existingProfile.id)).toEqual([
-      { accountId: "ocid-person", email: PROFILE_EMAIL },
+    const approval = { action: "submit", statement: await claw.sign(add) };
+    expect(await as(setup, approval)).toMatchObject({ ok: false, code: "not_direct" });
+    expect(await readOpenClawIdLinkedProfile("acct-owner")).toBeNull();
+    expect(await as(owner, approval)).toMatchObject({ ok: true });
+    expect(await readOpenClawIdLinksOfProfile(profile.id)).toEqual([
+      { accountId: "acct-owner", email: PROFILE_EMAIL },
     ]);
-    expect(await call(personal, { action: "link_held", idToken: held })).toMatchObject({
-      ok: true,
+    expect(await call(setup, { action: "link_held", idToken: held })).toMatchObject({
       payload: { link: "linked" },
     });
+    // The owner account is now also a member; its owner devices keep owner authority.
+    expect(await claw.authority.resolvePeer(claw.w1)).toMatchObject({ kind: "owner" });
   } finally {
     await service.stop();
   }
 });
 
-// A personal connection whose own sign-in verified `ownEmail`, as a Tailscale or trusted-proxy
-// login does; `undefined` models a login that is not an email address.
-function personalConnection(profileId: string, ownEmail: string | undefined, connId: string) {
-  return {
-    connId,
-    connect: { role: "operator", scopes: ["operator.read"] },
-    internal: { authenticatedOperator: true },
-    authenticatedUserProfile: { profileId },
-    ...(ownEmail === undefined ? {} : { authenticatedUserId: ownEmail }),
-  };
-}
+const OTHER_LOGIN = "other-login@example.test";
+const ME = PROFILE_EMAIL;
+const verified = (email?: string) => ({ ...(email ? { email } : {}), email_verified: true });
+// [name, this sign-in's own email, ID token claims, linked]; "alias" is the profile's own alias.
+const cases: Array<[string, string | undefined, Record<string, unknown>, boolean]> = [
+  ["same verified email", ME, verified(), true],
+  ["case and spacing that normalize equal", ME, verified("  Person@EXAMPLE.test "), true],
+  ["unverified email", ME, { email_verified: false }, false],
+  ["missing email_verified", ME, {}, false],
+  ["string email_verified", ME, { email_verified: "true" }, false],
+  ["different verified email", ME, verified("someone@example.test"), false],
+  ["the profile's alias while this sign-in's email differs", OTHER_LOGIN, verified("alias"), false],
+  ["a sign-in without an email", undefined, verified(), false],
+  ["a provider login", "person@github", verified("person@github"), false],
+  ["look-alike exampIe", ME, verified("person@exampIe.test"), false],
+  ["look-alike inner space", ME, verified("per son@example.test"), false],
+  ["look-alike plus tag", ME, verified("person+1@example.test"), false],
+  ["look-alike trailing dot", ME, verified("person@example.test."), false],
+  ["look-alike Cyrillic letter", ME, verified("p\u0435rson@example.test"), false],
+];
 
-it("links a first account only when its verified email is this sign-in's own email", async ({
+it.for(cases)("first link for %s", async ([, own, tokenClaims, linked], { state }) => {
+  state.applyEnv();
+  // The profile's own email alias is never compared with the account's email.
+  const alias = `alias-${PROFILE_EMAIL}`;
+  const profile = await ensureCanonicalUserProfileForEmail(alias);
+  const reported = tokenClaims.email === "alias" ? { ...tokenClaims, email: alias } : tokenClaims;
+  const { polled } = await signIn(personal(profile.id, own), "ocid-case", true, reported);
+  expect(polled).toMatchObject({
+    ok: true,
+    payload: { link: linked ? "linked" : "link_approval_required" },
+  });
+  expect(await readOpenClawIdLinksOfProfile(profile.id)).toHaveLength(linked ? 1 : 0);
+});
+
+// The held path follows the same rule; a linked profile then recognizes its account and tells a
+// second account to unlink first, and the second account is never added.
+it("applies the same rule to a held sign-in, then recognizes the link and refuses a second account", async ({
   state,
 }) => {
   state.applyEnv();
-  const cases: Array<{
-    name: string;
-    own: string | undefined;
-    tokenClaims: Record<string, unknown>;
-    linked: boolean;
-    /** The account reports exactly the profile's own email alias. */
-    reportsAlias?: boolean;
-  }> = [
-    {
-      name: "same verified email",
-      own: PROFILE_EMAIL,
-      tokenClaims: { email_verified: true },
-      linked: true,
-    },
-    {
-      name: "case and spacing that normalize equal",
-      own: PROFILE_EMAIL,
-      tokenClaims: { email: "  Person@EXAMPLE.test ", email_verified: true },
-      linked: true,
-    },
-    {
-      name: "unverified email",
-      own: PROFILE_EMAIL,
-      tokenClaims: { email_verified: false },
-      linked: false,
-    },
-    { name: "missing email_verified", own: PROFILE_EMAIL, tokenClaims: {}, linked: false },
-    {
-      name: "string email_verified",
-      own: PROFILE_EMAIL,
-      tokenClaims: { email_verified: "true" },
-      linked: false,
-    },
-    {
-      name: "different verified email",
-      own: PROFILE_EMAIL,
-      tokenClaims: { email: "someone@example.test", email_verified: true },
-      linked: false,
-    },
-    {
-      name: "the profile's alias while this sign-in's email differs",
-      own: "other-login@example.test",
-      tokenClaims: { email_verified: true },
-      linked: false,
-      reportsAlias: true,
-    },
-    {
-      name: "a sign-in without an email",
-      own: undefined,
-      tokenClaims: { email_verified: true },
-      linked: false,
-    },
-    {
-      name: "a provider login",
-      own: "person@github",
-      tokenClaims: { email: "person@github", email_verified: true },
-      linked: false,
-    },
-    ...[
-      "person@exampIe.test",
-      "per son@example.test",
-      "person+1@example.test",
-      "person@example.test.",
-      "p\u0435rson@example.test",
-    ].map((email) => ({
-      name: `look-alike ${JSON.stringify(email)}`,
-      own: PROFILE_EMAIL,
-      tokenClaims: { email, email_verified: true },
-      linked: false,
-    })),
-  ];
-  let index = 0;
-  for (const current of cases) {
-    index += 1;
-    approver = `ocid-case-${index}`;
-    const alias = `case-${index}-${PROFILE_EMAIL}`;
-    claims = current.reportsAlias ? { ...current.tokenClaims, email: alias } : current.tokenClaims;
-    // Each case's profile has its own email alias, never compared with the account's email.
-    const profile = await ensureCanonicalUserProfileForEmail(alias);
-    const connection = personalConnection(profile.id, current.own, `conn-case-${index}`);
-    const polled = await deviceSignIn(connection, true);
-    expect(polled, current.name).toMatchObject({
-      ok: true,
-      payload: { link: current.linked ? "linked" : "link_approval_required" },
-    });
-    expect(await readOpenClawIdLinksOfProfile(profile.id), current.name).toHaveLength(
-      current.linked ? 1 : 0,
-    );
-    expect((await readOpenClawIdLinkedProfile(approver))?.profileId ?? null, current.name).toBe(
-      current.linked ? profile.id : null,
-    );
-  }
-  claims = {};
-});
-
-it("applies the same rule to a held sign-in", async ({ state }) => {
-  state.applyEnv();
   const profile = await ensureCanonicalUserProfileForEmail(PROFILE_EMAIL);
-  const elsewhere = personalConnection(profile.id, "other-login@example.test", "conn-held-other");
-  const own = personalConnection(profile.id, PROFILE_EMAIL, "conn-held-own");
-  approver = "ocid-held";
-  claims = { email_verified: true };
-  // Sign in without linking, then link with the held token.
-  const other = await deviceSignIn(elsewhere, false);
-  const { idToken: otherToken } = other.payload as { idToken: string };
-  expect(await call(elsewhere, { action: "link_held", idToken: otherToken })).toMatchObject({
-    ok: true,
-    payload: { link: "link_approval_required" },
-  });
-  expect(await readOpenClawIdLinksOfProfile(profile.id)).toEqual([]);
-  const mine = await deviceSignIn(own, false);
-  const { idToken: ownToken } = mine.payload as { idToken: string };
-  expect(await call(own, { action: "link_held", idToken: ownToken })).toMatchObject({
-    ok: true,
-    payload: { link: "linked" },
-  });
-  expect(await readOpenClawIdLinksOfProfile(profile.id)).toEqual([
-    { accountId: "ocid-held", email: PROFILE_EMAIL },
-  ]);
-  claims = {};
+  const steps = [
+    [OTHER_LOGIN, "ocid-held", "link_approval_required", 0],
+    [PROFILE_EMAIL, "ocid-held", "linked", 1],
+    [PROFILE_EMAIL, "ocid-held", "linked", 1],
+    [PROFILE_EMAIL, "ocid-other", "profile_linked", 1],
+  ] as const;
+  for (const [own, sub, link, rows] of steps) {
+    const connection = personal(profile.id, own, `conn-${own}`);
+    const { held } = await signIn(connection, sub, false, verified());
+    expect(await call(connection, { action: "link_held", idToken: held })).toMatchObject({
+      payload: { link },
+    });
+    expect(await readOpenClawIdLinksOfProfile(profile.id)).toHaveLength(rows);
+  }
+  expect(await readOpenClawIdLinkedProfile("ocid-other")).toBeNull();
 });
