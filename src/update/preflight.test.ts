@@ -131,9 +131,7 @@ it.each<{
       }
       return access(file, mode);
     });
-    if (test.windows) {
-      vi.stubGlobal("process", { ...process, platform: "win32" });
-    }
+    vi.stubGlobal("process", { ...process, platform: test.windows ? "win32" : "linux" });
     const result = await preflight({
       kind: "package",
       target: { kind: "package", spec: "openclaw@2026.11.21", version: "2026.11.21" },
