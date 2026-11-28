@@ -1205,7 +1205,9 @@ export async function recoverLiveFinalDelivery(
     },
     stateContext,
   );
-  if (outcome.value.status === "recovered") {
+  // A deferred lookup did not attempt another send. Leave its custody with
+  // reconciliation, which can still confirm delivery after the retry budget expires.
+  if (outcome.value.status !== "failed") {
     return outcome.value;
   }
   const pending = await loadUnfinishedDelivery(entry.id, params.stateDir, stateContext);
@@ -1214,7 +1216,7 @@ export async function recoverLiveFinalDelivery(
       { ...params, entry: pending, error: pending.lastError ?? "delivery retry budget exhausted" },
       stateContext,
     );
-    if (settled === "moved-to-failed" && outcome.value.status === "failed") {
+    if (settled === "moved-to-failed") {
       outcome.value.error.queueCustody = "released";
     }
   }

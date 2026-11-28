@@ -1,15 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { TrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { onTrustedMessageAuditEventForTest as onTrustedMessageAuditEvent } from "../../audit/message-audit-events.test-support.js";
+import type {
+  ChannelMessageDurableFinalAdapter,
+  ChannelMessageSendResult,
+  ChannelMessageSendTextContext,
+} from "../../channels/message/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.test-support.js";
 import { isOutboundDeliveryError, PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { installQueueTestPlugin, matrixDeliveryResult } from "./deliver.custody.test-support.js";
 import {
   boundedCronCompletionRetention,
   drainMatrixReconnect,
@@ -20,8 +26,11 @@ import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js"
 import { recoverPendingDeliveries, type DeliverFn } from "./delivery-queue-recovery.js";
 import {
   claimDeliveryPlatformSendAttempt,
-  reserveDeliveryAttempt,
   enqueueDeliveryOnce,
+  markDeliveryPlatformOutcomeUnknown,
+  markDeliveryPlatformSendAttemptStarted,
+  reserveDeliveryAttempt,
+  type QueuedDelivery,
 } from "./delivery-queue-storage.js";
 import {
   loadPendingDeliveries,
@@ -38,6 +47,30 @@ function matrixRequest(params: Omit<DeliveryParams, "cfg" | "channel" | "to">): 
 }
 function deliverMatrix(params: Omit<DeliveryParams, "cfg" | "channel" | "to">) {
   return deliverOutboundPayloads(matrixRequest(params));
+}
+
+function installReconcilingTextTransport(
+  sendText: (ctx: ChannelMessageSendTextContext) => Promise<ChannelMessageSendResult>,
+) {
+  const reconcileUnknownSend = vi
+    .fn<NonNullable<ChannelMessageDurableFinalAdapter["reconcileUnknownSend"]>>()
+    .mockResolvedValue({
+      status: "unresolved",
+      error: "provider lookup timed out",
+      retryable: true,
+    });
+  installQueueTestPlugin({
+    message: {
+      id: "matrix",
+      durableFinal: {
+        capabilities: { text: true, reconcileUnknownSend: true },
+        reconcileUnknownSendKinds: { text: true },
+        reconcileUnknownSend,
+      },
+      send: { text: sendText },
+    },
+  });
+  return reconcileUnknownSend;
 }
 
 describe("durable outbound queue delivery", () => {
@@ -286,6 +319,145 @@ describe("durable outbound queue delivery", () => {
     await expect(deliverOutboundPayloads(params)).resolves.toEqual([]);
     expect(sendMatrix).toHaveBeenCalledOnce();
   });
+
+  it.each(["returned", "thrown"] as const)(
+    "does not resend a final after a %s retryable reconciliation failure",
+    async (failure) => {
+      const deliveryIntentId = `cron-direct-delivery:v1:retryable-reconciliation-${failure}`;
+      const visibleMessages: string[] = [];
+      const sendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
+        await ctx.onPlatformSendDispatch?.();
+        visibleMessages.push(ctx.text);
+        throw Object.assign(new Error("socket reset after acceptance"), { code: "ECONNRESET" });
+      });
+      const reconcileUnknownSend = installReconcilingTextTransport(sendText);
+      if (failure === "thrown") {
+        reconcileUnknownSend.mockRejectedValue(new Error("provider lookup timed out"));
+      }
+      const params = matrixRequest({
+        payloads: [{ text: "Final answer already accepted" }],
+        queuePolicy: "required",
+        deliveryIntentId,
+        completionRetention: boundedCronCompletionRetention,
+        reusePendingDeliveryIntent: true,
+        requireUnknownSendReconciliation: true,
+        retryAmbiguousFinalText: true,
+      });
+      await expect(deliverOutboundPayloads(params)).rejects.toThrow("socket reset");
+      expect(visibleMessages).toEqual(["Final answer already accepted"]);
+      expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+        id: deliveryIntentId,
+        recoveryState: "unknown_after_send",
+        attemptCount: 1,
+        lastError: expect.stringContaining("provider lookup timed out"),
+      });
+
+      reconcileUnknownSend.mockResolvedValue({
+        status: "sent",
+        ...matrixDeliveryResult("original-platform-message"),
+      });
+      await drainMatrixReconnect({ deliver: deliverOutboundPayloads, stateDir: tmpDir });
+      expect(reconcileUnknownSend).toHaveBeenCalledTimes(2);
+      expect(sendText).toHaveBeenCalledOnce();
+      expect(
+        getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+      ).toBe("completed");
+      await expect(deliverOutboundPayloads(params)).resolves.toEqual([]);
+      expect(sendText).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    // At retry 2, proof can spend a third slot, but it cannot create one.
+    ["send_attempt_started", 3, [5_000, 25_000], "completed"],
+    ["send_attempt_started", 2, [5_000, 25_000], "failed"],
+    // Even with a slot left, not_sent cannot override stronger post-send evidence.
+    ["unknown_after_send", 2, [5_000], "failed"],
+  ] as const)(
+    "settles a late not_sent for %s (budget %i, backoff %j) as %s",
+    async (state, maxRetries, delays, status) => {
+      const id = "cron-direct-delivery:v1:late-not-sent";
+      const text = "Saved final answer";
+      await enqueueDeliveryOnce(
+        {
+          channel: "matrix",
+          to: "!room:example",
+          payloads: [{ text }],
+          completionRetention: boundedCronCompletionRetention,
+          retryAmbiguousFinalText: true,
+          maxRetries,
+        },
+        id,
+        tmpDir,
+      );
+      const claim = await claimDeliveryPlatformSendAttempt(id, tmpDir);
+      assert(claim);
+      await reserveDeliveryAttempt(id, maxRetries, tmpDir, claim);
+      await markDeliveryPlatformSendAttemptStarted(id, tmpDir, undefined, claim);
+      if (state === "unknown_after_send") {
+        await markDeliveryPlatformOutcomeUnknown(id, tmpDir, claim);
+      }
+      let dispatched: QueuedDelivery | undefined;
+      const sendText = vi.fn(async (ctx: ChannelMessageSendTextContext) => {
+        assert(ctx.onPlatformSendDispatch);
+        await ctx.onPlatformSendDispatch();
+        [dispatched] = await loadPendingDeliveries(tmpDir);
+        return matrixDeliveryResult("recovered-message");
+      });
+      const reconcileUnknownSend = installReconcilingTextTransport(sendText);
+      const recover = () =>
+        recoverPendingDeliveries({
+          cfg: {},
+          stateDir: tmpDir,
+          log: createRecoveryLog(),
+          deliver: deliverOutboundPayloads,
+        });
+      // The worker timestamps failures on the wall clock; only the recovery scheduler moves ahead.
+      const wallNow = Date.now;
+      using clock = vi.spyOn(Date, "now");
+      for (const [i, delay] of delays.entries()) {
+        const lookupStartedAt = wallNow();
+        await recover();
+        expect(sendText).not.toHaveBeenCalled();
+        const [pending] = await loadPendingDeliveries(tmpDir);
+        expect(pending).toMatchObject({
+          id,
+          recoveryState: state,
+          retryCount: i + 1,
+          attemptCount: 1,
+          maxRetries,
+        });
+        assert(pending?.lastAttemptAt !== undefined);
+        expect(pending.lastAttemptAt).toBeGreaterThanOrEqual(lookupStartedAt);
+        expect(pending.lastAttemptAt).toBeLessThanOrEqual(wallNow());
+        const due = pending.lastAttemptAt + delay;
+        clock.mockReturnValue(due - 1);
+        expect((await recover()).deferredBackoff).toBe(1);
+        expect(reconcileUnknownSend).toHaveBeenCalledTimes(i + 1);
+        clock.mockReturnValue(due);
+      }
+      reconcileUnknownSend.mockResolvedValue({ status: "not_sent" });
+      await recover();
+      expect(getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir)).toBe(status);
+      // Terminal custody is not eligible for another lookup or another dispatch.
+      await recover();
+      expect(reconcileUnknownSend).toHaveBeenCalledTimes(delays.length + 1);
+      expect(sendText).toHaveBeenCalledTimes(status === "completed" ? 1 : 0);
+      if (status === "completed") {
+        expect(dispatched).toMatchObject({
+          id,
+          attemptCount: 3,
+          retryCount: 2,
+          recoveryState: "send_attempt_started",
+          platformSendAttemptId: expect.any(String),
+        });
+        expect(dispatched?.platformSendAttemptId).not.toBe(claim);
+        expect(sendText).toHaveBeenCalledWith(
+          expect.objectContaining({ text, to: "!room:example" }),
+        );
+      }
+    },
+  );
 
   it("holds one live claim while concurrent producers reuse a stable pending intent", async () => {
     let resolveSend!: (value: { messageId: string }) => void;

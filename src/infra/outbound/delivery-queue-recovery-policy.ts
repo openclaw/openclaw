@@ -1,4 +1,5 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { ChannelMessageUnknownSendReconciliationResult } from "../../channels/message/types.js";
 import { resolveDeliveryQueueAttemptCount } from "../delivery-queue-sqlite.types.js";
 import {
   FINAL_TEXT_RECOVERY_MAX_ATTEMPTS,
@@ -39,15 +40,16 @@ export function isOrdinaryFinalText(
  * resent once, accepting a rare duplicate over a lost reply. A crash mid-send leaves
  * `send_attempt_started`; a live ambiguous transport failure is typed. Other post-send evidence
  * (accepted chunks, untyped failures) never qualifies, and an adapter's `not_sent` verdict keeps
- * its own replay rule.
+ * its own replay rule. A retryable lookup failure retries reconciliation, not the send.
  */
 export function canReplayAmbiguousFinalText(
   entry: QueuedDelivery,
-  reconciliation?: { status: string } | null,
+  reconciliation?: ChannelMessageUnknownSendReconciliationResult | null,
 ): boolean {
   return (
     entry.retryAmbiguousFinalText === true &&
     reconciliation?.status !== "not_sent" &&
+    !(reconciliation?.status === "unresolved" && reconciliation.retryable === true) &&
     (entry.ambiguousTransportError === true || entry.recoveryState === "send_attempt_started") &&
     resolveDeliveryQueueAttemptCount(entry) <
       Math.min(FINAL_TEXT_RECOVERY_MAX_ATTEMPTS, resolveMaxRetries(entry))
@@ -59,7 +61,7 @@ export type UnknownSendReplay = "blind" | "proven";
 
 export function resolveUnknownSendReplay(
   entry: QueuedDelivery,
-  reconciliation?: { status: string } | null,
+  reconciliation?: ChannelMessageUnknownSendReconciliationResult | null,
 ): UnknownSendReplay | undefined {
   if (reconciliation?.status === "not_sent" && entry.recoveryState === "send_attempt_started") {
     return "proven";
