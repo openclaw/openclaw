@@ -88,7 +88,7 @@ type GatewayRunLoopStartOptions = Pick<
   | "gatewayStateOwner"
 > & { requestHotReloadRecovery?: GatewayRestartEmitter };
 
-export type GatewayRestartStartupFailureHandler = (
+type GatewayRestartStartupFailureHandler = (
   error: unknown,
   signal: AbortSignal,
 ) => Promise<"completed" | "failed" | void>;
