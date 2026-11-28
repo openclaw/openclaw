@@ -617,7 +617,7 @@ describe("buildReplyPayloads media filter integration", () => {
       originatingChannel: "telegram",
       originatingTo: "268300329",
       accountId: "personal",
-      messagingToolSentTexts: ["different message"],
+      messagingToolSentTexts: ["hello world!"],
       messagingToolSentTargets: [
         {
           tool: "telegram",
