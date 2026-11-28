@@ -35,7 +35,8 @@ export function buildSessionsListQuery(
     ...(querySearch ? { search: querySearch } : {}),
     includeGlobal: deepLinkSessionKey ? true : filters.includeGlobal,
     includeUnknown: deepLinkSessionKey ? true : filters.includeUnknown,
-    includeDerivedTitles: false,
+    // Titles are already materialized for the selected rows; keep previews out of the roster.
+    includeDerivedTitles: true,
     includeLastMessage: false,
     archivedFilter: filters.statusFilter,
     ...(scopeAgentId ? { agentId: scopeAgentId } : {}),
