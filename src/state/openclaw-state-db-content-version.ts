@@ -5,7 +5,8 @@ import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import { existingPathOrUndefined } from "./openclaw-state-db.paths.js";
 
-const versions = new WeakMap<object, { fingerprint: string; version: string }>();
+// Retain one current content fact per canonical path, independently of admission scope.
+const versions = new Map<string, { fingerprint: string; version: string }>();
 
 /** Returned metadata also invalidates rows when a write races cached hash selection. */
 export function readAdmittedStateContentVersion(
@@ -20,7 +21,7 @@ export function readAdmittedStateContentVersion(
   if (existingPathOrUndefined(pathname) === undefined) {
     return undefined;
   }
-  const scope = getOpenClawDatabaseMaintenanceScope();
+  const canonicalPath = fs.realpathSync.native(pathname);
   const fingerprint = () => {
     const canonical = fs.realpathSync.native(pathname);
     return ["", "-wal", "-journal"]
@@ -32,13 +33,13 @@ export function readAdmittedStateContentVersion(
       .join("|");
   };
   const before = fingerprint();
-  const previous = scope && versions.get(scope);
+  const previous = versions.get(canonicalPath);
   const version =
     previous?.fingerprint === before
       ? previous.version
       : readSqliteSourceContentVersionSync(pathname);
-  if (scope && version !== undefined && before === fingerprint()) {
-    versions.set(scope, { fingerprint: before, version });
+  if (version !== undefined && before === fingerprint()) {
+    versions.set(canonicalPath, { fingerprint: before, version });
   }
   assertCurrent();
   return version && `${isExistingOpenClawStateSchema(pathname)}:${version}:${fingerprint()}`;
