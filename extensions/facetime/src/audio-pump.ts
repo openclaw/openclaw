@@ -142,6 +142,8 @@ function buildSoxOutputArguments(): string[] {
     "-b",
     "16",
     "-L",
+    // SoX can mistake queued bytes on macOS socket stdin for the entire stream.
+    "--ignore-length",
     "-",
     "-t",
     "coreaudio",

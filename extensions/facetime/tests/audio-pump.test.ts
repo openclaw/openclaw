@@ -110,7 +110,11 @@ describe("FaceTime native audio bridge", () => {
     pump.writeOutputAudio(audio, { itemId: "greeting" });
     const outputIndex = spawn.mock.calls.findIndex((call) => call[0].endsWith("sox"));
     expect(outputIndex).toBeGreaterThanOrEqual(0);
-    expect(spawn.mock.calls[outputIndex]?.[1]).toContain("OpenClaw-Feed");
+    const playbackArgs = spawn.mock.calls[outputIndex]?.[1] ?? [];
+    const stdinIndex = playbackArgs.indexOf("-");
+    expect(stdinIndex).toBeGreaterThan(0);
+    expect(playbackArgs[stdinIndex - 1]).toBe("--ignore-length");
+    expect(playbackArgs).toContain("OpenClaw-Feed");
     expect(processFor("sox")?.writes).toEqual([audio]);
     expect(processes[0]?.writes).toEqual([]);
     pump.finishOutputAudio();
