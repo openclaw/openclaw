@@ -776,6 +776,8 @@ The template id is stored as card metadata.
 
 Card forms, inline label editing, and bulk edits offer searchable labels from the currently loaded cards in the board and agent scope. You can add a new label directly; commas are part of a label, not a separator in these controls. Selections remain drafts until Save or Apply. Bulk label modes keep their distinct meanings: Keep unchanged, Add, Replace (empty clears labels), and Remove. Adding labels is blocked if a selected card would exceed its existing 12-label limit. The loaded suggestions are not a complete label catalog.
 
+In a card’s details, selecting a priority or agent, or saving labels, shows the change immediately. If the Gateway rejects the edit, the card shows its confirmed values. Reopen the label picker to retry your submitted labels.
+
 <a id="dashboard-workflow" />
 
 ## Control UI workflow
