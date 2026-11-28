@@ -106,7 +106,7 @@ async function withAdmission(
 
 async function prepareAdmission(
   storePath: string,
-  options: Parameters<typeof withAdmission>[1] = {},
+  options: NonNullable<Parameters<typeof withAdmission>[1]>,
 ) {
   const runId = randomUUID();
   const target = {
