@@ -1,4 +1,5 @@
 import {
+  GEMINI_MAX_INPUT_TOKENS,
   buildBedrockEmbeddingBody,
   buildCohereEmbeddingBody,
   buildGeminiEmbeddingRequest,
@@ -17,8 +18,14 @@ import type {
   EmbeddingProviderCreateOptions,
   EmbeddingUsage,
 } from "openclaw/plugin-sdk/embedding-providers";
-import { sanitizeAndNormalizeEmbedding } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  estimateUtf8Bytes,
+  sanitizeAndNormalizeEmbedding,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawRouterCapabilityOffer } from "./capability-offers.js";
 
 export type NativeEmbeddingRequest = {
@@ -30,7 +37,24 @@ export type NativeEmbeddingRequest = {
   maxResponseBytes: number;
 };
 
-export function embeddingRole(
+function geminiInputLimit(model: string): number | undefined {
+  return Object.hasOwn(GEMINI_MAX_INPUT_TOKENS, model) ? GEMINI_MAX_INPUT_TOKENS[model] : undefined;
+}
+
+export function configuredNativeInputLimit(model: string): number | undefined {
+  const slash = model.indexOf("/");
+  const provider = model.slice(0, slash);
+  const wire = model.slice(slash + 1);
+  if (["google", "google-gemini", "gemini"].includes(provider)) {
+    return geminiInputLimit(wire);
+  }
+  if (["bedrock", "aws-bedrock", "amazon-bedrock"].includes(provider)) {
+    return resolveBedrockEmbeddingSpec(wire)?.maxTokens;
+  }
+  return undefined;
+}
+
+function embeddingRole(
   options: EmbeddingProviderCreateOptions,
   call?: EmbeddingProviderCallOptions,
 ) {
@@ -75,36 +99,119 @@ function validateVectors(vectors: number[][], count: number, dimensions: number)
   return vectors.map(sanitizeAndNormalizeEmbedding);
 }
 
-export function prepareNativeEmbeddingRequests(
+function isRemoteEmbeddingFormat(format: string) {
+  return format === "openai.embeddings" || format === "voyage.embeddings";
+}
+
+function offerPriority(offer: ClawRouterCapabilityOffer) {
+  if (isRemoteEmbeddingFormat(offer.requestFormat)) {
+    return 0;
+  }
+  return offer.requestFormat === "google.batch_embed_contents" ? 1 : 2;
+}
+
+export function planClawRouterEmbeddingCall(
   offers: ClawRouterCapabilityOffer[],
   model: string,
   inputs: EmbeddingInput[],
   options: EmbeddingProviderCreateOptions,
   call?: EmbeddingProviderCallOptions,
-): NativeEmbeddingRequest[] {
+) {
   const role = embeddingRole(options, call);
-  const supported = new Set([
-    "cohere.embed",
-    "aws_bedrock.invoke",
-    "google.embed_content",
-    "google.batch_embed_contents",
-  ]);
-  const candidates = offers.filter(
-    (offer) =>
-      offer.model?.id === model &&
-      offer.methods.includes("POST") &&
-      offer.routeKind !== "unified" &&
-      offer.requestFormat === offer.responseFormat &&
-      supported.has(offer.requestFormat) &&
-      Array.isArray(offer.model.capabilities) &&
-      offer.model.capabilities.includes("llm.embeddings"),
-  );
-  // Prefer the bounded synchronous batch contract when it is actually offered.
-  const offer =
-    candidates.find((row) => row.requestFormat === "google.batch_embed_contents") ?? candidates[0];
-  const upstream = offer?.model?.upstream;
-  if (!offer || typeof upstream !== "string" || !upstream) {
-    throw new Error("ClawRouter has no eligible native embedding offer for this model");
+  const candidates = offers
+    .filter(
+      (offer) =>
+        offer.model?.id === model &&
+        offer.methods.includes("POST") &&
+        offer.requestFormat === offer.responseFormat &&
+        Array.isArray(offer.model.capabilities) &&
+        offer.model.capabilities.includes("llm.embeddings"),
+    )
+    .sort((a, b) => offerPriority(a) - offerPriority(b));
+  let rejected: unknown;
+  // Try only local codec preparation. Once a plan is chosen, dispatch never falls back.
+  for (const offer of candidates) {
+    const upstream = offer.model?.upstream;
+    try {
+      if (isRemoteEmbeddingFormat(offer.requestFormat) && offer.url.endsWith("/embeddings")) {
+        const voyage = offer.requestFormat === "voyage.embeddings";
+        if (inputs.some((input) => typeof input !== "string" && input.parts?.length)) {
+          throw new Error("This ClawRouter embedding offer accepts text-only inputs");
+        }
+        if (options.taskType || (!voyage && options.dimensions !== undefined)) {
+          throw new Error("This ClawRouter embedding offer does not support the requested options");
+        }
+        if (
+          voyage &&
+          (!["voyage-4", "voyage-4-large", "voyage-4-lite"].includes(String(upstream)) ||
+            (options.dimensions !== undefined &&
+              ![256, 512, 1024, 2048].includes(options.dimensions)))
+        ) {
+          throw new Error("Unsupported Voyage embedding model or dimensions");
+        }
+        const wireModel = offer.routeKind === "unified" ? model : normalizeOptionalString(upstream);
+        if (typeof wireModel === "string" && wireModel) {
+          return { kind: "remote" as const, offer, wireModel, voyage, role };
+        }
+      } else if (
+        offer.routeKind !== "unified" &&
+        typeof upstream === "string" &&
+        upstream &&
+        [
+          "cohere.embed",
+          "aws_bedrock.invoke",
+          "google.embed_content",
+          "google.batch_embed_contents",
+        ].includes(offer.requestFormat)
+      ) {
+        return {
+          kind: "native" as const,
+          requests: prepareNativeEmbeddingRequests(
+            offer,
+            upstream,
+            inputs,
+            options,
+            role,
+            configuredNativeInputLimit(model),
+            call,
+          ),
+        };
+      }
+    } catch (error) {
+      rejected ??= error;
+    }
+  }
+  throw rejected ?? new Error("ClawRouter has no eligible embedding offer for this model");
+}
+
+function prepareNativeEmbeddingRequests(
+  offer: ClawRouterCapabilityOffer,
+  upstream: string,
+  inputs: EmbeddingInput[],
+  options: EmbeddingProviderCreateOptions,
+  role: "query" | "document",
+  plannedLimit: number | undefined,
+  call?: EmbeddingProviderCallOptions,
+): NativeEmbeddingRequest[] {
+  // The configured catalog ID may be an alias. Its fresh wire model owns the actual limit.
+  const wireLimit = offer.requestFormat.startsWith("google.")
+    ? geminiInputLimit(upstream)
+    : offer.requestFormat === "aws_bedrock.invoke"
+      ? resolveBedrockEmbeddingSpec(upstream)?.maxTokens
+      : undefined;
+  if (wireLimit !== undefined && wireLimit < (plannedLimit ?? Infinity)) {
+    for (const input of inputs) {
+      const text =
+        typeof input === "string"
+          ? input
+          : (input.parts
+              ?.filter((part) => part.type === "text")
+              .map((part) => part.text)
+              .join("\n") ?? input.text);
+      if (estimateUtf8Bytes(text) > wireLimit) {
+        throw new Error("ClawRouter embedding input limit exceeded for the admitted model");
+      }
+    }
   }
   const requests: NativeEmbeddingRequest[] = [];
   const encode = (payload: unknown) => new TextEncoder().encode(JSON.stringify(payload));
@@ -223,6 +330,9 @@ export function prepareNativeEmbeddingRequests(
       requests.push({
         offer,
         body,
+        ...(!directCohere && offer.routeKind === "manifest"
+          ? { pathParams: { model: upstream } }
+          : {}),
         maxResponseBytes: 8 * 1024 * 1024,
         read: (payload) => {
           if (payload.error !== undefined) {

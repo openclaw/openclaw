@@ -12,19 +12,19 @@ import {
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
+  createProviderHttpError,
   fetchWithTimeoutGuarded,
   readProviderJsonObjectResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { mergeSsrFPolicies } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeClawRouterApiBaseUrl } from "./base-url.js";
 import {
   fetchClawRouterCapabilityOffers,
   resolveClawRouterCapabilityHttpContext,
 } from "./capability-offers.js";
-import { embeddingRole, prepareNativeEmbeddingRequests } from "./embedding-native.js";
+import { configuredNativeInputLimit, planClawRouterEmbeddingCall } from "./embedding-native.js";
 
 const normalizeModel = (options: EmbeddingProviderCreateOptions) =>
   options.model.trim().replace(/^clawrouter\//u, "");
@@ -146,29 +146,18 @@ export const clawrouterEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
         signal,
         ssrfPolicy: client.ssrfPolicy,
       });
-      const offer = offers.find(
-        (candidate) =>
-          candidate.model?.id === model &&
-          ["openai.embeddings", "voyage.embeddings"].includes(candidate.requestFormat) &&
-          candidate.responseFormat === candidate.requestFormat &&
-          candidate.methods.includes("POST") &&
-          candidate.url.endsWith("/embeddings") &&
-          Array.isArray(candidate.model.capabilities) &&
-          candidate.model.capabilities.includes("llm.embeddings"),
-      );
-      if (!offer) {
-        const requests = prepareNativeEmbeddingRequests(offers, model, inputs, options, call);
+      const plan = planClawRouterEmbeddingCall(offers, model, inputs, options, call);
+      if (plan.kind === "native") {
+        const headers = new Headers(context.headers);
+        headers.set("Content-Type", "application/json");
         const vectors: number[][] = [];
-        for (const request of requests) {
+        for (const request of plan.requests) {
           signal.throwIfAborted();
           const { response, release } = await fetchWithTimeoutGuarded(
             request.offer.url,
             {
               method: "POST",
-              headers: {
-                ...Object.fromEntries(context.headers),
-                "Content-Type": "application/json",
-              },
+              headers,
               body: JSON.stringify(
                 request.offer.routeKind === "manifest"
                   ? {
@@ -193,7 +182,11 @@ export const clawrouterEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
           );
           try {
             if (!response.ok) {
-              throw new Error(`ClawRouter embeddings failed (HTTP ${response.status})`);
+              throw await createProviderHttpError(response, "ClawRouter embeddings failed", {
+                requestHeaders: headers,
+                signal,
+                maxBodyBytes: 8 * 1024,
+              });
             }
             const payload = await readProviderJsonObjectResponse(
               response,
@@ -214,27 +207,7 @@ export const clawrouterEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
         }
         return vectors;
       }
-      const role = embeddingRole(options, call);
-      if (inputs.some((input) => typeof input !== "string" && input.parts?.length)) {
-        throw new Error("This ClawRouter embedding offer accepts text-only inputs");
-      }
-      const voyage = offer.requestFormat === "voyage.embeddings";
-      if (options.taskType || (!voyage && options.dimensions !== undefined)) {
-        throw new Error("This ClawRouter embedding offer does not support the requested options");
-      }
-      if (
-        voyage &&
-        (!["voyage-4", "voyage-4-large", "voyage-4-lite"].includes(String(offer.model?.upstream)) ||
-          (options.dimensions !== undefined &&
-            ![256, 512, 1024, 2048].includes(options.dimensions)))
-      ) {
-        throw new Error("Unsupported Voyage embedding model or dimensions");
-      }
-      const wireModel =
-        offer?.routeKind === "unified" ? model : normalizeOptionalString(offer?.model?.upstream);
-      if (!offer || !wireModel) {
-        throw new Error("ClawRouter has no eligible OpenAI-format embedding offer for this model");
-      }
+      const { offer, wireModel, voyage, role } = plan;
       signal.throwIfAborted();
       const provider = createRemoteEmbeddingProvider({
         id: "clawrouter",
@@ -278,6 +251,7 @@ export const clawrouterEmbeddingProvider: MemoryEmbeddingProviderAdapter = {
       provider: {
         id: "clawrouter",
         model,
+        maxInputTokens: configuredNativeInputLimit(model),
         embedBatch,
         embed: async (input, call) => (await embedBatch([input], call))[0] ?? [],
       },

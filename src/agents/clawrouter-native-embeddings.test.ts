@@ -2,6 +2,7 @@ import { once } from "node:events";
 import { createServer } from "node:http";
 import { buffer } from "node:stream/consumers";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { enforceEmbeddingMaxInputTokens } from "../plugin-sdk/memory-core-host-engine-indexing.js";
 import {
   createCapturedPluginRegistration,
   getActivePluginRegistry,
@@ -60,6 +61,11 @@ describe("actual ClawRouter native memory embeddings", () => {
   let routeKind = "native",
     eligible = true,
     invalidTail = false;
+  let alias: string | undefined;
+  let offerOpenAI = false;
+  let quota: "temporary" | "permanent" | undefined;
+  let catalogReads = 0;
+  const modelId = () => alias ?? selected[0] + "/" + selected[1];
   const wires: Array<{
     path: string;
     auth?: string;
@@ -84,6 +90,7 @@ describe("actual ClawRouter native memory embeddings", () => {
     void (async () => {
       res.setHeader("Content-Type", "application/json");
       if (req.url === "/v1/catalog") {
+        catalogReads++;
         res.end(
           JSON.stringify({
             version: "clawrouter.client-catalog.v1",
@@ -95,12 +102,23 @@ describe("actual ClawRouter native memory embeddings", () => {
                 nativeBaseUrl: "/v1/native/" + selected[0],
                 models: [
                   {
-                    id: selected[0] + "/" + selected[1],
+                    id: modelId(),
                     upstream: selected[1],
                     capabilities: ["llm.embeddings"],
                   },
                 ],
                 routes: [
+                  ...(offerOpenAI
+                    ? [
+                        {
+                          endpoint: "embeddings",
+                          path: "/v1/embeddings",
+                          methods: ["POST"],
+                          requestFormat: "openai.embeddings",
+                          responseFormat: "openai.embeddings",
+                        },
+                      ]
+                    : []),
                   {
                     endpoint: endpoint(),
                     path: path(),
@@ -110,9 +128,22 @@ describe("actual ClawRouter native memory embeddings", () => {
                   },
                 ],
                 offers: [
+                  ...(offerOpenAI
+                    ? [
+                        {
+                          endpoint: "embeddings",
+                          modelId: modelId(),
+                          routeKind: "unified",
+                          route: "/v1/embeddings",
+                          transport: "http",
+                          eligible,
+                          affordability: "request-dependent",
+                        },
+                      ]
+                    : []),
                   {
                     endpoint: endpoint(),
-                    modelId: selected[0] + "/" + selected[1],
+                    modelId: modelId(),
                     routeKind,
                     route: route(),
                     transport: "http",
@@ -130,12 +161,21 @@ describe("actual ClawRouter native memory embeddings", () => {
       const body = (routeKind === "manifest" ? envelope.body : envelope) as Record<string, unknown>;
       const pathModel = (envelope.pathParams as Record<string, unknown> | undefined)?.model;
       wires.push({ path: req.url ?? "", auth: req.headers.authorization, body, pathModel });
-      // Google manifest selection requires the model path parameter, even for a batch body.
-      if (
-        routeKind === "manifest" &&
-        selected[2].startsWith("google.") &&
-        pathModel !== selected[1]
-      ) {
+      if (quota) {
+        res.statusCode = 429;
+        if (quota === "temporary") res.setHeader("Retry-After", "3");
+        res.end(
+          JSON.stringify({
+            error: { code: quota === "temporary" ? "rate_limited" : "insufficient_quota" },
+          }),
+        );
+        return;
+      }
+      if (req.url === "/v1/embeddings") {
+        res.end(JSON.stringify({ data: [{ index: 0, embedding: [1, 2] }] }));
+        return;
+      }
+      if (routeKind === "manifest" && path().includes("${model}") && pathModel !== selected[1]) {
         res.statusCode = 400;
         res.end(JSON.stringify({ error: { code: "invalid_native_embedding_route" } }));
         return;
@@ -211,10 +251,14 @@ describe("actual ClawRouter native memory embeddings", () => {
     routeKind = "native";
     eligible = true;
     invalidTail = false;
+    alias = undefined;
+    offerOpenAI = false;
+    quota = undefined;
+    catalogReads = 0;
     wires.length = 0;
   });
   const options = (): EmbeddingProviderCreateOptions => ({
-    model: selected[0] + "/" + selected[1],
+    model: modelId(),
     dimensions: selected[3],
     config: {
       plugins: { enabled: false },
@@ -274,7 +318,7 @@ describe("actual ClawRouter native memory embeddings", () => {
         if (model.includes("marengo-3-0")) {
           expect(first).toEqual({ inputType: "text", text: { inputText: "query" } });
         }
-        if (format.startsWith("google.")) {
+        if (path().includes("${model}")) {
           for (const wire of wires) {
             expect(wire.pathModel).toBe(kind === "manifest" ? model : undefined);
           }
@@ -313,6 +357,10 @@ describe("actual ClawRouter native memory embeddings", () => {
       )?.multimodal?.enabled,
     ).toBe(true);
     routeKind = "manifest";
+    offerOpenAI = true;
+    const plain = await create({ ...options(), dimensions: undefined });
+    expect(await plain.provider!.embed("plain")).toEqual([1, 2]);
+    expect(wires.pop()?.path).toBe("/v1/embeddings");
     const { provider } = await create(options());
     expect(
       await provider!.embed({
@@ -346,6 +394,52 @@ describe("actual ClawRouter native memory embeddings", () => {
     await expect(provider!.embed("revoked")).rejects.toThrow("no eligible");
     expect(wires).toHaveLength(count);
   });
+  it("uses the configured native wire limit to split memory chunks before discovery", async () => {
+    selected = cases[11];
+    const text = "x".repeat(513);
+    const chunk = { text, hash: "source", startLine: 1, endLine: 1 };
+    const { provider } = await create({
+      ...options(),
+      model: "clawrouter/bedrock/cohere.embed-english-v3",
+    });
+    expect(
+      enforceEmbeddingMaxInputTokens(provider!, [chunk]).map((item) => item.text.length),
+    ).toEqual([512, 1]);
+    for (const [model, limit] of [
+      ["google/gemini-embedding-001", 2048],
+      ["bedrock/amazon.titan-embed-text-v1", 8000],
+      ["bedrock/us.twelvelabs.marengo-embed-2-7-v1:0", 512],
+      ["openai/text-embedding-3-small", undefined],
+    ] as const) {
+      expect((await create({ ...options(), model })).provider?.maxInputTokens).toBe(limit);
+    }
+    expect(catalogReads).toBe(0);
+  });
+  it("checks a catalog alias against its freshly admitted native model before dispatch", async () => {
+    selected = cases[11];
+    alias = "team/short";
+    const aliased = (await create(options())).provider!;
+    expect(aliased.maxInputTokens).toBeUndefined();
+    expect(await aliased.embedBatch([])).toEqual([]);
+    expect(catalogReads).toBe(0);
+    await expect(aliased.embed("x".repeat(513))).rejects.toThrow("input limit");
+    expect(wires).toHaveLength(0);
+    expect(await aliased.embed("short")).toEqual(axis(selected[3]));
+  });
+  it.each(["temporary", "permanent"] as const)(
+    "preserves the native %s quota response",
+    async (kind) => {
+      selected = cases[5];
+      quota = kind;
+      const { provider } = await create(options());
+      await expect(provider!.embed("synthetic")).rejects.toMatchObject(
+        kind === "temporary"
+          ? { status: 429, retryAfterMs: 3000 }
+          : { status: 429, errorCode: "insufficient_quota" },
+      );
+      expect(wires.map((wire) => wire.path)).toEqual([route().replaceAll("${model}", selected[1])]);
+    },
+  );
   it("rejects unqualified options and aborts before native dispatch; dimensions partition indexes", async () => {
     selected = cases[13];
     const cfg = options();
