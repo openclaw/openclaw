@@ -369,6 +369,32 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(onStatus).not.toHaveBeenCalled();
   });
 
+  it("reports an accepted consult run even when Google Live closes before the acknowledgment", async () => {
+    const acknowledgment = createDeferred<ReturnType<typeof consultRunResult>>();
+    const onConsultRun = vi.fn();
+    const { client } = consultClient(() => acknowledgment.promise);
+    const { transport, ws } = await startFixture({ onConsultRun }, client);
+
+    ws.emitCalls(consultCall("call-1", { question: "check the session" }));
+    await waitForFast(() =>
+      expect(client.request).toHaveBeenCalledWith(
+        "talk.client.toolCall",
+        expect.objectContaining({ callId: "call-1" }),
+      ),
+    );
+    expect(onConsultRun).not.toHaveBeenCalled();
+
+    transport.stop();
+    acknowledgment.resolve(consultRunResult());
+
+    await waitForFast(() =>
+      expect(onConsultRun).toHaveBeenCalledExactlyOnceWith({
+        runId: "run-1",
+        sessionKey: "main",
+      }),
+    );
+  });
+
   it("does not revive Talk status or abort an accepted consult after stop", async () => {
     const onStatus = vi.fn();
     const runId = "run-1";
@@ -491,24 +517,24 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
       expect(method).toBe("talk.client.toolCall");
       return consultRunResult();
     });
-    const transport = await sessionTransport(createSession(
-      "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
-    ), client);
+    const transport = await sessionTransport(
+      createSession(
+        "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContentConstrained",
+      ),
+      client,
+    );
     const ws = await startTransport(transport);
     ws.emitCalls(consultCall("call-aborted", { question: "check the session" }));
     await waitForFast(() => expect(listeners.size).toBe(1));
     for (const listener of listeners) {
       listener({ event: "chat", payload: { runId: "run-1", state: "aborted" } });
     }
-    await waitForFast(() => expectToolResponse(
-      ws,
-      "call-aborted",
-      REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-      {
+    await waitForFast(() =>
+      expectToolResponse(ws, "call-aborted", REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME, {
         status: "cancelled_by_user",
         message: "The user stopped this task. Do not retry unless the user asks again.",
-      },
-    ));
+      }),
+    );
     transport.stop();
   });
 

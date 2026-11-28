@@ -127,6 +127,7 @@ export class GoogleLiveToolOwner {
       const activeContext: RealtimeTalkTransportContext = {
         ...ctx,
         callbacks: {
+          ...ctx.callbacks,
           onStatus: (status, detail) => {
             if (!this.options.isClosed()) {
               ctx.callbacks.onStatus?.(status, detail);
