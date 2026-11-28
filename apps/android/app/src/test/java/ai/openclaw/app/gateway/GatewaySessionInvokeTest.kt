@@ -535,7 +535,6 @@ class GatewaySessionInvokeTest {
                 connectParams.complete(frame["params"]!!.jsonObject)
               }
               webSocket.send(connectResponseFrame(id))
-              webSocket.close(1000, "done")
             }
           }
         }
@@ -873,7 +872,6 @@ class GatewaySessionInvokeTest {
                 connectAuth.complete(frame["params"]?.jsonObject?.get("auth")?.jsonObject)
               }
               webSocket.send(connectResponseFrame(id))
-              webSocket.close(1000, "done")
             }
           }
         }
@@ -1147,7 +1145,6 @@ class GatewaySessionInvokeTest {
                     """{"deviceToken":"$returnedToken","role":"operator","scopes":["operator.read"]}""",
                 ),
               )
-              webSocket.close(1000, "done")
             }
           }
 
@@ -1202,7 +1199,6 @@ class GatewaySessionInvokeTest {
                     """{"deviceToken":"bootstrap-node-token","role":"node","scopes":[],"deviceTokens":[{"deviceToken":"bootstrap-operator-token","role":"operator","scopes":["operator.admin","operator.approvals","operator.pairing","operator.read","operator.talk.secrets","operator.write"]}]}""",
                 ),
               )
-              webSocket.close(1000, "done")
             }
           }
         }
