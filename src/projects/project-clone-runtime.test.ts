@@ -173,11 +173,11 @@ it.each(["clone", "refresh", "denied"] as const)(
           })
         : run(argv, options),
     );
+    // Refresh runs real local Git before the mocked fetch; a 60 ms budget would bound those too.
     const error = await capture(
-      (operation === "refresh" ? refreshProjectCheckout : cloneProjectCheckout)(
-        { url, target },
-        { timeoutMs: 60 },
-      ),
+      operation === "refresh"
+        ? refreshProjectCheckout({ url, target })
+        : cloneProjectCheckout({ url, target }, { timeoutMs: 60 }),
     );
     expect(error).toBeInstanceOf(ProjectCloneError);
     expect(error).toMatchObject({
@@ -185,7 +185,7 @@ it.each(["clone", "refresh", "denied"] as const)(
       message:
         operation === "denied"
           ? "GitHub denied access to this repository. Ask the Gateway operator to check the configured GitHub credential and repository access before retrying."
-          : `Git ${operation} did not finish within 60 ms. The repository may be too large to clone here; retry, or ask the Gateway operator to check projects/clone logs.`,
+          : `Git ${operation} did not finish within ${operation === "refresh" ? "10 minutes" : "60 ms"}. The repository may be too large to clone here; retry, or ask the Gateway operator to check projects/clone logs.`,
     });
     expect(String(error)).not.toContain("could not reach GitHub");
     if (operation === "denied") {

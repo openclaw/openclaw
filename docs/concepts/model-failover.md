@@ -360,7 +360,7 @@ Use `auth.order.openai` for the user-facing order:
 }
 ```
 
-Use `openai:*` for both ChatGPT/Codex OAuth profiles and OpenAI API-key profiles. When the subscription hits a Codex usage limit, OpenClaw records the exact reset time when Codex provides one. It tries the next ordered auth profile, and keeps the run inside the Codex harness. Once the reset time passes, the subscription profile is eligible again and the next automatic selection can return to it.
+Use `openai:*` for both ChatGPT/Codex OAuth profiles and OpenAI API-key profiles. When the subscription hits a Codex usage limit, OpenClaw records the exact reset time when Codex provides one. It tries the next ordered auth profile, and keeps the run inside the Codex harness. Once the reset time passes, the subscription profile is eligible again and the next automatic selection can return to it. Purchased credits on the same ChatGPT account and user cover exhausted included usage. Separate quota limits and spending caps still apply.
 
 Use a user-pinned profile to make one account/key the durable first preference for that session. If it becomes unavailable, OpenClaw temporarily rotates through the remaining eligible `auth.order.openai` profiles and returns to the pinned profile after recovery.
 

@@ -426,15 +426,11 @@ export async function streamAgentResponse(
             case "toolcall_delta":
             case "toolcall_end":
               if (partialMessage) {
-                // Only updates assembled here prove appends; provider snapshots can correct text.
-                let append: { offset: number; delta: string } | undefined;
-                if (event.type === "text_delta" && event.partial === undefined) {
-                  const priorBlock = partialMessage.content[event.contentIndex];
-                  append = {
-                    offset: priorBlock?.type === "text" ? priorBlock.text.length : 0,
-                    delta: event.delta,
-                  };
-                }
+                // Deltas, not the shared snapshot, give the repetition guard its offsets.
+                const delta =
+                  event.type === "text_delta" || event.type === "thinking_delta"
+                    ? event.delta
+                    : undefined;
                 let message: AssistantMessage = partialMessage;
                 if ("partial" in event && event.partial) {
                   message = event.partial;
@@ -485,7 +481,7 @@ export async function streamAgentResponse(
                   message,
                   committedContentCount,
                   event.type === "toolcall_end" ? undefined : event.contentIndex,
-                  append,
+                  delta,
                 );
                 if (stopped) {
                   modelAbort.abort(new Error(REPETITIVE_OUTPUT_ERROR_MESSAGE));

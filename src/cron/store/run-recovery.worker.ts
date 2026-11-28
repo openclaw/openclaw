@@ -10,6 +10,7 @@ import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.
 import type { CronRunReceipt } from "./run-receipt.types.js";
 import { recoverCronJobInDatabase } from "./run-recovery.kernel.js";
 import type { CronRunRecoveryInput, CronRunRecoveryOutcome } from "./run-recovery.types.js";
+import { loadCronRuntimeAuthorities } from "./runtime-authority-store.js";
 import { createCronMutationLogger } from "./runtime-mutation.worker.js";
 
 /** One startup command restores committed outcomes before scheduling can dispatch work. */
@@ -22,6 +23,8 @@ export function recoverCronRunsInWorker(
       ensureCronRunReceiptSchema(db);
       const receiptSchema = prepareCronRunReceiptWriteSchema(db);
       const jobs = loadedCronStoreFromRows(loadCronRows(db, input.storeKey)).store.jobs;
+      // Recovery publishes whole jobs back to the Gateway, including their private authority.
+      loadCronRuntimeAuthorities({ db, storeKey: input.storeKey, jobs });
       const liveReceiptIds = new Set(input.liveReceiptIds);
       const liveJobIds = new Set<string>();
       const receipts = new Map<string, CronRunReceipt>();

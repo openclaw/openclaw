@@ -11,6 +11,7 @@ import {
 } from "../cli/update-cli/schema-preflight.js";
 import { isBunRuntime } from "../daemon/runtime-binary.js";
 import { resolveBunRuntimeInfo } from "../daemon/runtime-paths.js";
+import { resolveServiceAccountName } from "../daemon/systemd-service-account-command.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveNpmCommand } from "../infra/npm-command.js";
@@ -43,7 +44,6 @@ export async function preflight(params: {
   kind: UpdateTarget["kind"];
   target: UpdateTarget;
   prefix: string;
-  stateDir: string;
   node?: string;
   env?: NodeJS.ProcessEnv;
   statfs?: (file: string) => Promise<{ bavail: number | bigint; bsize: number | bigint }>;
@@ -54,9 +54,10 @@ export async function preflight(params: {
     reason,
     message,
   });
-  let reason = "unsupported-install";
+  let reason = "prefix-not-writable";
   try {
     const ancestor = await existingAncestor(params.prefix);
+    reason = "unsupported-install";
     const installPath =
       params.target.kind === "git"
         ? params.target.checkout
@@ -179,21 +180,37 @@ export async function preflight(params: {
   } catch (error) {
     if (
       (reason === "prefix-not-writable" || reason === "disk-space-unavailable") &&
-      (hasErrnoCode(error, "EACCES") || hasErrnoCode(error, "EPERM"))
+      (hasErrnoCode(error, "EACCES") ||
+        hasErrnoCode(error, "EPERM") ||
+        hasErrnoCode(error, "EROFS"))
     ) {
       try {
-        const ancestor = await existingAncestor(params.prefix);
-        const owner = await fs.stat(ancestor);
-        const user = os.userInfo();
-        const relative = path.relative(user.homedir, await fs.realpath(ancestor));
-        const outsideHome =
-          relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
-        return refuse(
-          "prefix-not-writable",
-          owner.uid === 0 && outsideHome
-            ? `The installation at '${params.prefix}' is owned by root. Run: sudo openclaw update`
-            : `Files in '${params.prefix}' are not writable by ${user.username}. Fix ownership with: sudo chown -R ${user.username} ${shellEscape(params.prefix)}. Then retry the update.`,
-        );
+        const ancestor = await fs.realpath(await existingAncestor(params.prefix));
+        let message = `'${ancestor}' is not writable; check its permissions or read-only filesystem.`;
+        if (hasErrnoCode(error, "EROFS")) {
+          message = `'${ancestor}' is on a read-only filesystem.`;
+        } else if (process.platform !== "win32") {
+          const owner = await fs.stat(ancestor);
+          const user = os.userInfo();
+          if (owner.uid === user.uid) {
+            message = `'${ancestor}' is owned by you but not writable; check its permissions or read-only filesystem.`;
+          } else if (user.uid !== 0 && owner.uid !== 0) {
+            const account = await resolveServiceAccountName(String(owner.uid)).catch(
+              () => `uid ${owner.uid}`,
+            );
+            message = `'${ancestor}' is owned by ${account}; update as that user, or run sudo openclaw update.`;
+          } else if (user.uid !== 0) {
+            const relative = path.relative(await fs.realpath(user.homedir), ancestor);
+            const outsideHome =
+              relative === ".." ||
+              relative.startsWith(`..${path.sep}`) ||
+              path.isAbsolute(relative);
+            message = outsideHome
+              ? `The installation at '${ancestor}' is owned by root. Run: sudo openclaw update`
+              : `Files in '${ancestor}' are not writable by ${user.username}. Fix ownership with: sudo chown -R ${shellEscape(user.username)} ${shellEscape(ancestor)}. Then retry the update.`;
+          }
+        }
+        return refuse("prefix-not-writable", message);
       } catch {
         // Preserve the original permission failure if ownership cannot be inspected.
       }

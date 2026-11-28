@@ -223,11 +223,9 @@ describe("cron protocol validators", () => {
     checkUpdate(patch).toBe(accepted);
   });
 
-  it("accepts response-only wake metadata while rejecting it on add and update", () => {
+  it("keeps protocol-v4 wake metadata limited to its released values", () => {
     expect(Value.Check(CronJobSchema, { ...jobWithState(), wakeMode: "now" })).toBe(true);
-    expect(isAdd(minimalAddParams)).toBe(true);
-    expect(isAdd({ ...minimalAddParams, wakeMode: "now" })).toBe(false);
-    expect(isUpdate(update({ wakeMode: "next-heartbeat" }))).toBe(false);
+    expect(isAdd({ ...minimalAddParams, wakeMode: "later" })).toBe(false);
   });
 
   it.each([

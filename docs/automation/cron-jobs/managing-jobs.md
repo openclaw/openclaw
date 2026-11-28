@@ -79,11 +79,11 @@ Run links from automation messages and notifications open the exact recorded run
 
 ## Managing jobs
 
-Full job responses retain a deprecated `wakeMode: "now"` field so released
-protocol-v4 clients, including Android v2026.11.10, can still open automation
-details. This value is derived when the Gateway returns the job; it is not a
-stored setting and does not control scheduling. Create and update requests do
-not accept `wakeMode`. The compatibility field remains until protocol v4 retires.
+The schedule controls when an automation runs. For released protocol-v4 clients,
+the Gateway accepts and discards `wakeMode` on create and update. It accepts
+both legacy values, `"now"` and `"next-heartbeat"`. Full job responses include
+`wakeMode: "now"` so clients such as Android v2026.11.10 can open job details.
+This compatibility lasts until protocol v4 retires.
 
 In the Control UI, an open automation refreshes its next-run time and condition activity when scheduler events arrive. These runtime updates preserve unsaved settings and the saved definition used for conflict detection, including when the selected automation is outside the current list page or filter.
 

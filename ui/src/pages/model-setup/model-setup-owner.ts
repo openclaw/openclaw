@@ -7,10 +7,9 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { subscribeModelCatalogChanges } from "../../lib/model-catalog-store.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
-import { readSessionDefaults } from "../../lib/sessions/session-key.ts";
-import { createModelProviderLogin } from "../model-providers/login-controller.ts";
 import {
   captureModelSetupConnection,
   modelSetupAgentSelection,
@@ -23,7 +22,6 @@ import { completeModelSetupWizard } from "./model-setup-completion.ts";
 import { createModelSetupIconLoader } from "./model-setup-icon-loader.tsx";
 import { createModelSetupSaving } from "./model-setup-saving.ts";
 import { formatModelSetupError } from "./model-setup-task-result.ts";
-import { createNativeModelSetup } from "./native-model-setup.tsx";
 import { candidateActivation, type ModelSetupPrepareOption } from "./prepare-options.ts";
 import { manualProviderActivation } from "./provider-picker.tsx";
 import type { ModelSetupDetection } from "./rpc.ts";
@@ -38,10 +36,18 @@ import { ModelSetupWizardRunner, type ModelSetupWizardCompletion } from "./wizar
 
 export type ModelSetupPageProps = {
   routeData?: ModelSetupRouteData;
-  embedded?: boolean;
+  /** First-run setup opens local discovery on request; discovery alone is always open. */
+  discoveryOpen?: boolean;
   agentLabel?: string;
   credentialChoices?: readonly string[];
   onClose?: () => void;
+  /**
+   * First-run state the Models page consumes: an unresolved activation fences catalog sign-in,
+   * and the first finished discovery decides where detected models render.
+   */
+  onFirstRunState?: (state: { unresolved: boolean; detected: boolean }) => void;
+  /** The catalog painted before discovery finished; late results render below it. */
+  resultsBelow?: boolean;
 };
 
 export function createModelSetup(
@@ -60,8 +66,6 @@ export function createModelSetup(
     }
   };
   const actionsDisabled = (): boolean =>
-    login.busy ||
-    nativeModels.active ||
     state.activationState.phase === "testing" ||
     state.verifyState.phase === "checking" ||
     wizardMutationActive ||
@@ -75,11 +79,9 @@ export function createModelSetup(
 
   let observedConnection: ReturnType<typeof captureModelSetupConnection> | null = null;
   let pendingPrepareOption: ModelSetupPrepareOption | null = null;
-  let manualProviderRevealPending = false;
   let wizardMutationGeneration = 0;
   let wizardMutationActive = false;
   let wizardReturnFocus: HTMLElement | null = null;
-  let manualInput: HTMLInputElement | undefined;
   let feedback: HTMLElement | undefined;
   let wizardDialog: import("../../components/modal-dialog.tsx").OpenClawModalDialog | undefined;
   const readConnection = () => {
@@ -106,39 +108,11 @@ export function createModelSetup(
     closeWizard,
     notify,
   });
-  const nativeModels = createNativeModelSetup({
-    getContext: () => context,
-    getConnection: readConnection,
-    canUseSetup,
-    blocked: () => {
-      projection.read();
-      return activationBlocked();
-    },
-    onSelected: () => (props.embedded ? props.onClose?.() : context.navigate("chat")),
-    onChange: notify,
-  });
   const iconLoader = createModelSetupIconLoader(
     () => context,
     () => state.pageState,
     (urls) => (state.iconUrls = urls),
   );
-  const login = createModelProviderLogin({
-    getScope: () => ({
-      context,
-      agentId: agentSelection().state.selectedId,
-      connectionEpoch: context.gateway.connectionRevision,
-    }),
-    getManualProviders: () =>
-      state.pageState.phase === "ready" ? state.pageState.result.manualProviders : [],
-    onManualProvider: (authChoice) => {
-      manualProviderRevealPending = true;
-      selectManualProvider(authChoice);
-    },
-    canStart: () =>
-      canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved && !actionsDisabled(),
-    canContinue: () => canUseSetup(context.gateway.snapshot.client) && !firstRun.unresolved,
-    refresh: () => detect(),
-  });
   const wizard = new ModelSetupWizardRunner({
     getClient: () => context.gateway.snapshot.client,
     getAgentId: () => agentSelection().state.selectedId,
@@ -222,16 +196,11 @@ export function createModelSetup(
   const [detectionIdentity, setDetectionRequest] = createSignal<ModelSetupDetection>();
 
   let feedbackState: ModelSetupActivationState | undefined;
+  let reported = { unresolved: false, detected: false };
 
   function afterRender() {
     if (!connected) {
       return;
-    }
-    if (manualProviderRevealPending) {
-      manualProviderRevealPending = false;
-      wizardDialog?.setReturnFocusTarget(manualInput ?? null);
-      manualInput?.scrollIntoView?.({ block: "nearest", behavior: "auto" });
-      manualInput?.focus({ preventScroll: true });
     }
     if (feedbackState !== state.activationState && state.activationState.phase !== "idle") {
       feedback?.scrollIntoView?.({ block: "nearest", behavior: "auto" });
@@ -242,6 +211,17 @@ export function createModelSetup(
     }
     iconLoader.reconcile();
     firstRun.start();
+    // The Models page fences catalog sign-in on unresolved recovery and places late results.
+    const next = {
+      unresolved: firstRun.unresolved,
+      detected:
+        reported.detected ||
+        (state.detectionRequest === null && state.pageState.phase !== "loading"),
+    };
+    if (next.unresolved !== reported.unresolved || next.detected !== reported.detected) {
+      reported = next;
+      props.onFirstRunState?.(next);
+    }
   }
 
   function synchronizeGateway(currentRoute: ModelSetupPageProps["routeData"]): void {
@@ -259,7 +239,6 @@ export function createModelSetup(
     }
     const connection = observation.connection;
     observedConnection = connection;
-    nativeModels.reset();
     // A pending agent roster keeps its prior connection fields; read the live phase.
     const suspendedNotice =
       snapshot.phase !== "connected" && state.wizardMode === "auth"
@@ -304,8 +283,6 @@ export function createModelSetup(
     } else {
       firstRun.connectionChanged(connection);
     }
-    manualProviderRevealPending = false;
-    login.reset();
     state.detectionRequest = null;
     setDetectionRequest(undefined);
     retireWizardMutation();
@@ -554,9 +531,6 @@ export function createModelSetup(
       snapshot.phase === "connected" &&
       isGatewayMethodAdvertised(snapshot, "openclaw.setup.detect") !== true;
     return {
-      onManualInput: (element: HTMLInputElement) => {
-        manualInput = element;
-      },
       onFeedback: (element: HTMLDivElement) => {
         feedback = element;
       },
@@ -565,7 +539,10 @@ export function createModelSetup(
       },
       detecting: state.detectionRequest !== null,
       detectionIdentity,
-      embedded: props.embedded ?? false,
+      // Outside first run, setup is the Models page's local discovery dialog.
+      embedded: routeData()?.firstRun !== true,
+      discoveryOpen: routeData()?.firstRun !== true || props.discoveryOpen === true,
+      resultsBelow: props.resultsBelow === true,
       agentLabel: props.agentLabel ?? "",
       credentialChoices: props.credentialChoices ?? [],
       onClose: props.onClose,
@@ -580,7 +557,6 @@ export function createModelSetup(
       ),
       activation: state.activationState,
       verify: state.verifyState,
-      connection: props.embedded ? undefined : login.pageActions,
       wizard:
         state.wizardState.phase === "step" && wizardMutationActive
           ? { ...state.wizardState, busy: true }
@@ -592,7 +568,6 @@ export function createModelSetup(
       canPrepare:
         canUseSetup(snapshot.client) &&
         isGatewayMethodAdvertised(snapshot, "openclaw.setup.prepare.start") === true,
-      modelConfigured: readSessionDefaults(snapshot)?.modelConfigured === true,
       gatewayTooOld,
       refreshWarning: state.setupRefreshWarning,
       cancellationNotice: state.cancellationNotice,
@@ -605,7 +580,6 @@ export function createModelSetup(
       manualApiKey: state.manualApiKey,
       manualError: state.manualError,
       moreSignInOpen: state.moreSignInOpen,
-      nativeModels,
       firstRun: routeData()?.firstRun === true,
       iconUrls: state.iconUrls,
       onDetect: () => {
@@ -642,15 +616,15 @@ export function createModelSetup(
         state.moreSignInOpen = open;
       },
       onIconError: iconLoader.invalidate,
-      onOpenChat: () => (props.embedded ? props.onClose?.() : firstRun.continueSetup()),
+      onOpenChat: () =>
+        routeData()?.firstRun === true ? firstRun.continueSetup() : props.onClose?.(),
       onOpenSetupAssistant: () => firstRun.continueSetup("utility"),
       onSuccessClose: () => {
-        if (props.embedded) {
-          props.onClose?.();
-          return;
+        if (routeData()?.firstRun === true) {
+          state.activationState = { phase: "idle" };
+          void detect();
         }
-        state.activationState = { phase: "idle" };
-        void detect();
+        props.onClose?.();
       },
       onWizardValueChange: (value: unknown) => {
         state.wizardDraft = { ...state.wizardDraft, value };
@@ -663,7 +637,6 @@ export function createModelSetup(
   };
   const synchronizeCurrentGateway = () => {
     synchronizeGateway(routeData());
-    login.synchronize();
     notify();
   };
   createEffect(
@@ -689,6 +662,14 @@ export function createModelSetup(
     const stopGateway = context.gateway.subscribe(synchronizeCurrentGateway);
     // Receipt-clear events retire restored wizard work before another activation can start.
     const stopFirstRun = firstRun.subscribe(notify);
+    // Models on the same page (catalog sign-in, keys) can configure a model; rescan so
+    // first run offers its verification and onboarding handoff without a reload. A newer
+    // scan replaces one that began before the change; setup actions rescan when they settle.
+    const stopCatalog = subscribeModelCatalogChanges(context.gateway, () => {
+      if (!actionsDisabled()) {
+        void detect();
+      }
+    });
     synchronizeCurrentGateway();
     return () => {
       disposed = true;
@@ -696,6 +677,7 @@ export function createModelSetup(
       connected = false;
       stopGateway();
       stopFirstRun();
+      stopCatalog();
       firstRun.dispose();
       retireWizardMutation();
       iconLoader.reset();
@@ -704,7 +686,6 @@ export function createModelSetup(
   });
   return {
     view,
-    login,
     wizardSaving: wizardSaving.saving,
     revision: projection.revision,
   };

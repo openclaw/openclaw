@@ -15,6 +15,7 @@ import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import { createCronScheduledRunId } from "../store/run-request-id.js";
 import type { CronJob } from "../types.js";
 import { start, stop } from "./ops-lifecycle.js";
+import { update, updateWithPrecondition } from "./ops-mutations.js";
 import { recoverCronRuns } from "./run-recovery.js";
 import { makeCronRecoveryState } from "./run-recovery.test-support.js";
 import { createCronServiceState } from "./state.js";
@@ -163,6 +164,35 @@ async function record(
 }
 
 describe("worker-owned startup recovery", () => {
+  it("can re-enable a transferred one-shot after startup recovery", async () => {
+    const entry = job("completed", {
+      ownerProfileId: "creator",
+      enabled: false,
+      schedule: { kind: "at", at: new Date(now - 1_000).toISOString() },
+      deleteAfterRun: false,
+      state: { lastRunAtMs: now - 1_000, lastRunStatus: "ok" },
+    });
+    const { storePath } = await recoveryStore([entry]);
+    const state = makeCronRecoveryState(logger, storePath, now);
+    await update(state, entry.id, { ownerProfileId: "recipient" });
+
+    try {
+      await start(state);
+      const schedule = { kind: "every", everyMs: 86_400_000 } as const;
+      await updateWithPrecondition(state, entry.id, { enabled: true, schedule }, (current) => {
+        expect(current.ownerProfileId).toBe("recipient");
+      });
+      expect((await loadCronStore(storePath)).jobs[0]).toMatchObject({
+        ownerProfileId: "recipient",
+        enabled: true,
+        schedule,
+      });
+    } finally {
+      stop(state);
+      await state.schedulerDrain;
+    }
+  });
+
   it("keeps recovered rows resident and observes a later in-process write", async () => {
     const entry = job("resident-recovery");
     const store = await recoveryStore([entry]);

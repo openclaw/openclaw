@@ -4,7 +4,7 @@ import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 /** Core tools the model reads as one capability, so Tool Search shows or defers them together. */
-export const CORE_TOOL_CATALOG_FAMILIES: Readonly<Record<string, readonly string[]>> = {
+const CORE_TOOL_CATALOG_FAMILIES: Readonly<Record<string, readonly string[]>> = {
   delegation: ["sessions_spawn", "subagents", "agents_wait"],
 };
 const CORE_TOOL_CATALOG_FAMILY = new Map(

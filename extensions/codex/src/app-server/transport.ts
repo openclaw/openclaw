@@ -1,4 +1,5 @@
 import { finished } from "node:stream/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { terminateCodexAppServerDescendants } from "./transport-process-containment.js";
 import { waitForCodexAppServerProcessRegistrationCleanup } from "./transport-process-registration.js";
 
@@ -6,10 +7,18 @@ export type CodexAppServerCloseResult =
   | { exited: true; cleanup: "closed" | "terminated" | "uncertain" }
   | { exited: false; cleanup: "uncertain" };
 
+type ContainmentOutcome = "natural" | "graceful" | "contained" | "uncertain";
+type StdioDrain = {
+  drained: Promise<boolean>;
+  retain: () => void;
+  release: () => void;
+};
 type TransportClose = {
-  closing: Promise<"natural" | "graceful" | "contained" | "uncertain">;
+  closing: Promise<ContainmentOutcome>;
   naturalExit: boolean;
   wasForced: () => boolean;
+  exitWaitReady: Promise<void>;
+  drainStdio: () => StdioDrain;
 };
 const CODEX_APP_SERVER_TRANSPORT_CLOSES = new WeakMap<object, TransportClose>();
 
@@ -69,13 +78,27 @@ export function closeCodexAppServerTransport(
 
 function beginCodexAppServerTransportClose(
   child: CodexAppServerTransport,
-  options: TransportCloseOptions,
+  options: TransportCloseOptions & { exitTimeoutMs?: number },
 ): TransportClose {
   const current = CODEX_APP_SERVER_TRANSPORT_CLOSES.get(child);
   if (current) {
     return current;
   }
   let forced = false;
+  const exitWaitReady = createDeferred<void>();
+  let drain: StdioDrain | undefined;
+  const drainStdio = () =>
+    (drain ??= ownStdioDrain(child, exitWaitReady.promise, options.exitTimeoutMs ?? 2_000));
+  if (options.drainStdio) {
+    void drainStdio();
+  }
+  const forceKillDelayMs = options.forceKillDelayMs ?? 1_000;
+  const releaseUndrainedPipes = () => {
+    if (!drain) {
+      child.stdout.destroy?.();
+      child.stderr.destroy?.();
+    }
+  };
   const forceKill = () => {
     forced = true;
     signalCodexAppServerTransport(child, "SIGKILL");
@@ -91,20 +114,38 @@ function beginCodexAppServerTransportClose(
       // Client admission is closed; discard late notifications so stdout cannot
       // block Codex's shutdown drain after the message reader has detached.
       child.stdout.resume();
-      if (await waitForCodexAppServerTransportExit(child, options.forceKillDelayMs ?? 1_000)) {
+      if (await waitForCodexAppServerTransportExit(child, forceKillDelayMs)) {
         return "graceful";
       }
     }
     if (process.platform === "win32" || !child.pid || !child.kill) {
-      finishCodexAppServerTransportClose(child, options, forceKill);
+      finishCodexAppServerTransportClose(child, forceKillDelayMs, forceKill, releaseUndrainedPipes);
       return "uncertain";
     }
-    const contained = await terminateCodexAppServerDescendants(child).catch(() => undefined);
+    const contained = await terminateCodexAppServerDescendants(child, {
+      startRecovery: () => {
+        exitWaitReady.resolve();
+        // Startup still owes a full EOF grace and time to observe exit. Cap
+        // its extra inspection at one third of the force interval. Each
+        // diagnostic caller can independently stop waiting sooner.
+        const retryMs =
+          options.drainStdio && !options.gracefulExit ? forceKillDelayMs / 3 : forceKillDelayMs;
+        return performance.now() + retryMs;
+      },
+    }).catch(() => undefined);
     if (contained === "exited") {
       return options.gracefulExit ? "graceful" : "natural";
     }
     try {
-      finishCodexAppServerTransportClose(child, options, forceKill, contained?.resume);
+      // The root has already used its stdin-EOF grace. Escalate as soon as the
+      // descendant check finishes so cleanup can settle within the owner's budget.
+      finishCodexAppServerTransportClose(
+        child,
+        options.gracefulExit ? 0 : forceKillDelayMs,
+        forceKill,
+        releaseUndrainedPipes,
+        contained?.resume,
+      );
     } catch {
       forceKill();
     }
@@ -112,18 +153,25 @@ function beginCodexAppServerTransportClose(
     // Failed containment cannot certify cleanup from the root's exit alone.
     return contained ? "contained" : "uncertain";
   })();
-  const closure = { closing, naturalExit: false, wasForced: () => forced };
+  const closure: TransportClose = {
+    closing,
+    naturalExit: false,
+    wasForced: () => forced,
+    exitWaitReady: exitWaitReady.promise,
+    drainStdio,
+  };
+  void closing.then(() => exitWaitReady.resolve(), exitWaitReady.reject);
   CODEX_APP_SERVER_TRANSPORT_CLOSES.set(child, closure);
   return closure;
 }
 
 function finishCodexAppServerTransportClose(
   child: CodexAppServerTransport,
-  options: TransportCloseOptions,
+  forceKillDelayMs: number,
   killTransport: () => void,
+  releaseUndrainedPipes: () => void,
   resumeRoot?: () => void,
 ): void {
-  const forceKillDelayMs = options.forceKillDelayMs ?? 1_000;
   const forceKill = setTimeout(
     () => {
       if (hasCodexAppServerTransportExited(child)) {
@@ -136,10 +184,7 @@ function finishCodexAppServerTransportClose(
   forceKill.unref?.();
   child.once("exit", () => {
     clearTimeout(forceKill);
-    if (!options.drainStdio) {
-      child.stdout.destroy?.();
-      child.stderr.destroy?.();
-    }
+    releaseUndrainedPipes();
   });
   try {
     child.stdin.end?.();
@@ -158,37 +203,39 @@ export async function closeCodexAppServerTransportAndWait(
   child: CodexAppServerTransport,
   options: TransportCloseOptions & { exitTimeoutMs?: number } = {},
 ): Promise<CodexAppServerCloseResult> {
-  const drained = options.drainStdio
-    ? Promise.all(
-        [child.stdout, child.stderr].map((stream) => finished(stream, { cleanup: true })),
-      ).then(
-        () => true,
-        () => false,
-      )
-    : undefined;
+  // The startup owner must send EOF before its diagnostic exit interval starts.
+  // A joining reader can start its own wait as soon as containment needs recovery.
+  const ownsDiagnosticClose =
+    options.drainStdio && !options.gracefulExit && !CODEX_APP_SERVER_TRANSPORT_CLOSES.has(child);
   const closure = beginCodexAppServerTransportClose(child, options);
-  const containment = await closure.closing;
-  const settled = await waitForCodexAppServerTransportExit(
-    child,
-    options.exitTimeoutMs ?? 2_000,
-    drained,
-  );
-  if (settled) {
+  const drain = options.drainStdio ? closure.drainStdio() : undefined;
+  drain?.retain();
+  let settled: boolean;
+  try {
+    await (ownsDiagnosticClose ? closure.closing : closure.exitWaitReady);
+    settled = await waitForCodexAppServerTransportExit(
+      child,
+      options.exitTimeoutMs ?? 2_000,
+      closure.closing.then(
+        () => drain?.drained ?? true,
+        () => false,
+      ),
+    );
+  } finally {
+    drain?.release();
+  }
+  const exited = settled || (!options.drainStdio && hasCodexAppServerTransportExited(child));
+  if (exited) {
     await Promise.all([
       waitForCodexAppServerProcessRegistrationCleanup(child),
       child.waitForCleanup?.(),
     ]);
   }
+  const containment = settled ? await closure.closing : undefined;
   closure.naturalExit =
     containment === "natural" && settled && (child.exitCode != null || child.signalCode != null);
-  if (options.drainStdio) {
-    // Share the existing exit budget with pipe draining. A timed-out drain is
-    // not a complete natural-exit diagnostic and must not authorize a retry.
-    child.stdout.destroy?.();
-    child.stderr.destroy?.();
-  }
   if (!settled) {
-    return { exited: false, cleanup: "uncertain" };
+    return { exited, cleanup: "uncertain" };
   }
   if (containment === "contained") {
     return {
@@ -204,6 +251,41 @@ export async function closeCodexAppServerTransportAndWait(
       child.signalCode == null
         ? "closed"
         : "uncertain",
+  };
+}
+
+function ownStdioDrain(
+  child: CodexAppServerTransport,
+  ready: Promise<void>,
+  timeoutMs: number,
+): StdioDrain {
+  const drained = Promise.all(
+    [child.stdout, child.stderr].map((stream) => finished(stream, { cleanup: true })),
+  ).then(
+    () => true,
+    () => false,
+  );
+  // The transport and each diagnostic waiter hold the same pipes until their
+  // own wait ends. The final release disposes them.
+  let readers = 1;
+  const release = () => {
+    if (--readers === 0) {
+      child.stdout.destroy?.();
+      child.stderr.destroy?.();
+    }
+  };
+  void ready
+    .then(
+      () => waitForCodexAppServerTransportExit(child, timeoutMs, drained),
+      () => false,
+    )
+    .then(release, release);
+  return {
+    drained,
+    retain: () => {
+      readers++;
+    },
+    release,
   };
 }
 

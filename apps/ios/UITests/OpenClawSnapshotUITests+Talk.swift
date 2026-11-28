@@ -97,7 +97,8 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(status.waitForExistence(timeout: 20))
         XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 5), "Talk puts the keyboard away")
         self.attachScreenshot(named: "talk-over-draft")
-        app.buttons["chat-realtime-control"].firstMatch.tap()
+        // The held draft keeps its own hidden copy of the main button (below the card with a draft); End is the row's.
+        app.otherElements["chat-talk-row"].buttons["chat-realtime-control"].tap()
         XCTAssertTrue(status.waitForNonExistence(timeout: 3))
         self.waitForValue("Keep this draft", of: input)
         XCTAssertTrue(app.buttons["chat-send-message"].waitForExistence(timeout: 3))

@@ -206,7 +206,7 @@ function expectInvalidCronPatternError(respond: ReturnType<typeof vi.fn>): void 
 }
 
 describe("cron method validation", () => {
-  it("persists canonical delivery for published cron.add and cron.update request aliases", async () => {
+  it("persists canonical jobs from released cron.add and cron.update requests", async () => {
     const { storePath } = await makeStorePath();
     getRuntimeConfig.mockReturnValue(telegramConfig());
     const scheduler = createTestGatewayScheduler();
@@ -232,7 +232,11 @@ describe("cron method validation", () => {
       threadId: 123,
       accountId: "bot:12345",
     });
-    const params = agentTurnCronParams({ enabled: false, delivery: createDelivery });
+    const params = agentTurnCronParams({
+      enabled: false,
+      delivery: createDelivery,
+      wakeMode: "now",
+    });
     const respond = vi.fn();
     try {
       await expectDefined(
@@ -260,7 +264,9 @@ describe("cron method validation", () => {
         "last",
       );
       const created = readRow();
-      expect(JSON.parse(created.job_json).delivery).toEqual({
+      const createdJob = JSON.parse(created.job_json);
+      expect(createdJob).not.toHaveProperty("wakeMode");
+      expect(createdJob.delivery).toEqual({
         mode: "announce",
         channel: "telegram",
         to: "telegram:123",
@@ -275,7 +281,10 @@ describe("cron method validation", () => {
         to: "telegram:456",
         threadId: "456",
       });
-      const updateParams = { id: created.job_id, patch: { delivery: updateDelivery } };
+      const updateParams = {
+        id: created.job_id,
+        patch: { delivery: updateDelivery, wakeMode: "next-heartbeat" },
+      };
       await expectDefined(
         cronHandlers["cron.update"],
         "cron.update handler",
@@ -306,7 +315,9 @@ describe("cron method validation", () => {
         }),
         "last",
       );
-      expect(JSON.parse(readRow().job_json).delivery).toEqual({
+      const updatedJob = JSON.parse(readRow().job_json);
+      expect(updatedJob).not.toHaveProperty("wakeMode");
+      expect(updatedJob.delivery).toEqual({
         mode: "announce",
         channel: "telegram",
         to: "telegram:456",

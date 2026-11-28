@@ -111,6 +111,12 @@ const CronRunDiagnosticsSchema = closedObject({
   entries: Type.Array(CronRunDiagnosticSchema),
 });
 const CronCommonOptionalFields = {
+  wakeMode: Type.Optional(
+    Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")], {
+      deprecated: true,
+      description: "Accepted and ignored for released protocol-v4 writers.",
+    }),
+  ),
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   description: Type.Optional(Type.String()),

@@ -553,7 +553,7 @@ it.skipIf(process.platform === "win32").for(["SIGKILL", "SIGTERM"] as const)(
             call.name === "parent" &&
             call.current.includes(
               killSignal === "SIGKILL"
-                ? "Its run did not survive the restart"
+                ? "Remote work may still be running or may have finished"
                 : "status: error: Gateway stopped",
             ),
         );

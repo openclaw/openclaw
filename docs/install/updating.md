@@ -1869,9 +1869,9 @@ openclaw update
 ### Host prerequisites
 
 Before preparing a release, the updater checks that Node satisfies the target's
-requirements, required tools are available (Git and pnpm for source builds, npm
-for packages), and the install and state filesystems have room for the release
-and any required raised-floor preimages. Refusals name what to install or free.
+requirements, required tools are available (Git for source builds, npm for
+packages), and the installation filesystem has at least 1.4 GB free.
+Refusals name what to install or free.
 
 On macOS, if the updater selects `/usr/bin/git` and there is no active
 developer directory, run `xcode-select --install` to install the Command Line
