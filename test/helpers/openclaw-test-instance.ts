@@ -122,8 +122,19 @@ type ReadinessProbe = {
   omittedFailing?: number;
   /** Responder's reported server uptime; binds the answer to a process started after spawn. */
   uptimeMs?: number;
-  error?: "timeout" | "child-exit" | "fetch-failed" | "invalid-json" | "body-failed" | "aborted";
+  error?:
+    | "timeout"
+    | "child-exit"
+    | "fetch-failed"
+    | "invalid-json"
+    | "body-failed"
+    | "foreign-responder"
+    | "aborted";
 };
+
+// Parent and child clocks share the host. Allow spawn/measurement skew while
+// rejecting a ready listener that was already alive before this child existed.
+const GATEWAY_READINESS_UPTIME_SKEW_MS = 1_000;
 
 export type GatewayReadinessDiagnostic = {
   probe: "GET /readyz";
@@ -356,6 +367,7 @@ async function waitForGatewayReady(
   fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal,
   record?: (diagnostic: GatewayReadinessDiagnostic) => void,
+  spawnedAtMs?: number,
 ) {
   const finishPhase = beginUiE2ePhase("gateway-readiness");
   const startedAt = Date.now();
@@ -492,6 +504,14 @@ async function waitForGatewayReady(
             ) {
               return false;
             }
+            if (
+              probe.uptimeMs !== undefined &&
+              probe.uptimeMs >
+                Date.now() - (spawnedAtMs ?? startedAt) + GATEWAY_READINESS_UPTIME_SKEW_MS
+            ) {
+              probe.error = "foreign-responder";
+              return false;
+            }
             // All configured agents are admitted; also join the startup sidecars.
             probeAbort.signal.throwIfAborted();
             probe.endpoint = "/startupz";
@@ -557,7 +577,8 @@ async function waitForGatewayReady(
           outcome !== "ready" &&
           (!lastProbe.error ||
             lastProbe.error === "invalid-json" ||
-            lastProbe.error === "body-failed")
+            lastProbe.error === "body-failed" ||
+            lastProbe.error === "foreign-responder")
         ) {
           const { attempt, phase, elapsedMs, status, ready, endpoint, startupStatus, error } =
             lastProbe;
@@ -1074,6 +1095,7 @@ export async function createOpenClawTestInstance(
           const attemptStderr = createBoundedStringLog();
           await releasePort();
           signal?.throwIfAborted();
+          const spawnedAtMs = Date.now();
           let spawned: Awaited<ReturnType<typeof spawnGatewayProcess>>;
           try {
             spawned = await spawnGatewayProcess(gatewayArgs, attemptStderr, deadline);
@@ -1084,7 +1106,7 @@ export async function createOpenClawTestInstance(
             return;
           }
           const attempt = spawned.process;
-          const owner = { ...spawned, ready: false, spawnedAtMs: Date.now() };
+          const owner = { ...spawned, ready: false, spawnedAtMs };
           child = owner;
           constructionCleanup = undefined;
           try {
@@ -1098,6 +1120,7 @@ export async function createOpenClawTestInstance(
               fetch,
               signal,
               (diagnostic) => readiness.push(diagnostic),
+              owner.spawnedAtMs,
             );
             signal?.throwIfAborted();
             owner.ready = true;

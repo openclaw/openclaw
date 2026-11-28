@@ -31,6 +31,7 @@ function probe(value: unknown) {
           "fetch-failed",
           "invalid-json",
           "body-failed",
+          "foreign-responder",
           "aborted",
         ]);
   const status = value.status === undefined ? undefined : integer(value.status, 599);
