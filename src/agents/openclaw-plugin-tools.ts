@@ -255,6 +255,9 @@ function createPluginToolDelivery(params: {
           onPlatformSendDispatch: async () => {
             resolveAuthorization();
           },
+          assertDirectAdapterHandoff: () => {
+            resolveAuthorization();
+          },
           forceCoreDelivery: true,
           skipQueue: true,
           dryRun: false,
