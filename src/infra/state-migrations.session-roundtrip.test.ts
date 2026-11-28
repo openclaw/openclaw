@@ -56,7 +56,8 @@ describe("session key write/read round-trip (#29683)", () => {
 
   it("group keys bypass main-alias canonicalization", () => {
     const cfg = makeNonDefaultAgentCfg();
-    const writeKey = resolveWriteKey(cfg, "ops", "group:discord:group:123456789");
+    const writeKey = resolveWriteKey(cfg, "ops", "discord:group:123456789");
+    expect(writeKey).toBe("agent:ops:discord:group:123456789");
     expect(writeKey).toBe(resolveSessionStoreKey({ cfg, sessionKey: writeKey }));
   });
 
