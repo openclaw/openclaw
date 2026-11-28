@@ -189,12 +189,16 @@ private struct ChatSystemLine: View {
 }
 
 private enum ChatUIConstants {
-    /// Web `--radius-md` (ui/src/styles/base.css:366) on the user bubble.
-    static let bubbleCorner: CGFloat = 10
+    #if os(iOS)
+    static let bubbleCorner: CGFloat = 16
     static let userFooterSpacing: CGFloat = 4
     /// How far a reactions pill reaches into the user bubble. Less than the bubble's 14-point
     /// leading padding, so it never covers text.
     static let reactionOverlap: CGFloat = 8
+    #else
+    /// Web `--radius-md` (ui/src/styles/base.css:366) on the user bubble.
+    static let bubbleCorner: CGFloat = 10
+    #endif
     static let onboardingBubbleCorner: CGFloat = 18
 }
 
@@ -560,7 +564,7 @@ enum ChatUserMessageDisclosurePolicy {
             lineCount += 1
         }
         guard end < text.endIndex else { return nil }
-        return String(text[..<end]).trimmingCharacters(in: .whitespacesAndNewlines) + "…"
+        return String(text[..<end]).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private static func stringIndex(atUTF16Offset offset: Int, in text: String) -> String.Index {
@@ -576,6 +580,45 @@ enum ChatUserMessageDisclosurePolicy {
     }
 }
 
+/// Resolve the last rendered text line, including text nested in a Markdown quote.
+private struct ChatPreviewTailFade: ViewModifier {
+    let isCollapsed: Bool
+
+    func body(content: Content) -> some View {
+        if self.isCollapsed {
+            content.overlayPreferenceValue(Text.LayoutKey.self) { layouts in
+                if let tail = layouts.last, let line = tail.layout.last {
+                    GeometryReader { proxy in
+                        let origin = proxy[tail.origin]
+                        Canvas { context, _ in
+                            context.translateBy(x: origin.x, y: origin.y)
+                            let bounds = line.typographicBounds.rect
+                            let rtl = line.first?.layoutDirection == .rightToLeft
+                            let end = rtl ? bounds.minX : bounds.maxX
+                            let length = min(bounds.width / 2, bounds.height * 3)
+                            // Erase ink, not the quote bar or the space between glyphs.
+                            context.clipToLayer { ink in
+                                ink.addFilter(.alphaThreshold(min: 0.001, color: .white))
+                                ink.draw(line)
+                            }
+                            context.fill(Path(bounds), with: .linearGradient(
+                                Gradient(colors: [.clear, .white]),
+                                startPoint: CGPoint(x: rtl ? end + length : end - length, y: bounds.midY),
+                                endPoint: CGPoint(x: end, y: bounds.midY)))
+                        }
+                    }
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+                    .blendMode(.destinationOut)
+                }
+            }
+            .compositingGroup()
+        } else {
+            content
+        }
+    }
+}
+
 extension ChatMessageBubble {
     @ViewBuilder
     private var messageBody: some View {
@@ -587,7 +630,15 @@ extension ChatMessageBubble {
         VStack(alignment: .leading, spacing: 6) {
             if shouldRenderBubble {
                 if self.isUser {
+                    #if os(iOS)
+                    VStack(alignment: .trailing, spacing: ChatUIConstants.userFooterSpacing) {
+                        self.userBubble(text: text, textColor: textColor)
+                        self.footer
+                            .padding(.trailing, self.style == .onboarding ? 8 : 0)
+                    }
+                    #else
                     self.userBubble(text: text, textColor: textColor)
+                    #endif
                 } else {
                     // Assistant replies are plain text on the column, like the web chat.
                     self.messageContent(text: text, textColor: textColor)
@@ -643,7 +694,9 @@ extension ChatMessageBubble {
     private func messageContent(text: String, textColor: Color) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             if self.isUser {
-                self.userMessageText(text: text, textColor: textColor)
+                VStack(alignment: .leading, spacing: 4) {
+                    self.userMessageText(text: text, textColor: textColor)
+                }
             } else {
                 ChatAssistantTextBody(
                     text: text,
@@ -656,9 +709,11 @@ extension ChatMessageBubble {
                 ChatSourcePreviewsView(sources: self.sourcePreviews)
             }
 
+            #if os(macOS)
             if let previewURL = self.linkPreviewURL {
                 ChatLinkPreview(url: previewURL)
             }
+            #endif
 
             if !self.visibleInlineAttachments.isEmpty {
                 ForEach(self.visibleInlineAttachments.indices, id: \.self) { idx in
@@ -684,7 +739,9 @@ extension ChatMessageBubble {
                         .id(self.inlineWidgetScope)
             }
 
+            #if !os(iOS)
             self.footer
+            #endif
         }
         .textSelection(.enabled)
         .foregroundStyle(textColor)
@@ -694,20 +751,15 @@ extension ChatMessageBubble {
     private func userMessageText(text: String, textColor: Color) -> some View {
         let preview = ChatUserMessageDisclosurePolicy.collapsedPreview(text)
 
-        if let preview, !self.userMessageExpanded {
-            Text(preview)
-                .font(OpenClawChatTypography.body)
-                .foregroundStyle(textColor)
-                .fixedSize(horizontal: false, vertical: true)
-        } else {
-            ChatMarkdownRenderer(
-                text: text,
-                context: .user,
-                variant: self.markdownVariant,
-                typography: .response,
-                textColor: textColor)
-                .chatMarkdownFileLinks()
-        }
+        // The web clamps the rendered Markdown, so a collapsed prompt keeps its quotes and formatting.
+        ChatMarkdownRenderer(
+            text: (self.userMessageExpanded ? nil : preview) ?? text,
+            context: .user,
+            variant: self.markdownVariant,
+            typography: .response,
+            textColor: textColor)
+            .chatMarkdownFileLinks()
+            .modifier(ChatPreviewTailFade(isCollapsed: preview != nil && !self.userMessageExpanded))
 
         if preview != nil {
             Button {
@@ -715,17 +767,18 @@ extension ChatMessageBubble {
                     self.onToggleUserMessageExpanded()
                 }
             } label: {
-                Text(String(localized: self.userMessageExpanded ? "Show less" : "Show more"))
-                    .font(OpenClawChatTypography.caption)
-                    .foregroundStyle(textColor.opacity(self.isDesktopLayout ? 1 : 0.78))
-                    .padding(.horizontal, 10)
-                    .frame(minHeight: 30)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(Color.white.opacity(self.isDesktopLayout ? 0.04 : 0.14)))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+                // Grow the tap target, not the visible gap or the bubble's bottom inset.
+                HStack(spacing: 2) {
+                    Text(String(localized: self.userMessageExpanded ? "Show less" : "Show more"))
+                    Image(systemName: self.userMessageExpanded ? "chevron.up" : "chevron.down")
+                        .imageScale(.small)
+                        .fontWeight(.semibold)
+                }
+                .font(OpenClawChatTypography.footnote)
+                .foregroundStyle(.secondary)
+                .padding(EdgeInsets(top: 18, leading: 0, bottom: 10, trailing: 0))
+                .contentShape(Rectangle())
+                .padding(EdgeInsets(top: -18, leading: 0, bottom: -10, trailing: 0))
             }
             .buttonStyle(.plain)
             .accessibilityValue(String(
@@ -746,8 +799,7 @@ extension ChatMessageBubble {
         guard !self.message.isToolResult else { return false }
         return !self.primaryText.isEmpty ||
             !self.inlineAttachments.isEmpty ||
-            !self.inlineWidgets.isEmpty ||
-            self.linkPreviewURL != nil
+            !self.inlineWidgets.isEmpty
     }
 
     private var toolActivityItems: [ChatToolActivityItem] {
@@ -755,6 +807,7 @@ extension ChatMessageBubble {
         return ChatToolActivity.items(message: self.message, liveTools: self.liveToolCalls)
     }
 
+    #if os(macOS)
     private var linkPreviewURL: URL? {
         let role = self.message.role.lowercased()
         guard role == "user" || role == "assistant",
@@ -763,6 +816,7 @@ extension ChatMessageBubble {
         else { return nil }
         return url
     }
+    #endif
 
     private var primaryText: String {
         ChatMessageVisibleText.displayText(

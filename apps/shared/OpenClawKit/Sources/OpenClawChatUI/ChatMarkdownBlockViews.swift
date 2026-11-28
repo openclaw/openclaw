@@ -10,6 +10,7 @@ import UIKit
 struct ChatCodeBlockView: View {
     let block: ChatCodeBlock
     var bodyScale: CGFloat = 1
+    @Environment(\.openClawChatWrapCodeLines) private var wrapsCodeLines
 
     var body: some View {
         #if os(iOS) || os(macOS)
@@ -37,12 +38,14 @@ struct ChatCodeBlockView: View {
                     .frame(height: 20)
             }
             .foregroundStyle(.secondary)
-            ScrollView(.horizontal, showsIndicators: false) {
-                Text(self.attributedCode)
-                    .font(OpenClawChatTypography.mono(size: 13 * self.bodyScale, relativeTo: .footnote))
-                    .foregroundStyle(OpenClawChatTheme.assistantText)
-                    .lineSpacing(2 * self.bodyScale)
-                    .textSelection(.enabled)
+            if self.wrapsCodeLines {
+                self.codeText
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    self.codeText
+                }
             }
         }
         .padding(10)
@@ -53,6 +56,14 @@ struct ChatCodeBlockView: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)))
+    }
+
+    private var codeText: some View {
+        Text(self.attributedCode)
+            .font(OpenClawChatTypography.mono(size: 13 * self.bodyScale, relativeTo: .footnote))
+            .foregroundStyle(OpenClawChatTheme.assistantText)
+            .lineSpacing(2 * self.bodyScale)
+            .textSelection(.enabled)
     }
 
     private var attributedCode: AttributedString {
@@ -165,6 +176,8 @@ struct ChatMarkdownTableView: View {
     /// wide at the reply's own width keeps them and scrolls instead of squeezing the cells.
     static let minimumColumnWidth: CGFloat = 120
 
+    @Environment(\.self) private var environment
+
     /// Width the reply proposes to this card, so 0 until the first layout pass reports it.
     @State private var cardWidth: CGFloat = 0
     /// The enclosing message's file labels; nil where file links are off.
@@ -259,8 +272,13 @@ struct ChatMarkdownTableView: View {
     private func cell(_ text: String, isHeader: Bool, column: Int) -> some View {
         // Cells read at the size of the reply's body text; a fixed footnote size stayed
         // smaller than the surrounding prose at every Dynamic Type setting.
-        ChatMarkdownInlineChips.text(ChatMarkdownInlineChips.inlineMarkdown(text), fileLabels: self.fileLabels)
-            .font(isHeader ? self.typography.proseFont.weight(.semibold) : self.typography.proseFont)
+        let font = isHeader ? self.typography.proseFont.weight(.semibold) : self.typography.proseFont
+        return ChatMarkdownInlineChips.text(
+            ChatMarkdownInlineChips.inlineMarkdown(text),
+            fileLabels: self.fileLabels,
+            font: font,
+            environment: self.environment)
+            .font(font)
             .foregroundStyle(OpenClawChatTheme.assistantText)
             .textSelection(.enabled)
             // Grid cells otherwise accept compressed row proposals and ellipsize wrapped text.

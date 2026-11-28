@@ -2690,7 +2690,6 @@
     {"path":"apps/ios/Sources/Status/GatewayStatusBuilder.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.2006761fbf01a8ee","source":"Reconnecting…"},
     {"path":"apps/ios/Sources/Status/GatewayStatusBuilder.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.1f8cd94385b5b4a2","source":"Verify gateway TLS fingerprint"},
     {"path":"apps/ios/Sources/Status/GatewayStatusBuilder.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.dfc56e211d4edee0","source":"Verifying gateway TLS fingerprint…"},
-    {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSelectableTextSheet.swift","kind":"ui-call","surface":"apple","id":"native.apple.50ae97042e9ad1b0","source":"Close"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSelectableTextSheet.swift","kind":"ui-modifier","surface":"apple","id":"native.apple.f4483cba92be9484","source":"Select Text"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebarPeople.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.8154cd7674c08ac5","source":"Online"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionSidebarPeople.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.946bdee25ed9b91a","source":"Online · Active"},
