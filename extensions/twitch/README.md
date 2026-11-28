@@ -40,7 +40,7 @@ Minimal config (simplified single-account):
 **Access control options:**
 
 - `requireMention: false` - Disable the default mention requirement to respond to all messages
-- `allowFrom: ["your_user_id"]` - Restrict to your Twitch user ID only (find your ID at https://www.twitchangles.com/xqc or similar)
+- `allowFrom: ["your_user_id"]` - Restrict to your Twitch user ID only (find your ID at https://www.streamweasels.com/tools/convert-twitch-username-to-user-id/)
 - `allowedRoles: ["moderator", "vip", "subscriber"]` - Restrict to specific roles
 
 Multi-account config (advanced):
