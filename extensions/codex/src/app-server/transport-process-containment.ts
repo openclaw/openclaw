@@ -119,24 +119,24 @@ export async function terminateCodexAppServerOrphan(
   }
 }
 
-type InspectionBudget = { deadline: number; startForceKillGrace?: () => number };
+type InspectionBudget = { deadline: number; startRecovery?: () => number };
 
-function useForceKillGrace(budget: InspectionBudget): boolean {
-  if (!budget.startForceKillGrace) {
+function extendInspection(budget: InspectionBudget): boolean {
+  if (!budget.startRecovery) {
     return false;
   }
-  // Keep custody and all observed identities. The transport owns the force-kill
-  // deadline, including when another caller joins with a shorter exit wait.
+  // Keep custody and all observed identities. The transport bounds recovery
+  // and starts each caller's exit wait when inspection needs more time.
   budget.deadline = Math.min(
-    budget.startForceKillGrace(),
+    budget.startRecovery(),
     performance.now() + MAX_PROCESS_CONTAINMENT_MS,
   );
-  budget.startForceKillGrace = undefined;
+  budget.startRecovery = undefined;
   return performance.now() < budget.deadline;
 }
 
 function hasInspectionTime(budget: InspectionBudget): boolean {
-  return performance.now() < budget.deadline || useForceKillGrace(budget);
+  return performance.now() < budget.deadline || extendInspection(budget);
 }
 
 async function inspectDuringContainment<T>(
@@ -149,7 +149,7 @@ async function inspectDuringContainment<T>(
     if (
       !(error instanceof ProcessInspectionError) ||
       error.reason !== "deadline" ||
-      !useForceKillGrace(budget)
+      !extendInspection(budget)
     ) {
       return undefined;
     }
@@ -162,11 +162,11 @@ export async function terminateCodexAppServerDescendants(
   {
     expected,
     deadline: initialDeadline,
-    startForceKillGrace,
+    startRecovery,
   }: {
     expected?: CodexAppServerProcessIdentity;
     deadline?: number;
-    startForceKillGrace?: () => number;
+    startRecovery?: () => number;
   } = {},
 ): Promise<{ root: PosixProcess; resume: () => void } | "exited" | undefined> {
   const rootPid = child.pid;
@@ -179,8 +179,7 @@ export async function terminateCodexAppServerDescendants(
   // Inspection failures never grant containment or signal authority.
   const budget = {
     deadline: initialDeadline ?? performance.now() + MAX_PROCESS_CONTAINMENT_MS,
-    startForceKillGrace:
-      process.platform === "linux" && !expected ? startForceKillGrace : undefined,
+    startRecovery: process.platform === "linux" && !expected ? startRecovery : undefined,
   };
   const snapshot = await inspectDuringContainment(budget, (deadline) =>
     readCodexAppServerProcessSnapshot(deadline, undefined, [rootPid]),

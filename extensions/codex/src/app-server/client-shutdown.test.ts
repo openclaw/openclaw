@@ -12,6 +12,10 @@ import {
 import { clearSharedCodexAppServerClientIfCurrentAndUnclaimed } from "./shared-client.js";
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
 import * as processSnapshot from "./transport-process-snapshot.js";
+import {
+  closeCodexAppServerTransportAndWait,
+  type CodexAppServerCloseResult,
+} from "./transport.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -77,6 +81,13 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
     if (cleanup === "joining deadline") {
       // Each waiter observes exit within its own deadline while the transport owns the retry.
       const later = harness.client.closeAndWait({ exitTimeoutMs: 150 });
+      let diagnosticResult: CodexAppServerCloseResult | undefined;
+      const diagnostics = closeCodexAppServerTransportAndWait(harness.process, {
+        drainStdio: true,
+        exitTimeoutMs: 100,
+      }).then((result) => {
+        diagnosticResult = result;
+      });
       let ownerSettled = false;
       const owner = harness.client.closeAndWait({ exitTimeoutMs: 500 }).then(() => {
         ownerSettled = true;
@@ -84,6 +95,7 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
       try {
         await vi.advanceTimersByTimeAsync(2_301);
         await expect(closing).resolves.toEqual({ exited: false, cleanup: "uncertain" });
+        expect(diagnosticResult).toEqual({ exited: false, cleanup: "uncertain" });
         expect(scans).toBe(2);
         expect(kill).not.toHaveBeenCalledWith(-root.pid, "SIGKILL");
         Object.assign(harness.process, { exitCode: 0 });
@@ -95,7 +107,7 @@ describe.skipIf(process.platform === "win32")("npm launcher shutdown", () => {
         resumeRetry.resolve();
       }
       await vi.advanceTimersByTimeAsync(75);
-      await owner;
+      await Promise.all([owner, diagnostics]);
       expect(kill).not.toHaveBeenCalledWith(-root.pid, "SIGKILL");
       return;
     }

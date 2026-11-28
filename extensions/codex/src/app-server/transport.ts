@@ -79,7 +79,6 @@ function beginCodexAppServerTransportClose(
   }
   let forced = false;
   const exitWaitReady = Promise.withResolvers<void>();
-  let forceKillAt: number | undefined;
   const forceKill = () => {
     forced = true;
     signalCodexAppServerTransport(child, "SIGKILL");
@@ -104,10 +103,9 @@ function beginCodexAppServerTransportClose(
       return "uncertain";
     }
     const contained = await terminateCodexAppServerDescendants(child, {
-      startForceKillGrace: () => {
-        forceKillAt = performance.now() + (options.forceKillDelayMs ?? 1_000);
+      startRecovery: () => {
         exitWaitReady.resolve();
-        return forceKillAt;
+        return performance.now() + (options.forceKillDelayMs ?? 1_000);
       },
     }).catch(() => undefined);
     if (contained === "exited") {
@@ -116,8 +114,13 @@ function beginCodexAppServerTransportClose(
     try {
       // The root has already used its stdin-EOF grace. Escalate as soon as the
       // descendant check finishes so cleanup can settle within the owner's budget.
-      const killAt = options.gracefulExit ? performance.now() : forceKillAt;
-      finishCodexAppServerTransportClose(child, options, forceKill, contained?.resume, killAt);
+      finishCodexAppServerTransportClose(
+        child,
+        options,
+        forceKill,
+        contained?.resume,
+        options.gracefulExit ? 0 : options.forceKillDelayMs,
+      );
     } catch {
       forceKill();
     }
@@ -141,12 +144,8 @@ function finishCodexAppServerTransportClose(
   options: TransportCloseOptions,
   killTransport: () => void,
   resumeRoot?: () => void,
-  forceKillAt?: number,
+  forceKillDelayMs = options.forceKillDelayMs ?? 1_000,
 ): void {
-  const forceKillDelayMs =
-    forceKillAt === undefined
-      ? (options.forceKillDelayMs ?? 1_000)
-      : forceKillAt - performance.now();
   const forceKill = setTimeout(
     () => {
       if (hasCodexAppServerTransportExited(child)) {
@@ -190,9 +189,9 @@ export async function closeCodexAppServerTransportAndWait(
       )
     : undefined;
   const closure = beginCodexAppServerTransportClose(child, options);
-  // Startup diagnostics need the final close cause and drained pipes. Other
-  // callers can start their own exit wait while the transport owns a retry.
-  await (options.drainStdio ? closure.closing : closure.exitWaitReady);
+  // Start each caller's exit timer when recovery begins. A settled result
+  // includes the close outcome and any requested pipe drain.
+  await closure.exitWaitReady;
   const settled = await waitForCodexAppServerTransportExit(
     child,
     options.exitTimeoutMs ?? 2_000,
