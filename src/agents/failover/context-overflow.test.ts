@@ -55,4 +55,10 @@ describe("provider request-size ceilings worded as TPM limits", () => {
       expect(classifyFailoverReason(message)).toBe("rate_limit");
     },
   );
+
+  it("does not classify tool-call argument buffer overflow as context overflow", () => {
+    const message = "Exceeded tool-call argument buffer limit";
+    expect(isContextOverflowError(message)).toBe(false);
+    expect(isLikelyContextOverflowError(message)).toBe(false);
+  });
 });

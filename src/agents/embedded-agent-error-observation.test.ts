@@ -225,6 +225,12 @@ describe("buildApiErrorObservationFields", () => {
     expect(observed.httpCode).toBe("401");
     expect(observed.providerRuntimeFailureKind).toBe("unclassified");
   });
+
+  it("classifies tool-call argument buffer limit errors distinctly", () => {
+    const observed = buildApiErrorObservationFields("Exceeded tool-call argument buffer limit");
+
+    expect(observed.providerRuntimeFailureKind).toBe("tool_call_argument_buffer_exceeded");
+  });
 });
 
 describe("sanitizeForConsole", () => {

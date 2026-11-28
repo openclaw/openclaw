@@ -4,6 +4,7 @@ import {
   hasRateLimitTpmHint,
   isContextOverflowErrorFromTables,
   isReasoningConstraintErrorMessage,
+  isToolCallArgumentBufferExceededError,
   looksLikeProviderContextOverflowCandidate,
 } from "./context-overflow-tables.js";
 import {
@@ -40,6 +41,7 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (
     hasRateLimitTpmHint(errorMessage) ||
     isReasoningConstraintErrorMessage(errorMessage) ||
+    isToolCallArgumentBufferExceededError(errorMessage) ||
     isBillingErrorMessage(errorMessage) ||
     matchesContextOverflowMessage(errorMessage, "context-window-too-small") ||
     isRateLimitErrorMessage(errorMessage)
