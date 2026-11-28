@@ -119,7 +119,8 @@ suite.define(() => {
         await expectBrowser(target).toBeVisible();
 
         const hiddenMentioned = { ...mentioned, hiddenFromInvolvingMe: true };
-        const setHidden = async (hidden: boolean) => {
+        const setHidden = async (hidden: boolean, reject = false) => {
+          const sent = (await gateway.getRequests("sessions.setInvolvement")).length;
           await target.hover();
           await target.click({ button: "right" });
           if (!hidden) {
@@ -133,21 +134,39 @@ suite.define(() => {
 
           await gateway.deferNext("sessions.setInvolvement");
           await action.click();
-          const request = await gateway.waitForRequest(
-            "sessions.setInvolvement",
-            hidden ? undefined : { after: 1 },
-          );
+          const request = await gateway.waitForRequest("sessions.setInvolvement", { after: sent });
           expect(request.params).toMatchObject({
             key: sessionKey,
             expectedSessionId: mentioned.sessionId,
             hidden,
           });
+          if (hidden) {
+            await expectBrowser(target).toHaveCount(0);
+            if (reject) {
+              const neighbor = page.locator(`[data-session-key="${homeKey}"] a`).first();
+              await neighbor.focus();
+              await gateway.rejectDeferred("sessions.setInvolvement", {
+                code: "UNAVAILABLE",
+                message: "Personal visibility could not be saved.",
+              });
+              await expectBrowser(
+                page.locator(".app-toast-lane--top-right .app-toast"),
+              ).toContainText("Personal visibility could not be saved.");
+              await expectBrowser(target).toBeVisible();
+              await expectBrowser(neighbor).toBeFocused();
+              return;
+            }
+          } else {
+            // All owners never loses the row when a personal choice changes.
+            await expectBrowser(target).toBeVisible();
+          }
           await gateway.setSessionsListResponse(list([home, hidden ? hiddenMentioned : mentioned]));
           if (hidden) {
             await gateway.setMethodResponse("sessions.list", list([home]));
           }
           await gateway.resolveDeferred("sessions.setInvolvement", { ok: true });
         };
+        await setHidden(true, true);
         await setHidden(true);
         await expectBrowser(target).toHaveCount(0);
         await gateway.setMethodResponse("sessions.list", list([home, hiddenMentioned]));
@@ -156,7 +175,7 @@ suite.define(() => {
         await setHidden(false);
         await chooseFilter("involving-me");
         await expectBrowser(target).toBeVisible();
-        expect(await gateway.getRequests("sessions.setInvolvement")).toHaveLength(2);
+        expect(await gateway.getRequests("sessions.setInvolvement")).toHaveLength(3);
         await page.reload();
         await waitForSessionRosterHydration(page);
         await expectBrowser(target).toBeVisible();
