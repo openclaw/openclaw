@@ -74,6 +74,8 @@ export type ModelProviderCapability = {
   apiKeySupported: boolean;
   quickApiKeySetup: boolean;
   quickApiKeyGroupLabel?: string;
+  /** Manifest group shared with other providers; the catalog shows the group as one card. */
+  groupId?: string;
   /** A provider setup suggests first: one of its text-inference choices is onboarding-featured. */
   featured?: true;
   loginOptions?: import("../../plugins/provider-login-options.js").ProviderLoginOption[];

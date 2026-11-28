@@ -190,6 +190,14 @@ export const gatewayDirectStopEntrypoints = {
     sourceWorkerName: "../sessions/session-controller.queries",
   }),
   runLoop: worker({ currentModuleUrl: import.meta.url, sourceWorkerName: "gateway-cli/run-loop" }),
+  stateDatabase: worker({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../state/openclaw-state-db",
+  }),
+  stateDatabaseCache: worker({
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../state/openclaw-state-db-cache",
+  }),
   cleanupScope: worker({
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "runtime-cleanup-scope",

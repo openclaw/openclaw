@@ -28,10 +28,11 @@ if (fixtureProcfs) {
     mapped.set(file, target);
   }
 }
-const { open: originalOpen, readdir: originalReaddir } = fsPromises;
+const { open: originalOpen, readdir: originalReaddir, readFile: originalReadFile } = fsPromises;
 const result = { inspectionDeadlineMs: 1_000, inspectionSpawns: 0 };
 installProcfsFixture({
   open: (file, ...args) => originalOpen(mapped.get(file) ?? file, ...args),
+  readFile: (file, ...args) => originalReadFile(mapped.get(file) ?? file, ...args),
   readdir: (file) =>
     fixtureProcfs && file === "/proc"
       ? Promise.resolve([String(process.pid)])

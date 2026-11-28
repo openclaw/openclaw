@@ -1,5 +1,6 @@
 import { assert, onTestFinished, vi } from "vitest";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { callGateway } from "../../../gateway/call.js";
 import { WRITE_SCOPE } from "../../../gateway/method-scopes.js";
 import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
@@ -114,6 +115,20 @@ export function announcementFixture(
         getRuntimeConfig,
       );
       context.localEmbedded = true;
+      // Local contexts own an in-process lifecycle runtime; this one reaches the mocked client.
+      const forward = <T>(request: Parameters<typeof callGateway>[0]) => callGateway<T>(request);
+      context.lifecycleRuntime = {
+        dispatchSessionMethod: (method, params, opts) =>
+          forward({
+            method,
+            params,
+            timeoutMs: opts?.timeoutMs,
+            assertDispatchCurrent: opts?.assertCurrent,
+          }),
+        waitForAgent: (params, timeoutMs) => forward({ method: "agent.wait", params, timeoutMs }),
+        dispatchAgent: () => Promise.reject(new Error("fixture dispatches no agent turns")),
+        sendNotice: () => Promise.reject(new Error("fixture sends no notices")),
+      };
       gatewayContextResolver = () => context;
     } else {
       fixture.wake.mockResolvedValue(false);

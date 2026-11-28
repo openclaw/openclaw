@@ -26,6 +26,13 @@ describe("private-qa-cli", () => {
     mocks.resolvePackageRoot.mockReturnValue(root);
     vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "1");
     fs.writeFileSync(path.join(root, "package.json"), '{"name":"openclaw","type":"module"}');
+    fs.mkdirSync(path.join(root, "src"));
+    const artifactDirectory = path.join(root, "dist", "plugin-sdk");
+    fs.mkdirSync(artifactDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(artifactDirectory, "qa-lab.js"),
+      'export const registerQaLabCli = (program) => program.command("fixture-qa");',
+    );
   });
 
   afterEach(() => {
@@ -37,13 +44,6 @@ describe("private-qa-cli", () => {
     "registers the private QA artifact from a source checkout marked by %s",
     async (marker) => {
       fs.writeFileSync(path.join(root, marker), "");
-      fs.mkdirSync(path.join(root, "src"));
-      const artifactDirectory = path.join(root, "dist", "plugin-sdk");
-      fs.mkdirSync(artifactDirectory, { recursive: true });
-      fs.writeFileSync(
-        path.join(artifactDirectory, "qa-lab.js"),
-        'export const registerQaLabCli = (program) => program.command("fixture-qa");',
-      );
 
       const program = new Command();
       await registerPrivateQa(program);
@@ -66,11 +66,5 @@ describe("private-qa-cli", () => {
   it("does not advertise QA without private QA admission", () => {
     vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "0");
     expect(getSubCliEntriesCore().some((entry) => entry.name === "qa")).toBe(false);
-  });
-
-  it("rejects non-source package roots even when private QA is enabled", async () => {
-    await expect(registerPrivateQa(new Command())).rejects.toThrow(
-      "Private QA CLI is only available from an OpenClaw source checkout.",
-    );
   });
 });

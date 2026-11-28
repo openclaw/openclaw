@@ -200,14 +200,13 @@ posixIt(
   { timeout: 60_000 },
   async ({ signal, onTestFailed }) => {
     const env = createFixtureEnv("openclaw-borrowed-stop-", true);
-    const sourceUrl = (relative: string) => new URL(relative, import.meta.url).href;
     const script = `
       import assert from "node:assert/strict";
       import { AsyncResource } from "node:async_hooks";
       import { writeSync } from "node:fs";
-      import { runGatewayLoop } from ${JSON.stringify(sourceUrl("./run-loop.ts"))};
-      import { openOpenClawStateDatabase } from ${JSON.stringify(sourceUrl("../../state/openclaw-state-db.ts"))};
-      import { borrowOpenClawStateDatabaseForAsyncRead } from ${JSON.stringify(sourceUrl("../../state/openclaw-state-db-cache.ts"))};
+      import { runGatewayLoop } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.runLoop))};
+      import { openOpenClawStateDatabase } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.stateDatabase))};
+      import { borrowOpenClawStateDatabaseForAsyncRead } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.stateDatabaseCache))};
       import { startFinalizationFixtureClock, advanceFinalizationFixtureClock } from ${JSON.stringify(finalizationFixtureClockUrl)};
 
       const trace = (line) => writeSync(1, "process proof: " + line + "\\n");

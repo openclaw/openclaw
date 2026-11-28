@@ -980,7 +980,7 @@ puts JSON.generate(rows)
     const launchHelper = swiftFunctionBody(snapshotUITest, "launchApp");
     const navigationTest = swiftFunctionBody(
       snapshotUITest,
-      "testAgentsNavigateToSettingsThroughSidebar",
+      "testSessionsNavigateToSettingsThroughSidebar",
     );
     const rootTabs = readFileSync(rootTabsPath, "utf8");
 
@@ -993,13 +993,16 @@ puts JSON.generate(rows)
     expect(launchHelper).toContain("app.launch()");
     expect(snapshotUITest).not.toContain("screenshotLaunchRetryThreshold");
     expect(snapshotUITest).not.toContain("selectReleaseScreenshotDestination");
-    expect(navigationTest).toContain("self.launchApp(for: Self.agentScreenshotTarget)");
+    expect(navigationTest).toContain("self.launchApp(for: Self.controlScreenshotTarget)");
     expect(navigationTest).toContain('self.selectSidebarDestination("Settings")');
-    expect(navigationTest).toContain('"SettingsHub.Fallback"');
+    expect(navigationTest).toContain('"SettingsHub.Native"');
     expect(navigationTest).not.toContain("XCTExpectFailure");
     expect(navigationTest).not.toContain("XCTExpectedFailure");
-    expect(rootTabs).toContain("self.scenePhase == .active");
-    expect(rootTabs).toContain("self.selectedSidebarDestination.rawValue");
+    expect(rootTabs).toContain("self.settingsSheetPath.last == .gateway ? .gateway : .settings");
+    expect(rootTabs).toMatch(/else \{\s*self\.selectedSidebarDestination\s*\}/);
+    expect(rootTabs).toContain(
+      String.raw`\(self.scenePhase == .active ? "ready" : "inactive"):\(destination.rawValue)`,
+    );
   });
 
   it("requires the exact nonempty PNG manifest before Watch capture", () => {

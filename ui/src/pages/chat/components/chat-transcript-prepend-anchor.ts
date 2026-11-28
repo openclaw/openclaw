@@ -12,6 +12,7 @@ type TranscriptMessageKeys = Pick<ReadonlySet<string>, "keys" | "has">;
 /** Own the message anchor across projection capture, measurement, and restoration. */
 export class TranscriptPrependAnchor {
   messageKeys: TranscriptMessageKeys = new Set();
+  syncBeforeCapture: (() => void) | null = null;
   private committedMessageRows: ReadonlyMap<string, string> = new Map();
   private searchProjection: TranscriptSearchProjection = null;
   private searchReturn: ChatTranscriptPrependAnchor | "end" | null = null;
@@ -146,6 +147,10 @@ export class TranscriptPrependAnchor {
     // original reader target rather than recapturing an already shifted bubble.
     const retained =
       this.pending && this.messageKeys.has(this.pending.messageKey) ? this.pending : null;
+    if (!retained && element) {
+      // The DOM can include wheel travel that the offset observer has not delivered yet.
+      this.syncBeforeCapture?.();
+    }
     const anchor =
       retained ??
       captureTranscriptPrependAnchor(element, this.messageKeys, this.messageElements.values());
