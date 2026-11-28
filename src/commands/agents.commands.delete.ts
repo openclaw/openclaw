@@ -175,18 +175,22 @@ export async function agentsDeleteCommand(opts: AgentsDeleteOptions) {
     return;
   }
 
+  // A retired agent is no longer in config; only its completed deletion records its paths.
+  let recorded: typeof existingJournal;
   if (configured || retired) {
     existingJournal = await readAgentDeletionJournalAsync(agentId);
     if (existingJournal?.cleanupCompleted) {
+      recorded = retired ? existingJournal : undefined;
       existingJournal = undefined;
     }
   }
-  const agentDir = existingJournal?.agentDir ?? currentAgentDir;
+  const paths = existingJournal ?? recorded;
+  const agentDir = paths?.agentDir ?? currentAgentDir;
   if (!agentDir) {
     throw new Error(`Agent "${agentId}" deletion has no state directory.`);
   }
-  const workspaceDir = existingJournal?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
-  const sessionsDir = existingJournal?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId);
+  const workspaceDir = paths?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, agentId);
+  const sessionsDir = paths?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId);
   // Doctor holds these stores back after deletion history was lost; its restore-first
   // guidance is shown before the user confirms, and printed when --force skips the prompt.
   const heldGuidance = await describeHeldAgentStores(cfg, agentId, process.env);

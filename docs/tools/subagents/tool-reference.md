@@ -29,8 +29,7 @@ to select that person's authority for a new child. Omit it to keep the active
 execution's original requester, including after collaborative steering. New child
 admission resolves current destination policy for that requester; accepted work
 survives normal parent completion, while revocation still stops it. The child does
-not inherit the parent's participant roster. Codex native `spawn_agent` retains the
-original requester and permits collaborative turns. Selecting a person does not
+not inherit the parent's participant roster. Selecting a person does not
 establish that they requested or approved the work.
 
 Starts a sub-agent run on the spawning session's sub-agent queue, with

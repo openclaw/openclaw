@@ -64,6 +64,7 @@ export type TranscriptSearchProjection = { query: string; empty: boolean } | nul
 
 export type TranscriptProjectionSource = {
   messages: readonly unknown[];
+  showToolCalls: boolean;
   search: TranscriptSearchProjection;
 };
 

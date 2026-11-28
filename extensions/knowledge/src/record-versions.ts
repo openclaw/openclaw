@@ -1,3 +1,4 @@
+import { t } from "./i18n/index.js";
 import type { Page } from "./page-context.js";
 import { button, chip, date, el, type Detail, type RecordDetail } from "./page-dom.js";
 
@@ -59,23 +60,32 @@ export function claimVersions(ui: Page, r: RecordDetail, n: number, versions: HT
     for (const [index, version] of [...chain.entries()].toReversed()) {
       const item = el("div", undefined, "knowledge-version"),
         number = el("code", numbered ? `v${index + 1}` : "·");
-      number.title = `Record revision ${version.revision}`;
+      number.title = t("knowledge.versions.revision", { revision: String(version.revision) });
       item.append(
         number,
         button(version.body || version.title, () => open(version.id), "knowledge-quiet"),
         el(
           "small",
-          `${version.lifecycle === "active" ? "Current · saved" : version.lifecycle === "withdrawn" ? "Withdrawn" : "Replaced"} ${version.metadata?.lifecycle_change?.at ? date(version.metadata.lifecycle_change.at) : version.recordedAt ? date(version.recordedAt) : "time not recorded"}`,
+          t(
+            `knowledge.versions.${version.lifecycle === "active" ? "current" : version.lifecycle === "withdrawn" ? "withdrawn" : "replaced"}`,
+            {
+              date: version.metadata?.lifecycle_change?.at
+                ? date(version.metadata.lifecycle_change.at)
+                : version.recordedAt
+                  ? date(version.recordedAt)
+                  : t("knowledge.versions.timeUnknown"),
+            },
+          ),
         ),
       );
       if (version.id === r.id) {
         item.classList.add("knowledge-version-viewing");
-        item.append(chip("Viewing"));
+        item.append(chip(t("knowledge.versions.viewing")));
       }
       versions.append(item);
     }
     if (queue.length) {
-      versions.append(el("p", "Showing 10 linked versions. Open a version to continue."));
+      versions.append(el("p", t("knowledge.versions.limit")));
     }
   })().catch((error: unknown) => {
     if (live(n)) {

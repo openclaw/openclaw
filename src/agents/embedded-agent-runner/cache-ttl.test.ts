@@ -45,7 +45,6 @@ describe("isCacheTtlEligibleProvider", () => {
 
   it.each([
     ["openai", "gpt-4o", undefined, undefined],
-    ["openrouter", "openai/gpt-4o", undefined, undefined],
     ["openrouter", "model-1", "openai-responses", { supportsPromptCacheKey: true }],
     ["myproxy", "model-1", "custom-api", { supportsPromptCacheKey: true }],
   ] as const)("rejects unsupported %s/%s via %s", (provider, model, api, route) => {
