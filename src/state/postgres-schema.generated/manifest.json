@@ -69,6 +69,16 @@
       "file": "fragment-worker_environment_session_attachments.postgres.sql"
     },
     {
+      "id": "pwa_icon_slots",
+      "tables": [
+        "pwa_icon_slots"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "first-use",
+      "file": "fragment-pwa_icon_slots.postgres.sql"
+    },
+    {
       "id": "durable_background_processes",
       "tables": [
         "durable_background_processes"

@@ -9,6 +9,7 @@ import {
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  pwaIcon: () => import("./pwa-icon-slots.worker.js").then((m) => m.pwaIconReadOperations),
   durableProcess: () =>
     import("../agents/bash-durable-process-store.js").then((m) => m.durableProcessReadOperations),
   workerEnvironments: () =>

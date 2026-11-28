@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import path from "node:path";
 import { resolveStateDir } from "../config/state-dir.js";
 import { isRequestBodyLimitError, readRequestBodyWithLimit } from "../infra/http-body.js";
 import { sendHttpRequestRejection } from "../infra/http-request-lifecycle.js";
@@ -26,7 +25,7 @@ import { createPwaIconStore, type PwaIconRasters } from "./pwa-icon-store.js";
 import { readControlUiRootAsset, type ControlUiRootState } from "./server-control-ui-root.js";
 import { hasGatewayDelegationClaim } from "./trusted-proxy-delegation.js";
 
-const icons = createPwaIconStore(path.join(resolveStateDir(), "pwa-icons"));
+const icons = createPwaIconStore(resolveStateDir());
 
 export async function handlePwaIconHttpRequest(
   req: IncomingMessage,
@@ -57,7 +56,38 @@ export async function handlePwaIconHttpRequest(
       return true;
     }
     let body: Buffer;
-    if (route.manifest) {
+    let contentType: string;
+    if (route.file === "install") {
+      // Installers can cold-fetch this document without a Control UI session. Keep its
+      // links relative to the managed token directory, with no user data or script.
+      res.setHeader(
+        "Content-Security-Policy",
+        "default-src 'none'; img-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+      );
+      contentType = "text/html; charset=utf-8";
+      body = Buffer.from(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>OpenClaw</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" type="image/png" sizes="512x512" href="./icon.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png">
+</head>
+<body>
+  <main>
+    <img src="./icon.png" width="96" height="96" alt="Selected app icon">
+    <h1>Install OpenClaw with this icon</h1>
+    <p>Use your browser’s Install app command on this page. In Safari, choose Add to Dock on Mac or Share → Add to Home Screen on iPhone or iPad.</p>
+    <p>The installed app opens your usual Control UI. If an earlier installation still shows the old icon, remove it and install again from this page.</p>
+    <a href="../../" rel="noreferrer">Return to OpenClaw</a>
+  </main>
+</body>
+</html>`);
+    } else if (route.file === "manifest.webmanifest") {
+      contentType = "application/manifest+json";
       const root = options.root;
       const source =
         root && (root.kind === "resolved" || root.kind === "bundled")
@@ -88,9 +118,10 @@ export async function handlePwaIconHttpRequest(
         respondNotFound(res);
         return true;
       }
+      contentType = "image/png";
       body = png;
     }
-    res.setHeader("Content-Type", route.manifest ? "application/manifest+json" : "image/png");
+    res.setHeader("Content-Type", contentType);
     res.setHeader("Content-Length", body.length);
     res.end(req.method === "HEAD" ? undefined : body);
     return true;
@@ -139,6 +170,11 @@ export async function handlePwaIconHttpRequest(
   const scope = authorizeOperatorScopesForMethod("users.background.upload", scopes);
   if (!scope.allowed) {
     sendMissingScopeForbidden(res, scope.missingScope);
+    return true;
+  }
+  // A precondition, never a credential: a stale tab must not mutate the newly signed-in account.
+  if (req.headers["x-openclaw-install-profile"] !== profileId) {
+    sendJson(res, 409, { error: "install_profile_changed" });
     return true;
   }
   const slot = req.headers["x-openclaw-install-device"];

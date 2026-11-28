@@ -1425,6 +1425,13 @@ CREATE INDEX IF NOT EXISTS idx_sandbox_registry_last_used
   ON sandbox_registry_entries(registry_kind, last_used_at_ms DESC, container_name)
   WHERE last_used_at_ms IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS pwa_icon_slots (
+  profile_key TEXT NOT NULL,
+  device_key TEXT NOT NULL,
+  token TEXT NOT NULL UNIQUE CHECK (length(token) = 64),
+  PRIMARY KEY (profile_key, device_key)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS durable_background_processes (
   id TEXT NOT NULL PRIMARY KEY,
   record_json TEXT NOT NULL

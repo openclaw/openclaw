@@ -2,6 +2,7 @@ import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeEach, expect, it, vi } from "vitest";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import {
   closeHttpServer,
   listenLoopback,
@@ -11,7 +12,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { ensureDeviceToken } from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createPwaIconStore } from "./pwa-icon-store.js";
 import { AUTH_TOKEN, createTestGatewayServer } from "./server-http.test-harness.js";
@@ -35,7 +39,8 @@ it("publishes only a writer's flattened raster and a deployment-scoped install m
   const cfg = {
     gateway: { auth, trustedProxies: ["127.0.0.1"], controlUi: { allowedOrigins: ["*"] } },
   };
-  ensureProfileForEmail("installer@example.test");
+  const installer = ensureProfileForEmail("installer@example.test");
+  const alternate = ensureProfileForEmail("another@example.test");
   const basePath = "/gateway";
   const server = createTestGatewayServer({
     resolvedAuth: auth,
@@ -57,6 +62,7 @@ it("publishes only a writer's flattened raster and a deployment-scoped install m
   const headers = {
     Origin: origin,
     "x-openclaw-install-device": "a".repeat(64),
+    "x-openclaw-install-profile": installer.id,
     "Content-Type": "image/png",
     "x-openclaw-scopes": "operator.write",
     "x-forwarded-user": "installer@example.test",
@@ -69,6 +75,7 @@ it("publishes only a writer's flattened raster and a deployment-scoped install m
   const reset = (extra: Record<string, string> = {}) =>
     fetch(upload, { method: "DELETE", headers: { ...headers, ...extra } });
   try {
+    expect((await reset({ "x-openclaw-install-profile": alternate.id })).status).toBe(409);
     for (const slot of ["", "abc", "F".repeat(64), "../elsewhere"]) {
       expect((await post({ "x-openclaw-install-device": slot })).status).toBe(400);
       expect((await reset({ "x-openclaw-install-device": slot })).status).toBe(400);
@@ -88,6 +95,22 @@ it("publishes only a writer's flattened raster and a deployment-scoped install m
     expect(created.status, receipt).toBe(200);
     const { iconUrl, manifestUrl } = JSON.parse(receipt);
     expect(iconUrl).toMatch(/^\/gateway\/pwa-icon\/[0-9a-f]{64}\/icon\.png$/u);
+    const installUrl = new URL("install", origin + manifestUrl);
+    const page = await fetch(installUrl);
+    expect(page.status).toBe(200);
+    expect(page.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(page.headers.get("cache-control")).toContain("no-store");
+    expect(page.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(page.headers.get("content-security-policy")).toContain("default-src 'none'");
+    const html = await page.text();
+    expect(html).not.toMatch(/<script|https?:\/\//iu);
+    expect(html).toContain('<link rel="manifest" href="./manifest.webmanifest">');
+    expect(html).toContain('rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png"');
+    expect(new URL("../../", installUrl).pathname).toBe("/gateway/");
+    const head = await fetch(installUrl, { method: "HEAD" });
+    expect(head.headers.get("content-length")).toBe(String(Buffer.byteLength(html)));
+    expect(await head.text()).toBe("");
+    expect((await fetch(installUrl, { method: "POST" })).status).toBe(405);
     const icon = await fetch(origin + iconUrl);
     expect(icon.headers.get("content-type")).toBe("image/png");
     const bytes = Buffer.from(await icon.arrayBuffer());
@@ -134,19 +157,38 @@ it("publishes only a writer's flattened raster and a deployment-scoped install m
     const replacement = await replaced.json();
     expect(replacement.iconUrl).not.toBe(iconUrl);
     expect((await fetch(origin + iconUrl)).status).toBe(404);
+    expect((await fetch(installUrl)).status).toBe(404);
     const directory = path.join(state, "pwa-icons");
-    expect(await readdir(directory)).toHaveLength(8);
-    const secondPerson = await post({ "x-forwarded-user": "another@example.test" });
+    expect(await readdir(directory)).toHaveLength(6);
+    const secondPerson = await post({
+      "x-forwarded-user": "another@example.test",
+      "x-openclaw-install-profile": alternate.id,
+    });
     expect(secondPerson.status).toBe(200);
     expect((await secondPerson.json()).iconUrl).not.toBe(iconUrl);
-    expect(await readdir(directory)).toHaveLength(12);
-    expect((await reset({ "x-forwarded-user": "another@example.test" })).status).toBe(204);
-    const durable = createPwaIconStore(directory);
+    expect(await readdir(directory)).toHaveLength(9);
+    expect(
+      (
+        await reset({
+          "x-forwarded-user": "another@example.test",
+          "x-openclaw-install-profile": alternate.id,
+        })
+      ).status,
+    ).toBe(204);
+    const durable = createPwaIconStore(state);
     const token = replacement.iconUrl.split("/").at(-2);
     expect(await durable.read(token, 512)).toEqual(
       Buffer.from(await (await fetch(origin + replacement.iconUrl)).arrayBuffer()),
     );
-    expect((await reset({ "x-forwarded-user": "colleague@example.test" })).status).toBe(204);
+    const colleague = ensureProfileForEmail("colleague@example.test");
+    expect(
+      (
+        await reset({
+          "x-forwarded-user": "colleague@example.test",
+          "x-openclaw-install-profile": colleague.id,
+        })
+      ).status,
+    ).toBe(204);
     expect((await fetch(origin + replacement.iconUrl)).status).toBe(200);
     expect((await reset()).status).toBe(204);
     expect((await reset()).status).toBe(204);
@@ -155,12 +197,13 @@ it("publishes only a writer's flattened raster and a deployment-scoped install m
       "icon-192.png",
       "apple-touch-icon.png",
       "manifest.webmanifest",
+      "install",
     ]) {
       expect((await fetch(new URL(file, origin + replacement.iconUrl))).status).toBe(404);
     }
     expect((await fetch(origin + otherDevice.iconUrl)).status).toBe(200);
-    expect(await readdir(directory)).toHaveLength(4);
-    expect(await createPwaIconStore(directory).has(token)).toBe(false);
+    expect(await readdir(directory)).toHaveLength(3);
+    expect(await createPwaIconStore(state).has(token)).toBe(false);
   } finally {
     await closeHttpServer(server);
   }
@@ -187,6 +230,7 @@ it("accepts a paired writer or gateway secret, not anonymous or read-only device
           "sec-fetch-site": "same-origin",
           "Content-Type": "image/png",
           "x-openclaw-install-device": "c".repeat(64),
+          "x-openclaw-install-profile": GATEWAY_OWNER_PROFILE_ID,
           "x-openclaw-scopes": "operator.admin",
           ...(token ? { Authorization: "Bearer " + token } : {}),
         },
@@ -227,6 +271,36 @@ it("accepts a paired writer or gateway secret, not anonymous or read-only device
       await closeHttpServer(server);
     }
   }
+});
+
+it("recovers committed slot artwork after an interrupted replacement", async () => {
+  const dir = tempDirs.make("pwa-slot-recovery-");
+  const device = "a".repeat(64);
+  const artwork = Buffer.from("first raster fixture");
+  const rasters = { 512: artwork, 192: artwork, 180: artwork };
+  const store = createPwaIconStore(dir);
+  const first = await store.set("fixture-profile", device, rasters);
+  if (first.status !== "ok" || !first.token) {
+    throw new Error("Missing initial icon");
+  }
+  const { db } = openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: dir } });
+  const rows = () => db.prepare("SELECT token FROM pwa_icon_slots").all();
+  expect(rows()).toEqual([{ token: first.token }]);
+  db.exec(`CREATE TRIGGER interrupt_icon AFTER UPDATE ON pwa_icon_slots
+    BEGIN SELECT RAISE(ABORT, 'simulated slot transaction interruption'); END`);
+  await expect(store.set("fixture-profile", device, rasters)).rejects.toThrow(
+    "simulated slot transaction interruption",
+  );
+  expect(rows()).toEqual([{ token: first.token }]);
+  const reopened = createPwaIconStore(dir);
+  expect(await reopened.read(first.token, 512)).toEqual(artwork);
+  expect((await readdir(path.join(dir, "pwa-icons"))).toSorted()).toEqual(
+    [180, 192, 512].map((size) => `${first.token}.${size}.png`),
+  );
+  db.exec("DROP TRIGGER interrupt_icon");
+  expect((await reopened.set("fixture-profile", device, null)).status).toBe("ok");
+  expect(rows()).toEqual([]);
+  expect(await createPwaIconStore(dir).has(first.token)).toBe(false);
 });
 
 it("bounds new slots without preventing replacement or reset at quota", async () => {

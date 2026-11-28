@@ -21,8 +21,8 @@ export function parsePwaIconRoute(pathname: string, basePath: string) {
   const [token, file, ...extra] = pathname.slice(prefix.length + 1).split("/");
   if (token && /^[0-9a-f]{64}$/u.test(token) && extra.length === 0) {
     const size = PWA_ICON_SIZES.find((n) => PWA_ICON_FILES[n] === file);
-    if (size || file === "manifest.webmanifest") {
-      return { kind: "asset" as const, token, manifest: !size, size };
+    if (size || file === "manifest.webmanifest" || file === "install") {
+      return { kind: "asset" as const, token, file, size };
     }
   }
   return { kind: "invalid" as const };

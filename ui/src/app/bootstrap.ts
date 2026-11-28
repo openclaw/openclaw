@@ -70,6 +70,7 @@ import type { NativeConversationBridge } from "./native-conversation-types.ts";
 import { prepareNativeUpdateFallback, startNativeLinkRouting } from "./native-link-routing.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 import { isBrowserPanelAvailable } from "./panel-availability.ts";
+import { deferInstallIconProfile } from "./pwa-install-lifecycle.ts";
 import {
   rememberProfileAppearanceIdentity,
   seedProfileAppearancePrefs,
@@ -139,14 +140,14 @@ export function bootstrapApplication(
   );
   const isDocumentGateway = () =>
     gatewayCredentialScope(gateway.connection.gatewayUrl) === documentGatewayScope;
+  const stopInstallIcon = deferInstallIconProfile(gateway, resourceBasePath, isDocumentGateway);
   const stopBrowserAuthRecovery = startBrowserAuthRecovery(resourceBasePath, () =>
     isDocumentGateway() ? getGatewayAuth() : {},
   );
   const connectionBootstrap = createConnectionBootstrapCoordinator();
   const chatSubmissions = createChatSubmissions();
   const router = createApplicationRouter();
-  const bootRecord = initial.bootRecord;
-  let warmBoot = bootRecord !== null;
+  let warmBoot = initial.bootRecord !== null;
   const warmBootConnectionRevision = gateway.connectionRevision;
   initial.prewarmChatSnapshot();
   if (startsApplicationRouter && !firstRunDefaultLanding) {
@@ -154,7 +155,7 @@ export function bootstrapApplication(
     warmApplicationRouteModule(router, applicationLocation, basePath);
   }
   const stopWarmBootConnection = ownsWarmBoot
-    ? subscribeWarmBootConnection(gateway, bootRecord, () => {
+    ? subscribeWarmBootConnection(gateway, initial.bootRecord, () => {
         warmBoot = false;
         finishBootFrame();
       })
@@ -285,11 +286,11 @@ export function bootstrapApplication(
   });
   const scopeUpgrade = createScopeUpgradeCapability(gateway);
   const sessions = createSessionCapability(gateway, agentSelection, {
-    bootRecord,
+    bootRecord: initial.bootRecord,
     connectionBootstrap,
   });
   const bootRecordPersistence = ownsWarmBoot
-    ? subscribeBootRecordPersistence({ gateway, agents, sessions }, bootRecord)
+    ? subscribeBootRecordPersistence({ gateway, agents, sessions }, initial.bootRecord)
     : undefined;
   const runtimeConfig = createRuntimeConfigCapability(gateway, {
     current: () => {
@@ -689,6 +690,7 @@ export function bootstrapApplication(
     stop: () => {
       stopBrowserAuthRecovery();
       startupLifecycle.stop();
+      stopInstallIcon();
       stopWarmBootConnection?.();
       bootRecordPersistence?.dispose();
       stopPostConnect();

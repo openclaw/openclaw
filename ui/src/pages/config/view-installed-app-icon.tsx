@@ -1,32 +1,40 @@
-import { action, createMemo, createOptimistic, createSignal, refresh, Show } from "solid-js";
+import { action, createMemo, createOptimistic, createSignal, Show } from "solid-js";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
-import {
-  currentPwaInstallIcon,
-  resetPwaInstallIcon,
-  savePwaInstallIcon,
-} from "../../app/pwa-install-icon.ts";
+import { resetPwaInstallIcon, savePwaInstallIcon } from "../../app/pwa-install-icon.ts";
+import { installIconSelection } from "../../app/pwa-install-selection.ts";
 import { SettingsRow, SettingsSectionHeader } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 
 export function InstalledAppIcon(props: { agentPicture?: string | null }) {
-  const current = createMemo(currentPwaInstallIcon);
+  const selection = projectOwner(installIconSelection, (source) => source);
+  const owner = createMemo(() => selection.read().owner);
   const [saving, setSaving] = createOptimistic(false);
-  const [error, setError] = createSignal("");
-  const [saved, setSaved] = createSignal(false);
+  type Owner = typeof installIconSelection.owner;
+  const [result, setResult] = createSignal<{ owner: Owner; error?: string }>();
+  const currentResult = createMemo(() => (result()?.owner === owner() ? result() : undefined));
   let input!: HTMLInputElement;
+  let chooserOwner: Owner = null;
 
-  const apply = action(function* (change: () => void | Promise<void>) {
+  const apply = action(function* (expected: Owner, change: () => void | Promise<void>) {
+    if (!expected || expected !== installIconSelection.owner) {
+      return;
+    }
     setSaving(true);
     try {
       yield change();
-      refresh(current);
-      setSaved(true);
-      setError("");
+      if (expected === installIconSelection.owner) {
+        setResult({ owner: expected });
+      }
     } catch (err) {
-      setSaved(false);
-      setError(formatUiError(err, t("configView.appearance.installIcon.failed")));
+      if (expected === installIconSelection.owner) {
+        setResult({
+          owner: expected,
+          error: formatUiError(err, t("configView.appearance.installIcon.failed")),
+        });
+      }
     }
   });
 
@@ -46,28 +54,28 @@ export function InstalledAppIcon(props: { agentPicture?: string | null }) {
               <img
                 width="40"
                 height="40"
-                src={current() ?? inferControlUiPublicAssetPath("apple-touch-icon.png")}
+                src={selection.read().icon ?? inferControlUiPublicAssetPath("apple-touch-icon.png")}
                 alt={t("configView.appearance.installIcon.preview")}
               />
               <button
                 type="button"
                 class="btn btn--sm"
-                disabled={saving() || !current()}
-                onClick={() => void apply(resetPwaInstallIcon)}
+                disabled={saving() || !owner()}
+                onClick={() => void apply(owner(), resetPwaInstallIcon)}
               >
                 {t("configView.appearance.installIcon.default")}
               </button>
               <button
                 type="button"
                 class="btn btn--sm"
-                disabled={saving() || !props.agentPicture}
+                disabled={saving() || !owner() || !props.agentPicture}
                 title={
                   !props.agentPicture ? t("configView.appearance.installIcon.noPicture") : undefined
                 }
                 onClick={() => {
                   const source = props.agentPicture;
                   if (source) {
-                    void apply(() => savePwaInstallIcon(source));
+                    void apply(owner(), () => savePwaInstallIcon(source));
                   }
                 }}
               >
@@ -76,8 +84,11 @@ export function InstalledAppIcon(props: { agentPicture?: string | null }) {
               <button
                 type="button"
                 class="btn btn--sm"
-                disabled={saving()}
-                onClick={() => input.click()}
+                disabled={saving() || !owner()}
+                onClick={() => {
+                  chooserOwner = owner();
+                  input.click();
+                }}
               >
                 {t("configView.appearance.installIcon.custom")}
               </button>
@@ -89,8 +100,10 @@ export function InstalledAppIcon(props: { agentPicture?: string | null }) {
                 onChange={(event) => {
                   const file = event.currentTarget.files?.[0];
                   event.currentTarget.value = "";
-                  if (file) {
-                    void apply(() => savePwaInstallIcon(file));
+                  const expected = chooserOwner;
+                  chooserOwner = null;
+                  if (file && expected) {
+                    void apply(expected, () => savePwaInstallIcon(file));
                   }
                 }}
               />
@@ -98,14 +111,25 @@ export function InstalledAppIcon(props: { agentPicture?: string | null }) {
           }
         />
       </div>
+      <Show when={selection.read().icon}>
+        {(icon) => (
+          <a href={icon().replace(/icon\.png$/u, "install")} rel="noreferrer">
+            {t("configView.appearance.installIcon.openInstallPage")}
+          </a>
+        )}
+      </Show>
       <span role="status" class="settings-section__desc">
-        {saving()
-          ? t("configView.appearance.installIcon.saving")
-          : saved()
-            ? t("configView.appearance.installIcon.saved")
-            : ""}
+        {!owner()
+          ? t("configView.appearance.installIcon.signIn")
+          : saving()
+            ? t("configView.appearance.installIcon.saving")
+            : currentResult() && !currentResult()?.error
+              ? t("configView.appearance.installIcon.saved")
+              : ""}
       </span>
-      <Show when={!saving() && error()}>{(message) => <span role="alert">{message()}</span>}</Show>
+      <Show when={!saving() && currentResult()?.error}>
+        {(message) => <span role="alert">{message()}</span>}
+      </Show>
     </section>
   );
 }

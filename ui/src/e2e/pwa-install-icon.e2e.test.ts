@@ -23,6 +23,9 @@ suite.define(() => {
         const touchIcon = prefix + "/apple-touch-icon.png";
         const uploads = new Map<string, Buffer>();
         await installMockGateway(page, {
+          presenceUsers: [
+            { self: true, id: "installer", identity: { type: "profile", id: "installer" } },
+          ],
           methodResponses: { "config.get": configResponse({}, "icon-proof") },
         });
         await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
