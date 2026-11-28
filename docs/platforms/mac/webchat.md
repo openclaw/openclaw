@@ -434,9 +434,14 @@ window. **Manage Gateways…** opens **Connection → Gateways**, even when the 
 empty. For SSH-tunneled primaries, the primary row uses the SSH host name rather
 than the loopback tunnel endpoint, unless a matching saved Gateway supplies its name.
 
-Right-click the OpenClaw Dock icon for **Open Dashboard** and **Settings…**.
+Right-click the OpenClaw Dock icon for **Open OpenClaw** and **Settings…**.
 When more than one Gateway is configured, this menu also lists every Gateway;
 the checkmark follows the selected experience's frontmost Gateway window.
+
+In the Web experience, clicking the Dock icon or choosing **Open OpenClaw**
+returns to the last focused Dashboard window when both it and the main Dashboard
+window remain open. This is separate from the startup Gateway selection. To open
+or focus a specific Gateway, choose it from the Dock menu's Gateway list.
 
 The menu checks health only while open, retaining cached facts between openings.
 Before the first result a card shows **checking…**; failed checks show
