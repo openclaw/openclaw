@@ -118,6 +118,14 @@ describe("config schema", () => {
     }
   });
 
+  it("validates the native Codex MCP startup readiness modes", () => {
+    const withReadiness = (startupReadiness: string) =>
+      OpenClawSchema.safeParse(mcpConfig({ url: mcpUrl, codex: { startupReadiness } })).success;
+    expect(withReadiness("connection")).toBe(true);
+    expect(withReadiness("catalog")).toBe(true);
+    expect(withReadiness("deferred")).toBe(false);
+  });
+
   it("rejects empty Codex MCP agent scopes", () => {
     for (const agents of [[], ["  "], ["!!!"]]) {
       expect(() =>

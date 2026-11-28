@@ -51,6 +51,23 @@ describe("buildCodexUserMcpServersThreadConfigPatchForRuntime", () => {
     authMocks.loadExecApprovalsReadOnlyAsync.mockResolvedValue({ version: 1, agents: {} });
   });
 
+  it("passes each server's explicit startup readiness to Codex", async () => {
+    const url = "https://mcp.example.invalid/rpc";
+    const patch = await project({
+      docs: http(url, {
+        codex: { startupReadiness: "catalog" },
+        toolFilter: { include: ["read"] },
+      }),
+      inventory: { command: "inventory-mcp", codex: { startupReadiness: "connection" } },
+      default: http(url),
+    });
+    expectProjection(patch, {
+      docs: { url, enabled_tools: ["read"], startup_readiness: "catalog" },
+      inventory: { command: "inventory-mcp", startup_readiness: "connection" },
+      default: { url },
+    });
+  });
+
   it("projects exact-agent durable grants with server policy precedence in runtime preparation", async () => {
     const grants = ["auto", "unspecified", "prompt", "approve", "missing"].map((server) => ({
       server,

@@ -262,6 +262,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Refresh-capable auth profile id used to inject the current bearer token into this remote MCP server. When set, OpenClaw resolves and refreshes the profile at runtime and does not project refresh material downstream.",
   "mcp.servers.*.codex.agents":
     "Optional non-empty OpenClaw agent ids that should receive this MCP server in Codex app-server thread config. Lists with no valid agent IDs grant no access; when omitted, the server is projected for all Codex app-server agents.",
+  "mcp.servers.*.codex.startupReadiness":
+    'Use "connection" for live startup readiness or "catalog" to allow Codex to use a valid cached tool catalog. Tool calls still require a live connection.',
   "mcp.servers.*.codex.defaultToolsApprovalMode":
     'Optional Codex MCP tool approval mode for this server: "auto", "prompt", or "approve". Use only for MCP servers you intentionally trust.',
   "mcp.servers.*.codex.default_tools_approval_mode":

@@ -493,6 +493,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "mcp.servers.*.toolFilter.include": "Included MCP Tools",
   "mcp.servers.*.toolFilter.exclude": "Excluded MCP Tools",
   "mcp.servers.*.codex.agents": "Codex MCP Agents",
+  "mcp.servers.*.codex.startupReadiness": "Codex MCP Startup Readiness",
   "mcp.servers.*.codex.defaultToolsApprovalMode": "Codex MCP Tool Approval",
   "mcp.servers.*.codex.default_tools_approval_mode": "Codex MCP Tool Approval",
   ui: "UI",

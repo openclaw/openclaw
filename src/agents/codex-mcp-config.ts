@@ -104,6 +104,10 @@ export function normalizeCodexMcpServerConfig(
     next.supports_parallel_tool_calls = server.supportsParallelToolCalls;
   }
   applyCodexToolFilter(next, name, server);
+  const readiness = isRecord(server.codex) ? server.codex.startupReadiness : undefined;
+  if (readiness === "connection" || readiness === "catalog") {
+    next.startup_readiness = readiness;
+  }
   const defaultToolsApprovalMode = resolveProjectedMcpCodexToolApprovalMode(name, server);
   if (defaultToolsApprovalMode) {
     next.default_tools_approval_mode = defaultToolsApprovalMode;
