@@ -262,7 +262,13 @@ export async function sendConfigSet(
   return await rpcReq(requireClient(), "config.set", params, timeoutMs);
 }
 
-export async function getCurrentConfigObject() {
+export async function getCurrentConfigObject(options?: { warmRedactionHints?: boolean }) {
+  if (options?.warmRedactionHints) {
+    // A fixture that tests a later owner transition need not time cold schema discovery.
+    const { loadGatewayConfigRedactionHints } =
+      await import("../../../src/config/runtime-schema.js");
+    loadGatewayConfigRedactionHints();
+  }
   const current = await rpcReq<{
     raw?: string | null;
     valid?: boolean;

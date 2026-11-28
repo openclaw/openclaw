@@ -66,7 +66,7 @@ describe("gateway config methods", () => {
   installConfigWriteGatewayHooks();
 
   it("reloads owners independently and reports a changed unresolved owner as cold", async () => {
-    const original = await getCurrentConfigObject();
+    const original = await getCurrentConfigObject({ warmRedactionHints: true });
     const secretFile = path.join(await resetTempDir("owner-reload"), "secrets.json");
     await writeJsonFile(secretFile, { first: "first-old", second: "second-old" });
     await fs.chmod(secretFile, 0o600);
