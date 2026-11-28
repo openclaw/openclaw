@@ -64,6 +64,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     color: createOptimisticRowField(host, "color"),
     category: optimisticCategories,
   };
+  const optimisticSnooze = createOptimisticRowField(host, "snoozedUntil");
   const optimisticUnread = createOptimisticRowField(host, "unread");
   const acknowledgeHiddenRuns = createHiddenRunReads(host, optimisticUnread);
   const optimisticArchive = createOptimisticArchivePatches(host);
@@ -76,6 +77,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
   > = [
     optimisticPins,
     optimisticUnread,
+    optimisticSnooze,
     optimisticArchive,
     ...Object.values(metadataFields),
     ...settingsPatches.owners,
@@ -160,6 +162,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       patchParams.icon !== undefined ||
       patchParams.color !== undefined ||
       patchParams.category !== undefined ||
+      patchParams.snoozedUntil !== undefined ||
       patchParams.pinned !== undefined ||
       patchParams.unread === false ||
       patchParams.archived !== undefined ||
@@ -190,6 +193,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     const modelPatch = modelOverrides.preparePatch(key, patchParams, options, scope);
     const nextPinned = patchParams.pinned === true;
     let pinPatchToken: symbol | null = null;
+    let snoozePatchToken: symbol | null = null;
     let unreadPatchToken: symbol | null = null;
     let categoryPatchToken: symbol | null = null;
     const displayClaims: Array<readonly [typeof optimisticCategories, symbol | null]> = [];
@@ -209,6 +213,11 @@ export function createSessionMutations(host: SessionMutationsHost) {
         categoryPatchToken = optimisticCategories.prepare(
           () => patchParams.category?.trim() || undefined,
         )(pendingTarget);
+      }
+      if (patchParams.snoozedUntil !== undefined && !snoozePatchToken && pendingTarget) {
+        snoozePatchToken = optimisticSnooze.prepare(() => patchParams.snoozedUntil ?? undefined)(
+          pendingTarget,
+        );
       }
       modelPatch.start();
       // Sidebar rows read `pinned` straight off the snapshot, so a pin/unpin has
@@ -243,6 +252,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
           [
             [optimisticPins, pinPatchToken],
             [optimisticUnread, unreadPatchToken],
+            [optimisticSnooze, snoozePatchToken],
             [optimisticCategories, categoryPatchToken],
             ...displayClaims,
           ],

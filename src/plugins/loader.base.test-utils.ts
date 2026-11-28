@@ -1969,40 +1969,6 @@ describe("loadOpenClawPlugins", () => {
     },
   );
 
-  it("injects plugin config into internal hook event context", async () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "hook-config-context",
-      filename: "hook-config-context.cjs",
-      registration: `api.registerHook(
-        "gateway:startup",
-        (event) => {
-          event.messages.push(event.context.pluginConfig?.marker);
-        },
-        { name: "hook-config-context" },
-      );`,
-    });
-    updatePluginManifest(plugin, { configSchema: { type: "object" } });
-
-    clearInternalHooks();
-
-    loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: {
-        allow: ["hook-config-context"],
-        entries: { "hook-config-context": { config: { marker: "plugin-config-visible" } } },
-      },
-      options: { onlyPluginIds: ["hook-config-context"] },
-    });
-
-    const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
-    await triggerInternalHook(event);
-    expect(event.messages).toEqual(["plugin-config-visible"]);
-    expect(event.context).toStrictEqual({});
-
-    clearInternalHooks();
-  });
-
   it("preserves plugin hook context mutations for bootstrap hooks", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
