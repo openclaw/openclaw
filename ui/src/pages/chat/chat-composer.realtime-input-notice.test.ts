@@ -3,11 +3,11 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
-import { renderChatView } from "./chat-view.test-helpers.ts";
+import { renderChatView, waitForElement } from "./chat-view.test-helpers.ts";
 
 afterEach(() => resetChatViewState());
 
-it("keeps recovered microphone input-loss guidance visible while listening", () => {
+it("keeps recovered microphone input-loss guidance visible while listening", async () => {
   const onDismissRealtimeTalkInputNotice = vi.fn();
   const container = renderChatView({
     realtimeTalkActive: true,
@@ -16,7 +16,8 @@ it("keeps recovered microphone input-loss guidance visible while listening", () 
     onDismissRealtimeTalkInputNotice,
   });
 
-  expect(container.querySelector(".agent-chat__voice-activity")).not.toBeNull();
+  // The microphone activity view loads independently of the recovery notice.
+  await waitForElement(container, '.agent-chat__voice-activity[data-status="listening"]');
   const notice = container.querySelector('[role="status"].agent-chat__composer-alert');
   expect(notice?.textContent).toContain("Microphone input recovered; repeat the last part");
   expect(notice?.closest(".sr-only")).toBeNull();
