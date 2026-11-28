@@ -39,7 +39,7 @@ import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-ret
 import { releasePluginInstanceRegistry } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 import { withPluginRuntimePluginScope } from "./runtime/gateway-request-scope.js";
-import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-scope.js";
+import { getPluginRuntimeGenerationRegistry } from "./runtime/generation-state.js";
 
 const { values: valueInstances } = pluginInstanceState;
 export type {

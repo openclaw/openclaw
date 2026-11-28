@@ -11,6 +11,7 @@ import {
   findAuthorizedSwarmCollectorRequest,
   findSwarmCollectorSession,
 } from "../../agents/subagents/registry/subagent-registry-memory.js";
+import { visibleParentInputProvenance } from "../../agents/subagents/spawn/subagent-capabilities.js";
 import { isSubagentSessionFromEntry } from "../../agents/subagents/spawn/subagent-depth-policy.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../../agents/subagents/swarm/swarm-output-schema.js";
@@ -231,7 +232,10 @@ export async function prepareAgentRequestPreflight(params: {
   ) {
     return rejectInvalidRequest("Restart input is reserved for restart recovery.");
   }
-  if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {
+  if (
+    inputProvenance?.kind === "inter_session" &&
+    (inputProvenance.sourceTool === "sessions_send" || inputProvenance.sourceRelation === "parent")
+  ) {
     const sourceSessionKey = inputProvenance.sourceSessionKey;
     const sourceAgentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
     const sourceTarget =
@@ -242,35 +246,56 @@ export async function prepareAgentRequestPreflight(params: {
           )
         : undefined;
     const sourceEntry = sourceTarget ? sourceTarget.store[sourceTarget.canonicalKey] : undefined;
-    let sourceIsSubagent = Boolean(
-      sourceTarget && isSubagentSessionFromEntry(sourceTarget.canonicalKey, sourceEntry),
-    );
-    if (
-      !sourceIsSubagent &&
-      sourceTarget &&
-      sourceEntry &&
-      (sourceEntry.parentSessionKey || sourceEntry.spawnedBy)
-    ) {
-      const [sourceAcp] = await readAcpSessionMetaForEntries({
-        entries: [
-          {
-            sessionKey: sourceTarget.canonicalKey,
-            agentId: sourceTarget.agentId,
-            entry: sourceEntry,
-          },
-        ],
-        cfg,
-      });
-      sourceIsSubagent = isSubagentSessionFromEntry(
-        sourceTarget.canonicalKey,
-        sourceEntry,
-        sourceAcp,
-      );
+    if (inputProvenance.sourceRelation === "parent") {
+      const target =
+        canUseInternalRuntimeHandoff && requestSessionKey && selectedAgentId
+          ? await withGatewaySessionStoreTarget(
+              { cfg, key: requestSessionKey, agentId: selectedAgentId, projection: "full" },
+              (value) => value,
+            )
+          : undefined;
+      if (
+        !target ||
+        !visibleParentInputProvenance(
+          sourceTarget?.canonicalKey,
+          target.canonicalKey,
+          target.store[target.canonicalKey],
+        ).sourceRelation
+      ) {
+        delete inputProvenance.sourceRelation;
+      }
     }
-    if (sourceIsSubagent) {
-      inputProvenance.sourceRole = "subagent";
-    } else {
-      delete inputProvenance.sourceRole;
+    if (inputProvenance.sourceTool === "sessions_send") {
+      let sourceIsSubagent = Boolean(
+        sourceTarget && isSubagentSessionFromEntry(sourceTarget.canonicalKey, sourceEntry),
+      );
+      if (
+        !sourceIsSubagent &&
+        sourceTarget &&
+        sourceEntry &&
+        (sourceEntry.parentSessionKey || sourceEntry.spawnedBy)
+      ) {
+        const [sourceAcp] = await readAcpSessionMetaForEntries({
+          entries: [
+            {
+              sessionKey: sourceTarget.canonicalKey,
+              agentId: sourceTarget.agentId,
+              entry: sourceEntry,
+            },
+          ],
+          cfg,
+        });
+        sourceIsSubagent = isSubagentSessionFromEntry(
+          sourceTarget.canonicalKey,
+          sourceEntry,
+          sourceAcp,
+        );
+      }
+      if (sourceIsSubagent) {
+        inputProvenance.sourceRole = "subagent";
+      } else {
+        delete inputProvenance.sourceRole;
+      }
     }
   }
   const sessionEffects =

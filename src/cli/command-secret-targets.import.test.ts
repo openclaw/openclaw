@@ -68,6 +68,41 @@ describe("command secret targets module import", () => {
     }
   });
 
+  it("resolves model credentials without loading the web-tool runtime", async () => {
+    // mock-isolation: A model-only command must not initialize the web provider runtime.
+    vi.doMock("../secrets/runtime-web-tools.js", () => {
+      throw new Error("Model credential resolution loaded the web runtime");
+    });
+    vi.stubEnv("OPENCLAW_TEST_MODEL_KEY", "fixture-model-key");
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
+    vi.stubEnv("OPENCLAW_GATEWAY_PORT", undefined);
+    try {
+      const { resolveCommandSecretRefsViaGateway } = await import("./command-secret-gateway.js");
+      const { getModelsCommandSecretTargetIds } = await import("./model-secret-targets.js");
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: {
+          models: {
+            providers: {
+              fixture: {
+                baseUrl: "https://provider.example/v1",
+                apiKey: { source: "env", provider: "default", id: "OPENCLAW_TEST_MODEL_KEY" },
+                models: [],
+              },
+            },
+          },
+        },
+        commandName: "infer model run",
+        targetIds: getModelsCommandSecretTargetIds(),
+        localGatewayAbsent: true,
+      });
+      expect(result.resolvedConfig.models?.providers?.fixture?.apiKey).toBe("fixture-model-key");
+      expect(result.hadUnresolvedTargets).toBe(false);
+    } finally {
+      vi.doUnmock("../secrets/runtime-web-tools.js");
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("can resolve configured-channel status targets without the full registry", async () => {
     const listSecretTargetRegistryEntries = vi.fn(() => {
       throw new Error("registry touched too early");

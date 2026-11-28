@@ -236,11 +236,22 @@ const enCron = {
         "Scheduled runs outside these hours are skipped, and one-time runs wait. Manual runs follow it too. Hours can cross midnight.",
       activeHoursStart: "From",
       activeHoursEnd: "Until",
+      idleOnly: "Wait until the agent is free",
+      idleOnlyHelp:
+        "Starts only when the agent isn’t busy with chats or other automations. On a busy agent, this can wait a long time.",
+      skipIfScratchEmpty: "Skip when scratch is empty",
+      skipIfScratchEmptyHelp:
+        "Skips the run when this automation’s scratch notes list no tasks. If it has no scratch at all, it still runs.",
       deliveryTarget: "Send to",
       channelTarget: "A chat or person",
       ownerTarget: "The owner’s direct messages",
       ownerTargetHelp:
         "OpenClaw finds the owner’s direct messages on every run. It never sends to a group chat instead.",
+      directPolicy: "Direct messages",
+      directPolicyHelp: "Choose Block to never send results as a direct message.",
+      defaultPolicy: "Default",
+      allowDirect: "Allow",
+      blockDirect: "Block",
       action: "Action",
       command: "Command",
       script: "Script",
@@ -265,12 +276,13 @@ const enCron = {
       webhookUrl: "Webhook URL",
       channel: "Channel",
       webhookPlaceholder: "https://example.com/cron",
-      automaticChannel: "Automatic",
       channelHelp: "The connected app that gets the results, like Telegram or Slack.",
       webhookHelp: "OpenClaw sends each run’s results to this URL.",
       to: "Recipient",
       toPlaceholder: "+1555… or chat ID",
       toHelp: "A chat ID, phone number, or user ID. Leave blank to use the channel’s default.",
+      recipientSuggestionsUnavailable:
+        "Couldn’t load recipient suggestions. You can enter the recipient in the editor under {advanced} → {results}. Details: {details}",
       advanced: "Advanced",
       advancedTask: "Task",
       advancedConditions: "Conditions",
@@ -442,6 +454,13 @@ const enCron = {
       reload: "Reload scratch",
       save: "Save scratch",
       clear: "Remove scratch",
+      loadFailed: "Couldn’t load scratch. Use Load scratch to try again.",
+      reloadFailed:
+        "Couldn’t reload scratch. Copy any edits you want to keep before trying Reload scratch again.",
+      saveUnconfirmed:
+        "OpenClaw couldn’t confirm the save. Copy any edits you want to keep, then use Reload scratch to check what’s saved.",
+      removeUnconfirmed:
+        "OpenClaw couldn’t confirm removal. Copy any edits you want to keep, then use Reload scratch to check what’s saved.",
       empty:
         "No scratch saved yet. Saving an empty editor creates empty scratch; removing it leaves scratch unset.",
       limit: "{bytes} / {max} bytes",

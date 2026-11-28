@@ -16,6 +16,7 @@ import {
   detectMime,
   extensionForMime,
   getFileExtension,
+  isZipContainerMime,
   normalizeMimeType,
 } from "@openclaw/media-core/mime";
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
@@ -365,8 +366,12 @@ function extensionForAuthoritativeHeaderMime(contentType?: string): string | und
   return extensionForMime(mime);
 }
 
-function isGenericContainerMime(mime?: string): boolean {
-  return mime === "application/zip" || mime === "application/octet-stream";
+function isContainerMime(mime?: string): boolean {
+  return (
+    mime === "application/zip" ||
+    mime === "application/octet-stream" ||
+    (mime !== undefined && isZipContainerMime(mime))
+  );
 }
 
 function isImageHeaderMime(contentType?: string): boolean {
@@ -382,7 +387,7 @@ function resolveSavedMediaExtension(params: {
 }): string {
   const trustedHeaderExt =
     params.headerExt &&
-    isGenericContainerMime(params.detectedMime) &&
+    isContainerMime(params.detectedMime) &&
     isImageHeaderMime(params.contentType)
       ? undefined
       : params.headerExt;
@@ -563,6 +568,40 @@ export async function saveMediaStream(
   detectionFilePathHint?: string,
   options?: { assertCommitAllowed?: () => void; durable?: boolean },
 ): Promise<SavedMedia> {
+  // Pull from entry: a hot source (a decrypt stream, for example) can fail while the temp file is
+  // still being prepared, and that failure must reject this save instead of escaping uncaught.
+  const source = stream[Symbol.asyncIterator]();
+  const first = source.next();
+  // The read loop awaits this pull; until then, keep an early failure from going unhandled.
+  first.catch(() => undefined);
+  try {
+    return await writeMediaStream(
+      source,
+      first,
+      contentType,
+      subdir,
+      maxBytes,
+      originalFilename,
+      detectionFilePathHint,
+      options,
+    );
+  } catch (error) {
+    // Close the source as for-await does on an abrupt exit, including failures before reading.
+    void source.return?.().catch(() => undefined);
+    throw error;
+  }
+}
+
+async function writeMediaStream(
+  source: AsyncIterator<unknown>,
+  first: Promise<IteratorResult<unknown>>,
+  contentType: string | undefined,
+  subdir: string,
+  maxBytes: number,
+  originalFilename: string | undefined,
+  detectionFilePathHint: string | undefined,
+  options: { assertCommitAllowed?: () => void; durable?: boolean } | undefined,
+): Promise<SavedMedia> {
   options?.assertCommitAllowed?.();
   const readScope = captureChannelReadScope();
   readScope?.assertCurrent();
@@ -576,7 +615,8 @@ export async function saveMediaStream(
     const sniffBuffer = Buffer.allocUnsafe(16384);
     let sniffLen = 0;
     let size = 0;
-    for await (const chunk of stream) {
+    for (let step = await first; !step.done; step = await source.next()) {
+      const chunk = step.value;
       readScope?.assertCurrent();
       options?.assertCommitAllowed?.();
       const chunkBuffer = Buffer.isBuffer(chunk)

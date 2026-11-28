@@ -245,6 +245,7 @@ export function createJob(
     schedule,
     ...(input.pacing !== undefined ? { pacing: structuredClone(input.pacing) } : {}),
     ...(input.activeHours !== undefined ? { activeHours: structuredClone(input.activeHours) } : {}),
+    ...(input.idleOnly !== undefined ? { idleOnly: input.idleOnly } : {}),
     ...(input.cyberAccessProgram !== undefined
       ? { cyberAccessProgram: input.cyberAccessProgram }
       : {}),
@@ -380,6 +381,13 @@ export function applyJobPatch(
       job.cyberAccessProgram = patch.cyberAccessProgram;
     }
   }
+  if ("idleOnly" in patch) {
+    if (patch.idleOnly == null) {
+      delete job.idleOnly;
+    } else {
+      job.idleOnly = patch.idleOnly;
+    }
+  }
   if (patch.wakeMode) {
     job.wakeMode = patch.wakeMode;
   }
@@ -424,6 +432,7 @@ export function applyJobPatch(
       authoredDelivery &&
       (patch.delivery?.mode !== undefined ||
         authoredDelivery.target !== undefined ||
+        authoredDelivery.directPolicy !== undefined ||
         authoredDelivery.channel !== undefined ||
         authoredDelivery.to !== undefined ||
         authoredDelivery.threadId !== undefined ||
@@ -438,11 +447,7 @@ export function applyJobPatch(
     }
     // Clear-only failure destinations retain their global-default opt-outs.
     const failureDestination = job.delivery?.failureDestination;
-    const directPolicy = job.delivery?.directPolicy;
-    job.delivery =
-      failureDestination || directPolicy
-        ? { mode: "none", failureDestination, directPolicy }
-        : undefined;
+    job.delivery = failureDestination ? { mode: "none", failureDestination } : undefined;
   }
   if (patch.state) {
     const statePatch = { ...patch.state } as Partial<CronJobState>;
@@ -542,6 +547,11 @@ export function applyDeclarativeJobSpec(
   } else {
     delete job.cyberAccessProgram;
   }
+  if (input.idleOnly !== undefined) {
+    job.idleOnly = input.idleOnly;
+  } else {
+    delete job.idleOnly;
+  }
   job.payload =
     input.payload.kind === "script"
       ? normalizeCronScriptPayload(structuredClone(input.payload))
@@ -573,10 +583,7 @@ export function applyDeclarativeJobSpec(
     toolsAllowExecTarget: opts.toolsAllowExecTarget,
   });
   const delivery = resolveInitialCronDelivery(input);
-  const directPolicy = job.delivery?.directPolicy;
-  if (directPolicy !== undefined) {
-    job.delivery = { ...structuredClone(delivery ?? { mode: "none" }), directPolicy };
-  } else if (delivery) {
+  if (delivery) {
     job.delivery = structuredClone(delivery);
   } else {
     delete job.delivery;

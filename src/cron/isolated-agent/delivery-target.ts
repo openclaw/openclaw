@@ -172,9 +172,9 @@ export async function resolveDeliveryTarget(
     sourceGeneration?: CronDeliverySourceGeneration;
   },
 ): Promise<DeliveryTargetResolution> {
-  const requestedChannel = jobPayload.channel;
+  const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
-  const allowMismatchedLastTo = requestedChannel === undefined;
+  const allowMismatchedLastTo = requestedChannel === "last";
   const deliveryTargetRuntime = await deliveryTargetRuntimeLoader.load();
   const source = jobPayload.sourceConversation;
   if (source && !hasExplicitCronDeliveryTarget(jobPayload)) {
@@ -237,7 +237,7 @@ export async function resolveDeliveryTarget(
       currentSessionKey: threadSessionKey,
       policy: {
         target: "owner",
-        channel: requestedChannel,
+        channel: requestedChannel === "last" ? undefined : requestedChannel,
         accountId: jobPayload.accountId,
         directPolicy: jobPayload.directPolicy,
       },
@@ -333,7 +333,7 @@ export async function resolveDeliveryTarget(
       mode,
       error:
         channelResolutionError ??
-        new Error("No delivery channel could be resolved; set delivery.channel explicitly."),
+        new Error("Channel is required when delivery.channel=last has no previous channel."),
     };
   }
 

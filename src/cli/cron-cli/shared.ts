@@ -120,16 +120,13 @@ export function parseCronCommandEnv(values: unknown): Record<string, string> | u
   return env;
 }
 
-export const getCronChannelOptions = (includeLast = false) => {
+export const getCronChannelOptions = () => {
   // Keep help truthful even before the plugin registry is bootstrapped. The fallback names the
   // channel plugin id the runtime resolves, not a per-conversation platform channel identifier.
   const pluginIds = listChannelPlugins()
     .map((plugin) => plugin.id)
     .filter(Boolean);
-  return [
-    ...(includeLast ? ["last"] : []),
-    ...(pluginIds.length ? pluginIds : ["<channel-plugin-id>"]),
-  ].join("|");
+  return pluginIds.length > 0 ? ["last", ...pluginIds].join("|") : "last|<channel-plugin-id>";
 };
 
 function toLocalIsoTime(value: unknown): string | undefined {
@@ -262,7 +259,9 @@ function formatCronStatusForDisplay(job: CronJob) {
     label =
       state.autoDisabled.reason === "schedule-errors"
         ? "disabled (schedule)"
-        : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
+        : state.autoDisabled.reason === "account-unavailable"
+          ? "disabled (account)"
+          : `disabled (${state.autoDisabled.consecutiveErrors}x)`;
   } else if (undelivered) {
     label = suppressed ? "ok (suppressed)" : "ok (not delivered)";
   } else if (deliveryUnknown) {
@@ -540,6 +539,7 @@ export function coerceCronDeliveryPreviews(value: unknown): Map<string, CronDeli
 
 function formatCronPolicies(job: CronJob): string {
   const active = job.activeHours;
+  const skipEmpty = job.payload?.kind === "agentTurn" ? job.payload.skipIfScratchEmpty : undefined;
   const includeReasoning =
     job.payload?.kind === "agentTurn" ? job.payload.includeReasoning : undefined;
   return sanitizeTerminalText(
@@ -547,7 +547,10 @@ function formatCronPolicies(job: CronJob): string {
       active
         ? `active hours=${active.start}-${active.end} @ ${active.timezone ?? "user"}`
         : undefined,
+      job.idleOnly !== undefined ? `idle only=${job.idleOnly}` : undefined,
       job.delivery?.target ? `delivery target=${job.delivery.target}` : undefined,
+      job.delivery?.directPolicy ? `direct policy=${job.delivery.directPolicy}` : undefined,
+      skipEmpty !== undefined ? `skip if scratch empty=${skipEmpty}` : undefined,
       includeReasoning !== undefined ? `include reasoning=${includeReasoning}` : undefined,
     ]
       .filter((value) => value !== undefined)

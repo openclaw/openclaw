@@ -83,6 +83,7 @@ const TRUSTED_LIFECYCLE_PATCH_KEYS: ReadonlySet<string> = new Set([
   "wakeMode",
   "pacing",
   "activeHours",
+  "idleOnly",
 ]);
 
 /** Any other edit (prompt, tools, routes, failure alerts, future fields) narrows the job to the caller. */

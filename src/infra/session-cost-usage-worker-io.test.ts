@@ -433,17 +433,26 @@ it("refreshes archives from their source and keeps the last usage of one that ca
       (await read(sessionFile)).summaries[0]?.totalTokens;
     expect(await refreshUsage({ agentId: "main" })).toBe("refreshed");
     const healthyKey = await keyOf(healthy);
+    const undecodableKey = await keyOf(undecodable);
     expect([await totalOf(healthy), await totalOf(undecodable)]).toEqual([5, 6]);
     // Usage decodes archives as a stream; it never writes plaintext copies.
-    expect(existsSync(healthyKey) || existsSync(await keyOf(undecodable))).toBe(false);
+    expect(existsSync(healthyKey) || existsSync(undecodableKey)).toBe(false);
 
     // Upgrade: rows checkpointed against a decompressed copy rescan once from the source.
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const legacy = JSON.parse(storedRollup(healthyKey).valueJson);
     legacy.checkpoint = { ...legacy.checkpoint, observedSize: 34 * 1024 * 1024, inode: 1 };
-    database.db
-      .prepare("UPDATE cache_entries SET value_json = ? WHERE key = ?")
-      .run(JSON.stringify(legacy), healthyKey);
+    const writeEnvelope = database.db.prepare(
+      "UPDATE cache_entries SET value_json = ? WHERE key = ?",
+    );
+    writeEnvelope.run(JSON.stringify({ ...legacy, includesTimedUsage: undefined }), healthyKey);
+    writeEnvelope.run(
+      JSON.stringify({
+        ...JSON.parse(storedRollup(undecodableKey).valueJson),
+        includesTimedUsage: undefined,
+      }),
+      undecodableKey,
+    );
 
     // A damaged archive gets a new identity; its previous usage moves to it.
     const bytes = await fs.readFile(undecodable);
@@ -456,8 +465,10 @@ it("refreshes archives from their source and keeps the last usage of one that ca
     expect(
       await refreshUsage({ agentId: "main", sessionFiles: [undecodable, live!.sessionFile] }),
     ).toBe("refreshed");
-    expect(await totalOf(undecodable)).toBe(6);
-    expect((await read(undecodable)).cacheStatus).toMatchObject({ staleFiles: 1 });
+    expect(await read(undecodable)).toMatchObject({
+      summaries: [{ totalTokens: 6, totalCost: 1 }],
+      cacheStatus: { staleFiles: 1 },
+    });
     expect(await refreshUsage({ agentId: "main" })).toBe("refreshed");
     expect(JSON.parse(storedRollup(healthyKey).valueJson).checkpoint).toMatchObject({
       observedSize: (await fs.stat(healthy)).size,

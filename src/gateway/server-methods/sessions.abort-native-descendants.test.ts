@@ -10,6 +10,7 @@ import {
   createEmbeddedRunHandle,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
+import { abortControlledSubagents } from "../../agents/subagents/cancel-descendants.js";
 import { writeSubagentSessionEntry } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -26,7 +27,6 @@ import {
 } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
 import * as sessionUtils from "../session-utils.js";
-import { abortControlledSubagents } from "./chat-abort-descendants.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
 import { createActiveRun, invokeChatAbortHandler } from "./chat.abort.test-helpers.js";
 import {

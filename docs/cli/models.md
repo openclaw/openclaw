@@ -33,7 +33,7 @@ openclaw models scan
 
 For `models status`, `OPENCLAW_AGENT_DIR` overrides the inspected auth directory when `--agent` is omitted. A matching configured `agentDir` retains that agent's ownership during credential refresh. An explicit `--agent <id>` takes precedence over the environment override.
 
-`set`, `set-image`, `scan`, `refresh`, `aliases`, and `fallbacks`/`image-fallbacks` `add`, `remove`, and `clear` operate on global defaults and reject `--agent`.
+`set`, `set-image`, `scan`, `refresh`, `aliases`, and `fallbacks`/`image-fallbacks` `add`, `remove`, `clear`, and `list` operate on global defaults and reject `--agent`.
 
 `models set`, `models set-image`, `models aliases add`, `models fallbacks add`, and `models image-fallbacks add` require a known provider: an installed plugin declaration, a prepared runtime provider alias, or a `models.providers` entry. An unknown provider exits nonzero without changing config. If the plugin inventory is unavailable or the retained runtime generation has no providers loaded, the commands save with a warning because provider ownership cannot be verified.
 
@@ -412,6 +412,13 @@ Omit the provider or method to choose from the available flows. An unavailable
 or ambiguous plugin method is not silently replaced with a different login.
 The menu reads the selected local configuration, including `plugins.load.paths`,
 and honors plugin disablement and allowlists.
+
+Provider menus keep onboarding's preferred providers first, then list other
+providers alphabetically. The Gateway groups sign-in methods by provider and
+shows their descriptions in priority order. Type to filter by label, hint,
+or ID. Use the arrow keys and Enter to select a match. If `--provider` and
+`--method` identify one available flow, the menu is skipped. Keep both flags on
+the same shell command. Use a trailing backslash to split it across lines.
 
 For these online logins, `--profile-id`, `--force`, `--set-default`, and Copilot
 `--yes` are refused before starting sign-in because the Gateway login API does

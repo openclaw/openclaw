@@ -135,13 +135,18 @@ monitoring jobs:
 - `--active-hours-timezone <zone>` chooses an IANA timezone, `user` (the default,
   using the configured user timezone), or `local` (Gateway host). This is
   independent of the schedule's `--tz`.
+- `--idle-only` gives foreground work priority. `--no-idle-only` turns that
+  policy off.
+- `--skip-if-scratch-empty` skips an agent turn with explicitly empty scratch.
+  Missing scratch still runs. `--no-skip-if-scratch-empty` turns this off.
 - `--include-reasoning` includes reasoning returned by an agent alongside a meaningful result;
   `--no-include-reasoning` keeps it out. This does not set the thinking level.
 
 A new window requires both endpoints. An edit can update just one field of an
-existing window. Use `automations edit --clear-active-hours` on its own to
-remove the window. The reasoning flag requires an agent-turn payload
-(`--message` on creation).
+existing window. `automations edit --clear-active-hours` removes the window;
+`--clear-idle-only` removes the stored idle policy. Do not combine a clear flag
+with its corresponding set flag. The scratch and reasoning flags require an
+agent-turn payload (`--message` on creation).
 
 Manual force-runs bypass cadence but still respect the execution window and
 the job's authority and delivery policies. See
@@ -192,11 +197,11 @@ If session cleanup fails, the error is logged. A removal with no active run also
 
 ## Delivery
 
-`openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. With automatic routing, the preview shows a conversation commit, the resolved channel route, or why delivery will be blocked.
+`openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows a conversation commit, the resolved channel route, or why delivery will be blocked.
 
 If an existing session metadata store cannot be read or its schema is not ready, the preview keeps the requested destination and reports why it is unavailable without blocking job creation or listing. An absent database has no session routing history and uses the normal delivery fallback.
 
-Provider-prefixed targets can disambiguate unresolved announce channels. For example, `to: "telegram:123"` selects Telegram when `delivery.channel` is omitted. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the prefix must match that channel. `channel: "whatsapp"` with `to: "telegram:123"` is rejected. Service prefixes such as `imessage:` and `sms:` remain channel-owned target syntax.
+Provider-prefixed targets can disambiguate unresolved announce channels. For example, `to: "telegram:123"` selects Telegram when `delivery.channel` is omitted or `last`. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the prefix must match that channel. `channel: "whatsapp"` with `to: "telegram:123"` is rejected. Service prefixes such as `imessage:` and `sms:` remain channel-owned target syntax.
 
 <Note>
 Isolated `automations add` jobs default to `--announce` delivery. Use `--no-deliver` to keep output internal. `--deliver` remains as a deprecated alias for `--announce`, which replaced it in 2026.2.3.
@@ -221,9 +226,7 @@ Use `automations add|create --webhook <url>` or `automations edit <job-id> --web
 
 Reminders created from an active chat preserve the live chat delivery target for announce delivery. Internal session keys may be lowercase. Do not use them as a source of truth for case-sensitive provider IDs such as Matrix room IDs.
 
-<a id="owner-targets-and-direct-message-policy" />
-
-### Owner targets
+### Owner targets and direct-message policy
 
 `--delivery-target owner` resolves a positively identified owner DM dynamically
 instead of following the last group conversation. It cannot be combined with
@@ -231,8 +234,11 @@ instead of following the last group conversation. It cannot be combined with
 recipient and thread; setting an explicit recipient replaces owner targeting.
 Use `--clear-delivery-target` to remove it.
 
-Owner targeting supports agent-turn jobs in any supported session, including
-`main`, and non-main command or script jobs with chat delivery.
+`--direct-policy allow|block` controls direct/DM delivery for the job. The
+default is `allow`; `block` prohibits DMs. Use `--clear-direct-policy` to remove
+the stored policy. These policies support agent-turn jobs in any supported session,
+including `main`, and non-main command or script jobs with chat delivery.
+They cannot be set and cleared in the same command.
 
 ### Failure delivery
 
@@ -559,6 +565,11 @@ openclaw automations scratch <job-id> --unset          # remove the scratch row
 ```
 
 Scratch is stored in the shared state database, capped at 256 KiB, and never included in `automations list`/`automations get`/`automations runs` output. Writes are compare-and-swap guarded against the revision read at command start. Pass `--expected-revision <n>` to pin an explicit revision instead. Present scratch becomes bounded model prompt context, so do not store secrets in it. See [Job scratch and quiet results](/automation/cron-jobs/payloads#job-scratch-and-quiet-results) for self-scoped scratch and result actions.
+
+For a job with `--skip-if-scratch-empty`, blank text, comments, headings, fence
+markers, and empty checklist stubs skip the run. `--unset` removes scratch;
+missing scratch still runs. Use `automations disable <job-id>` to stop the job
+regardless of scratch content.
 
 Agent and session retargeting:
 

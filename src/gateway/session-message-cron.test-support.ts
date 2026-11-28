@@ -70,7 +70,7 @@ export function registerCronSessionCompletionEventTests({
                 },
               }
             : {}),
-          delivery: { mode: "announce" },
+          delivery: { mode: "announce", channel: "last" },
           wakeMode: "now",
           enabled: true,
           state: {},

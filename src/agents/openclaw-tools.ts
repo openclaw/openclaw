@@ -258,6 +258,7 @@ function* createOpenClawToolsSteps(
   const inlineWidgetClientAvailable =
     (widgetClientCaps ?? options?.clientCaps)?.includes("inline-widgets") === true;
   const sessionKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
+  const projectRouting = { config: availabilityConfig ?? {}, agentId: sessionAgentId };
   const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
   const deliveryContext = {
     channel: options?.agentChannel,
@@ -595,7 +596,7 @@ function* createOpenClawToolsSteps(
         })
       : null,
     !embedded && sessionKey && options?.sessionProjectMoveEligible
-      ? createSessionProjectTool(options)
+      ? createSessionProjectTool(options, { ...projectRouting, sessionKey })
       : null,
     transcriptsTool,
     imageGenerateTool,

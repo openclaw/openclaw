@@ -94,7 +94,7 @@ On hosts with multiple configured channels, isolated announce jobs created with 
 
 Channel announcements retry transient failures only when no payload may have reached the recipient. A successful retry records delivery without retaining the earlier attempt's error, including with best-effort delivery. Partial or ambiguous sends are not replayed by the announcement retry loop.
 
-When announce delivery omits `channel`, a provider-prefixed target such as `telegram:123` can select the channel before the scheduler falls back to session history or a single configured channel. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the target prefix must name the same provider; `channel: "whatsapp"` with `to: "telegram:123"` is rejected instead of letting WhatsApp interpret the Telegram ID as a phone number. Target-kind and service prefixes (`channel:<id>`, `user:<id>`, `imessage:<handle>`, `sms:<number>`) stay channel-owned target syntax, not provider selectors.
+When announce delivery uses `channel: "last"` or omits `channel`, a provider-prefixed target such as `telegram:123` can select the channel before the scheduler falls back to session history or a single configured channel. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the target prefix must name the same provider; `channel: "whatsapp"` with `to: "telegram:123"` is rejected instead of letting WhatsApp interpret the Telegram ID as a phone number. Target-kind and service prefixes (`channel:<id>`, `user:<id>`, `imessage:<handle>`, `sms:<number>`) stay channel-owned target syntax, not provider selectors.
 
 For isolated jobs, chat delivery is shared: if a chat route is available, the agent can use the `message` tool even with `--no-deliver`. If the agent sends to the configured/current target, OpenClaw skips the fallback announce. Otherwise `announce`, `webhook`, and `none` only control what the runner does with the final reply after the agent turn.
 
@@ -136,14 +136,14 @@ Set `cron.delivery` to send every announce job that names no route of its own to
 
 The job owner is its `agentId`, else the agent in its session key, else the default agent. The job creator is the Gateway profile recorded when the job was created: the operator profile that created it, or the human profile that asked an agent to create it. Jobs created before creator recording, and jobs whose creator is channel-only, unknown, an agent with no delegating human, or the system, have no creator default. Primary results resolve in this order:
 
-| Job delivery                                                                            | Destination                                                                          |
-| --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| Names a route: `channel`, `to`, `threadId`, `accountId`, or `target: "owner"`           | The job's own route (defaults ignored)                                               |
-| `announce` (or omitted) with no route, creator has `cron.creators.<profileId>.delivery` | The creator default                                                                  |
-| `announce` (or omitted) with no route, owner agent has `cron.agents.<agentId>.delivery` | The agent default                                                                    |
-| `announce` (or omitted) with no route, only `cron.delivery` set                         | The Gateway default                                                                  |
-| `announce` (or omitted) with no route, no default configured                            | Unchanged: creating conversation, remembered route, or the single configured channel |
-| `none` or `webhook`                                                                     | Unchanged: defaults never add a chat destination                                     |
+| Job delivery                                                                                    | Destination                                                                          |
+| ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| Names a route: `channel` other than `last`, `to`, `threadId`, `accountId`, or `target: "owner"` | The job's own route (defaults ignored)                                               |
+| `announce` (or omitted) with no route, creator has `cron.creators.<profileId>.delivery`         | The creator default                                                                  |
+| `announce` (or omitted) with no route, owner agent has `cron.agents.<agentId>.delivery`         | The agent default                                                                    |
+| `announce` (or omitted) with no route, only `cron.delivery` set                                 | The Gateway default                                                                  |
+| `announce` (or omitted) with no route, no default configured                                    | Unchanged: creating conversation, remembered route, or the single configured channel |
+| `none` or `webhook`                                                                             | Unchanged: defaults never add a chat destination                                     |
 
 - The most specific default wins whole. A creator default replaces the agent and Gateway defaults, and an agent default replaces the Gateway default, instead of merging fields, because a recipient, thread, and account belong to the channel that supplied them.
 - A default replaces the creating-conversation route for route-less announce jobs in every session target, including `current` and `main`. Results then land in the default destination, not the creating chat. To keep a job in a particular chat, set its `channel` and `to`.
@@ -160,25 +160,24 @@ Failure alerts have the same layers. `cron.creators.<profileId>.failureAlert` an
 Set `delivery.target: "owner"` (`--delivery-target owner`) when a job should
 resolve a positively identified owner DM at delivery time. This does not follow
 the last group conversation or guess a recipient when owner identity is
-ambiguous.
+ambiguous. `delivery.directPolicy: "block"` (`--direct-policy block`) blocks
+direct/DM delivery for that job; the default is `allow`.
 
 A missing owner route does not skip execution. The job still runs, and ordinary
 delivery settlement records the unavailable destination without falling back to
-the last conversation.
+the last conversation. An explicit DM block remains intentional non-delivery.
 
 ```bash
 openclaw automations edit <job-id> \
   --announce --channel telegram --delivery-target owner
 ```
 
-Owner targeting supports agent-turn jobs in any supported session, including `main`, and
+These policies support agent-turn jobs in any supported session, including `main`, and
 non-main command or script jobs with chat delivery. Owner targeting cannot
 be combined with `--to`, `--thread-id`, or `--webhook`. Setting it on an existing
 job clears the previous explicit recipient and thread. Selecting a new explicit
-recipient replaces owner targeting. Use `--clear-delivery-target` to remove
-owner targeting.
-
-A saved direct-message block still applies after an upgrade, edit, or manual run.
+recipient replaces owner targeting. Use `--clear-delivery-target` or
+`--clear-direct-policy` to remove the stored policy.
 
 Use `payload.includeReasoning: true` (`--include-reasoning`) on an agent-turn
 job only when reasoning returned by the agent should accompany a meaningful result.
@@ -192,9 +191,9 @@ receiver but its response is lost. An explicit HTTP rejection or a failure prove
 to precede sending records **Not delivered** and allows the in-app fallback
 notification, including when Gateway work admission refuses an alert before its
 transport starts. An unknown outcome does not trigger that fallback.
-When an owner-targeted alert or an alert with a saved direct-message block can’t be
-delivered, its fallback stays in the session. It sends no automatic
-external notification.
+When an alert on an owner-targeted route or a route with `directPolicy: "block"` is
+recorded as Not delivered, its fallback turn stays in-session: it is not delivered
+automatically and has no current external conversation for implicit sends.
 
 A model-backed run can finish successfully even when its final reply says the requested task is blocked or could not be completed. The scheduler does not infer execution failure from assistant prose. Such a reply follows normal delivery: `announce` sends it, `none` stays silent, and `NO_REPLY` suppresses a text-only announcement without failing the run. A blocker report does not itself increment the execution-failure streak, trigger error backoff, or request a failure alert or owner-conversation repair. Runtime errors, such as provider failures and execution timeouts, still use the failure policy below.
 
@@ -211,7 +210,7 @@ Failure notification routes resolve in this order:
 1. Route fields in the job's `failureAlert` object.
 2. `job.delivery.failureDestination`, layered over the destination fields in global `cron.failureAlert` (`mode`, `channel`, `to`, `threadId`, `accountId`), or over the creator's `cron.creators.<profileId>.failureAlert` route, else the owning agent's `cron.agents.<agentId>.failureAlert` route, when one exists. A `cron.failureDestination` block is not read directly; `openclaw doctor --fix` merges it into the global object.
 3. The job's primary announce target, including a configured [default destination](#default-destinations).
-   When this tier applies, failure alerts keep the primary target's owner targeting.
+   When this tier applies, failure alerts keep the primary target's owner targeting and `directPolicy`.
 
 - `job.failureAlert: false` disables execution and required-delivery failure alerts for that job.
 - Global `cron.failureAlert.enabled: false` disables inherited notifications. A per-job `failureAlert` object explicitly re-enables that job; `enabled: true` explicitly enables the global policy.

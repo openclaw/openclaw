@@ -31,7 +31,9 @@ describe("cron default delivery destination", () => {
       agentDelivery,
     ],
   ])("routes a route-less announce job: %s", (_name, cronConfig, agentId, expected) => {
-    expect(plan(cronConfig, { mode: "announce" }, agentId as string)).toMatchObject({
+    expect(
+      plan(cronConfig, { mode: "announce", channel: "last" }, agentId as string),
+    ).toMatchObject({
       mode: "announce",
       source: "delivery",
       requested: true,
@@ -80,7 +82,7 @@ describe("cron default delivery destination", () => {
   });
 
   it("leaves route-less jobs unchanged when no default is configured", () => {
-    const delivery: CronDelivery = { mode: "announce" };
+    const delivery: CronDelivery = { mode: "announce", channel: "last" };
     expect(plan({}, delivery)).toEqual(resolveCronDeliveryPlan(makeCronJob({ delivery })));
     expect(plan({ agents: { other: { delivery: agentDelivery } } }, delivery)).toEqual(
       resolveCronDeliveryPlan(makeCronJob({ delivery })),
@@ -168,7 +170,10 @@ describe("cron default failure-alert route", () => {
 
   it("falls back to the primary default destination when no failure route exists", () => {
     expect(
-      resolve({ delivery: globalDelivery }, { agentId: "ops", delivery: { mode: "announce" } }),
+      resolve(
+        { delivery: globalDelivery },
+        { agentId: "ops", delivery: { mode: "announce", channel: "last" } },
+      ),
     ).toMatchObject({ mode: "announce", channel: "telegram", to: "-100123456789", threadId: 1 });
   });
 

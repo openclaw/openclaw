@@ -5,7 +5,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveCronDeliveryPreview } from "../../../cron/delivery-preview.js";
-import { resolveCronOperatorExecutionRevision } from "../../../cron/service/jobs-tool-policy.js";
 import * as cronStore from "../../../cron/store.js";
 import {
   loadCronQuarantinedJobs,
@@ -14,10 +13,8 @@ import {
   saveCronStore,
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
-import { recordCronRun } from "../../../cron/store/run-history.js";
 import { makeCronStreamSandboxTarget } from "../../../cron/stream-sandbox.test-support.js";
-import type { CronJob, CronStoredJob } from "../../../cron/types.js";
-import { legacyMemberSnapshot } from "../../../gateway/openclaw-id/member-source-role-import.test-support.js";
+import type { CronJob } from "../../../cron/types.js";
 import { buildUpdateRehearsalPathEnv } from "../../../infra/update-rehearsal-paths.js";
 import { withInstalledOfficialProviderCustody } from "../../../plugins/provider-policy-custody.test-support.js";
 import {
@@ -87,102 +84,6 @@ const updateDoctorEnv = {
   ...externalDoctorEnv(),
   OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
 };
-
-it(
-  "backs up retired options and preserves automatic routing and delivery restrictions",
-  withState(async (fixture) => {
-    const storePath = fixture.statePath("cron", "jobs.json");
-    const backed = job("backed", { delivery: { mode: "announce", channel: "last" } });
-    const explicit = job("explicit", {
-      delivery: { mode: "announce", channel: "last", to: "telegram:current" },
-    });
-    const bound: CronStoredJob = {
-      ...job("bound", { delivery: { mode: "announce", channel: "last" } }),
-      sourceConversation: { sessionKey: "agent:main:chat", sessionId: "creating-chat" },
-    };
-    const owner = job("owner", {
-      delivery: { mode: "announce", target: "owner", channel: "last" },
-    });
-    Object.assign(owner, { idleOnly: true });
-    Object.assign(owner.payload, { skipIfScratchEmpty: true });
-    Object.assign(owner.delivery!, { directPolicy: "block" });
-    await saveJobs(storePath, backed, owner, explicit, bound);
-    const route = { channel: "telegram", to: "fixture-room", accountId: "ops", threadId: 42 };
-    const storeKey = cronStoreKey(storePath);
-    const time = Date.now() - 1000;
-    await recordCronRun({
-      storeKey,
-      jobId: backed.id,
-      runId: "cron:backed:delivered",
-      agentId: "main",
-      startedAt: time,
-      endedAt: time + 1,
-      status: "succeeded",
-      detail: {
-        storeKey,
-        delivery: { delivered: true, receipts: [{ ...route, messageId: "fixture-receipt" }] },
-      },
-    });
-
-    const result = await repair(storePath);
-    expect(result.warnings).toEqual([]);
-    const prefix = "Saved pre-repair cron backup: ";
-    const backup = result.changes.find((line) => line.startsWith(prefix));
-    expect((await fs.stat(expectDefined(backup).slice(prefix.length))).size).toBeGreaterThan(0);
-    expect(result.changes.join("\n")).toContain('Paused automation "owner"');
-    const jobs = await readJobs(storePath);
-    expect(jobs.map((entry) => entry.id)).toEqual([backed.id, owner.id, explicit.id, bound.id]);
-    expect(jobs[0]?.delivery).toEqual({ mode: "announce" });
-    expect(jobs[1]).toMatchObject({
-      enabled: false,
-      delivery: { mode: "announce", target: "owner", directPolicy: "block" },
-    });
-    expect(jobs[1]).not.toHaveProperty("idleOnly");
-    expect(jobs[1]?.payload).not.toHaveProperty("skipIfScratchEmpty");
-    expect(jobs[2]?.delivery).toEqual({ mode: "announce", to: "telegram:current" });
-    expect(jobs[3]?.delivery).toEqual({ mode: "announce" });
-    expect((await repair(storePath)).changes).toEqual([]);
-  }),
-);
-
-it(
-  "retains current scheduled execution authority through neutral heartbeat option repair",
-  withState(async (fixture) => {
-    const storePath = fixture.statePath("cron", "jobs.json");
-    const current = {
-      ...job("current-authority", {
-        agentId: "main",
-        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
-        delivery: { mode: "none" },
-      }),
-      idleOnly: false,
-    };
-    const source = {
-      kind: "gateway" as const,
-      version: 1 as const,
-      agentId: "main",
-      sourceRunId: "original-turn",
-      snapshot: legacyMemberSnapshot(),
-    };
-    const revision = resolveCronOperatorExecutionRevision(current);
-    const stale = { ...current, id: "stale-authority" };
-    await saveJobs(
-      storePath,
-      Object.assign(current, { operatorSource: { source, executionRevision: revision } }),
-      Object.assign(stale, { operatorSource: { source, executionRevision: "stale" } }),
-    );
-
-    expect((await repair(storePath)).warnings).toEqual([]);
-    const [repaired, stillStale] = (await loadCronStore(storePath)).jobs;
-    const next = expectDefined(repaired);
-    expect(next.operatorSource).toEqual({
-      source,
-      executionRevision: resolveCronOperatorExecutionRevision(next),
-    });
-    expect(next.operatorSource?.executionRevision).not.toBe(revision);
-    expect(stillStale?.operatorSource).toEqual({ source, executionRevision: "stale" });
-  }),
-);
 
 it(
   "leaves canonical one-shot jobs untouched without a SQLite repair backup",
@@ -416,7 +317,7 @@ it(
 );
 
 it(
-  "preserves an unsupported delivery row with retired options while repairing a sibling",
+  "preserves unknown delivery mode 42 alongside legacy hints",
   withState(async (state) => {
     const storePath = state.statePath("cron", "jobs.json");
     const deliveryJob = (id: string, message: string, delivery: CronJob["delivery"]): CronJob => ({
@@ -438,7 +339,7 @@ it(
     );
     const db = openOpenClawStateDatabase().db;
     db.prepare(
-      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.delivery.mode', json(?), '$.isolation', json(?), '$.idleOnly', json('false')) WHERE store_key = ? AND job_id = 'sqlite-job'",
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.delivery.mode', json(?), '$.isolation', json(?)) WHERE store_key = ? AND job_id = 'sqlite-job'",
     ).run(JSON.stringify(42), JSON.stringify({ legacy: "retain me" }), cronStoreKey(storePath));
     db.prepare(
       "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.delivery.mode') WHERE store_key = ? AND job_id = 'repairable-sibling'",

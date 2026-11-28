@@ -16,7 +16,6 @@ import {
   shouldPreserveSubagentForMaintenance,
 } from "./subagent-delivery-state.js";
 import {
-  getSubagentRunsForChildSession,
   getSubagentSessionReadLookup,
   compactSubagentRunForMemory,
   immutableSubagentRunSessionList,
@@ -347,30 +346,16 @@ export function getSubagentSessionListRunsSnapshotForChildSessions(
   childSessionKeys: readonly string[],
 ): Map<string, SubagentRunReadRecord> {
   const keys = new Set(childSessionKeys.map((key) => key.trim()).filter(Boolean));
-  const selected = new Map<string, SubagentRunReadRecord>();
   if (keys.size === 0) {
-    return selected;
+    return new Map();
   }
   const cache = persistedSubagentSessionListRunsReadCache;
-  if (shouldReadPersistedSubagentRuns()) {
-    const snapshot = loadPersistedSubagentRunsForRead(cache);
-    const lookup = getSessionListLookup(cache, snapshot);
-    for (const runId of lookup.selectChildren(keys)) {
-      // A live row can have moved out of a persisted child bucket.
-      const persisted = snapshot.get(runId);
-      const live = persisted && subagentRuns.get(persisted.runId);
-      const entry = live ? cache.project(live) : persisted;
-      if (entry && keys.has(entry.childSessionKey.trim())) {
-        selected.set(entry.runId, entry);
-      }
-    }
-  }
-  for (const key of keys) {
-    for (const entry of getSubagentRunsForChildSession(key)) {
-      selected.set(entry.runId, cache.project(entry));
-    }
-  }
-  return selected;
+  const compact = shouldReadPersistedSubagentRuns()
+    ? loadPersistedSubagentRunsForRead(cache)
+    : new Map<string, SubagentRunReadRecord>();
+  return mergeSubagentRunReadScope(subagentRuns, cache, compact, {
+    childSessionKeys: [...keys],
+  });
 }
 
 export function prepareSubagentMaintenanceRunsSnapshotForRead(

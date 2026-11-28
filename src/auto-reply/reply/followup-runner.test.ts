@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createTypingCallbacks } from "../../channels/typing.js";
 import {
   resolveSessionTranscriptReadFence,
   runWithSessionTranscriptReadFence,
@@ -18,8 +19,7 @@ import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import type { FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import type { QueuedFollowupReplyBatch } from "./queue/types.js";
-import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
-import { createMockTypingController } from "./test-helpers.js";
+import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
 
 const state = vi.hoisted(() => ({
   account: vi.fn(),
@@ -83,11 +83,9 @@ vi.mock("./route-reply.js", async (importOriginal) => ({
 
 const { createFollowupRunner } = await import("./followup-runner.js");
 let turn: ReturnType<typeof createTurn>;
-let typing: ReturnType<typeof createMockTypingController>;
 
 function createRunner(overrides: Partial<Parameters<typeof createFollowupRunner>[0]> = {}) {
   return createFollowupRunner({
-    typing,
     typingMode: "never",
     defaultModel: "claude",
     ...overrides,
@@ -103,11 +101,6 @@ function attachSource(source: ReturnType<typeof createTurn>) {
   const deliver = vi.fn(async () => {});
   source.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
   return deliver;
-}
-
-function expectTypingComplete() {
-  expect(typing.markRunComplete).toHaveBeenCalledOnce();
-  expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
 }
 
 function createTurn(
@@ -172,7 +165,6 @@ function createExecution(
 beforeEach(() => {
   vi.clearAllMocks();
   turn = createTurn();
-  typing = createMockTypingController();
   admitTurn(turn);
   state.completedSourceDelivery = false;
   state.account.mockResolvedValue(undefined);
@@ -211,6 +203,30 @@ describe("createFollowupRunner", () => {
       );
     },
   );
+
+  it("shows typing for the queued turn after the source dispatch stopped its callbacks", async () => {
+    vi.useFakeTimers();
+    try {
+      const start = vi.fn(async () => {});
+      const callbacks = createTypingCallbacks({ start, onStartError: () => {} });
+      // The source dispatch returned on enqueue and stopped the shared channel callbacks.
+      callbacks.onIdle?.();
+      state.execute.mockImplementationOnce(
+        async ({ defaults }: { defaults: FollowupRunnerParams }) => {
+          await defaults.typing.startTypingLoop();
+          return createExecution();
+        },
+      );
+      await createRunner({
+        opts: { onReplyStart: callbacks.onReplyStart, onTypingCleanup: callbacks.onCleanup },
+      })(turn.queued);
+      expect(start).toHaveBeenCalledOnce();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(start).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("reads the current transcript without borrowing the interrupted turn's admission fence", async () => {
     const admission = {
@@ -455,7 +471,6 @@ describe("createFollowupRunner", () => {
       }
       expect(state.execute).not.toHaveBeenCalled();
       expect(turn.operation.complete).toHaveBeenCalledTimes(kind === "owned skip" ? 1 : 0);
-      expectTypingComplete();
       expect(end).toHaveBeenCalledExactlyOnceWith({
         visibleReplySent: false,
         failed: true,
@@ -531,7 +546,6 @@ describe("createFollowupRunner", () => {
         }),
       );
       expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
-      expectTypingComplete();
     },
   );
 

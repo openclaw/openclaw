@@ -29,7 +29,7 @@ suite.define(() => {
       sessionTarget: "isolated",
       wakeMode: "now",
       payload: { kind: "agentTurn", message: "Prepare a synthetic report." },
-      delivery: { mode: "announce" },
+      delivery: { mode: "announce", channel: "last" },
       state: {},
     };
     const entries: CronRunsResult["entries"] = [

@@ -47,7 +47,8 @@ function taskPayload(monitor: CronJob, message: string) {
   if (monitor.payload.kind !== "agentTurn") {
     throw new Error(`Automation ${monitor.id} has not completed heartbeat conversion`);
   }
-  return { ...monitor.payload, message: migrateHeartbeatPrompt(message) };
+  const { skipIfScratchEmpty: _skipIfScratchEmpty, ...payload } = monitor.payload;
+  return { ...payload, message: migrateHeartbeatPrompt(message) };
 }
 
 function taskJobInput(params: TaskJobInput) {
@@ -70,6 +71,7 @@ function taskJobInput(params: TaskJobInput) {
     sessionTarget: params.monitor.sessionTarget,
     sessionKey: params.monitor.sessionKey,
     activeHours: params.monitor.activeHours,
+    idleOnly: params.monitor.idleOnly,
     delivery: params.monitor.delivery,
     wakeMode: "now" as const,
     ...(params.lastRunAtMs === undefined ? {} : { state: { lastRunAtMs: params.lastRunAtMs } }),
@@ -133,6 +135,7 @@ export function convertStoredHeartbeatTask(
     sessionTarget: monitor.sessionTarget,
     sessionKey: monitor.sessionKey,
     activeHours: monitor.activeHours,
+    idleOnly: monitor.idleOnly,
     delivery: previous.delivery ?? monitor.delivery,
     wakeMode: "now",
     updatedAtMs: nowMs,

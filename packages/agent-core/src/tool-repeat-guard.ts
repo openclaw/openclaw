@@ -3,11 +3,13 @@
  * before it: name plus canonical arguments, never the outcome. The third
  * identical call gets one redirect note; the twentieth ends the turn with
  * `tool_repeat_limit`. Tools that poll by design declare `repeatable` and
- * skip the check. Committed user input resets the streak.
+ * skip the check; a dispatcher declares its targets' declarations, so a poll
+ * through it is exempt exactly as a direct one. Committed user input resets the streak.
  */
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { prepareDispatchArguments, readDispatchCall } from "./dispatch-call.js";
 import { copyInternalToolResultState } from "./internal-hooks.js";
-import type { AgentTool, AgentToolCall, AgentToolResult } from "./types.js";
+import type { AgentTool, AgentToolCall, AgentToolResult, ToolRepeatable } from "./types.js";
 
 export const TOOL_REPEAT_LIMIT_CODE = "tool_repeat_limit";
 export const TOOL_REPEAT_NOTE_AT = 3;
@@ -32,13 +34,36 @@ export function resetToolRepeatState(state: ToolRepeatState): void {
   state.count = 0;
 }
 
-function isRepeatable(tool: AgentTool, args: unknown): boolean {
-  const { repeatable } = tool;
+function readArgument(args: unknown, name: string): unknown {
+  return typeof args === "object" && args !== null ? Reflect.get(args, name) : undefined;
+}
+
+function isRepeatable(repeatable: ToolRepeatable | undefined, args: unknown): boolean {
   if (repeatable === true) {
     return true;
   }
-  const action =
-    typeof args === "object" && args !== null && "action" in args ? args.action : undefined;
+  if (repeatable && "dispatch" in repeatable) {
+    // Classify with the dispatcher's own argument reader, so every call form it executes
+    // resolves to the same target and input here. The declaration lists only exempt targets,
+    // so a selector naming anything else counts as a distinct target: a call whose selectors
+    // disagree stays counted, as the dispatcher refuses it as ambiguous.
+    const { targets, aliases } = repeatable.dispatch;
+    const targetId = (value: string) =>
+      Object.hasOwn(targets, value)
+        ? value
+        : Object.hasOwn(aliases, value)
+          ? aliases[value]
+          : undefined;
+    const call = readDispatchCall(prepareDispatchArguments(args), (value) => [
+      targetId(value) ?? `\0other:${value}`,
+    ]);
+    if ("error" in call) {
+      return false;
+    }
+    const id = targetId(call.id);
+    return id !== undefined && isRepeatable(targets[id], call.input);
+  }
+  const action = readArgument(args, "action");
   return typeof action === "string" && repeatable?.actions.includes(action) === true;
 }
 
@@ -48,7 +73,7 @@ export function observeToolRepeat(
   toolCall: AgentToolCall,
   tool: AgentTool | undefined,
 ): ToolRepeatVerdict | undefined {
-  if (tool && isRepeatable(tool, toolCall.arguments)) {
+  if (tool && isRepeatable(tool.repeatable, toolCall.arguments)) {
     resetToolRepeatState(state);
     return undefined;
   }

@@ -73,10 +73,9 @@ async function preparePrompt(workerPlacement: boolean) {
   return prepared.systemPromptText;
 }
 
-it("carries worker placement into the prepared sessions_spawn guidance", async () => {
-  const local = await preparePrompt(false);
-  const worker = await preparePrompt(true);
-  expect(local).toContain('`context:"isolated"`');
-  expect(worker).toContain("the whole child brief goes in `task`");
-  expect(worker).not.toContain('`context:"isolated"`');
+it("keeps the sessions_spawn delegation trigger for local and worker placements", async () => {
+  // Placement-specific brief fields live in the spawn tool descriptions.
+  for (const prompt of [await preparePrompt(false), await preparePrompt(true)]) {
+    expect(prompt).toContain("delegate bounded independent work via `sessions_spawn`");
+  }
 });

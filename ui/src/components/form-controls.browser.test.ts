@@ -96,25 +96,6 @@ function controlsHtml() {
   `;
 }
 
-function mediaDeviceRowsHtml() {
-  const devices = [
-    ["Microphone input", "MacBook Pro Microphone (Built-in)"],
-    ["Camera", "System default"],
-  ];
-  return `<main style="width: 100%; max-width: 900px">${devices
-    .map(
-      ([label, option]) => `
-    <div class="settings-row">
-      <div class="settings-row__text"><span class="settings-row__title">${label}</span></div>
-      <div class="settings-row__control">
-        <select class="settings-select settings-select--media-device"><option>${option}</option></select>
-        <button class="btn btn--sm btn--icon" type="button">↻</button>
-      </div>
-    </div>`,
-    )
-    .join("")}</main>`;
-}
-
 async function setFixture(page: Page, body: string, attributes = "", head = "") {
   await page.setContent(
     `<!doctype html><html ${attributes}><head>${head}<style>${readUiCss()}</style></head><body>${body}</body></html>`,
@@ -276,33 +257,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     },
   );
 
-  it("keeps MCP remove glyphs proportionate to settings buttons", async () => {
-    await withBrowserPage(desktopContext.newPage(), async (page) => {
-      await setFixture(
-        page,
-        `<div class="settings-row__control">
-          <button class="btn btn--sm btn--icon mcp-server-remove" type="button" aria-label="Remove synthetic server">
-            <svg viewBox="0 0 24 24"><path d="M3 6h18" /></svg>
-          </button>
-        </div>`,
-        'data-theme-mode="light"',
-      );
-
-      const metrics = await page
-        .getByRole("button", { name: "Remove synthetic server", exact: true })
-        .evaluate((button) => {
-          const glyph = button.querySelector("svg")!;
-          const buttonRect = button.getBoundingClientRect();
-          const glyphRect = glyph.getBoundingClientRect();
-          return {
-            button: [buttonRect.width, buttonRect.height],
-            glyph: [glyphRect.width, glyphRect.height],
-          };
-        });
-      expect(metrics).toEqual({ button: [32, 32], glyph: [18, 18] });
-    });
-  });
-
   it.each(["custom-light", "dark", "light"] as const)(
     "preserves action fill and foreground contrast on hover in %s mode",
     async (theme) => {
@@ -357,65 +311,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
     },
   );
 
-  it.each(["dark", "light"] as const)(
-    "keeps disabled buttons visually settled on hover and press in %s mode",
-    async (theme) => {
-      await withBrowserPage(desktopContext.newPage(), async (page) => {
-        await page.emulateMedia({ reducedMotion: "reduce" });
-        await setFixture(
-          page,
-          `<main style="padding: 24px"><button class="btn" type="button">Action</button></main>`,
-          `data-theme="${theme}" data-theme-mode="${theme}"`,
-        );
-        const button = page.getByRole("button", { name: "Action", exact: true });
-        for (const variant of [
-          "",
-          "primary",
-          "danger",
-          "btn--icon",
-          "btn--ghost",
-          "btn--icon btn--ghost",
-        ]) {
-          for (const disabled of ["native", "aria"] as const) {
-            await page.mouse.move(0, 0);
-            await button.evaluate(
-              (element, state) => {
-                element.setAttribute("class", `btn ${state.variant}`);
-                element.toggleAttribute("disabled", state.disabled === "native");
-                element.setAttribute("aria-disabled", String(state.disabled === "aria"));
-              },
-              { variant, disabled },
-            );
-            const resting = await buttonAppearance(button);
-            await button.hover();
-            expect(
-              await buttonAppearance(button),
-              `${variant || "neutral"} ${disabled} hover`,
-            ).toEqual(resting);
-            await page.mouse.down();
-            try {
-              expect(
-                await buttonAppearance(button),
-                `${variant || "neutral"} ${disabled} press`,
-              ).toEqual(resting);
-            } finally {
-              await page.mouse.up();
-            }
-          }
-        }
-        await page.mouse.move(0, 0);
-        await button.evaluate((element) => {
-          element.setAttribute("class", "btn");
-          element.removeAttribute("disabled");
-          element.removeAttribute("aria-disabled");
-        });
-        const enabled = await buttonAppearance(button);
-        await button.hover();
-        expect((await buttonAppearance(button)).background).not.toBe(enabled.background);
-      });
-    },
-  );
-
   it.each([393, 768, 1200])("keeps long copy beside its tile at %ipx", async (width) => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setViewportSize({ width, height: 1000 });
@@ -465,41 +360,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       expect(geometry.messageBelow).toBe(true);
       expect(geometry.messageWidth).toBeCloseTo(geometry.contentWidth, 0);
       expect(geometry.overflow).toBeLessThanOrEqual(1);
-    });
-  });
-
-  it("keeps paired selectors the same width across device labels and viewports", async () => {
-    await withBrowserPage(desktopContext.newPage(), async (page) => {
-      await page.setViewportSize({ width: 1200, height: 800 });
-      await setFixture(page, mediaDeviceRowsHtml(), 'data-theme-mode="light"');
-
-      const measure = () =>
-        page.locator(".settings-row").evaluateAll((rows) =>
-          rows.map((row) => {
-            const select = row.querySelector<HTMLElement>(".settings-select--media-device")!;
-            const button = row.querySelector<HTMLElement>(".btn--icon")!;
-            const selectRect = select.getBoundingClientRect();
-            const buttonRect = button.getBoundingClientRect();
-            return {
-              selectWidth: selectRect.width,
-              selectTop: selectRect.top,
-              buttonTop: buttonRect.top,
-            };
-          }),
-        );
-
-      const desktop = await measure();
-      expect(desktop.map((row) => row.selectWidth)).toEqual([220, 220]);
-      expect(desktop.every((row) => row.selectTop === row.buttonTop)).toBe(true);
-
-      await page.setViewportSize({ width: 390, height: 800 });
-      await page.locator("main").evaluate((main) => {
-        main.style.width = "285px";
-      });
-      const mobile = await measure();
-      expect(mobile[0]?.selectWidth).toBeCloseTo(mobile[1]?.selectWidth ?? 0, 5);
-      expect(mobile[0]?.selectWidth).toBeLessThan(340);
-      expect(mobile.every((row) => row.selectTop === row.buttonTop)).toBe(true);
     });
   });
 

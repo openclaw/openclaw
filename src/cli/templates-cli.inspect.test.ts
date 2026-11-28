@@ -6,17 +6,11 @@ import { defaultRuntime } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   preflightTemplatePackage: vi.fn(),
-  config: { plugins: { load: { paths: ["/configured/plugin"] } } },
 }));
 
 vi.mock("../templates/packages.js", async () => ({
   ...(await vi.importActual<typeof import("../templates/packages.js")>("../templates/packages.js")),
   preflightTemplatePackage: mocks.preflightTemplatePackage,
-}));
-
-vi.mock("../config/config.js", async () => ({
-  ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
-  getRuntimeConfig: () => mocks.config,
 }));
 
 const { runTemplatesInspectCommand } = await import("./templates-cli.runtime.js");

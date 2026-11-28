@@ -591,7 +591,7 @@ describe("completion announcement", () => {
 
   it("completes in the source without inheriting the shared main external route", async () => {
     await withCompletionFixture("script", async (fixture) => {
-      fixture.job.delivery = { mode: "announce" };
+      fixture.job.delivery = { mode: "announce", channel: "last" };
 
       await expect(fixture.finalize()).resolves.toMatchObject({
         deliveryAttempted: true,

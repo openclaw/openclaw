@@ -524,7 +524,7 @@ it.each(["no-route", "silent"] as const)(
       await prepareDelivery(
         fixture,
         mode === "no-route"
-          ? { mode: "announce" }
+          ? { mode: "announce", channel: "last" }
           : { mode: "announce", channel: "telegram", to: "12345" },
       );
       setReport(fixture, mode === "silent" ? undefined : "Final creator report");

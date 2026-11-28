@@ -639,6 +639,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/state/openclaw-state-db-delivery-queue-backfill.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["hasLegacyDeliveryQueueFailureCompactionWork"],
+        evidence:
+          "Read-only Doctor plan only: hasDeliveryQueueBackfillWork, called from planOpenClawStateDatabaseDoctorRepair (Doctor schema preparation and its config-flow pending check) on a read-only connection; no Gateway runtime caller.",
+      },
+    ],
+  ],
+  [
     "src/state/openclaw-state-db-legacy-backfills.ts",
     [
       {
@@ -1406,6 +1417,18 @@ const reviewedOperations = new Map([
         ],
         evidence:
           "SQL readers execute only through gatewayBootReadOperations in the shared-state read worker or gatewayBootOperations begin/recover in the shared-state writer. Host lifecycle APIs dispatch these operations; remaining host imports from this kernel are pure helpers and constants.",
+      },
+    ],
+  ],
+  [
+    "src/infra/gateway-lock-recovery-namespace.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["classifyGatewayLockProcessNamespace"],
+        guard: "holder && databasePath && isLegacyGatewayLeaseLock(holder)",
+        evidence:
+          "Physical Gateway lock admission reads only the selected SQLite gateway-owner lease before reclaiming a namespace-less, explicit Gateway-role owner older than five minutes. Native callers are gateway-state-owner-record.ts stale-lock/access admission and gateway-lock.ts historical-lock admission/discovery. Modern owners never enter this branch; runtime lease renewals remain worker-owned.",
       },
     ],
   ],
@@ -3056,21 +3079,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/infra/update-failure-report-receipt-store.ts",
-    [
-      {
-        tier: "W",
-        operations: [
-          "replaceReceiptAtRevision",
-          "reserveUpdateFailureReportReceiptRowSync",
-          "completeUpdateFailureReportReceiptCleanupRowSync",
-        ],
-        evidence:
-          "Receipt mutations and authoritative revision rereads are called only by restart-sentinel.worker.ts; report submission and artifact sweep await that physical shared-state owner.",
-      },
-    ],
-  ],
-  [
     "src/infra/session-sqlite-transcript-verification.ts",
     [
       {
@@ -3187,13 +3195,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T3",
-        operations: [
-          "readRecoveryRows",
-          "readPluginCohortPairRows",
-          "inspectPluginCohortRecoveryRows",
-        ],
+        operations: ["readRecoveryRows", "readPluginCohortPairRows"],
         evidence:
-          "Runtime mutation/reconciliation/interruption readers execute in existing workers. Native load/inspect recovery callers are update CLI repair, result, rollback and terminal owners plus CLI managed-handoff cleanup; no Gateway reader uses the synchronous recovery facade. Recovery exclusion is retained as activation/rollback custody, not removed as bookkeeping. Cohort runtime inspection uses inspectPluginCohortRecoveriesAsync through openclaw-state-read-handlers; metadata mutations read the pair inside their worker. Native pair reads serve admitted update/repair/config-capture owners; the synchronous mutation continuation is supplied only by CLI execution-guards with its actual executor fence.",
+          "Runtime mutation/reconciliation/interruption readers execute in existing workers. Native load/inspect recovery callers are CLI repair, result, rollback and terminal owners plus Doctor diagnostics. Gateway cohort completion uses loadPluginCohortRecoveryAsync to read only its named pair; metadata mutations recheck that exact transaction in their worker. Current source/executor/finalizer checks remain; foreign saved rows are not update admission authority.",
       },
     ],
   ],

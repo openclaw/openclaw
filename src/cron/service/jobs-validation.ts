@@ -21,7 +21,7 @@ import { computeJobNextRunAtMs } from "./jobs-scheduling.js";
 import type { CronServiceState } from "./state.js";
 
 export function assertExecutionPolicy(
-  job: Pick<CronJob, "activeHours" | "delivery" | "cyberAccessProgram" | "payload">,
+  job: Pick<CronJob, "activeHours" | "idleOnly" | "delivery" | "cyberAccessProgram" | "payload">,
 ) {
   if (job.cyberAccessProgram !== undefined) {
     if (!Value.Check(CyberAccessProgramSchema, job.cyberAccessProgram)) {
@@ -34,14 +34,19 @@ export function assertExecutionPolicy(
   if (job.activeHours !== undefined) {
     assertCronActiveHours(job.activeHours);
   }
-  const delivery = job.delivery;
-  if (normalizeMessageChannel(delivery?.channel) === "last") {
-    throw new Error(
-      "cron delivery.channel no longer accepts last; omit the channel for automatic routing",
-    );
+  if (job.idleOnly !== undefined && typeof job.idleOnly !== "boolean") {
+    throw new Error("cron idleOnly must be a boolean");
   }
+  const delivery = job.delivery;
   if (delivery?.target !== undefined && delivery.target !== "owner") {
     throw new Error('cron delivery.target must be "owner"');
+  }
+  if (
+    delivery?.directPolicy !== undefined &&
+    delivery.directPolicy !== "allow" &&
+    delivery.directPolicy !== "block"
+  ) {
+    throw new Error('cron delivery.directPolicy must be "allow" or "block"');
   }
   if (
     delivery?.target === "owner" &&
@@ -51,8 +56,11 @@ export function assertExecutionPolicy(
       "cron owner delivery cannot specify a recipient or thread; the owner DM is resolved at execution time",
     );
   }
-  if (delivery?.mode === "webhook" && delivery.target !== undefined) {
-    throw new Error("cron webhook delivery cannot specify an owner target");
+  if (
+    delivery?.mode === "webhook" &&
+    (delivery.target !== undefined || delivery.directPolicy !== undefined)
+  ) {
+    throw new Error("cron webhook delivery cannot specify target or directPolicy");
   }
 }
 
@@ -332,7 +340,7 @@ export function assertAnnounceDeliveryChannelSupport(
     job.sessionTarget !== "isolated" ||
     job.sessionKey?.trim() ||
     mode !== "announce" ||
-    channel !== undefined ||
+    (channel !== undefined && channel !== "last") ||
     targetMaySelectChannel ||
     job.delivery?.bestEffort === true ||
     job.delivery?.target === "owner" ||

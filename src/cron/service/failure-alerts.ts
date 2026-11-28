@@ -14,15 +14,12 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeAnyChannelId } from "../../channels/registry-normalize.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import {
   resolveCronDeliveryDefaultsScope,
   resolveCronFailureAlertDefaults,
 } from "../delivery-defaults.js";
-import {
-  normalizeCronDeliveryRecipient,
-  resolveCronDeliveryPlan,
-  resolveFailureDestination,
-} from "../delivery-plan.js";
+import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { cronFailureDetailLines } from "../failure-notification-text.js";
 import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import type {
@@ -70,6 +67,15 @@ function resolveFailureAlertChannel(channel: unknown, to?: string): CronMessageC
     return normalizeAnyChannelId(normalized) ?? normalized;
   }
   return normalizeOptionalLowercaseString(resolveTargetPrefixedChannel(to)) ?? normalized;
+}
+
+function normalizeFailureAlertRecipient(channel: CronMessageChannel, to: string): string {
+  try {
+    return normalizeTargetForProvider(channel, to) ?? to;
+  } catch {
+    // Invalid loaded targets are distinct routes; they must not block run finalization.
+    return to;
+  }
 }
 
 function clampPositiveInt(value: unknown, fallback: number): number {
@@ -212,8 +218,8 @@ export function resolveFailureAlert(
     (to === primaryAnnounceRoute.to ||
       (to !== undefined &&
         primaryAnnounceRoute.to !== undefined &&
-        normalizeCronDeliveryRecipient(channel, to) ===
-          normalizeCronDeliveryRecipient(channel, primaryAnnounceRoute.to)));
+        normalizeFailureAlertRecipient(channel, to) ===
+          normalizeFailureAlertRecipient(channel, primaryAnnounceRoute.to)));
   const accountId =
     normalizeOptionalString(route?.accountId) ??
     (primaryRecipientMatches ? primaryAnnounceRoute?.accountId : undefined);

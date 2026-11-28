@@ -7,6 +7,7 @@ import { bindSessionMcpStoreOwner } from "../../config/sessions/session-mcp-stor
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
+import type { CronIdleAdmissionWait } from "../service/state.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -20,6 +21,7 @@ import type { CronLaneWaitCallback, RunCronAgentTurnResult } from "./run.types.j
 export type RunCronAgentTurnParams = {
   /** The occurrence admitted by the cron service, or by a hook or join-intro caller. */
   occurrence: import("../scheduled-occurrence.js").ScheduledOccurrence;
+  waitForIdle?: CronIdleAdmissionWait;
   assertCurrent?: () => void;
   admissionSource?: import("../../agents/admitted-run-context.js").AdmittedRunContext["admissionSource"];
   cfg: OpenClawConfig;

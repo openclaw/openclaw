@@ -495,7 +495,7 @@ async function sendGatewayCronFailureAlertUnderAdmission(
           mode: "announce" as const,
           source: "delivery" as const,
           requested: true,
-          channel: params.channel === "last" ? undefined : params.channel,
+          channel: params.channel,
           target: params.target,
           directPolicy: params.directPolicy,
           to: params.to,
@@ -606,7 +606,7 @@ export function dispatchGatewayCronFinishedNotifications(params: {
     params.job &&
     params.resolveCronAgent &&
     !params.quietTrigger &&
-    // Active-hours deferrals are scheduled behavior, not a failure to resolve.
+    // Active-hours and idle-only deferrals are scheduled behavior, not a failure to resolve.
     // In a job's own session the notice would also feed the next run's context.
     !params.admissionDeferredReason &&
     (params.evt.status === "skipped" || (params.evt.status === "error" && params.runNotStarted))

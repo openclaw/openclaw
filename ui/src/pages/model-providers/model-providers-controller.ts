@@ -215,7 +215,7 @@ export function createModelProviders(
     canMutate: () => canMutate(),
     hasMutationAccess: () => mutationBlockedReason() === null,
     cancelRefresh: () => core.invalidate(),
-    refresh: () => refresh("forced"),
+    refresh: (force = true) => refresh(force ? "forced" : "replacement"),
     isCurrentClient: (client, epoch) => gateway.isCurrent({ client, epoch }),
     isBusy: (key) => Boolean(state.busy[key]),
     setBusy: (key, value) => setBusy(key, value),
@@ -693,6 +693,7 @@ export function createModelProviders(
       onRequestLogout: (pending: Parameters<typeof profileActions.requestLogout>[0]) =>
         void profileActions.requestLogout(pending),
       onProfileOrderChange: profileActions.setOrder,
+      onRenameProfile: profileActions.renameProfile,
       addStartChat: state.addStartChat,
       ...configActions.addProviderActions,
       ...modelDefaultsActions(() => state.defaultsDraft ?? configuredDefaults, stageDefaults),
@@ -710,7 +711,7 @@ export function createModelProviders(
       props,
       cards,
       installedAgentsAvailable: installedAgents.available(),
-      loginMessage: state.messages.connection ?? login.pageActions.loginMessage,
+      loginMessage: state.messages.connection ?? login.loginMessage,
       discovery: {
         agentLabel,
         credentialChoices:

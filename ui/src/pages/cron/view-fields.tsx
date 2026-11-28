@@ -31,6 +31,7 @@ const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   payloadThinking: "cron.form.thinking",
   timeoutSeconds: "cron.form.timeoutSeconds",
   deliveryMode: "cron.form.deliveryModeLabel",
+  deliveryDirectPolicy: "cron.form.directPolicy",
   deliveryTo: "cron.form.to",
   failureAlertAfter: "cron.form.failureAlertAfter",
   failureAlertCooldownSeconds: "cron.form.failureAlertCooldown",
@@ -264,7 +265,7 @@ export function CronSelect(props: FormProps & CronSelectOptions) {
     <Control
       id={props.inline ? undefined : inputIdForField(props.field)}
       label={props.label}
-      value={selected()}
+      value={props.channel ? selected() || "last" : selected()}
       options={props.options}
       disabled={props.disabled}
       invalid={props.errorKey ? Boolean(error()) : undefined}

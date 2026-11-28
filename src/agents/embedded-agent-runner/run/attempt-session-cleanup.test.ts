@@ -27,7 +27,6 @@ import { cleanupEmbeddedAttemptSessionPhase } from "./attempt-session-settle.js"
 const attempt = {
   runId: "run-1",
   sessionId: "session-1",
-  sessionFile: "/tmp/session.jsonl",
 } as never;
 
 function createInput(overrides: Record<string, unknown> = {}) {
@@ -38,8 +37,6 @@ function createInput(overrides: Record<string, unknown> = {}) {
   const emitDiagnosticRunCompleted = vi.fn();
   const trajectoryRecorder = {
     recordEvent: vi.fn(),
-    describeFlushState: vi.fn(),
-    flush: vi.fn(),
   };
   const state: { terminal: AgentRunAttemptTerminal; beforeAgentRunBlockedBy?: string } = {
     terminal: { kind: "ok" },

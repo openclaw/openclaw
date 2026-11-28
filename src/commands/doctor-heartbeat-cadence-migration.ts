@@ -148,6 +148,7 @@ function convertMonitor(
     message: heartbeat?.prompt?.trim()
       ? migrateHeartbeatPrompt(heartbeat.prompt)
       : DEFAULT_PROACTIVE_PROMPT,
+    skipIfScratchEmpty: true,
     ...(previous?.payload.toolsAllow ? { toolsAllow: previous.payload.toolsAllow } : {}),
     ...(previous?.payload.toolsAllowIsDefault !== undefined
       ? { toolsAllowIsDefault: previous.payload.toolsAllowIsDefault }
@@ -162,11 +163,8 @@ function convertMonitor(
   job.sessionKey = session.sessionKey;
   job.sessionTarget = heartbeat?.isolatedSession ? "isolated" : `session:${session.sessionKey}`;
   job.wakeMode = "now";
+  job.idleOnly = true;
   job.activeHours = migrateActiveHours(heartbeat);
-  const directPolicy =
-    heartbeat?.directPolicy === "block" || previous?.delivery?.directPolicy === "block"
-      ? "block"
-      : heartbeat?.directPolicy;
   job.delivery = {
     mode:
       target === "none" || !legacyAlertsEnabled(cfg, target, heartbeat?.accountId)
@@ -174,12 +172,12 @@ function convertMonitor(
         : "announce",
     ...(target === "owner"
       ? { target: "owner" as const }
-      : target !== "none" && target !== "last"
+      : target !== "none"
         ? { channel: target }
         : {}),
     ...(target !== "owner" && target !== "none" && heartbeat?.to ? { to: heartbeat.to } : {}),
     ...(heartbeat?.accountId ? { accountId: heartbeat.accountId } : {}),
-    ...(directPolicy ? { directPolicy } : {}),
+    ...(heartbeat?.directPolicy ? { directPolicy: heartbeat.directPolicy } : {}),
   };
   if (!previous || isGeneratedHeartbeatMonitor(previous)) {
     delete job.declarationKey;

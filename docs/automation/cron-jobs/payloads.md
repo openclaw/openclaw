@@ -54,6 +54,9 @@ The weekly Skill Workshop curator (declaration key `skill-collection-review:<age
 <ParamField path="--light-context" type="boolean">
   Skip workspace bootstrap file injection.
 </ParamField>
+<ParamField path="--skip-if-scratch-empty" type="boolean">
+  Skip an agent turn when its stored scratch is explicitly empty. Missing scratch still runs. Use `--no-skip-if-scratch-empty` to turn this off.
+</ParamField>
 <ParamField path="--include-reasoning" type="boolean">
   Include reasoning returned by the agent alongside a meaningful result. Reasoning alone does not turn a quiet check into a notification. Use `--no-include-reasoning` to keep it out of delivery. This is separate from the model's thinking level.
 </ParamField>
@@ -278,6 +281,13 @@ To change an account deliberately, update the job with a model/profile selection
 for example `--model "openai/gpt-4.1@work"`. This captures a fresh authorization.
 To list accounts while the Gateway runs, use `openclaw gateway call models.authStatus`.
 
+A run that reaches a removed, signed-out or replaced recorded account, and that no
+fallback on another provider could finish, auto-disables the job once with reason
+`account-unavailable`. A fallback that failed for a reason that can pass keeps the
+normal retry schedule. The notice names the repair: sign in again if needed, record
+the account with `model@profile`, then run `openclaw automations enable <jobId>`. The
+notice does not name the account; run history keeps the full refusal.
+
 If the recorded account was removed or signed out, an explicit plain-model edit
 such as `openclaw automations edit <jobId> --model openai/gpt-4.1` can release the
 dead binding when that model selects a key in the environment or provider config.
@@ -304,9 +314,9 @@ can be valid when credentials are inherited from the shared store; Doctor checks
 effective credentials before reporting a missing profile. It does not remove a
 missing profile from account order or recreate its credentials automatically.
 
-Managed updates and the standard container entrypoint run repairing Doctor before
-activation. A manual source upgrade must include `openclaw doctor --fix` before
-starting the Gateway. Startup checks potentially unmigrated host-account jobs in the background without
+Gateway boot and `openclaw doctor --fix` use the same account-adoption owner for
+legacy host-account jobs, including after a container image replacement.
+Startup checks potentially unmigrated host-account jobs in the background without
 delaying cron readiness or operations. The scan has a five-second aggregate budget;
 if it expires, one warning reports how many jobs were not checked and points to
 `openclaw doctor --lint` for a complete check. Startup does not capture credentials
@@ -430,7 +440,13 @@ made that call and then ended silently is still a failure. Adaptive scheduling s
 job. Scratch is context, not another scheduler:
 runtime does not parse `tasks:` blocks or read `HEARTBEAT.md`.
 
-Scratch does not decide whether a job runs. Disable the job to stop it.
+With `payload.skipIfScratchEmpty: true` (`--skip-if-scratch-empty`), blank text,
+comments, headings, fence markers, and empty checklist stubs count as an empty
+checklist. An empty checklist completes the run without a model call: history
+records `status: "ok"` and `completionStatus: "succeeded"` with the summary
+`Automation scratch is explicitly empty`, with no "did not start" notice or
+skipped-run alert. Removing scratch with `--unset` is different: missing scratch does
+not suppress a run. Disable the job when it should stop regardless of scratch.
 
 ### Command payloads
 

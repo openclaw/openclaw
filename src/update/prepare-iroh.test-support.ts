@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
-import { irohNativeBinaryName } from "../infra/iroh-native-build.js";
+import { irohNativeBinaryName, irohNativeBuildInputs } from "../infra/iroh-native-build.js";
 import { prepareGit } from "./prepare-git.js";
 import { node, repository, root } from "./prepare.test-support.js";
 
@@ -62,14 +62,24 @@ export async function irohRepository(
   );
   const base = await publish("add native crate fixture");
   await git(checkout, "pull", "--ff-only");
+  const writeArtifact = async (repositoryRoot: string, contents: string) => {
+    const artifactCrate = path.join(repositoryRoot, irohCrate);
+    const binary = path.join(artifactCrate, irohBinary);
+    await fs.writeFile(binary, contents);
+    // Keep builds strictly newer even on coarse clocks, and older than later source edits.
+    for (const input of [...irohNativeBuildInputs, "src/lib.rs"]) {
+      await fs.utimes(path.join(artifactCrate, input), 100, 100);
+    }
+    await fs.utimes(binary, 200, 200);
+  };
   let runningRoot = checkout;
   if (opts.artifact === "running" || opts.artifact === "both") {
     runningRoot = path.join(root, "running");
     await git(checkout, "worktree", "add", "--detach", runningRoot, base);
-    await fs.writeFile(path.join(runningRoot, irohCrate, irohBinary), "running bytes");
+    await writeArtifact(runningRoot, "running bytes");
   }
   if (opts.artifact === "checkout" || opts.artifact === "both") {
-    await fs.writeFile(path.join(checkout, irohCrate, irohBinary), "checkout bytes");
+    await writeArtifact(checkout, "checkout bytes");
   } else if (opts.artifact === "foreign") {
     await fs.writeFile(
       path.join(checkout, irohCrate, "iroh-node.android-arm-eabi.node"),
@@ -90,7 +100,9 @@ export async function irohRepository(
   } else if (opts.checkoutDrift === "dirty") {
     // This binary is newer than the dirty input, but still cannot match the target tree.
     await fs.writeFile(path.join(checkout, irohCrate, "Cargo.toml"), "locally modified\n");
+    await fs.utimes(path.join(checkout, irohCrate, "Cargo.toml"), 300, 300);
     await fs.writeFile(path.join(checkout, irohCrate, irohBinary), "dirty build bytes");
+    await fs.utimes(path.join(checkout, irohCrate, irohBinary), 400, 400);
   }
   const staging = path.join(root, "staging");
   const release = path.join(staging, "openclaw");
@@ -153,10 +165,6 @@ export function registerIrohPreparationTests() {
       reason: "build:iroh-failed",
       stderrTail: expect.stringContaining(detail),
     });
-    await expect(fs.access(target.staging)).rejects.toMatchObject({ code: "ENOENT" });
-    expect((await exec("git", ["-C", target.checkout, "worktree", "list"])).stdout).not.toContain(
-      target.staging,
-    );
     expect(await fs.readFile(path.join(target.runningRoot, irohCrate, irohBinary), "utf8")).toBe(
       "running bytes",
     );

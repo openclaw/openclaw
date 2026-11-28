@@ -185,7 +185,8 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
     const previousDelivery =
       editingJob?.delivery?.mode === "webhook" ? undefined : editingJob?.delivery;
     // Owner lookup may be account-scoped, but must never inherit a conversation or thread target.
-    const deliveryChannel = form.deliveryChannel.trim() || undefined;
+    const ownerChannel =
+      form.deliveryChannel !== "last" ? form.deliveryChannel.trim() || undefined : undefined;
     const delivery = selectedDeliveryMode
       ? {
           mode: selectedDeliveryMode,
@@ -195,15 +196,20 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
                 ...(form.deliveryTarget === "owner"
                   ? {
                       target: "owner",
-                      channel: deliveryChannel,
+                      channel: ownerChannel,
                       accountId: normalizedDeliveryAccountId || undefined,
                     }
                   : {}),
+                ...(form.deliveryDirectPolicy ? { directPolicy: form.deliveryDirectPolicy } : {}),
               }
             : {
-                channel:
-                  selectedDeliveryMode === "announce"
-                    ? (deliveryChannel ?? (editingJob?.delivery?.channel ? null : undefined))
+                channel: ownerTarget
+                  ? (ownerChannel ??
+                    (editingJob?.delivery?.channel !== undefined ? null : undefined))
+                  : selectedDeliveryMode === "announce"
+                    ? normalizePersistedDeliveryChannel(form.deliveryChannel, {
+                        preserveLast: Boolean(editingJob?.delivery?.channel),
+                      })
                     : undefined,
                 to:
                   (ownerTarget ? "" : form.deliveryTo.trim()) ||
@@ -211,6 +217,11 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
                     ? null
                     : undefined),
                 target: ownerTarget ? "owner" : previousDelivery?.target ? null : undefined,
+                directPolicy:
+                  selectedDeliveryMode === "announce"
+                    ? form.deliveryDirectPolicy ||
+                      (previousDelivery?.directPolicy ? null : undefined)
+                    : undefined,
                 accountId: deliveryAccountId,
                 bestEffort: form.deliveryBestEffort,
               }),
@@ -262,6 +273,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
         : editingJob?.activeHours
           ? null
           : undefined,
+      idleOnly: form.idleOnly || editingJob?.idleOnly !== undefined ? form.idleOnly : undefined,
       delivery,
       failureAlert,
     };

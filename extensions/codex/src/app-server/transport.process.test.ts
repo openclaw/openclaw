@@ -187,6 +187,12 @@ if (role === "root") {
     ["unconfirmed-termination", false],
     ["snapshot-failure", true],
     ["inspection-timeout", true],
+    ...(process.platform === "linux"
+      ? ([
+          ["transient-scan-timeout", false],
+          ["confirmation-timeout", false],
+        ] as const)
+      : []),
     ["extended", false],
   ] as const)("revalidates identities while quiescing: %s", async (scenario, ctx) => {
     const [mode, sentinelSurvived] = scenario;
@@ -259,11 +265,19 @@ process.stdin.on("end", () => process.exit(0));
       "unconfirmed-termination": [...repeat(runningTree), ...repeat(blockedTree)],
       "snapshot-failure": [...quiescing, undefined],
       "inspection-timeout": [...repeat(runningTree), "deadline"],
+      "transient-scan-timeout": ["deadline", ...quiescing, stoppedTree],
+      "confirmation-timeout": [...quiescing, stoppedTree],
       extended: [...repeat(runningTree), ...repeat(rootStoppedTree, 16), stoppedTree],
     };
     const snapshots = scenarios[mode];
     let inspection = 0;
     let descendantSignalled = false;
+    let confirmationStalled = false;
+    let clockOffset = 0;
+    if (mode === "confirmation-timeout" || mode === "transient-scan-timeout") {
+      const now = performance.now.bind(performance);
+      vi.spyOn(performance, "now").mockImplementation(() => now() + clockOffset);
+    }
     const actualSnapshot = processSnapshot.readCodexAppServerProcessSnapshot;
     const actualProcess = processSnapshot.readCodexAppServerProcess;
     let rootStopObserved = false;
@@ -279,12 +293,21 @@ process.stdin.on("end", () => process.exit(0));
     ): Promise<PosixProcess[]> => {
       // Identity faults exercise signalling; cleanup needs a separate OS
       // observation. A queued kill alone must not certify an uninterruptible child.
+      if (descendantSignalled && mode === "confirmation-timeout" && !confirmationStalled) {
+        confirmationStalled = true;
+        clockOffset += Math.max(1, inspectionDeadline - performance.now() + 1);
+        throw new processSnapshot.ProcessInspectionError("deadline");
+      }
       if (descendantSignalled && mode !== "unconfirmed-termination") {
         return await actualSnapshot(inspectionDeadline, pids);
       }
       const rows = snapshots[Math.min(inspection++, snapshots.length - 1)];
       if (rows === "deadline") {
-        await delay(Math.max(1, inspectionDeadline - performance.now()));
+        if (mode === "transient-scan-timeout") {
+          clockOffset += Math.max(1, inspectionDeadline - performance.now() + 1);
+        } else {
+          await delay(Math.max(1, inspectionDeadline - performance.now()));
+        }
         throw new processSnapshot.ProcessInspectionError("deadline");
       }
       if (!rows) {

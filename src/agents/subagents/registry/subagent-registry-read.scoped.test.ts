@@ -150,7 +150,7 @@ describe("subagent registry scoped reads", () => {
         expect(await mod.getLatestSubagentRunByChildSessionKey(childSessionKey)).toEqual(latest);
       }
       expect(
-        mod.buildSubagentSessionListReadIndex().getDisplaySubagentRun(childSessionKey),
+        mod.buildSubagentSessionListReadIndex().getSessionDisplayFacts(childSessionKey)?.identity,
       ).toEqual(source === "live" ? projectSubagentRunForSessionList(latest) : latest);
       expect(mocks.getSubagentRunsSnapshotForChildSession).toHaveBeenCalledTimes(
         source === "live" ? 0 : 1,
@@ -399,9 +399,9 @@ describe("subagent registry scoped reads", () => {
       ),
     ).toBe(true);
     expect(await mod.getLatestSubagentRunByChildSessionKey(reusedChild)).toBe(freshTerminal);
-    expect(mod.buildSubagentSessionListReadIndex(now).getDisplaySubagentRun(reusedChild)).toEqual(
-      projectSubagentRunForSessionList(freshTerminal),
-    );
+    expect(
+      mod.buildSubagentSessionListReadIndex(now).getSessionDisplayFacts(reusedChild)?.identity,
+    ).toEqual(projectSubagentRunForSessionList(freshTerminal));
     expect(mod.getLatestLiveSubagentRunByChildSessionKey(reusedChild)).toBe(freshTerminal);
     expect(mod.isSubagentSessionRunActive(parent)).toBe(false);
     expect(mod.listSubagentRunsForRequester(root)).toEqual([freshTerminal, parentRun]);

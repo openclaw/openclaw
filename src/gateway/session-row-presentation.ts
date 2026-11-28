@@ -48,6 +48,7 @@ import type * as records from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   prepareSessionRowPublicationView,
+  retainSessionRowView,
   type PublicationView,
   type SessionRowView,
 } from "./session-row-publication.js";
@@ -61,7 +62,7 @@ import {
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
 import { prepareProjectedSessionSharing } from "./session-sharing.js";
-import { sessionTitleRequests } from "./session-title-state.js";
+import { isTitlePending } from "./session-title-state.js";
 import { matchesSessionArchiveFilter, resolveSessionChildOwners } from "./session-utils-core.js";
 import {
   applyGatewaySessionRowMode,
@@ -453,8 +454,8 @@ export function prepareProjectedSessionPresentation(
       facts[2] = liveModel?.model;
       facts[3] = liveModel === null;
       facts[4] = childOwnerSessionKeys;
-      facts[5] = temporal.subagentRun?.model;
-      facts[6] = temporal.subagentOwner;
+      facts[5] = temporal.subagent?.model;
+      facts[6] = temporal.subagent?.ownerSessionKey;
       facts[7] = temporal.fields.status;
       facts[8] = temporal.fields.lastRunError;
       facts[9] = temporal.fields.suppressErrorNotice;
@@ -467,11 +468,7 @@ export function prepareProjectedSessionPresentation(
       facts[15] = run?.active;
       facts[16] = run?.status;
       facts[17] = preparedFacts;
-      facts[18] = sessionTitleRequests.isPending({
-        storePath: record.storeTarget.storePath,
-        sessionKey: record.key,
-        sessionId: record.entry.sessionId,
-      });
+      facts[18] = isTitlePending(record);
       facts[19] = resolveActiveSessionAgentStatus(record.entry.agentStatus, now);
       // Active budgeted goals can stamp budgetLimitedAt from enriched usage at this clock.
       facts[20] =
@@ -617,15 +614,11 @@ export function prepareProjectedSessionPresentation(
         row.childSessions = row.childSessions.filter((childKey) => !excluded.has(childKey));
       }
     }
-    if (signature !== undefined) {
+    if (views && signature !== undefined) {
       // Shared-fact replies never send this raw row; encode only at the wire boundary.
       const snapshot = freezeSessionRow(definedSessionRowFields(row), previous?.row);
       const view = { facts: recipientFacts, row: snapshot };
-      if (variants) {
-        variants.push(view);
-      } else {
-        views?.set(signature, [view]);
-      }
+      retainSessionRowView(views, signature, view);
       recipientFacts = [];
       return projectModels(snapshot, view);
     }

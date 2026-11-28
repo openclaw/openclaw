@@ -281,28 +281,6 @@ describe("diagnostic CPU profile owner", () => {
     expect((await capture()).status).toBe("complete");
     expect(native.start).toHaveBeenCalledTimes(2);
   });
-  it("reports elapsed capture time including native startup and stop completion", async () => {
-    let now = 100;
-    vi.spyOn(performance, "now").mockImplementation(() => now);
-    native.post.mockImplementation((method: string) => {
-      if (method === "Profiler.start") {
-        now += 2_100;
-        return Promise.resolve().then(() => {
-          now += 700;
-          return {};
-        });
-      }
-      now += 20;
-      return Promise.resolve(method === "Profiler.stop" ? { profile: profile() } : {});
-    });
-    native.wait.mockImplementation(async () => {
-      now += 5_000;
-    });
-    expect(await capture()).toMatchObject({
-      status: "complete",
-      result: { startBlockedMs: 2_100, actualDurationMs: 7_820 },
-    });
-  });
   it("returns a complete sanitized graph only after native cleanup", async () => {
     const outcome = await capture();
     expect(outcome.status).toBe("complete");

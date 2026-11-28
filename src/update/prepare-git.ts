@@ -236,15 +236,6 @@ export async function prepareGit(params: {
     const buildId = await readBuiltGatewayBuildId(releaseRoot);
     return { ok: true, releaseRoot, version, ...(buildId ? { buildId } : {}) };
   } catch (error) {
-    // Git owns its worktree registration; remove it before removing the staging prefix.
-    await runCommandWithTimeout(
-      gitCommandArgv(params.checkout, ["worktree", "remove", "--force", releaseRoot]),
-      {
-        timeoutMs: 30_000,
-        killProcessTree: true,
-      },
-    ).catch(() => undefined);
-    await fs.rm(params.staging, { recursive: true, force: true });
     return { ok: false, reason, stderrTail: formatErrorMessage(error).slice(-8192) };
   } finally {
     await cleanupManager?.();

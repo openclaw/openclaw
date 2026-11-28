@@ -16,7 +16,7 @@ type BootstrapFile = Awaited<
 const budget = { agents: { defaults: { bootstrapMaxChars: 300, bootstrapTotalMaxChars: 300 } } };
 function prepare(
   files: BootstrapFile[],
-  params: Partial<Parameters<typeof prepareAgentWorkspaceContext>[0]> = {},
+  params: Partial<Parameters<typeof prepareAgentWorkspaceContext>[0]>,
 ) {
   vi.spyOn(bootstrapRuntime, "resolveBootstrapFilesForRun").mockResolvedValue(files);
   return prepareAgentWorkspaceContext({ workspaceDir, scope: "full", ...params });
@@ -72,6 +72,10 @@ it("orders personal instructions in a remapped workspace", async () => {
     expect(turn.includes("alice preferences.")).toBe(profile === "alice");
     expect(turn.includes("bob preferences.")).toBe(profile === "bob");
     expect(turn.includes("belongs to this session")).toBe(Boolean(profile));
+    const personal = context.personalPersonaInstructions ?? "";
+    expect(personal).not.toContain("Shared preferences.");
+    expect(personal.includes("<AGENT_SOUL>")).toBe(Boolean(profile));
+    expect(personal.includes(`${profile} preferences.`)).toBe(Boolean(profile));
     expect(context.personaFiles).toEqual([
       { path: path.join(projectedWorkspace, "SOUL.md"), content: "Agent voice." },
       { path: path.join(projectedWorkspace, "IDENTITY.md"), content: "Agent identity." },

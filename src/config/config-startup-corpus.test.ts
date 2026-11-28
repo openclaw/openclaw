@@ -301,7 +301,7 @@ describe("operator config startup corpus", () => {
               schedule: expect.objectContaining({ kind: "every", everyMs: 3_600_000 }),
               sessionTarget: "isolated",
               activeHours: { start: "08:00", end: "23:00", timezone: "UTC" },
-              delivery: { mode: "none" },
+              delivery: { mode: "none", directPolicy: "allow" },
             }),
           );
         }

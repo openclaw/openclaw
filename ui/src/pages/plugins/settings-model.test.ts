@@ -34,7 +34,12 @@ describe("plugin settings model", () => {
   });
 
   it("never reads inherited plugin ids from schema or config", () => {
-    expect(pluginConfigSchema(schema, "__proto__")?.properties).toBeUndefined();
-    expect(pluginEntryValue({ plugins: { entries: {} } }, "__proto__")).toEqual({});
+    expect(pluginConfigSchema(schema, "__proto__")).toEqual({ type: "object" });
+    expect(
+      pluginEntryValue(
+        { plugins: { entries: Object.create({ workboard: { config: { token: "inherited" } } }) } },
+        "workboard",
+      ),
+    ).toEqual({});
   });
 });

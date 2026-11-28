@@ -6,7 +6,7 @@ import {
 } from "./subagent-delivery-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-function baseRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
+function baseRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
   return {
     runId: "run-1",
     childSessionKey: "agent:main:subagent:child",

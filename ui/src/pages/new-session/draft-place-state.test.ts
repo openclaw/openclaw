@@ -126,6 +126,32 @@ describe("DraftPlaceState agent selection", () => {
 
 describe("DraftPlaceState repository selection", () => {
   it.each([
+    {
+      checkFailed: true,
+      reason: "Couldn’t check the checkout. Select the project again to retry.",
+    },
+    { checkFailed: false, reason: "This session can’t use this project." },
+  ])(
+    "explains why a selected project is unavailable (checkFailed=$checkFailed)",
+    async ({ checkFailed, reason }) => {
+      const { state, browser, request, changed } = createRepositoryFixture({ unavailable: true });
+      vi.spyOn(browser, "projects", "get").mockReturnValue([
+        { id: "garden", displayName: "Garden plans", source: "registered" },
+      ]);
+      if (checkFailed) {
+        request.mockRejectedValueOnce(new Error("Checkout options unavailable"));
+      }
+      const settled = nextChange(
+        changed,
+        () => state.repositoryState.currentCheckoutUnavailable === "unavailable",
+      );
+      state.selectProjectId("garden");
+      await settled;
+      expect(state.currentCheckoutUnavailableReason).toBe(reason);
+    },
+  );
+
+  it.each([
     { source: "registered", redacted: false, current: false, savedWorktree: false },
     { source: "registered", redacted: true, current: false, savedWorktree: false },
     { source: "registered", redacted: false, current: true, savedWorktree: true },

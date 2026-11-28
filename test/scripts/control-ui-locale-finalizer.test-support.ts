@@ -310,6 +310,37 @@ export const readControlUiSourceCatalog = () =>
         }
         return true;
       };
+      const runPublisher = (step: WorkflowStep) => {
+        const inputs = mapValues(step.with ?? {}, interpolate);
+        const action = readWorkflow(".github/actions/publish-generated-pr/action.yml");
+        const publication: WorkflowStep = action.runs.steps.find(
+          (candidate: WorkflowStep) => candidate.name === "Publish generated pull request",
+        );
+        const publicationContext: Context = {
+          ...context,
+          inputs: {
+            ...mapValues<{ default?: unknown }, unknown>(action.inputs, (input) => input.default),
+            ...inputs,
+          },
+          steps: tokenStep({
+            "contents-token": "contents-token",
+            "pull-request-token": "test-token",
+          }),
+        };
+        const publicationEnv = Object.fromEntries(
+          Object.entries(publication.env ?? {}).filter(([key]) => key !== "PUBLISH_ACTION_PATH"),
+        );
+        const run = shell(publication.run!, {
+          ...baseEnv,
+          ...mapValues(publicationEnv, (value) =>
+            String(evaluateWorkflowExpression(value, publicationContext)),
+          ),
+          CI_GIT_OWNER: at(".github/actions/git-owner/owner.py"),
+          PUBLISH_ACTION_PATH: at(".github/actions/publish-generated-pr"),
+        });
+        trace.push({ step: step.name!, status: run.status ?? 1 });
+        return run;
+      };
       const result = () => ({
         fresh,
         later,
@@ -359,12 +390,14 @@ export const readControlUiSourceCatalog = () =>
       if (!resolved || !gate("publisher-preflight")) {
         return result();
       }
-      // App-token issuance and GitHub repository settings are external services.
-      context.steps = tokenStep({ "pull-request-token": "test-token" });
       const preflight: WorkflowStep = workflow.jobs["publisher-preflight"].steps.find(
-        (step: WorkflowStep) => step.run,
+        (step: WorkflowStep) => step.uses === "./.github/actions/publish-generated-pr",
       );
-      const ready = execute(preflight);
+      const admission = runPublisher(preflight);
+      const ready = admission.status === 0;
+      if (!ready) {
+        failure = admission.stdout + admission.stderr;
+      }
       states["publisher-preflight"] = jobResult(ready);
       if (!gate("refresh")) {
         gate("finalize");
@@ -469,34 +502,7 @@ export const readControlUiSourceCatalog = () =>
           if (scenario.advanceAfterCatchup) {
             later = advanceMain("Latest locale proof", "Later locale proof");
           }
-          const inputs = mapValues(step.with ?? {}, interpolate);
-          const action = readWorkflow(".github/actions/publish-generated-pr/action.yml");
-          const publication: WorkflowStep = action.runs.steps.find(
-            (candidate: WorkflowStep) => candidate.name === "Publish generated pull request",
-          );
-          const publicationContext: Context = {
-            ...context,
-            inputs: {
-              ...mapValues<{ default?: unknown }, unknown>(action.inputs, (input) => input.default),
-              ...inputs,
-            },
-            steps: tokenStep({
-              "contents-token": "contents-token",
-              "pull-request-token": "test-token",
-            }),
-          };
-          const publicationEnv = Object.fromEntries(
-            Object.entries(publication.env ?? {}).filter(([key]) => key !== "PUBLISH_ACTION_PATH"),
-          );
-          const run = shell(publication.run!, {
-            ...baseEnv,
-            ...mapValues(publicationEnv, (value) =>
-              String(evaluateWorkflowExpression(value, publicationContext)),
-            ),
-            CI_GIT_OWNER: at(".github/actions/git-owner/owner.py"),
-            PUBLISH_ACTION_PATH: at(".github/actions/publish-generated-pr"),
-          });
-          trace.push({ step: step.name!, status: run.status ?? 1 });
+          const run = runPublisher(step);
           expect(run.status, run.stdout + run.stderr).toBe(0);
         } else {
           throw new Error("Unhandled finalizer step: " + step.name);

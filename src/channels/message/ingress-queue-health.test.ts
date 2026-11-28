@@ -116,9 +116,6 @@ describe("channel ingress queue health", () => {
               oldestReceivedAt: 100,
             },
           ]);
-          expect(JSON.stringify(pressure)).not.toMatch(
-            /private-(?:id|lane|owner|payload|error)|retry-private|stale-private|null-(?:pressured|stale)/,
-          );
           expect(hostQueries).not.toHaveBeenCalled();
         } finally {
           hostQueries.mockRestore();

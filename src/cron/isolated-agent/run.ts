@@ -48,8 +48,10 @@ import { finishReplyOperationBackend } from "../../sessions/session-controller.s
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { resolveCronConfigurationRefusal } from "../configuration-refusal.js";
+import { isCronExecutionIdle } from "../execution-idle.js";
 import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
 import { CronOperatorSourceError } from "../operator-source-error.js";
+import { resolveCronRateLimitResetAt } from "../rate-limit-reset.js";
 import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../run-diagnostics.js";
 import {
@@ -220,11 +222,11 @@ async function runCronIsolatedAgentTurnInTrace(
             };
             const resolveUnstartedTerminalMetadata = () =>
               executionStarted ? undefined : { executionStarted: false, providerStarted: false };
-            let admissionDeferredReason: "active-hours" | undefined;
+            let admissionDeferredReason: "busy" | "active-hours" | undefined;
             const ownReplyOperation = getCurrentSessionControllerOwner();
             const resolveRecoveryClassification = (includePendingTools = false) =>
               resolveCronRecoveryClassification(ownReplyOperation, { includePendingTools });
-            const resolveStartDeferral = (): "active-hours" | undefined => {
+            const resolveStartDeferral = (): "busy" | "active-hours" | undefined => {
               const cfg = selectLiveRuntimeConfig(params.cfg);
               if (
                 !isCronWithinActiveHours(
@@ -235,23 +237,42 @@ async function runCronIsolatedAgentTurnInTrace(
               ) {
                 return "active-hours";
               }
-              return undefined;
+              return params.job.idleOnly &&
+                !isCronExecutionIdle(
+                  cfg,
+                  params.job,
+                  prepared.context.agentId,
+                  prepared.context.runSessionKey,
+                  ownReplyOperation,
+                )
+                ? "busy"
+                : undefined;
             };
             const awaitStartPolicy = async (onAdmitted?: () => void) => {
               assertInvocationCurrent();
-              const deferral = resolveStartDeferral();
+              let deferral = resolveStartDeferral();
+              while (deferral === "busy" && params.waitForIdle) {
+                await params.waitForIdle(
+                  prepared.context.runSessionKey,
+                  abortSignal,
+                  ownReplyOperation,
+                );
+                assertInvocationCurrent();
+                deferral = resolveStartDeferral();
+              }
               if (!deferral) {
                 onAdmitted?.();
               }
               return deferral;
             };
-            const deferredResult = (reason: "active-hours") =>
+            const deferredResult = (reason: "busy" | "active-hours") =>
               prepared.context.withRunSession({
                 status: "skipped",
                 executionStarted: false,
                 admissionDeferred: true,
                 admissionDeferredReason: reason,
-                summary: "Outside this automation’s active hours",
+                summary:
+                  "Automation admission deferred by its current window or foreground activity",
               });
             const notifyExecutionStarted = async (info?: {
               lifecycleGeneration?: string;
@@ -285,7 +306,9 @@ async function runCronIsolatedAgentTurnInTrace(
               const deferral = await awaitStartPolicy(markStarted);
               if (deferral) {
                 admissionDeferredReason = deferral;
-                const error = new Error("Outside this automation’s active hours");
+                const error = new Error(
+                  "Automation admission deferred by its current window or foreground activity",
+                );
                 lifecycleAbortController.abort(error);
                 throw error;
               }
@@ -580,6 +603,7 @@ async function runCronIsolatedAgentTurnInTrace(
                     ? readAgentTerminalSnapshot(err)
                     : undefined,
                 interruptedByRestart,
+                rateLimitResetAt: resolveCronRateLimitResetAt(err),
                 errorClassification:
                   err instanceof CronOperatorSourceError
                     ? { kind: "permanent" }

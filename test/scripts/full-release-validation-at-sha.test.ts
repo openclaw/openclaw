@@ -14,7 +14,6 @@ import {
   assertTrustedWorkflowHarness,
   dispatchInputsDigest,
   fullReleaseConcurrencyBranchPrefix,
-  formatCandidateToolingLagWarning,
   parseArgs,
   releaseProfileForVersion,
   releaseDecisionStopsForeground,
@@ -38,12 +37,10 @@ import {
   isWorkflowDispatch,
   ghField,
   expectDispatchFailure,
+  expectCandidateToolingLagWarning,
+  rejectArgs,
 } from "./full-release-validation-at-sha.test-support.js";
 import { publicationSelectionFixture } from "./full-release-validation-state.test-support.js";
-
-function rejectArgs(args: string[], error: string) {
-  expect(() => parseArgs(args)).toThrow(error);
-}
 
 describe("full-release-validation-at-sha", () => {
   it("continues candidate dispatch after a tooling comparison fails", () => {
@@ -56,26 +53,6 @@ describe("full-release-validation-at-sha", () => {
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain("WARNING: candidate tooling lag is unavailable");
     expect(fixture.dispatches()).toHaveLength(2);
-  });
-
-  it("reports patch-inequivalent main FRV tooling without changing frozen Q", () => {
-    const candidateSha = "a".repeat(40);
-    const mainSha = "b".repeat(40);
-
-    expect(
-      formatCandidateToolingLagWarning(candidateSha, mainSha, 3508, 28162, [
-        "14.8% extensions/",
-        "1.3% scripts/",
-      ]),
-    ).toBe(
-      [
-        `WARNING: frozen qualification Q ${candidateSha} is 3508 non-merge commit(s) behind main ${mainSha}, with 28162 net changed path(s). Moving main cannot repair this harness; explicitly select and admit any replacement Q before dispatch.`,
-        "Largest changed areas (share of net changed paths):",
-        "14.8% extensions/",
-        "1.3% scripts/",
-        `Inspect every exact path: git diff --name-status ${candidateSha} ${mainSha}`,
-      ].join("\n"),
-    );
   });
 
   it("keeps candidate dispatch available when the tooling-lag lookup is unavailable", () => {
@@ -92,6 +69,7 @@ describe("full-release-validation-at-sha", () => {
   });
 
   it("does not depend on a manually maintained release-path inventory", () => {
+    expectCandidateToolingLagWarning();
     const fixture = createDispatchFixture({ candidateOwned: true });
     const result = fixture.run();
 
@@ -106,79 +84,76 @@ describe("full-release-validation-at-sha", () => {
     expect(treeDiffs).not.toContainEqual(expect.arrayContaining(["--name-only"]));
   });
 
-  it("rejects an unsigned publication candidate before dispatch", () => {
-    const fixture = createDispatchFixture({ candidateOwned: true, candidateSignature: "missing" });
+  it.each<{
+    name: string;
+    options: NonNullable<Parameters<typeof createDispatchFixture>[0]>;
+    tags?: string[];
+    main?: boolean;
+    args?: string[];
+    error?: string;
+  }>([
+    {
+      name: "rejects an unsigned publication candidate before dispatch",
+      options: { candidateSignature: "missing" },
+      error: "requires a valid maintainer signature",
+    },
+    {
+      name: "accepts GitHub web-flow for an exact canonical release-branch merge",
+      options: { candidateAuthorityActor: "web-flow", candidateWebFlowMerge: true },
+    },
+    {
+      name: "rejects GitHub web-flow without one exact canonical release-branch merge",
+      options: { candidateAuthorityActor: "web-flow" },
+      error: "requires one exact merge into a canonical release branch",
+    },
+    {
+      name: "rejects an unsigned candidate in explicit release-tag context",
+      options: { candidateSignature: "missing", includeTargetRef: false },
+      tags: ["v2026.8.1"],
+      args: ["--target-ref", "v2026.8.1"],
+      error: "requires a valid maintainer signature",
+    },
+    {
+      name: "discovers release-tag provenance for a signed SHA-only candidate",
+      options: { includeTargetRef: false },
+      tags: ["v2026.8.1", "v2026.8.1-1"],
+    },
+    {
+      name: "rejects a main-ancestor candidate that is an open same-repository PR head",
+      options: { candidateOpenPrHead: true, includeTargetRef: false },
+      main: true,
+      error: "is an open same-repository PR head",
+    },
+  ])("$name", ({ options, tags = [], main, args = [], error }) => {
+    const fixture = createDispatchFixture({ candidateOwned: true, ...options });
+    for (const tag of tags) {
+      runGit(fixture.checkout, ["tag", tag, fixture.targetSha]);
+    }
+    if (tags.length > 0) {
+      runGit(fixture.checkout, ["push", "origin", ...tags.map((tag) => `refs/tags/${tag}`)]);
+    }
+    if (main) {
+      runGit(fixture.checkout, ["push", "origin", `${fixture.targetSha}:refs/heads/main`]);
+    }
     const result = fixture.run([
+      ...args,
       "--workflow-sha",
       fixture.targetSha,
       "-f",
       "validation_purpose=publish",
       "-f",
-      `publication_selection_json=${JSON.stringify({
-        route: "normal",
-        npmDistTag: "latest",
-        publishOpenclawNpm: true,
-        pluginPublishScope: "all-publishable",
-        plugins: [],
-      })}`,
+      `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
     ]);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("requires a valid maintainer signature");
-    expect(fixture.dispatches()).toEqual([]);
-  });
-
-  it("accepts GitHub web-flow for an exact canonical release-branch merge", () => {
-    const fixture = createDispatchFixture({
-      candidateOwned: true,
-      candidateAuthorityActor: "web-flow",
-      candidateWebFlowMerge: true,
-    });
-    const result = fixture.run([
-      "--workflow-sha",
-      fixture.targetSha,
-      "-f",
-      "validation_purpose=publish",
-      "-f",
-      `publication_selection_json=${JSON.stringify({
-        route: "normal",
-        npmDistTag: "latest",
-        publishOpenclawNpm: true,
-        pluginPublishScope: "all-publishable",
-        plugins: [],
-      })}`,
-    ]);
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain(
-      `Release candidate provenance verified for ${fixture.targetSha}`,
-    );
-    expect(fixture.dispatches()).toHaveLength(2);
-  });
-
-  it("rejects GitHub web-flow without one exact canonical release-branch merge", () => {
-    const fixture = createDispatchFixture({
-      candidateOwned: true,
-      candidateAuthorityActor: "web-flow",
-    });
-    const result = fixture.run([
-      "--workflow-sha",
-      fixture.targetSha,
-      "-f",
-      "validation_purpose=publish",
-      "-f",
-      `publication_selection_json=${JSON.stringify({
-        route: "normal",
-        npmDistTag: "latest",
-        publishOpenclawNpm: true,
-        pluginPublishScope: "all-publishable",
-        plugins: [],
-      })}`,
-    ]);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("requires one exact merge into a canonical release branch");
-    expect(fixture.dispatches()).toEqual([]);
+    expect(result.status, result.stderr).toBe(error ? 1 : 0);
+    if (error) {
+      expect(result.stderr).toContain(error);
+      expect(fixture.dispatches()).toEqual([]);
+    } else {
+      expect(result.stdout).toContain(
+        `Release candidate provenance verified for ${fixture.targetSha}`,
+      );
+      expect(fixture.dispatches()).toHaveLength(2);
+    }
   });
 
   it("preserves main-ancestor trust through the provenance preflight", () => {
@@ -196,106 +171,13 @@ describe("full-release-validation-at-sha", () => {
       "-f",
       "validation_purpose=publish",
       "-f",
-      `publication_selection_json=${JSON.stringify({
-        route: "normal",
-        npmDistTag: "latest",
-        publishOpenclawNpm: true,
-        pluginPublishScope: "all-publishable",
-        plugins: [],
-      })}`,
+      `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
     ]);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("(main-ancestor)");
     expect(result.stderr).toContain("Admission workflow identity changed");
     expect(result.stderr).not.toContain("requires a valid maintainer signature");
-  });
-
-  it("rejects an unsigned candidate in explicit release-tag context", () => {
-    const fixture = createDispatchFixture({
-      candidateOwned: true,
-      candidateSignature: "missing",
-      includeTargetRef: false,
-    });
-    runGit(fixture.checkout, ["tag", "v2026.8.1", fixture.targetSha]);
-    runGit(fixture.checkout, ["push", "origin", "refs/tags/v2026.8.1"]);
-    const result = fixture.run([
-      "--target-ref",
-      "v2026.8.1",
-      "--workflow-sha",
-      fixture.targetSha,
-      "-f",
-      "validation_purpose=publish",
-      "-f",
-      `publication_selection_json=${JSON.stringify({
-        route: "normal",
-        npmDistTag: "latest",
-        publishOpenclawNpm: true,
-        pluginPublishScope: "all-publishable",
-        plugins: [],
-      })}`,
-    ]);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("requires a valid maintainer signature");
-    expect(fixture.dispatches()).toEqual([]);
-  });
-
-  it("discovers release-tag provenance for a signed SHA-only candidate", () => {
-    const fixture = createDispatchFixture({
-      candidateOwned: true,
-      includeTargetRef: false,
-    });
-    runGit(fixture.checkout, ["tag", "v2026.8.1", fixture.targetSha]);
-    runGit(fixture.checkout, ["tag", "v2026.8.1-1", fixture.targetSha]);
-    runGit(fixture.checkout, ["push", "origin", "refs/tags/v2026.8.1", "refs/tags/v2026.8.1-1"]);
-    const result = fixture.run([
-      "--workflow-sha",
-      fixture.targetSha,
-      "-f",
-      "validation_purpose=publish",
-      "-f",
-      `publication_selection_json=${JSON.stringify({
-        route: "normal",
-        npmDistTag: "latest",
-        publishOpenclawNpm: true,
-        pluginPublishScope: "all-publishable",
-        plugins: [],
-      })}`,
-    ]);
-
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain(
-      `Release candidate provenance verified for ${fixture.targetSha}`,
-    );
-    expect(fixture.dispatches()).toHaveLength(2);
-  });
-
-  it("rejects a main-ancestor candidate that is an open same-repository PR head", () => {
-    const fixture = createDispatchFixture({
-      candidateOwned: true,
-      candidateOpenPrHead: true,
-      includeTargetRef: false,
-    });
-    runGit(fixture.checkout, ["push", "origin", `${fixture.targetSha}:refs/heads/main`]);
-    const result = fixture.run([
-      "--workflow-sha",
-      fixture.targetSha,
-      "-f",
-      "validation_purpose=publish",
-      "-f",
-      `publication_selection_json=${JSON.stringify({
-        route: "normal",
-        npmDistTag: "latest",
-        publishOpenclawNpm: true,
-        pluginPublishScope: "all-publishable",
-        plugins: [],
-      })}`,
-    ]);
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("is an open same-repository PR head");
-    expect(fixture.dispatches()).toEqual([]);
   });
 
   it("rejects a missing purpose before remote creation on supporting tooling", () => {

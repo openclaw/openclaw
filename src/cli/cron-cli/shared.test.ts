@@ -111,17 +111,19 @@ const unknownDelivery = {
 const policyJob = (value: boolean) => ({
   ...makeJob({
     activeHours: { start: "22:00", end: "06:00", timezone: "America/Los_Angeles" },
-    delivery: { mode: "announce", target: "owner" },
+    idleOnly: value,
+    delivery: { mode: "announce", target: "owner", directPolicy: "block" },
     payload: {
       kind: "agentTurn",
       message: "Check",
+      skipIfScratchEmpty: value,
       includeReasoning: value,
     },
   }),
   scratch: { content: "private checklist sentinel" },
 });
 const policyText = (value: boolean) =>
-  `policies: active hours=22:00-06:00 @ America/Los_Angeles; delivery target=owner; include reasoning=${value}`;
+  `policies: active hours=22:00-06:00 @ America/Los_Angeles; idle only=${value}; delivery target=owner; direct policy=block; skip if scratch empty=${value}; include reasoning=${value}`;
 type RenderCase = {
   name: string;
   job: CronJob;
@@ -282,8 +284,8 @@ it.each<[string, string | null, number?]>([
 });
 
 it.each([
-  { plugins: [], expected: "<channel-plugin-id>" },
-  { plugins: [{ id: "quietchat" }, { id: "forum" }], expected: "quietchat|forum" },
+  { plugins: [], expected: "last|<channel-plugin-id>" },
+  { plugins: [{ id: "quietchat" }, { id: "forum" }], expected: "last|quietchat|forum" },
 ])("lists channel options as $expected", ({ plugins, expected }) => {
   hoisted.listChannelPluginsMock.mockReturnValue(plugins);
   expect(getCronChannelOptions()).toBe(expected);

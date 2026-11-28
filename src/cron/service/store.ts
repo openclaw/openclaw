@@ -7,10 +7,7 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { describeUnavailableCronAgent } from "../agent-availability.js";
 import { captureCronMutationCommit } from "../mutation-completion.js";
 import { normalizeCronJobInput } from "../normalize.js";
-import {
-  getInvalidPersistedCronJobReason,
-  hasRetiredHeartbeatOptions,
-} from "../persisted-shape.js";
+import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import {
   getCronJobsStoreRevision,
@@ -228,16 +225,6 @@ export async function ensureLoaded(
         state.deps.log.warn(
           { jobId: raw.id },
           `cron: job execution withheld: ${CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE}`,
-        );
-      }
-    }
-    if (hasRetiredHeartbeatOptions(raw)) {
-      const warningKey = "heartbeat-options:" + raw.id;
-      if (!state.warnedInvalidPersistedJobKeys.has(warningKey)) {
-        state.warnedInvalidPersistedJobKeys.add(warningKey);
-        state.deps.log.warn(
-          { jobId: raw.id },
-          "cron: job execution withheld: retired heartbeat options; run openclaw doctor --fix",
         );
       }
     }

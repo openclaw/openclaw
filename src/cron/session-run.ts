@@ -15,6 +15,7 @@ import { prepareAutomationSystemEvents } from "../infra/system-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveHookExternalContentSource } from "../security/external-content-source.js";
 import { isCronWithinActiveHours } from "./active-hours.js";
+import { isCronExecutionIdle } from "./execution-idle.js";
 import { requiresExternalCronDelivery } from "./isolated-agent/delivery-target.js";
 import {
   buildCronDeliveryTrace,
@@ -25,6 +26,7 @@ import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
 import { CronOperatorSourceError } from "./operator-source-error.js";
 import { resolveCronAgentErrorClassification } from "./run-error-reason.js";
 import { appendCronJobScratchPrompt, buildCronCommandBody } from "./run-prompt.js";
+import { isCronScratchEffectivelyEmpty } from "./scratch-contract.js";
 import { readCronScratchSnapshot } from "./scratch-read.js";
 import type { CronServiceDeps } from "./service/state.js";
 import { resolveCronDeliverySessionKey } from "./session-target.js";
@@ -202,14 +204,32 @@ export async function runCronSessionTurn(
       checkedDeliveryConfig = cfg;
     };
     const scratch = (
-      await readCronScratchSnapshot(
-        params.cronStorePath ?? (await resolveCronJobsStorePathFromConfigAsync(params.cfg)),
-        { kind: "job", jobId: job.id, createdAtMsFallback: job.createdAtMs },
-        {},
-        { assertCurrent, signal: params.abortSignal },
-      )
-    )?.state.scratch;
+      params.sessionPreparation?.scratch ??
+      (
+        await readCronScratchSnapshot(
+          params.cronStorePath ?? (await resolveCronJobsStorePathFromConfigAsync(params.cfg)),
+          { kind: "job", jobId: job.id, createdAtMsFallback: job.createdAtMs },
+          {},
+          { assertCurrent, signal: params.abortSignal },
+        )
+      )?.state
+    )?.scratch;
     assertCurrent();
+    if (
+      notices.events.length === 0 &&
+      job.payload.kind === "agentTurn" &&
+      job.payload.skipIfScratchEmpty &&
+      isCronScratchEffectivelyEmpty(scratch?.content)
+    ) {
+      return {
+        status: "ok",
+        summary: "Automation scratch is explicitly empty",
+        executionStarted: false,
+        delivered: false,
+        deliveryAttempted: false,
+        deliverySuppressionReason: "empty",
+      };
+    }
     const baseSessionKey = parseAgentSessionKey(params.sessionKey)?.rest ?? params.sessionKey;
     const externalSource =
       (job.payload.kind === "agentTurn" ? job.payload.externalContentSource : undefined) ??
@@ -276,7 +296,10 @@ export async function runCronSessionTurn(
         bindSessionCreation: (operation) => notices.bindCreation(operation),
         beforeDeliver,
         assertDeliveryCurrent,
-        beforeStart: () => {
+        waitForIdle: params.waitForIdle
+          ? (signal, operation) => params.waitForIdle!(expectedTarget.sessionKey, signal, operation)
+          : undefined,
+        beforeStart: (operation) => {
           const cfg = getRuntimeConfig();
           if (
             !isCronWithinActiveHours(
@@ -287,7 +310,10 @@ export async function runCronSessionTurn(
           ) {
             return "active-hours";
           }
-          return true;
+          return job.idleOnly &&
+            !isCronExecutionIdle(cfg, job, params.agentId, expectedTarget.sessionKey, operation)
+            ? "busy"
+            : true;
         },
         onStarted: () => {
           notices.start();

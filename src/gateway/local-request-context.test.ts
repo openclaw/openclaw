@@ -14,18 +14,24 @@ import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
 import { loadCronStore, resolveCronJobsStorePath, saveCronStore } from "../cron/store.js";
+import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
+import type { GatewayLifecycleRuntime } from "./server-instance-runtime.types.js";
+import { registerGatewayLifecycleRuntime } from "./server-lifecycle-runtime-context.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import {
   dispatchGatewayMethodInProcess,
   dispatchGatewayMethodInProcessRaw,
 } from "./server-plugins.js";
+import { requireSessionRowProjection } from "./session-row-projection-access.js";
 
 const createAgentTurnService = vi.hoisted(() =>
   vi.fn<typeof import("./agent-turn/agent-turn-service.js").createAgentTurnService>(),
@@ -132,8 +138,6 @@ describe("local gateway request context", () => {
       const payload = { runId: "local-turn", status: "accepted" };
       createAgentTurnService.mockReturnValue({
         startTurn: async ({ io }) => io.emitAcceptance([true, payload, undefined]),
-        prepareWaitForTurn: vi.fn(),
-        waitForTurn: vi.fn(),
       });
 
       await expect(
@@ -148,6 +152,26 @@ describe("local gateway request context", () => {
         expect.any(Function),
       );
     });
+  });
+
+  it("owns dispatch facts and lifecycle reads only when no Gateway hosts the process", async () => {
+    await withConfig({}, async () => {
+      const oneShot = localContext();
+      expect(oneShot.loadReplyDispatchRuntime).toBeTypeOf("function");
+      expect(oneShot.lifecycleRuntime).toBeDefined();
+    });
+    // BOOT.md runs a local command inside a Gateway: that Gateway keeps both.
+    const hosting = { waitForAgent: vi.fn() } as unknown as GatewayLifecycleRuntime;
+    const release = registerGatewayLifecycleRuntime(hosting);
+    try {
+      await withConfig({}, async () => {
+        const hosted = localContext();
+        expect(hosted.loadReplyDispatchRuntime).toBeUndefined();
+        expect(hosted.lifecycleRuntime).toBe(hosting);
+      });
+    } finally {
+      release();
+    }
   });
 
   it("defaults local model catalog snapshot reads to read-only", async () => {
@@ -302,6 +326,62 @@ it("keeps standalone embedded RPC available inside its session admission", async
       await admission.run(() => expect(readIdentity()).resolves.toMatchObject({ ok: true }));
     } finally {
       admission.release();
+    }
+  });
+});
+
+it("retires the session projection before its database maintenance scope closes", async () => {
+  // Production reads subagent facts through the maintenance-scoped state database.
+  const env = { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" };
+  await withOpenClawTestState({ scenario: "minimal", env }, async () => {
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      assertOwnerCurrent: () => {},
+      assertDatabaseAccess: () => {},
+    });
+    const host = new LegacyPluginSdkResourceHost();
+    try {
+      const projection = await maintenance.run(() =>
+        host.run(() =>
+          withConfig({ agents: { defaults: {} } }, async () => {
+            const context = localContext();
+            await context.ensureSessionRowProjection?.();
+            return requireSessionRowProjection(context);
+          }),
+        ),
+      );
+      await maintenance.close();
+      // Late fact publications re-enter the drain; a live projection would read closed state.
+      await expect(projection.ensureMaterialized()).resolves.toBeUndefined();
+    } finally {
+      await host.close();
+    }
+  });
+});
+
+it("closes the database scope when the disposed projection's last refresh loses its read", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const maintenance = createOpenClawDatabaseMaintenanceScope({
+      assertOwnerCurrent: () => {},
+      assertDatabaseAccess: () => {},
+    });
+    const host = new LegacyPluginSdkResourceHost();
+    try {
+      const projection = await maintenance.run(() =>
+        host.run(() =>
+          withConfig({ agents: { defaults: {} } }, async () => {
+            const context = localContext();
+            await context.ensureSessionRowProjection?.();
+            return requireSessionRowProjection(context);
+          }),
+        ),
+      );
+      // The agent databases close in the same phase and revoke the refresh's history read.
+      vi.spyOn(projection, "ensureMaterialized").mockRejectedValue(
+        new Error("Session history database read was revoked"),
+      );
+      await expect(maintenance.close()).resolves.toBeUndefined();
+    } finally {
+      await host.close();
     }
   });
 });

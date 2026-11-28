@@ -1,5 +1,4 @@
 import { parseAbsoluteTimeMs } from "../parse.js";
-import { hasRetiredHeartbeatOptions } from "../persisted-shape.js";
 import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import {
@@ -83,7 +82,6 @@ export function isRunnableJob(params: {
   }
   if (
     !hasCanonicalCronDeliveryMode(job.delivery) ||
-    hasRetiredHeartbeatOptions(job) ||
     hasActiveCronRun(job, params.activeInProcess)
   ) {
     return false;

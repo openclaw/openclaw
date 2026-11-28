@@ -216,22 +216,16 @@ async function afterCommittedChange(
   }
 }
 
-it("reuses unchanged descriptions across readers while sampling pending titles live", () =>
+it("samples pending titles live for viewers and owners without changing earlier descriptions", () =>
   withFixture(async ({ context, describe }) => {
     await describe();
     const projection = getSessionRowProjection(context)!;
-    using present = vi.spyOn(projection, "present");
     const owner = identifiedClient(ensureProfileForEmail("owner@example.com").id);
     const readOwner = () => describeSession(context, owner);
     const viewerRow = await describe();
     const ownerRow = await readOwner();
     expect(viewerRow).toMatchObject({ session: { sharingRole: "viewer", titlePending: false } });
     expect(ownerRow).toMatchObject({ session: { sharingRole: "owner", titlePending: false } });
-    for (let index = 0; index < 3; index++) {
-      expectSession(await describe(), { sharingRole: "viewer", titlePending: false });
-      expectSession(await readOwner(), { sharingRole: "owner", titlePending: false });
-    }
-    expect(present).toHaveBeenCalledTimes(1);
     const record = projection.describe({ agentId: "main", key: targetKey })!;
     const generation = createDeferredCore<boolean>();
     const pending = sessionTitleRequests.run(

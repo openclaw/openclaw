@@ -385,50 +385,22 @@ suite.define(() => {
     });
 
     await page.goto(suite.server.baseUrl);
-    await page.waitForURL("**/settings/model-setup?firstRun=1");
-    expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+    await page.waitForURL("**/settings/model-providers?firstRun=1");
+    expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
     await gateway.waitForRequest("openclaw.setup.detect");
     expect(await gateway.getRequests("openclaw.setup.detect")).toHaveLength(1);
-    const loading = page.getByText("Loading models…", {
-      exact: true,
-    });
-    await loading.waitFor();
-    const loadingSections = page.locator('.model-setup__loading[role="status"][aria-busy="true"]');
-    await loadingSections.locator(".model-setup__loading-sections").waitFor();
-    expect(await loadingSections.locator(".settings-section").count()).toBe(5);
-    expect(await loadingSections.locator(".model-setup__loading-row").count()).toBe(5);
-    expect(await loadingSections.locator("button, input, wa-dropdown").count()).toBe(0);
-    await page.evaluate(() => document.fonts.ready);
-    // Compare section layouts at rest, not the shell's translated entrance frame.
-    await waitForControlUiProofSurface(page.locator(".shell"), [loadingSections]);
-    const sectionTitles = [
-      "Use an installed agent",
-      "Available models",
-      "Run a model locally",
-      "Set up and verify a model",
-      "Connect with an API key or token",
-    ];
-    const loadingGeometry = await page.evaluate(() => {
-      const root = document.querySelector<HTMLElement>(
-        '.model-setup__loading[role="status"][aria-busy="true"]',
-      );
-      if (!root?.checkVisibility()) {
-        throw new Error("Expected the model-setup loading sections to remain visible.");
-      }
-      return Array.from(root.querySelectorAll(".model-setup__loading-sections h2"), (heading) => {
-        const { top, height } = heading.getBoundingClientRect();
-        return { title: heading.textContent, top, height };
-      });
-    });
-    expect(loadingGeometry.map((heading) => heading.title)).toEqual(sectionTitles);
-    expect(loadingGeometry.every((heading) => heading.height > 0)).toBe(true);
-    const loadingSectionTops = loadingGeometry.map((heading) => heading.top);
+    await page.getByRole("heading", { name: "Models", exact: true }).waitFor();
+    // Slow discovery never holds the provider catalog.
+    const catalog = page.locator("[data-models-catalog]");
+    await catalog.getByRole("heading", { name: "Connect a provider", exact: true }).waitFor();
+    expect(await page.locator(".model-setup-discovery").count()).toBe(0);
     expect(await page.locator(".connect-splash").count()).toBe(0);
     expect([...requestedWorkspaceModules]).toEqual([]);
     await page.setViewportSize({ height: 844, width: 390 });
     await expectNoHorizontalOverflow(page);
     await page.setViewportSize(viewport);
 
+    const catalogTop = await catalog.evaluate((section) => section.getBoundingClientRect().top);
     await gateway.resolveDeferred("openclaw.setup.detect", {
       candidates: [
         {
@@ -458,21 +430,18 @@ suite.define(() => {
       setupComplete: false,
       workspace: "/tmp/openclaw-e2e",
     });
-    await loading.waitFor({ state: "detached" });
-    await page.getByRole("heading", { name: "Set up a model" }).waitFor();
-    // Restoring desktop starts a grid-row transition after the responsive update.
-    await page.locator(".shell:not(.shell--mobile-nav)").waitFor();
-    await waitForControlUiProofSurface(page.locator(".shell"), [
-      page.getByRole("heading", { name: "Set up a model" }),
-    ]);
-    const readySectionTops = await Promise.all(
-      sectionTitles.map(
-        async (name) => (await page.getByRole("heading", { name }).boundingBox())!.y,
-      ),
+    const candidates = page.locator('[data-candidate-kind="claude-cli"]');
+    await candidates.waitFor();
+    expect(await candidates.textContent()).toContain("Claude Code");
+    // Discovery finished after the catalog painted: its results render below, nothing moves.
+    expect(await catalog.evaluate((section) => section.getBoundingClientRect().top)).toBe(
+      catalogTop,
     );
-    expect(
-      Math.max(...readySectionTops.map((top, index) => Math.abs(top - loadingSectionTops[index]!))),
-    ).toBeLessThanOrEqual(13);
+    const catalogBottom = await catalog.evaluate(
+      (section) => section.getBoundingClientRect().bottom,
+    );
+    const candidateTop = await candidates.evaluate((row) => row.getBoundingClientRect().top);
+    expect(candidateTop).toBeGreaterThanOrEqual(catalogBottom);
     expect([...requestedWorkspaceModules]).toEqual([]);
     await page.setViewportSize({ height: 844, width: 390 });
     await expectNoHorizontalOverflow(page);

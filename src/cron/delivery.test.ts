@@ -24,12 +24,7 @@ beforeEach(() => {
           plugin: {
             ...base,
             meta: { ...base.meta, aliases },
-            messaging: {
-              targetPrefixes: [id, ...aliases],
-              ...(id === "telegram"
-                ? { normalizeTarget: (to: string) => to.replace(/^(telegram|tg):/i, "") }
-                : {}),
-            },
+            messaging: { targetPrefixes: [id, ...aliases] },
           },
         };
       }),
@@ -68,22 +63,11 @@ it("resolves webhook mode without channel routing", () => {
   });
 });
 
-it("infers the provider for a prefixed recipient in a saved automatic default", () => {
-  expect(
-    resolveCronDeliveryPlan(
-      { delivery: { mode: "announce" } },
-      { cronConfig: { delivery: { channel: "last", to: "telegram:123" } } },
-    ),
-  ).toMatchObject({ channel: "telegram", to: "telegram:123" });
-});
-
 it("uses Synology Chat provider prefixes with underscores and short spelling", () => {
   for (const to of ["synology-chat:123", "synology_chat:123", "synology:123"]) {
-    expect(resolveCronDeliveryPlan({ delivery: { mode: "announce", to } })).toMatchObject({
-      mode: "announce",
-      channel: "synology-chat",
-      to,
-    });
+    expect(
+      resolveCronDeliveryPlan({ delivery: { mode: "announce", channel: "last", to } }),
+    ).toMatchObject({ mode: "announce", channel: "synology-chat", to });
   }
 });
 
@@ -104,7 +88,6 @@ const telegram = announce("telegram", "telegram:alerts", "telegram-bot");
 it.each([
   [announce("telegram", "111", "bot-a"), announce("telegram", "111", "bot-a")],
   [announce("last", "telegram:123"), { mode: "announce", to: "telegram:123" }],
-  [announce("last", "tg:123"), announce("telegram", "123")],
   [webhook, webhook],
 ] as const)("deduplicates primary %j against failure route %j", (primary, route) => {
   expect(failure(route, undefined, primary)).toBeNull();

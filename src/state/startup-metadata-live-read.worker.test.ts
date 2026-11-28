@@ -10,23 +10,9 @@ import {
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
-  vi.doUnmock("../infra/update-run-recovery-store.js");
   vi.doUnmock("../infra/update-run-reconciliation.read.js");
+  vi.doUnmock("../infra/restart-stale-pids.js");
   vi.resetModules();
-});
-
-it("prepares recovery admission without loading reconciliation policy", async () => {
-  const loadReconciliation = vi.fn();
-  // mock-isolation: Observe first import while preserving the actual reconciliation implementation.
-  vi.doMock("../infra/update-run-reconciliation.read.js", async (importOriginal) => {
-    loadReconciliation();
-    return importOriginal();
-  });
-  const { prepareUpdateRunAdmissionRead } = await import("../infra/update-run-admission.read.js");
-  await prepareUpdateRunAdmissionRead({ type: "updateRuns.recoveryAdmission" });
-  expect(loadReconciliation).not.toHaveBeenCalled();
-  await prepareUpdateRunAdmissionRead({ type: "updateRuns.reconciliationCandidate", runId: "run" });
-  expect(loadReconciliation).toHaveBeenCalledOnce();
 });
 
 it("refuses a source replaced while update metadata code loads before opening SQLite", async () => {
@@ -37,22 +23,18 @@ it("refuses a source replaced while update metadata code loads before opening SQ
   const entered = createDeferred();
   const resume = createDeferred();
   // mock-isolation: Hold only module preparation; source identity and the metadata handler stay real.
-  vi.doMock("../infra/update-run-recovery-store.js", async () => {
+  vi.doMock("../infra/update-run-reconciliation.read.js", async () => {
     entered.resolve();
     await resume.promise;
-    return vi.importActual("../infra/update-run-recovery-store.js");
+    return vi.importActual("../infra/update-run-reconciliation.read.js");
   });
-  const { prepareUpdateRunAdmissionRead } = await import("../infra/update-run-admission.read.js");
-  await expect(
-    prepareUpdateRunAdmissionRead({ type: "updateRuns.reconciliationCandidates", input: {} }),
-  ).resolves.toEqual(expect.any(Function));
   const sqlite = await import("../infra/node-sqlite.js");
   const inspection = await import("../infra/sqlite-readonly-inspection.js");
   const { startupMetadataReadOperations } = await import("./startup-metadata-live-read.worker.js");
   const nativeOpen = vi.spyOn(sqlite, "openNodeSqliteDatabase");
   const liveRead = vi.spyOn(inspection, "tryInspectSqliteReadOnlyInProcess");
   const pending = startupMetadataReadOperations["startupMetadata.readCurrent"](
-    { type: "updateRuns.recoveryAdmission" },
+    { type: "updateRuns.reconciliationCandidates", input: {} },
     {
       path: pathname,
       env: {},
@@ -77,4 +59,17 @@ it("refuses a source replaced while update metadata code loads before opening SQ
     resume.resolve();
     await pending.catch(() => {});
   }
+});
+
+it("selects reconciliation candidates without loading Gateway process cleanup", async () => {
+  // mock-isolation: Fail on import to catch Gateway process cleanup loading in the SQLite reader.
+  vi.doMock("../infra/restart-stale-pids.js", () => {
+    throw new Error("Gateway process cleanup loaded during update reconciliation");
+  });
+  const { openNodeSqliteDatabase } = await import("../infra/node-sqlite.js");
+  const { prepareUpdateRunAdmissionRead } = await import("../infra/update-run-admission.read.js");
+  const command = { type: "updateRuns.reconciliationCandidates", input: {} } as const;
+  const read = await prepareUpdateRunAdmissionRead(command);
+  using database = openNodeSqliteDatabase(":memory:");
+  expect(read(database)).toEqual({ type: command.type, candidates: [] });
 });

@@ -92,6 +92,28 @@ export function createConfigMigrationSources(
   );
 }
 
+export function createMigrationDetectionStep(params: {
+  configPath: string;
+  configIncludedPaths: readonly string[];
+  stateDir: string;
+  run: LegacyStateMigrationStep["run"];
+  refusal?: PreparedLegacyStateMigrationStep["refusal"];
+}): LegacyStateMigrationStep {
+  return {
+    id: "migration-detection",
+    phase: "shared",
+    source: [
+      ...createConfigMigrationSources(params.configPath, params.configIncludedPaths),
+      { kind: "path", path: params.stateDir },
+    ],
+    target: [],
+    requiredness: "required",
+    reversibility: "not-applicable",
+    ...(params.refusal ? { refusal: params.refusal } : {}),
+    run: params.run,
+  };
+}
+
 export function createAgentTargetDiscoveryStep(params: {
   configPath: string;
   configIncludedPaths: readonly string[];
@@ -169,6 +191,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   agentDatabaseTargets: readonly { agentId: string; path: string }[];
   agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   integrityCheck?: "quick" | "full";
+  reuseCleanCloseIntegrity?: boolean;
   inspectedSessionEntryPaths?: readonly string[];
   orphanSessionStores?: ReturnType<typeof inspectOrphanSessionStoreEndpoints>;
   pluginSessionStoreAgentIds: readonly string[];
@@ -275,6 +298,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
       sharedStep("media-persistence", agentPersistence, agentPersistence, () =>
         migrateLegacyMediaPersistence({
           ...agentMigrationOptions,
+          reuseCleanCloseIntegrity: params.reuseCleanCloseIntegrity,
           isSessionEntryStatePrepared: (target) =>
             inspectedEntryStatePaths.has(normalizeDatabasePath(target.realPath)),
           prepareSessionEntryState: async (target) => {

@@ -19,7 +19,12 @@ it("starts with canonical approvals and reports a retained conflicting legacy po
   const claim = await acquireGatewayE2ePortBlock();
   await state.writeConfig({
     agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
-    gateway: { auth: { mode: "token", token }, port: claim.port, controlUi: { enabled: false } },
+    gateway: {
+      mode: "local",
+      auth: { mode: "token", token },
+      port: claim.port,
+      controlUi: { enabled: false },
+    },
     plugins: { enabled: false },
     discovery: { mdns: { mode: "off" } },
   });

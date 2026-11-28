@@ -100,9 +100,10 @@ describe("cron outcome receipt finalization", () => {
       const startedAt = Date.now();
       const job = dueJob("completed-request", startedAt);
       job.schedule = { kind: "every", everyMs: 60_000, anchorMs: startedAt };
-      const sibling: CronJob = {
+      const sibling: CronStoredJob = {
         ...job,
         id: "sibling",
+        runtimeAuthority: structuredClone(runtimeAuthority),
         state: { nextRunAtMs: startedAt + 60_000 },
       };
       if (repairSibling) {
@@ -122,6 +123,9 @@ describe("cron outcome receipt finalization", () => {
         startedAt + 60_000,
         startedAt + 60_000,
       ]);
+      expect(state.store?.jobs.find((entry) => entry.id === "sibling")?.runtimeAuthority).toEqual(
+        runtimeAuthority,
+      );
       expect(receiptStatus(receipt)).toEqual({ status: "ok" });
       expect(
         mutations.mock.calls.filter(([params]) => params.type === "cron.scheduleUnowned"),
@@ -228,7 +232,7 @@ describe("cron outcome receipt finalization", () => {
     },
   );
 
-  it.each(["definition", "authority", "run identity"] as const)(
+  it.each(["definition", "authority", "recovery flag", "run identity"] as const)(
     "rejects a guarded update when the observed %s changes",
     async (change) => {
       const { storePath } = fixtures.makeStorePath();
@@ -236,7 +240,10 @@ describe("cron outcome receipt finalization", () => {
       const job: CronStoredJob = dueJob("guarded-change", now);
       job.state.runningAtMs = now;
       job.state.runningReceiptId = "observed-run";
-      job.runtimeAuthority = structuredClone(runtimeAuthority);
+      if (change !== "recovery flag") {
+        job.runtimeAuthority = structuredClone(runtimeAuthority);
+      }
+      const changesAuthority = change === "authority" || change === "recovery flag";
       await saveCronStore(storePath, { version: 1, jobs: [job] });
       const state = createState(storePath, now);
       const precondition = vi.fn(async () => {
@@ -244,7 +251,7 @@ describe("cron outcome receipt finalization", () => {
         const changed = current.jobs[0]!;
         if (change === "definition") {
           changed.name = "changed by another writer";
-        } else if (change === "authority") {
+        } else if (changesAuthority) {
           delete changed.runtimeAuthority;
           changed.runtimeAuthorityRecoveryRequired = true;
         } else {
@@ -262,7 +269,7 @@ describe("cron outcome receipt finalization", () => {
       expect(retained.enabled).toBe(true);
       if (change === "definition") {
         expect(retained.name).toBe("changed by another writer");
-      } else if (change === "authority") {
+      } else if (changesAuthority) {
         expect(retained.runtimeAuthority).toBeUndefined();
         expect(retained.runtimeAuthorityRecoveryRequired).toBe(true);
       } else {

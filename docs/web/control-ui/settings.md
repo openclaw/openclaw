@@ -77,6 +77,8 @@ Inbox account alerts distinguish **Sign in** from **Update API key**. Accounts w
 
 Open panels share provider sign-in status. Configuration edits keep that status until the Gateway publishes updated authentication information; credential changes, reconnects, and expiry deadlines still refresh it.
 
+A Gateway without a model opens first-run **Models** (`/settings/model-providers?firstRun=1`), the same page as **Settings → Models** for the agent the app is using. Models found on the Gateway's computer, such as an on-device model or a saved sign-in, appear above **Connect a provider**; nothing is tested or used until you choose it. **Find local models** checks local model servers such as Ollama, LM Studio and llama.cpp. A model activated from these first-run choices opens guided setup when it answers; an already configured model offers **Check model**, then **Continue setup**.
+
 During first-run **Models**, reloading the browser resumes an unfinished provider wizard on the same running Gateway without repeating your answers. Continue from its current question, or choose **Cancel** to release provider choices once the Gateway confirms cancellation. Unsubmitted input is not saved. If the Gateway restarted or no longer has the wizard, **Check again** refreshes the current setup without starting another provider attempt; the recovery guard remains until a model can be verified or the pending attempt expires.
 
 If a provider rejects a text reply, the wizard returns keyboard focus to that field so you can correct it without clicking back. Your draft is kept, and sensitive replies remain masked.
@@ -513,6 +515,11 @@ creation. Keeping the app open lets creation finish when the agent is ready.
 ## Settings
 
 Inside **Settings**, the dedicated sidebar puts the **Settings** title, agent picker, and any back arrow on one row, followed by a **Search settings** field for quickly finding settings sections. **Ask OpenClaw** sits above the **Preferences** group.
+
+To check an error in a ready **Ask OpenClaw** chat, send `explain error:` followed
+by the error text with private values removed. OpenClaw explains recognized
+errors and suggests one next step without running it or asking the configured
+model. If the panel can't start, use the [terminal command](/cli/openclaw#explain-an-error-without-a-model).
 
 Form edits save automatically. If the connection changes while edits are pending,
 autosave pauses until you choose **Save** to keep them or **Reload Config** to

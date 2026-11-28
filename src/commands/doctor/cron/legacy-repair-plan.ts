@@ -7,7 +7,6 @@ import {
 } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { tryResolveAmbientOwnerAgentId } from "../../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { hasRetiredHeartbeatOptions } from "../../../cron/persisted-shape.js";
 import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../../../cron/store.js";
 import { prepareProviderModelPolicySurfaces } from "../../../plugins/provider-model-routes.js";
 import type { LegacyCodexModelIdentity } from "../shared/codex-route-model-ref.js";
@@ -16,7 +15,6 @@ import {
   repairRetiredModelSlots,
   repairModelRefAuthProfile,
 } from "../shared/retired-model-ref-repair.js";
-import { migrateRetiredHeartbeatOptions } from "./heartbeat-options.js";
 import { migrateLegacyNotifyFallback } from "./legacy-notify.js";
 import type { LegacyCronQuarantine } from "./legacy-quarantine-migration.js";
 import { planCronCodexRefRewriteAgainstPersistedConfig } from "./runtime-policy-migration.js";
@@ -137,17 +135,17 @@ export async function planLegacyCronStoreRepair(params: LegacyCronStoreRepairPar
     ),
   );
   const legacyWebhook = normalizeOptionalString(asOptionalRecord(params.cfg.cron)?.webhook);
-  const repairableJobs = state.rawJobs.filter((job) =>
-    canRepairCronDeliveryForDoctor(job.delivery),
-  );
   const notifyMigration = migrateLegacyNotifyFallback({
-    jobs: repairableJobs,
+    jobs: state.rawJobs.filter((job) => canRepairCronDeliveryForDoctor(job.delivery)),
     legacyWebhook,
   });
   warnings.push(...notifyMigration.warnings);
   const retirementChanges: string[] = [];
   if (resolveRetired) {
-    for (const job of repairableJobs) {
+    for (const job of state.rawJobs) {
+      if (!canRepairCronDeliveryForDoctor(job.delivery)) {
+        continue;
+      }
       const payload = asOptionalRecord(job.payload);
       const jobId = normalizeOptionalStringifiedId(job.id);
       if (!payload || !jobId) {
@@ -182,9 +180,6 @@ export async function planLegacyCronStoreRepair(params: LegacyCronStoreRepairPar
     }
   }
 
-  retirementChanges.push(
-    ...(await migrateRetiredHeartbeatOptions(state.storePath, repairableJobs)),
-  );
   const storeChanged =
     (state.legacyImport?.count ?? 0) > 0 ||
     retirementChanges.length > 0 ||
@@ -209,12 +204,5 @@ export async function planLegacyCronStoreRepair(params: LegacyCronStoreRepairPar
 export async function hasLegacyCronStoreRepairWork(
   params: LegacyCronStoreRepairParams,
 ): Promise<boolean> {
-  if (
-    params.state.rawJobs.some(
-      (job) => canRepairCronDeliveryForDoctor(job.delivery) && hasRetiredHeartbeatOptions(job),
-    )
-  ) {
-    return true;
-  }
   return (await planLegacyCronStoreRepair(params)).changed;
 }

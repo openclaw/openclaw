@@ -5,16 +5,14 @@ import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronOwnerTransferRecoveryError } from "../human-owner.js";
 import { cronOperatorSourceRefusal } from "../operator-source-error.js";
-import {
-  CRON_HEARTBEAT_OPTIONS_REPAIR_REQUIRED_MESSAGE,
-  hasRetiredHeartbeatOptions,
-} from "../persisted-shape.js";
 import { readDefaultProactiveJobReceiptsByKeyAsync } from "../proactive-job-receipt.js";
 import { isProactiveJobMigrationPending } from "../proactive-job-receipt.kernel.js";
 import { resolveCronRunAdmissionSource } from "../run-authority.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import type { ScheduledOccurrence } from "../scheduled-occurrence.js";
 import { resolveCronToolsAllowExecTargetRecoveryError } from "../scheduled-tool-policy.js";
+import { isCronScratchEffectivelyEmpty } from "../scratch-contract.js";
+import { readCronScratchSnapshotByKey } from "../scratch-read.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import { ownsCronSource } from "../source-schedule.js";
@@ -29,6 +27,7 @@ import type {
   CronTriggerEvalOutcome,
 } from "../types.js";
 import { abortErrorMessage, cronAbortErrorClassification } from "./execution-errors.js";
+import { waitForCronExecutionIdle } from "./execution-idle.js";
 import { admitCronOccurrence, resolvePausedOccurrence } from "./occurrence-admission.js";
 import {
   describeCronHostExecutionRestriction,
@@ -47,8 +46,9 @@ export async function executeJobCore(
   state: CronServiceState,
   job: CronStoredJob,
   abortSignal?: AbortSignal,
-  options?: ExecuteJobCoreOptions,
+  initialOptions?: ExecuteJobCoreOptions,
 ): Promise<CronJobExecutionResult> {
+  let options = initialOptions;
   const resolveAbortError = () => ({
     status: "error" as const,
     error: abortErrorMessage(abortSignal),
@@ -56,13 +56,6 @@ export async function executeJobCore(
   });
   if (abortSignal?.aborted) {
     return resolveAbortError();
-  }
-  if (hasRetiredHeartbeatOptions(job)) {
-    return {
-      status: "skipped",
-      summary: CRON_HEARTBEAT_OPTIONS_REPAIR_REQUIRED_MESSAGE,
-      executionStarted: false,
-    };
   }
   const ownerTransferError = resolveCronOwnerTransferRecoveryError(job);
   if (ownerTransferError) {
@@ -82,6 +75,39 @@ export async function executeJobCore(
       throw new Error("Gateway restarting.");
     }
   };
+  if (job.schedule.kind === "on-exit") {
+    const originalOptions = options;
+    const waitForIdle: NonNullable<ExecuteJobCoreOptions["waitForIdle"]> = async (
+      ownSessionKey,
+      signal,
+      ownReplyOperation,
+    ) => {
+      const signals = [abortSignal, signal, originalOptions?.idleAdmission?.signal].filter(
+        (entry): entry is AbortSignal => entry !== undefined,
+      );
+      const currentSignal = AbortSignal.any(signals);
+      const assertIdleOwnerCurrent = async () => {
+        originalOptions?.idleAdmission?.assertCurrent();
+        await originalOptions?.assertRunCurrent?.();
+        originalOptions?.idleAdmission?.assertCurrent();
+        assertCurrent();
+        currentSignal.throwIfAborted();
+      };
+      originalOptions?.onLaneWait?.({ waiting: true });
+      try {
+        await waitForCronExecutionIdle(state, job, {
+          activeJobMarker: originalOptions?.activeJobMarker,
+          ownSessionKey,
+          ownReplyOperation,
+          signal: currentSignal,
+          assertCurrent: assertIdleOwnerCurrent,
+        });
+      } finally {
+        originalOptions?.onLaneWait?.({ waiting: false });
+      }
+    };
+    options = { ...options, waitForIdle };
+  }
   const agentId = tryResolveCronJobEffectiveAgentId(
     job,
     state.deps.resolveDefaultAgentId
@@ -119,6 +145,39 @@ export async function executeJobCore(
       deliveryAttempted: false,
     };
   }
+  if (job.idleOnly && state.deps.isExecutionIdle?.(job) === false) {
+    if (options?.waitForIdle) {
+      await options.waitForIdle();
+      assertCurrent();
+      if (
+        !isCronWithinActiveHours(
+          job.activeHours,
+          state.deps.nowMs(),
+          state.deps.resolveUserTimezone?.(),
+        )
+      ) {
+        return {
+          status: "skipped",
+          summary: "Outside this automation's active hours",
+          admissionDeferred: job.schedule.kind === "at",
+          admissionDeferredReason: "active-hours",
+          executionStarted: false,
+          delivered: false,
+          deliveryAttempted: false,
+        };
+      }
+    } else {
+      return {
+        status: "skipped",
+        summary: "Automation deferred while its agent is busy",
+        admissionDeferred: true,
+        admissionDeferredReason: "busy",
+        executionStarted: false,
+        delivered: false,
+        deliveryAttempted: false,
+      };
+    }
+  }
   let sessionPreparation: CronSessionRunPreparation | undefined;
   let occurrence: ScheduledOccurrence | undefined;
   try {
@@ -140,6 +199,33 @@ export async function executeJobCore(
         };
         assertCurrent();
         sessionPreparation.notices.assertCurrent();
+      }
+    }
+    if (job.payload.kind === "agentTurn" && job.payload.skipIfScratchEmpty) {
+      const snapshot = await readCronScratchSnapshotByKey(
+        state.deps.storeKey,
+        { kind: "job", jobId: job.id, createdAtMsFallback: job.createdAtMs },
+        {},
+        { assertCurrent, signal: abortSignal },
+      );
+      assertCurrent();
+      sessionPreparation?.notices.assertCurrent();
+      if (sessionPreparation) {
+        sessionPreparation.scratch = snapshot?.state ?? { currentRevision: 0 };
+      }
+      if (
+        !sessionPreparation?.notices.events.length &&
+        isCronScratchEffectivelyEmpty(snapshot?.state.scratch?.content)
+      ) {
+        // An empty checklist is a quiet check, not a failure: complete with nothing to deliver.
+        return {
+          status: "ok",
+          summary: "Automation scratch is explicitly empty",
+          executionStarted: false,
+          delivered: false,
+          deliveryAttempted: false,
+          deliverySuppressionReason: "empty",
+        };
       }
     }
     const execTargetRecoveryError = resolveCronToolsAllowExecTargetRecoveryError({
@@ -357,6 +443,7 @@ async function executeMainSessionCronJob(
   assertCurrent();
   return await state.deps.runSessionEvent({
     occurrence,
+    waitForIdle: options?.waitForIdle,
     admissionSource: resolveCronRunAdmissionSource(job),
     sessionPreparation,
     deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
@@ -460,6 +547,7 @@ async function executeDetachedCronJob(
 
   const res = await state.deps.runIsolatedAgentJob({
     occurrence,
+    waitForIdle: options?.waitForIdle,
     deliveryAttemptFence: options?.deliveryAttemptFence ?? null,
     job,
     admissionSource: resolveCronRunAdmissionSource(job),
@@ -501,6 +589,7 @@ async function executeDetachedCronJob(
     agentTerminal: res.agentTerminal,
     diagnostics: res.diagnostics,
     failureNotificationDetail: res.failureNotificationDetail,
+    rateLimitResetAt: res.rateLimitResetAt,
     model: res.model,
     provider: res.provider,
     usage: res.usage,

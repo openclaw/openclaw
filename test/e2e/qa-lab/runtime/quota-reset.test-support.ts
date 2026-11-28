@@ -167,7 +167,7 @@ export async function startQuotaProvider(
     requests.push(recorded);
     return recorded;
   };
-  const usage = () => {
+  const usage = (accountId: RequestRecord["accountId"]) => {
     const usageExhausted =
       primaryExhausted() || phase === "ordinary-rate-limit-with-exhausted-usage";
     const window = (seconds: number, usedPercent = usageExhausted ? 100 : 2) => ({
@@ -177,6 +177,8 @@ export async function startQuotaProvider(
       reset_after_seconds: resetAt - Math.floor(Date.now() / 1000),
     });
     return {
+      account_id: accountId === "quota-alternate-account" ? accountId : ACCOUNT_ID,
+      user_id: "quota-test-user",
       plan_type: "pro",
       rate_limit: {
         allowed: !usageExhausted,
@@ -367,7 +369,7 @@ export async function startQuotaProvider(
         } else if (phase === "revoked") {
           json(403, { error: { message: "Account deactivated" } });
         } else {
-          const value = usage();
+          const value = usage(recorded.accountId);
           const hold = requestPath === "/core-wham/usage" ? nextUsageHold : undefined;
           if (hold) {
             nextUsageHold = undefined;

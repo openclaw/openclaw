@@ -443,7 +443,8 @@ it.each(["agent", "defaults"] as const)(
         agentId: perAgent ? "night" : "main",
         enabled: true,
         schedule: { kind: "every", everyMs: 30 * 60 * 1000 },
-        payload: { kind: "agentTurn" },
+        payload: { kind: "agentTurn", skipIfScratchEmpty: true },
+        idleOnly: true,
         activeHours: expectedHours,
       });
       await expectSettled(configPath);

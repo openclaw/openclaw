@@ -54,6 +54,7 @@ import {
 } from "../../cron/session-target.js";
 import { cronJobUsesToolRuntime } from "../../cron/tools-allow.js";
 import type { CronJob, CronJobCreate, CronJobPatch, CronStoredJob } from "../../cron/types.js";
+import { resolveTargetPrefixedChannel } from "../../infra/outbound/channel-target-prefix.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveHookExternalContentSource } from "../../security/external-content-source.js";
 import {
@@ -237,10 +238,22 @@ export async function assertValidCronUpdatePatch(params: {
   ) {
     await assertValidCronSessionTarget(nextJob, params.cfg);
   }
+  // Clearing a concrete channel (channel: null) while keeping a bare announce `to`
+  // intentionally falls back to "last" in multi-channel configs. Use the same
+  // adjusted delivery for both the delivery check and the inherited-alert check so
+  // an alert that inherits the route is judged identically to the delivery itself.
+  const effectiveDelivery =
+    params.patch.delivery?.channel === null &&
+    nextJob.delivery &&
+    (nextJob.delivery.mode ?? "announce") === "announce" &&
+    nextJob.delivery.channel === undefined &&
+    resolveTargetPrefixedChannel(nextJob.delivery.to) === undefined
+      ? { ...nextJob.delivery, channel: "last" as const }
+      : nextJob.delivery;
   if ("delivery" in params.patch) {
     await assertValidCronAnnounceDelivery({
       cfg: params.cfg,
-      delivery: nextJob.delivery,
+      delivery: effectiveDelivery,
     });
   }
   // Compare the canonical before/after policy so route-changing edits are
@@ -253,7 +266,7 @@ export async function assertValidCronUpdatePatch(params: {
     deps: { cronConfig: params.cfg.cron, defaultAgentId: params.defaultAgentId },
   };
   const currentAlert = resolveFailureAlert(alertDeps, params.currentJob);
-  const nextAlert = resolveFailureAlert(alertDeps, nextJob);
+  const nextAlert = resolveFailureAlert(alertDeps, { ...nextJob, delivery: effectiveDelivery });
   const alertNewlyEnabled = currentAlert === null && nextAlert !== null;
   const alertRouteChanged =
     currentAlert?.mode !== nextAlert?.mode ||
@@ -269,7 +282,7 @@ export async function assertValidCronUpdatePatch(params: {
     await assertValidCronFailureAlert({
       cfg: params.cfg,
       failureAlert: nextJob.failureAlert,
-      delivery: nextJob.delivery,
+      delivery: effectiveDelivery,
       owner: nextJob,
       defaultAgentId: params.defaultAgentId,
     });

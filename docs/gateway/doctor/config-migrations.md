@@ -660,19 +660,6 @@ quarantine files, including linked files, and reports their deferred archival.
 The live Doctor phase imports those sources and archives them after package
 installation. This also protects updates started by supported older releases.
 
-## Retired heartbeat-era automation options
-
-Run `openclaw doctor --fix` to repair stored jobs. Doctor backs up the cron
-store and removes Wait until idle and Skip empty scratch. It pauses custom jobs
-when removing those settings changes when they run. The default Proactive check
-can run while another session on the agent is working.
-
-Doctor removes the old `channel: "last"` value for primary delivery. Jobs with
-an explicit destination keep it. Automatic delivery uses the current route
-each time the job runs. Saved direct-message blocks still apply, including when
-you edit a job or choose **Run Now**. Completion webhooks and failure-alert
-routes keep their saved destinations.
-
 ## Legacy cron delivery settings
 
 A stored delivery object must name its mode: `none`, `announce`, or `webhook`.

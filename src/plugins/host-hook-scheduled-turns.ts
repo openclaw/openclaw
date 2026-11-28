@@ -243,6 +243,7 @@ export async function schedulePluginSessionTurn(params: {
       wakeMode: "now",
       delivery: {
         mode: cronDeliveryMode,
+        ...(cronDeliveryMode === "announce" ? { channel: "last" } : {}),
       },
     });
   } catch (error) {

@@ -129,6 +129,7 @@ describe("remote project search slot", () => {
 
     request.mockRejectedValueOnce(new Error("Remote search unavailable"));
     typeQuery("failed");
+    expect(view.getByText("GitHub", { exact: true })).not.toBeNull();
     await vi.advanceTimersByTimeAsync(PICKER_INPUT_DEBOUNCE_MS);
     await waitForSolid(() =>
       expect(view.getByRole("alert").textContent).toBe("Remote search unavailable"),

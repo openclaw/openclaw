@@ -85,9 +85,11 @@ describe("automation save editor ownership", () => {
     const stored = storedJob({
       sessionTarget: enabled ? "main" : "session:agent:main:main",
       activeHours: { start: "22:00", end: "06:00", timezone: "UTC" },
+      idleOnly: true,
       payload: {
         kind: "agentTurn",
         message: "Check notes",
+        skipIfScratchEmpty: true,
         includeReasoning: true,
       },
       delivery: enabled
@@ -98,6 +100,7 @@ describe("automation save editor ownership", () => {
             accountId: "operator",
             to: "old-group",
             threadId: 5,
+            directPolicy: "block",
           },
     });
     const readJob = () => readPublicJob(stored);
@@ -107,16 +110,21 @@ describe("automation save editor ownership", () => {
     if (!enabled) {
       Object.assign(state.cronForm, {
         activeHoursEnabled: false,
+        idleOnly: false,
+        payloadSkipIfScratchEmpty: false,
         payloadIncludeReasoning: false,
         deliveryTarget: "owner",
+        deliveryDirectPolicy: "allow",
       });
     }
     await saveAndReopen(state, readJob);
     expect(stored).toMatchObject({
       sessionTarget: enabled ? "main" : "session:agent:main:main",
+      idleOnly: enabled,
       payload: {
         kind: "agentTurn",
         message: "Check notes",
+        skipIfScratchEmpty: enabled,
         includeReasoning: enabled,
       },
     });
@@ -129,6 +137,7 @@ describe("automation save editor ownership", () => {
         target: "owner",
         channel: "telegram",
         accountId: "operator",
+        directPolicy: "allow",
       });
       expect(stored.delivery?.to).toBeUndefined();
       expect(stored.delivery?.threadId).toBeUndefined();
@@ -140,6 +149,7 @@ describe("automation save editor ownership", () => {
       delivery: {
         mode: "none",
         target: "owner",
+        directPolicy: "block",
         channel: "telegram",
         accountId: "operator",
       },
@@ -150,7 +160,7 @@ describe("automation save editor ownership", () => {
     expect(state.cronForm.deliveryMode).toBe("none");
     Object.assign(state.cronForm, {
       deliveryMode: "announce",
-      ...(!owner ? { deliveryTarget: "", deliveryTo: "team-room" } : {}),
+      ...(!owner ? { deliveryTarget: "", deliveryTo: "team-room", deliveryDirectPolicy: "" } : {}),
     });
     await saveAndReopen(state, readJob);
     expect(stored.delivery).toMatchObject({
@@ -159,12 +169,14 @@ describe("automation save editor ownership", () => {
       accountId: "operator",
     });
     expect(stored.delivery?.target).toBe(owner ? "owner" : undefined);
+    expect(stored.delivery?.directPolicy).toBe(owner ? "block" : undefined);
     expect(stored.delivery?.to).toBe(owner ? undefined : "team-room");
     expect(stored.delivery?.threadId).toBeUndefined();
     expect(state.cronForm).toMatchObject({
       deliveryMode: "announce",
       deliveryTarget: owner ? "owner" : "",
       deliveryTo: owner ? "" : "team-room",
+      deliveryDirectPolicy: owner ? "block" : "",
     });
   });
 
@@ -228,7 +240,7 @@ describe("automation save editor ownership", () => {
 it.each<[string, Partial<CronFormState>, string | number, string | number | undefined]>([
   ["recipient change", { deliveryTo: "-100new", failureAlertTo: "-100new" }, 42, undefined],
   ["account change", { deliveryAccountId: "new", failureAlertAccountId: "new" }, 42, undefined],
-  ["channel change", { deliveryChannel: "", failureAlertChannel: "last" }, 42, undefined],
+  ["channel change", { deliveryChannel: "last", failureAlertChannel: "last" }, 42, undefined],
   ["agent change", { agentId: "other" }, 42, undefined],
   ["cleared agent override", { clearAgent: true }, 42, undefined],
   ["delivery disabled", { deliveryMode: "none", failureAlertMode: "disabled" }, 42, undefined],

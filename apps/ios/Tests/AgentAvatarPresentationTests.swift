@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 import Testing
@@ -86,7 +87,8 @@ struct AgentAvatarPresentationTests {
             })
         })
         let model = NodeAppModel()
-        model.connectedGatewayID = "manual|identity-test|1"
+        // A fresh Gateway each run: the resolved identity is cached per Gateway across launches.
+        model.connectedGatewayID = "manual|identity-test-\(UUID().uuidString)|1"
         model.selectedAgentId = "main"
         var options = GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions
         options.allowStoredDeviceAuth = false
@@ -124,11 +126,50 @@ struct AgentAvatarPresentationTests {
             #expect(model.chatAgentName == "Molty")
             #expect(model.chatAgentDisplayName(for: "ops") == "Ops team")
             #expect(await requests.agentIDs.sorted() == ["main", "ops", "ops"])
+            await model.makeChatOfflineStore()?.storeAgentIdentities([])
             await model.operatorSession.disconnect()
         } catch {
+            await model.makeChatOfflineStore()?.storeAgentIdentities([])
             await model.operatorSession.disconnect()
             throw error
         }
+    }
+
+    @Test @MainActor
+    func `a cold start draws the last known agent before the Gateway answers`() async throws {
+        let gatewayID = "manual|cold-start-\(UUID().uuidString)|1"
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let portrait = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24), format: format).pngData { context in
+            UIColor.magenta.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 24, height: 24))
+        }
+        let previousLaunch = NodeAppModel()
+        previousLaunch.connectedGatewayID = gatewayID
+        let store = try #require(previousLaunch.makeChatOfflineStore())
+        await store.storeAgentIdentities([
+            OpenClawChatCachedAgentIdentity(
+                agentID: "main", rosterName: "main", identityName: "Molty", emoji: nil, isDefault: true,
+                avatar: portrait),
+            OpenClawChatCachedAgentIdentity(
+                agentID: "ops", rosterName: "Operations", identityName: nil, emoji: "🦞", isDefault: false,
+                avatar: nil),
+        ])
+
+        let model = NodeAppModel()
+        model.connectedGatewayID = gatewayID
+
+        // Nothing has come from the Gateway yet, so nothing may draw a placeholder.
+        #expect(model.gatewayAgents.isEmpty)
+        #expect(model.displayAgents.map(\.id) == ["main", "ops"])
+        #expect(model.chatAgentDisplayName(for: "main") == "Molty")
+        #expect(model.chatAgentDisplayName(for: "") == "Molty")
+        #expect(model.chatAgentDisplayName(for: "ops") == "Operations")
+        #expect(model.agentAvatarImage(for: "main")?.size == CGSize(width: 24, height: 24))
+        #expect(model.agentAvatarImage(for: "ops") == nil)
+        #expect(model.knowsAgentAvatar(for: "ops"))
+        #expect(!model.hasResolvedAgentAvatar(for: "main"))
+        await store.storeAgentIdentities([])
     }
 
     private static func agent(avatar: String) -> AgentSummary {

@@ -35,6 +35,7 @@ import { requestAndDrainCronRunsInWorker } from "./run-queue.worker.js";
 import { readActiveCronRunReceiptsInDatabase } from "./run-receipt-read.js";
 import { listActiveCronRunReceiptJobIdsInDatabase } from "./run-receipt-store.js";
 import { createCronScheduledRunId } from "./run-request-id.js";
+import { loadCronRuntimeAuthorities } from "./runtime-authority-store.js";
 import { scheduleUnownedCronJobsInWorker } from "./runtime-maintenance.worker.js";
 import { createCronMutationLogger } from "./runtime-mutation.worker.js";
 import type {
@@ -154,6 +155,7 @@ export function settleCronStartupBatchInWorker(
         updateCronRuntimeRow(db, storeKey, job, previousEnabled);
         result.jobs.push(job);
       }
+      loadCronRuntimeAuthorities({ db, storeKey, jobs: result.jobs });
       deferSqlitePostCommitPublication(db, () => {
         actor.startupBatch = undefined;
       });
@@ -406,6 +408,7 @@ function boundedCatchup(
       for (const notification of notifications) {
         notification.routing = { defaultAgentId: config.defaultAgentId };
       }
+      loadCronRuntimeAuthorities({ db, storeKey, jobs: changed });
       result.jobs.push(...changed);
       result.notifications.push(...notifications);
       for (const job of changed) {

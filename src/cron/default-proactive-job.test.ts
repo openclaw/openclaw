@@ -71,7 +71,7 @@ it("provisions only the ambient owner once in the selected partition without hos
         enabled: false,
         sessionTarget: "session:agent:main:main",
         schedule: { kind: "every", everyMs: 60_000 },
-        payload: { kind: "agentTurn" },
+        payload: { kind: "agentTurn", skipIfScratchEmpty: true },
         delivery: { mode: "announce", target: "owner" },
       });
       expect(job.state.nextRunAtMs).toBeUndefined();

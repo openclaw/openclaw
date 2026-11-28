@@ -1,4 +1,12 @@
 {
+  "controlUiFile": {
+    "assetReads": {
+      "owner": "src/gateway/server-control-ui-root.ts",
+      "start": "lazy",
+      "retire": "Retire workers after ten idle minutes or earlier under memory pressure. Stopping an asset root aborts and joins its reads. Gateway close or restart joins the shared pool.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
   "cronReadOnly": {
     "retainedReads": {
       "owner": "src/cron/store/read-only.ts",
@@ -10,6 +18,14 @@
       "owner": "src/cron/store/read-only.ts",
       "start": "lazy",
       "retire": "Join the worker before releasing snapshot pins or finishing maintenance. Retain custody for retry if retirement fails.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "cronStreamMatcher": {
+    "streamMatches": {
+      "owner": "src/gateway/cron-stream-matcher.ts",
+      "start": "lazy",
+      "retire": "Retire workers after one idle minute, extended to five on adaptive reuse, or sooner under memory pressure. Timeout or cancellation retires the active slot. Runtime close or restart joins the pool.",
       "memory": { "scope": "worker-heap", "expectedMiB": null }
     }
   },
@@ -26,6 +42,20 @@
       "owner": "src/infra/directory-watch-parent.worker.ts",
       "start": "eager",
       "retire": "Exit with the watch host; stop the host when its owner PID disappears.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "fileLog": {
+    "writer": {
+      "owner": "src/logging/logger-file-worker.ts",
+      "start": "lazy",
+      "retire": "Retire the writer after one idle minute, extended to five on adaptive reuse, or sooner under memory pressure. Runtime cleanup flushes queued logs before closing the pool.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "tailReader": {
+      "owner": "src/logging/log-tail-worker.ts",
+      "start": "lazy",
+      "retire": "Retire the separate tail reader after one idle minute, extended to five on adaptive reuse, or sooner under memory pressure. Runtime cleanup closes the pool.",
       "memory": { "scope": "worker-heap", "expectedMiB": null }
     }
   },
@@ -77,6 +107,14 @@
       "memory": { "scope": "worker-heap", "expectedMiB": null }
     }
   },
+  "publicSessionCard": {
+    "cardRenders": {
+      "owner": "src/gateway/control-ui-public-session-card.ts",
+      "start": "lazy",
+      "retire": "Retire after one idle minute, extended to five on adaptive reuse, or sooner under memory pressure. HTTP request-handler disposal requests pool close.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
   "sessionTranscript": {
     "pooledRequests": {
       "owner": "src/config/sessions/session-transcript-worker-resources.ts",
@@ -100,6 +138,14 @@
       "owner": "src/infra/shared-worker-host.ts",
       "start": "lazy",
       "retire": "Follow the pool's retirement policy and await endpoint cleanup. The last endpoint joins the host. Failed stops or missed acknowledgements force host retirement.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "sharedWorkerHost": {
+    "hostedEndpoints": {
+      "owner": "src/infra/shared-worker-host.ts",
+      "start": "lazy",
+      "retire": "Start with the first eligible endpoint and join the host when the last endpoint stops. A failed or overdue endpoint stop retires the host.",
       "memory": { "scope": "worker-heap", "expectedMiB": null }
     }
   },
@@ -145,6 +191,58 @@
       "memory": { "scope": "worker-heap", "expectedMiB": null }
     }
   },
+  "sqliteStore": {
+    "standaloneCarriers": {
+      "owner": "src/infra/sqlite-worker-broker-lifecycle.ts",
+      "start": "lazy",
+      "retire": "Retire the worker after the last backend closes and pending opens settle. External stores use isolated slots. Join worker exit when native close cannot prove release.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "sharedStateStores": {
+      "owner": "src/state/openclaw-state-worker-owner.ts",
+      "start": "lazy",
+      "retire": "Retire ordinary shared-state owners after 30 idle minutes or under memory pressure. Maintenance and cleanup clients close with their scopes.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "gatewayRestartSentinel": {
+      "owner": "src/gateway/server-startup-sidecars.ts",
+      "start": "eager",
+      "retire": "Reuse the shared-state carrier and its retirement policy for the post-ready restart-sentinel check.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "gatewayAgentPreparation": {
+      "owner": "src/gateway/server-agent-database-startup.ts",
+      "start": "eager",
+      "retire": "Retain the agent database owner through deferred startup preparation and publication. Its ordinary idle and shutdown policies govern retirement.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "cliAgentStores": {
+      "owner": "src/state/openclaw-agent-execution-owner.ts",
+      "start": "lazy",
+      "retire": "Retire idle agent database owners after 30 seconds in a one-shot command. CLI cleanup joins accepted operations and closes the owner.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "retainedGeneration": {
+      "owner": "src/infra/sqlite-worker-broker.ts",
+      "start": "lazy",
+      "retire": "Bind slots to the captured source generation. On generation retirement, settle accepted operations and close its backends before joining the empty slots.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    },
+    "leanHosted": {
+      "owner": "src/infra/shared-worker-host.ts",
+      "start": "lazy",
+      "retire": "Stop the broker endpoint after its last backend closes and pending opens settle. The final endpoint joins the physical host. Failed stops retire the host.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "stallObserver": {
+    "gatewayEventLoopMonitor": {
+      "owner": "src/logging/diagnostic-stall-kernel.ts",
+      "start": "eager",
+      "retire": "The Gateway main thread starts an unreferenced worker for the monitor lifetime. Monitor stop or worker error clears the heartbeat, closes the ports, and requests termination.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
   "stateRead": {
     "retainedReads": {
       "owner": "src/state/openclaw-state-read-worker.ts",
@@ -168,6 +266,14 @@
       "owner": "src/infra/shared-worker-host.ts",
       "start": "lazy",
       "retire": "Follow the pool's retirement policy and await endpoint cleanup. The last endpoint joins the host. Failed stops or missed acknowledgements force host retirement.",
+      "memory": { "scope": "worker-heap", "expectedMiB": null }
+    }
+  },
+  "systemCaWarmup": {
+    "gatewayStartup": {
+      "owner": "src/gateway/system-ca-warmup.ts",
+      "start": "eager",
+      "retire": "Run once per macOS Gateway process. The worker closes its port after the CA read. Request termination on a failed reply or after ten seconds.",
       "memory": { "scope": "worker-heap", "expectedMiB": null }
     }
   },

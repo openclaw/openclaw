@@ -1,5 +1,6 @@
 import {
   isDeadProcessState,
+  ProcessInspectionError,
   readCodexAppServerProcess,
   readCodexAppServerProcessSnapshot,
   type PosixProcess,
@@ -70,8 +71,7 @@ export async function terminateCodexAppServerOrphan(
   }
   const result = await terminateCodexAppServerDescendants(
     { pid: expected.pid, kill: (signal) => signalProcess(expected.pid, signal ?? "SIGTERM") },
-    expected,
-    deadline,
+    { expected, deadline },
   );
   const contained = result === "exited" ? undefined : result;
   let gone = false;
@@ -112,17 +112,62 @@ export async function terminateCodexAppServerOrphan(
       await signalSameProcess(
         contained.root,
         "SIGCONT",
-        performance.now() + MAX_PROCESS_CONTAINMENT_MS,
+        { deadline: performance.now() + MAX_PROCESS_CONTAINMENT_MS },
         "root",
       );
     }
   }
 }
 
+type InspectionBudget = { deadline: number; startRecovery?: () => number };
+
+function extendInspection(budget: InspectionBudget): boolean {
+  if (!budget.startRecovery) {
+    return false;
+  }
+  // Keep custody and all observed identities. The transport bounds recovery
+  // and starts each caller's exit wait when inspection needs more time.
+  budget.deadline = Math.min(
+    budget.startRecovery(),
+    performance.now() + MAX_PROCESS_CONTAINMENT_MS,
+  );
+  budget.startRecovery = undefined;
+  return performance.now() < budget.deadline;
+}
+
+function hasInspectionTime(budget: InspectionBudget): boolean {
+  return performance.now() < budget.deadline || extendInspection(budget);
+}
+
+async function inspectDuringContainment<T>(
+  budget: InspectionBudget,
+  read: (deadline: number) => Promise<T>,
+): Promise<T | undefined> {
+  try {
+    return await read(budget.deadline);
+  } catch (error) {
+    if (
+      !(error instanceof ProcessInspectionError) ||
+      error.reason !== "deadline" ||
+      !extendInspection(budget)
+    ) {
+      return undefined;
+    }
+    return await read(budget.deadline).catch(() => undefined);
+  }
+}
+
 export async function terminateCodexAppServerDescendants(
   child: ContainableTransport,
-  expected?: CodexAppServerProcessIdentity,
-  deadline = performance.now() + MAX_PROCESS_CONTAINMENT_MS,
+  {
+    expected,
+    deadline: initialDeadline,
+    startRecovery,
+  }: {
+    expected?: CodexAppServerProcessIdentity;
+    deadline?: number;
+    startRecovery?: () => number;
+  } = {},
 ): Promise<{ root: PosixProcess; resume: () => void } | "exited" | undefined> {
   const rootPid = child.pid;
   if (child.exitCode != null || child.signalCode != null) {
@@ -132,10 +177,14 @@ export async function terminateCodexAppServerDescendants(
     return undefined;
   }
   // Inspection failures never grant containment or signal authority.
-  const snapshot = await readCodexAppServerProcessSnapshot(deadline, undefined, [rootPid]).catch(
-    () => undefined,
+  const budget = {
+    deadline: initialDeadline ?? performance.now() + MAX_PROCESS_CONTAINMENT_MS,
+    startRecovery: process.platform === "linux" && !expected ? startRecovery : undefined,
+  };
+  const snapshot = await inspectDuringContainment(budget, (deadline) =>
+    readCodexAppServerProcessSnapshot(deadline, undefined, [rootPid]),
   );
-  if (!snapshot || performance.now() >= deadline) {
+  if (!snapshot || !hasInspectionTime(budget)) {
     return undefined;
   }
   const root = snapshot.find((row) => row.pid === rootPid);
@@ -161,17 +210,29 @@ export async function terminateCodexAppServerDescendants(
   // Orphans lack an unreaped handle, so their durable registration keeps cleanup.
   // An owner SIGKILL runs no exit handler; that remains the accepted gap.
   const release = expected ? undefined : holdStoppedRoot(root, child, stoppedDescendants);
-  if (!(await signalSameProcess(root, "SIGSTOP", deadline, "root"))) {
+  if (!(await signalSameProcess(root, "SIGSTOP", budget, "root"))) {
     release?.();
     return undefined;
   }
   let resumeRootOnUnwind = true;
   try {
+    if (process.platform === "linux") {
+      // Stop the children we already identified before the next full /proc scan.
+      // Quiescence still requires a fresh tree to discover forks and confirm stops.
+      for (const descendant of initialDescendants) {
+        if (
+          !isStoppedState(descendant.state) &&
+          (await signalSameProcess(descendant, "SIGSTOP", budget))
+        ) {
+          stoppedDescendants.set(identityKey(descendant), descendant);
+        }
+      }
+    }
     const descendants = await quiesceDescendants(
       root,
       initialDescendants,
       stoppedDescendants,
-      deadline,
+      budget,
     );
     if (!descendants) {
       return undefined;
@@ -180,17 +241,17 @@ export async function terminateCodexAppServerDescendants(
     // Parents are last: every destructive signal revalidates the exact live PID
     // while the stopped ancestry still prevents new descendants.
     for (const descendant of descendants.toReversed()) {
-      if (performance.now() >= deadline) {
+      if (!hasInspectionTime(budget)) {
         return undefined;
       }
       const killed =
         isDeadProcessState(descendant.state) ||
-        (await signalSameProcess(descendant, "SIGKILL", deadline));
+        (await signalSameProcess(descendant, "SIGKILL", budget));
       if (killed) {
         // Dead or killed PIDs can be reaped and reused; never release them later.
         stoppedDescendants.delete(identityKey(descendant));
       }
-      if (!killed || performance.now() >= deadline) {
+      if (!killed || !hasInspectionTime(budget)) {
         return undefined;
       }
     }
@@ -198,11 +259,10 @@ export async function terminateCodexAppServerDescendants(
     // stopped until every retained identity is observed gone, replaced or dead.
     const remaining = new Map(descendants.map((row) => [row.pid, row]));
     while (remaining.size > 0) {
-      const terminationSnapshot = await readCodexAppServerProcessSnapshot(deadline, [
-        root.pid,
-        ...remaining.keys(),
-      ]).catch(() => undefined);
-      if (performance.now() >= deadline) {
+      const terminationSnapshot = await inspectDuringContainment(budget, (deadline) =>
+        readCodexAppServerProcessSnapshot(deadline, [root.pid, ...remaining.keys()]),
+      );
+      if (!hasInspectionTime(budget)) {
         return undefined;
       }
       if (!terminationSnapshot) {
@@ -248,11 +308,11 @@ export async function terminateCodexAppServerDescendants(
       if (expected) {
         // Orphans have no retained child handle. Failed inspection leaves the
         // registration intact; never release a reused PID while unwinding.
-        const releaseDeadline = performance.now() + MAX_PROCESS_CONTAINMENT_MS;
+        const releaseBudget = { deadline: performance.now() + MAX_PROCESS_CONTAINMENT_MS };
         for (const descendant of stoppedDescendants.values()) {
-          await signalSameProcess(descendant, "SIGCONT", releaseDeadline);
+          await signalSameProcess(descendant, "SIGCONT", releaseBudget);
         }
-        await signalSameProcess(root, "SIGCONT", releaseDeadline, "root");
+        await signalSameProcess(root, "SIGCONT", releaseBudget, "root");
       } else {
         // A live parent still owns these stopped children when inspection fails.
         for (const descendant of stoppedDescendants.values()) {
@@ -269,18 +329,20 @@ async function quiesceDescendants(
   root: PosixProcess,
   initialDescendants: PosixProcess[],
   stopped: Map<string, PosixProcess>,
-  deadline: number,
+  budget: InspectionBudget,
 ): Promise<PosixProcess[] | undefined> {
   const provenByPid = new Map(initialDescendants.map((descendant) => [descendant.pid, descendant]));
   const stopFailures = new Map<string, number>();
   for (let pass = 0; pass < MAX_PROCESS_QUIESCE_PASSES; pass += 1) {
-    if (performance.now() >= deadline) {
+    if (!hasInspectionTime(budget)) {
       return undefined;
     }
     if (process.platform === "linux") {
       // A running root makes the topology unusable for this pass. Inspect only
       // its PID until it quiesces, then discover any newly forked descendants.
-      const current = await readCodexAppServerProcess(root.pid, deadline).catch(() => undefined);
+      const current = await inspectDuringContainment(budget, (deadline) =>
+        readCodexAppServerProcess(root.pid, deadline),
+      );
       if (!current || !isSameLiveRoot(current, root)) {
         return undefined;
       }
@@ -291,11 +353,10 @@ async function quiesceDescendants(
         continue;
       }
     }
-    const snapshot = await readCodexAppServerProcessSnapshot(deadline, undefined, [
-      root.pid,
-      ...provenByPid.keys(),
-    ]).catch(() => undefined);
-    if (!snapshot || performance.now() >= deadline) {
+    const snapshot = await inspectDuringContainment(budget, (deadline) =>
+      readCodexAppServerProcessSnapshot(deadline, undefined, [root.pid, ...provenByPid.keys()]),
+    );
+    if (!snapshot || !hasInspectionTime(budget)) {
       return undefined;
     }
     const currentRoot = snapshot.find((row) => row.pid === root.pid);
@@ -304,8 +365,8 @@ async function quiesceDescendants(
     }
     if (!isSameLiveRoot(currentRoot, root, true)) {
       if (
-        !(await signalSameProcess(root, "SIGSTOP", deadline, "root")) ||
-        performance.now() >= deadline
+        !(await signalSameProcess(root, "SIGSTOP", budget, "root")) ||
+        !hasInspectionTime(budget)
       ) {
         return undefined;
       }
@@ -341,14 +402,14 @@ async function quiesceDescendants(
     }
     let allStopped = true;
     for (const descendant of provenByPid.values()) {
-      if (performance.now() >= deadline) {
+      if (!hasInspectionTime(budget)) {
         return undefined;
       }
       if (isStoppedState(descendant.state)) {
         continue;
       }
-      const stopQueued = await signalSameProcess(descendant, "SIGSTOP", deadline);
-      if (performance.now() >= deadline) {
+      const stopQueued = await signalSameProcess(descendant, "SIGSTOP", budget);
+      if (!hasInspectionTime(budget)) {
         return undefined;
       }
       if (stopQueued) {
@@ -456,12 +517,14 @@ function resumeTransportRoot(
 async function signalSameProcess(
   expected: PosixProcess,
   signal: NodeJS.Signals,
-  deadline: number,
+  budget: InspectionBudget,
   identity: "root" | "descendant" = "descendant",
 ): Promise<boolean> {
   // Portable Node POSIX signals are PID-based, so never retain numeric authority:
   // take this final identity snapshot synchronously immediately before every signal.
-  const current = await readCodexAppServerProcess(expected.pid, deadline).catch(() => undefined);
+  const current = await inspectDuringContainment(budget, (deadline) =>
+    readCodexAppServerProcess(expected.pid, deadline),
+  );
   const matches = identity === "root" ? isSameLiveRoot : isSameLiveProcess;
   return Boolean(current && matches(current, expected) && signalProcess(current.pid, signal));
 }

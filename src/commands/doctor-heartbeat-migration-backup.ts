@@ -3,19 +3,16 @@ import { isDeepStrictEqual } from "node:util";
 import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { DoctorProgressMeasure } from "../infra/doctor-progress.js";
 import type { ExistingAgentDatabaseTarget } from "../infra/session-sqlite-migration-readers.js";
-import { readOnlyOpenWouldCreateSqliteSidecars } from "../infra/sqlite-files.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { hasUpdateDoctorMigrationCapture } from "../infra/update-doctor-migration-context.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  isArtifactPreservingStateRead,
-  withLiveStateReads,
-} from "../state/artifact-preserving-state-reads.js";
+import { isArtifactPreservingStateRead } from "../state/artifact-preserving-state-reads.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
 import { stateEngineInput } from "../state/openclaw-state-db-engine-input.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
 import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
+import { decideDoctorPendingFromLiveStores } from "./doctor-live-store-pending.js";
 import type { DoctorMaintenancePending } from "./doctor-maintenance-pending.js";
 import {
   backupDoctorMigrationDatabases,
@@ -114,24 +111,19 @@ export async function checkDoctorDatabaseMigrationsPending(params: {
   }
   const sharedPath = resolveOpenClawStateSqlitePath(env);
   const targets = await resolveMigrationDatabaseTargets(schemas);
-  if (
-    [sharedPath, ...(targets?.map((target) => target.path) ?? [])].some(
-      (pathname) => existsSync(pathname) && readOnlyOpenWouldCreateSqliteSidecars(pathname),
-    )
-  ) {
-    return "undecidable";
-  }
-  // Read the live stores: the step's artifact-preserving reads see the same bytes, copied.
-  return withLiveStateReads(async () =>
-    (await needsSharedStateMigrationBackup(sharedPath)) ||
-    (await needsHeartbeatMigrationBackup({
-      env,
-      agentDatabaseTargets: targets,
-      automaticRepair: false,
-      schemaPreparationPending: false,
-    }))
-      ? "work"
-      : "none",
+  // The step's artifact-preserving reads see the same bytes, copied.
+  return decideDoctorPendingFromLiveStores(
+    [sharedPath, ...(targets?.map((target) => target.path) ?? [])],
+    async () =>
+      (await needsSharedStateMigrationBackup(sharedPath)) ||
+      (await needsHeartbeatMigrationBackup({
+        env,
+        agentDatabaseTargets: targets,
+        automaticRepair: false,
+        schemaPreparationPending: false,
+      }))
+        ? "work"
+        : "none",
   );
 }
 

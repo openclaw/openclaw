@@ -40,7 +40,7 @@ const declaration = (overrides: Partial<CronJobCreate> = {}) =>
     displayName: "Daily report",
     owner: { agentId: "ops", sessionKey: "agent:ops:main" },
     payload: { kind: "agentTurn", message: "report" },
-    delivery: { mode: "announce" },
+    delivery: { mode: "announce", channel: "last" },
     ...overrides,
   });
 
@@ -55,37 +55,6 @@ async function add(cron: CronService, input = declaration(), options?: CronAddOp
 function expectUpdate(result: Awaited<ReturnType<typeof add>>, id: string, job?: unknown) {
   expect(result).toMatchObject({ created: false, updated: true, id, ...(job ? { job } : {}) });
 }
-
-it("retains the stored DM block when refreshing a declaration", async () => {
-  const { storePath, cron } = await setup();
-  const input = declaration({
-    delivery: {
-      mode: "announce",
-      target: "owner",
-      completionDestination: { mode: "webhook", to: "https://example.invalid/completed" },
-    },
-    failureAlert: { after: 2 },
-  });
-  const created = await add(cron, input);
-  const job = await storedJob(storePath, created.id);
-  cron.stop();
-  await writeCronStoreSnapshot({
-    storePath,
-    jobs: [
-      {
-        ...job,
-        delivery: { ...input.delivery!, directPolicy: "block" },
-      },
-    ],
-  });
-  const refreshed = createCronService(storePath);
-  await add(refreshed, { ...input, displayName: "Updated daily report" });
-  expect(await storedJob(storePath, created.id)).toMatchObject({
-    displayName: "Updated daily report",
-    delivery: { ...input.delivery, directPolicy: "block" },
-    failureAlert: input.failureAlert,
-  });
-});
 
 const retiredTriggerState = {
   triggerState: { owner: "retired" },

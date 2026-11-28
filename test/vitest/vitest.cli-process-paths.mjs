@@ -16,6 +16,7 @@ export const cliProcessTestFiles = [
   "src/cli/plugins-cli.install.test.ts",
   "src/cli/acp-cli-exit.process.test.ts",
   "src/cli/agent-session-affinity.process.test.ts",
+  "src/cli/agent-local-cold-start.process.test.ts",
   "src/cli/agent-local-rpc-cleanup.process.test.ts",
   "src/cli/capability-local-audio-path.process.test.ts",
   "src/cli/capability-web-output.process.test.ts",

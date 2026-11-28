@@ -1704,9 +1704,7 @@ class Monitor {
         historyOwner: options.historyOwner ?? state.historyOwner,
         recoveryAttempt: 0,
         terminal: false,
-        nativeCompletionDelivered: false,
         settledWithoutCompletion: false,
-        completionDeliveryAttempt: 0,
       };
       this.childStates.set(runId, childState);
       if (
@@ -1912,7 +1910,7 @@ class Monitor {
     const startedChild = this.currentChild(threadId);
     if (startedChild && !known.pendingTurns.some((candidate) => candidate.turnId === turnId)) {
       // Reserve the new turn before persistence yields to a later completion receipt.
-      startedChild.nativeCompletionDelivered = false;
+      this.completionDelivery.reset(startedChild);
       this.resumeChild(startedChild);
     }
     return true;

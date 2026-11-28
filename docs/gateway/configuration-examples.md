@@ -504,6 +504,7 @@ openclaw automations add \
   --active-hours-start 08:00 \
   --active-hours-end 22:00 \
   --active-hours-timezone user \
+  --idle-only \
   --announce --channel whatsapp --to "+15555550123"
 ```
 

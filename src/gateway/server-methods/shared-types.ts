@@ -464,6 +464,17 @@ export type GatewayRequestContext = GatewayKernelContext &
     trackExecution: typeof import("../../shared/async-work-scope.js").trackAsyncWork;
     /** Local commands can dispatch methods without owning a Gateway server. */
     localEmbedded?: true;
+    /** Agent-turn admission facts; a host without a Gateway publication supplies its own. */
+    loadReplyDispatchRuntime?: (params: {
+      agentId: string;
+      abortSignal?: AbortSignal;
+      onRuntimeLease: (
+        lease: import("../../agents/prepared-model-runtime.types.js").PreparedModelRuntimeLease,
+      ) => void;
+    }) => Promise<
+      | import("../../agents/prepared-model-runtime.types.js").PreparedReplyDispatchRuntime
+      | undefined
+    >;
     /** Live instance routing only; never authorization or wire state. */
     resolveGatewayContext?: GatewayContextResolver;
     hostLifecycle?: import("../server-public.js").GatewayHostLifecycle;
@@ -511,7 +522,6 @@ export type SessionMutationAuthorization = {
   }) => import("../session-sharing-read.js").PreparedMutationSharing;
   /** Host-resolved bounded participation, not public request data. */
   participationCeiling?: import("../../agents/participation-ceiling.js").ParticipationCeiling;
-  participationSignal?: AbortSignal;
   /** Release the request's retained sharing facts after its final effect. */
   release?: () => void;
   /** Retain these facts until a detached effect settles, independently of the request. */
@@ -519,7 +529,6 @@ export type SessionMutationAuthorization = {
   /** Retain published sharing facts for a run, independently of request and writer guards. */
   retainForRun?: () => {
     assertCurrent: () => void;
-    signal?: AbortSignal;
     release: () => void;
     participationAuthority?: import("../../agents/admitted-run-context.js").AdmittedRunOperatorAuthority;
     participationCeiling?: import("../../agents/participation-ceiling.js").BoundParticipationCeiling;

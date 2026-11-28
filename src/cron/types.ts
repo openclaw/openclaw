@@ -64,7 +64,6 @@ export type CronDelivery = {
   mode: CronDeliveryMode;
   /** Resolve the owner's current direct-message route at execution time. */
   target?: "owner";
-  /** Retained from saved jobs. The public delivery schema does not author this field. */
   directPolicy?: "allow" | "block";
   channel?: CronMessageChannel;
   to?: string;
@@ -102,6 +101,7 @@ type CronFailureDestinationPatch = {
 /** Partial delivery update shape; null clears optional delivery destinations or fields. */
 export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort">> & {
   target?: "owner" | null;
+  directPolicy?: "allow" | "block" | null;
   channel?: CronMessageChannel | null;
   to?: string | null;
   threadId?: string | number | null;
@@ -211,6 +211,8 @@ export type CronFailureNotificationDetail =
     }
   /** A deterministic setup refusal: the operator must record the intended account. */
   | { kind: "inference-account-unrecorded" }
+  /** The recorded account was removed, signed out or replaced: the job pauses until the operator acts. */
+  | { kind: "inference-account-retired" }
   /** A stuck-session recovery aborted the run for a known semantic cause (e.g. `blocked_tool_call`). */
   | { kind: "agent-stall"; classification: string };
 
@@ -241,6 +243,8 @@ export type CronRunOutcome = {
   diagnostics?: CronRunDiagnostics;
   /** Transient: the run was skipped because its parent conversation is gone; pause the job. */
   parentUnavailable?: CronParentUnavailable;
+  /** Transient: the provider's stated reset for a rate-limited run; the next run waits for it. */
+  rateLimitResetAt?: number;
 };
 
 /** Why a parent-linked job pauses before any session is created. */
@@ -564,6 +568,7 @@ export type CronJobPatch = Partial<
     | "payloadSource"
     | "pacing"
     | "activeHours"
+    | "idleOnly"
     | "cyberAccessProgram"
     | "trigger"
   >
@@ -571,6 +576,7 @@ export type CronJobPatch = Partial<
   displayName?: string | null;
   pacing?: CronPacing | null;
   activeHours?: CronActiveHours | null;
+  idleOnly?: boolean | null;
   cyberAccessProgram?: CronJob["cyberAccessProgram"] | null;
   trigger?: CronTrigger | null;
   payload?: CronPayloadPatch;

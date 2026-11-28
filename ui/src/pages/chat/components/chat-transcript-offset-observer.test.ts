@@ -68,6 +68,34 @@ it("waits for measured rows before renewing a growing end destination", () => {
   expect(isCurrent()).toBe(false);
 });
 
+it("keeps a shorter end request smooth while the native viewport is still travelling", () => {
+  const element = document.createElement("div");
+  element.scrollTop = 921;
+  const nativeScroll = vi.fn();
+  element.scrollTo = nativeScroll;
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 0,
+    estimateSize: () => 120,
+    getScrollElement: () => element,
+    scrollToFn: vi.fn(),
+    observeElementRect: vi.fn(),
+    observeElementOffset: vi.fn(),
+  });
+  virtualizer.scrollElement = element;
+  const state = new TranscriptOffsetState();
+  state.scrollCommand = { target: "end", behavior: "smooth", offset: 960 };
+  // Virtual-core requests an automatic final approach within one viewport.
+  scrollTranscriptOffset(
+    state,
+    { layout: new TranscriptLayoutOwner(vi.fn()), contentElement: null },
+    0,
+    943,
+    { behavior: "auto" },
+    virtualizer,
+  );
+  expect(nativeScroll).toHaveBeenCalledExactlyOnceWith({ top: 943, behavior: "smooth" });
+});
+
 function createWheelForecastObserver() {
   const element = document.createElement("div");
   Object.defineProperties(element, {
