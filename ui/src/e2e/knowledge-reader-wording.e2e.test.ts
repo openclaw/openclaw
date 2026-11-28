@@ -67,6 +67,7 @@ suite.define(() => {
             metadata: {},
           };
           const offsets: unknown[] = [];
+          let rejectNextCitationPage = scenario === "citations";
           await installNativePluginMockGateway(
             page,
             {
@@ -90,6 +91,15 @@ suite.define(() => {
                     const offset =
                       typeof input.evidenceOffset === "number" ? input.evidenceOffset : 0;
                     offsets.push(input.evidenceOffset);
+                    if (offset === 20 && rejectNextCitationPage) {
+                      rejectNextCitationPage = false;
+                      return {
+                        __mockError: {
+                          code: "UNAVAILABLE",
+                          message: "Synthetic citation diagnostic",
+                        },
+                      };
+                    }
                     const result = {
                       view: "content",
                       record:
@@ -225,12 +235,21 @@ suite.define(() => {
             await page.getByRole("button", { name: "Cancel", exact: true }).click();
           }
           if (scenario === "citations") {
-            await page.getByRole("button", { name: "More citations", exact: true }).click();
+            const more = page.getByRole("button", { name: "More citations", exact: true });
+            await more.click();
+            await page
+              .getByRole("status")
+              .filter({ hasText: "Couldn’t load more citations." })
+              .waitFor();
+            expect(await page.locator(".knowledge-evidence-list").textContent()).not.toContain(
+              "Synthetic citation diagnostic",
+            );
+            await more.click();
             await expect
               .poll(() => page.locator(".knowledge-source-group > summary").textContent())
               .toContain("25 citations");
             expect(await page.locator(".knowledge-source-group").count()).toBe(1);
-            expect(offsets).toContain(20);
+            expect(offsets.filter((offset) => offset === 20)).toHaveLength(2);
             const params = new URL(page.url()).searchParams;
             expect([params.get("p.agent"), params.get("p.vault"), params.get("p.record")]).toEqual([
               "main",
