@@ -17,11 +17,14 @@ struct StatusCommand: CLICommand {
     }
 
     mutating func run() async throws {
-        let cfg = try? ConfigLoader.load(at: self.configURL)
-        let wake = cfg?.wake.word ?? "clawd"
-        let wakeEnabled = cfg?.wake.enabled ?? false
+        do {
+            let cfg = try ConfigLoader.load(at: self.configURL)
+            print("wake: \(cfg.wake.enabled ? cfg.wake.word : "disabled")")
+        } catch {
+            print("wake: unknown")
+            print("config: \(configReadDiagnostic(error))")
+        }
         let latest = await TranscriptsStore.shared.latest().suffix(3)
-        print("wake: \(wakeEnabled ? wake : "disabled")")
         if latest.isEmpty {
             print("transcripts: (none yet)")
         } else {

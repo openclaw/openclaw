@@ -52,11 +52,11 @@ targets: [
 - `transcribe <file>` — offline transcription (txt|srt)
 - `test-hook "text"` — invoke configured hook
 - `mic list|set <index>` — enumerate/select input device
-- `setup` — write default config JSON
-- `doctor` — check Speech auth & device availability
+- `setup` — write default config JSON, overwriting any existing file at that path
+- `doctor` — check speech authorization, the config file, and input devices
 - `health` — prints `ok`
 - `tail-log` — last 10 transcripts
-- `status` — show wake state + recent transcripts
+- `status` — show wake state and recent transcripts. If the config cannot be read, `wake: unknown` appears alongside any recent transcripts.
 - `service install|uninstall|status` — user launchd plist (stub: prints launchctl commands)
 - `start|stop|restart` — placeholders until full launchd wiring
 
