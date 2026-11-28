@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   getReplyPayloadMetadata,
@@ -257,8 +258,13 @@ export async function buildAssistantReplyContentFromInputs(
           mediaBySource.set(normalizeMediaReferenceForComparison(url), blocks);
         }
       },
-      onPrepareError: (error) => {
-        params.onManagedMediaPrepareError?.(error.message);
+      onPrepareError: (error, cause) => {
+        // Callers only log this, so keep the whole cause; log transports redact at egress.
+        params.onManagedMediaPrepareError?.(
+          cause === error
+            ? error.message
+            : `${error.message}: ${formatErrorMessage(cause, { includeCode: true })}`,
+        );
       },
     });
     if (payload.audioAsVoice === true) {
