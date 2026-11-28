@@ -41,8 +41,31 @@ const TOKEN_ENDPOINT = `${TOKEN_SHARING_ISSUER}/api/accounts/oauth/token`;
 const MAX_RESPONSE_BYTES = 1024 * 1024;
 const LOGIN_TIMEOUT_MS = 5 * 60_000;
 type LoginOwner = Pick<ProviderAuthContext, "signal" | "assertCurrent">;
+type OAuthRequestStage = "token exchange" | "token refresh" | "signing key fetch";
+const SAFE_DIAGNOSTIC_TOKEN_RE = /^[A-Za-z0-9_.:/-]{1,128}$/;
+const REQUEST_ID_HEADERS = ["x-request-id", "openai-request-id", "cf-ray"] as const;
 
-async function requestJson(url: string, owner: LoginOwner, body?: URLSearchParams) {
+function readBoundedRequestId(headers: Headers): string | undefined {
+  for (const name of REQUEST_ID_HEADERS) {
+    const value = headers.get(name)?.trim();
+    if (value && SAFE_DIAGNOSTIC_TOKEN_RE.test(value)) {
+      return `${name}=${value}`;
+    }
+  }
+  return undefined;
+}
+
+function readBoundedOAuthErrorCode(json: Record<string, unknown> | undefined): string | undefined {
+  const raw = typeof json?.error === "string" ? json.error.trim() : "";
+  return raw && SAFE_DIAGNOSTIC_TOKEN_RE.test(raw) ? raw : undefined;
+}
+
+async function requestJson(
+  url: string,
+  owner: LoginOwner,
+  body?: URLSearchParams,
+  stage?: OAuthRequestStage,
+) {
   owner.signal?.throwIfAborted();
   owner.assertCurrent?.();
   return await withOpenAIOAuthResponse(
@@ -88,23 +111,48 @@ async function requestJson(url: string, owner: LoginOwner, body?: URLSearchParam
           response.status,
           json,
         );
+        const requestId = readBoundedRequestId(response.headers);
         if (json?.error === "invalid_grant") {
           failure.message =
             "ChatGPT connection expired or was revoked. Sign in again to reconnect.";
+        } else if (requestId) {
+          failure.message = `${failure.message} (${requestId})`;
+        }
+        if (requestId) {
+          const outcome = failure.oauthRefreshOutcome;
+          Object.assign(failure, {
+            oauthRefreshFailure: {
+              status: outcome.status ?? response.status,
+              ...(outcome.reason ? { reason: outcome.reason } : {}),
+              ...(outcome.reason === "invalid_grant" ? { errorType: "invalid_grant" } : {}),
+              ...(stage ? { stage } : {}),
+              requestId,
+            },
+          });
         }
         throw failure;
       }
       if (!response.ok) {
         const invalidGrant = json?.error === "invalid_grant";
+        const errorCode = readBoundedOAuthErrorCode(json);
+        const requestId = readBoundedRequestId(response.headers);
+        const stageSuffix = stage ? ` during ${stage}` : "";
+        const details = [
+          `HTTP ${response.status}`,
+          ...(errorCode ? [errorCode] : []),
+          ...(requestId ? [requestId] : []),
+        ].join(", ");
         throw Object.assign(
           new Error(
             invalidGrant
               ? "ChatGPT connection expired or was revoked. Sign in again to reconnect."
-              : `ChatGPT authentication request failed (HTTP ${response.status}). Retry sign-in later.`,
+              : `ChatGPT authentication request failed${stageSuffix} (${details}). Retry sign-in later.`,
           ),
           {
             oauthRefreshFailure: {
               status: response.status,
+              ...(stage ? { stage } : {}),
+              ...(requestId ? { requestId } : {}),
               ...(invalidGrant ? { reason: "invalid_grant", errorType: "invalid_grant" } : {}),
             },
           },
@@ -124,7 +172,12 @@ async function verifyIdentity(
   owner: LoginOwner,
   nonce?: string,
 ) {
-  const keys = await requestJson(`${TOKEN_SHARING_ISSUER}/.well-known/jwks.json`, owner);
+  const keys = await requestJson(
+    `${TOKEN_SHARING_ISSUER}/.well-known/jwks.json`,
+    owner,
+    undefined,
+    "signing key fetch",
+  );
   if (!Array.isArray(keys.keys) || !keys.keys.every(isRecord)) {
     throw new Error("ChatGPT returned an invalid signing key set. Start sign-in again.");
   }
@@ -261,6 +314,7 @@ export async function refreshTokenSharingCredential(
       refresh_token: credential.refresh,
       resource: TOKEN_SHARING_RESOURCE,
     }),
+    "token refresh",
   );
   try {
     return (
@@ -422,6 +476,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
         redirectUri,
         resource: TOKEN_SHARING_RESOURCE,
       }),
+      "token exchange",
     );
     const { credential, subject } = await readCredential({
       json,
