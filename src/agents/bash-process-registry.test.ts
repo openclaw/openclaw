@@ -49,7 +49,7 @@ it("releases unrelated backing storage from live, finished, and staged output", 
 });
 
 function makeSession(
-  params: Partial<Parameters<typeof createProcessSessionFixture>[0]> = {},
+  params: Partial<Parameters<typeof createProcessSessionFixture>[0]>,
 ): ProcessSession {
   const session = createProcessSessionFixture({
     id: "sess",

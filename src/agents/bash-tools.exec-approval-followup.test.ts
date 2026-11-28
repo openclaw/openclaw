@@ -34,20 +34,20 @@ const runId = "exec-approval-followup:req-1:nonce:nonce-test";
 const pending = { ...route, internalRuntimeHandoffId: "handoff-test", idempotencyKey: runId };
 type Followup = Parameters<typeof sendExecApprovalFollowup>[0];
 
-function send(overrides: Partial<Followup> = {}) {
+function send(overrides: Partial<Followup>) {
   return sendExecApprovalFollowup({ approvalId, sessionKey, resultText: finished, ...overrides });
 }
 function direct(overrides: Partial<Followup> = {}) {
   return send({ ...route, sessionKey: undefined, ...overrides });
 }
-function agentArgs(expected: Record<string, unknown> = {}) {
+function agentArgs(expected: Record<string, unknown>) {
   const call = vi.mocked(callGatewayTool).mock.calls[0];
   expect(call?.[0]).toBe("agent");
   const params = requireRecord(call?.[2], "agent params");
   expect(params).toMatchObject(expected);
   return params;
 }
-function directArgs(expected: Record<string, unknown> = {}) {
+function directArgs(expected: Record<string, unknown>) {
   const params = requireRecord(vi.mocked(sendMessage).mock.calls[0]?.[0], "direct params");
   expect(params).toMatchObject({
     gatewayOwnedDelivery: true,
