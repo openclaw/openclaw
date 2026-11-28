@@ -6,6 +6,7 @@ import { withLegacySessionCapabilityRead } from "../agents/subagents/spawn/subag
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
 export { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
+export { createAgentHarnessClientTools } from "../agents/agent-tool-definition-adapter.js";
 export { normalizeAgentToolResultMiddlewareRuntimeIds } from "../plugins/agent-tool-result-middleware.js";
 export {
   normalizeAcceptedSessionSpawnResult,
