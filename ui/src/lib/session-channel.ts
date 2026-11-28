@@ -7,7 +7,13 @@ import {
   parseThreadSessionSuffix,
 } from "../../../src/sessions/session-key-utils.js";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { formatSessionChannelLabel, resolveChannelSessionInfo } from "./session-display.ts";
+import {
+  channelConversationLabel,
+  formatChannelPeerAddress,
+  formatSessionChannelLabel,
+  resolveChannelSessionInfo,
+  splitChannelContactLabel,
+} from "./session-display.ts";
 
 export type SessionChannelPresentation = {
   channel: string;
@@ -16,6 +22,8 @@ export type SessionChannelPresentation = {
   topicId?: string;
   conversation?: string;
   address?: string;
+  /** Handle or formatted address shown when there is no newer line to show. */
+  contactDetail?: string;
   account?: string;
 };
 
@@ -78,25 +86,6 @@ function directAddress(
   return undefined;
 }
 
-function conversationLabel(channel: string, rawLabel: string | undefined): string | undefined {
-  let label = rawLabel;
-  if (!label) {
-    return undefined;
-  }
-  // These suffixes belong to the bundled ingress label producers, not user titles.
-  if (channel === "discord") {
-    label = label.replace(/ (?:user|channel) id:\d+$/, "");
-  } else if (channel === "telegram") {
-    label = label.replace(/(?:^| )id:-?\d+(?: topic:\d+)?$/, "");
-    if (/^(?:id:unknown|group:-?\d+(?: topic:\d+)?)$/.test(label)) {
-      return undefined;
-    }
-  } else if (channel === "signal") {
-    label = label.replace(/ id:\S+$/, "");
-  }
-  return normalizeOptionalString(label);
-}
-
 export function resolveSessionChannelPresentation(
   row: SessionChannelRow,
 ): SessionChannelPresentation | undefined {
@@ -150,7 +139,7 @@ export function resolveSessionChannelPresentation(
             : undefined,
         )
       : undefined;
-  const label = conversationLabel(channel, normalizeOptionalString(origin?.label));
+  const label = channelConversationLabel(channel, normalizeOptionalString(origin?.label));
   const subject = metadataMatches ? normalizeOptionalString(row.subject) : undefined;
   const groupChannel = metadataMatches ? normalizeOptionalString(row.groupChannel) : undefined;
   let conversation =
@@ -173,13 +162,17 @@ export function resolveSessionChannelPresentation(
     (!rowChannel || rowChannel === channel ? normalizeOptionalString(row.accountId) : undefined) ??
     normalizeOptionalString(delivery?.accountId) ??
     normalizeOptionalString(origin?.accountId);
+  // A person's handle is detail beside their name, not part of it.
+  const contact =
+    kind === "direct" && conversation ? splitChannelContactLabel(conversation) : undefined;
   return {
     channel,
     channelLabel: formatSessionChannelLabel(channel),
     kind,
     topicId,
-    conversation,
+    conversation: contact?.name ?? conversation,
     address,
+    contactDetail: contact?.handle ?? (address && formatChannelPeerAddress(channel, address)),
     account: account === "default" ? undefined : account,
   };
 }

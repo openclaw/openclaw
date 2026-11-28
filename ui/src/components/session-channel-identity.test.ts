@@ -1,7 +1,10 @@
-import { expect, it } from "vitest";
+import { beforeAll, expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { loadChannelPhoneFormatter } from "../lib/session-display.ts";
 import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+
+beforeAll(() => loadChannelPhoneFormatter());
 
 type Expected = Partial<NonNullable<SidebarRecentSession["channelPresentation"]>>;
 
@@ -51,7 +54,19 @@ it.each([
   ],
   [
     linked("whatsapp", "direct", whatsapp, { from: "15555550123@s.whatsapp.net" }),
-    { ...whatsappDirect, address: "+15555550123" },
+    { ...whatsappDirect, address: "+15555550123", contactDetail: "+1 555 555 0123" },
+  ],
+  [
+    linked("telegram", "direct", "51234567", {
+      from: "telegram:51234567",
+      label: "Lucas Pereira (@lucas_dev) id:51234567",
+    }),
+    {
+      channelLabel: "Telegram",
+      kind: "direct",
+      conversation: "Lucas Pereira",
+      contactDetail: "@lucas_dev",
+    },
   ],
   [
     linked(

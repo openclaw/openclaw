@@ -1,8 +1,9 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import {
   isSessionTitlePending,
+  loadChannelPhoneFormatter,
   resolveChannelSessionInfo,
   resolveSessionDisplayName,
   resolveSessionWorkContext,
@@ -29,6 +30,8 @@ describe("isSessionTitlePending", () => {
 });
 
 describe("resolveSessionDisplayName", () => {
+  beforeAll(() => loadChannelPhoneFormatter());
+
   it.each(["Subagent [worker]:"])("treats translated prefix %s as literal text", (prefix) => {
     using _ = vi.spyOn(i18n, "t").mockReturnValue(prefix);
     const key = "agent:main:subagent:worker";
@@ -71,6 +74,38 @@ describe("resolveSessionDisplayName", () => {
     },
   ])("$name", ({ key, row, expected }) => {
     expect(resolveSessionDisplayName(key, row)).toBe(expected);
+  });
+
+  it.each([
+    ["agent:main:whatsapp:direct:+5561985930031", undefined, "+55 61 98593 0031"],
+    ["agent:main:imessage:direct:+14155550123", undefined, "+1 415 555 0123"],
+    ["agent:main:imessage:direct:alex@example.com", undefined, "alex@example.com"],
+    // WhatsApp privacy ids are not phone numbers.
+    ["agent:main:whatsapp:direct:100000000123@lid", undefined, "WhatsApp · …23@lid"],
+    ["agent:main:signal:direct:+447700900123", "Sam Rivera id:+447700900123", "Sam Rivera"],
+    ["agent:main:discord:direct:3311", "aria.vega user id:3311", "aria.vega"],
+    [
+      "agent:main:telegram:direct:51234567",
+      "Lucas Pereira (@lucas_dev) id:51234567",
+      "Lucas Pereira",
+    ],
+    ["agent:main:telegram:direct:77711122", "@nina_k id:77711122", "@nina_k"],
+    ["agent:main:telegram:direct:77711122", "id:77711122", "Telegram · 77711122"],
+    ["agent:main:whatsapp:direct:+5561985930031", "+5561985930031", "+55 61 98593 0031"],
+    ["agent:main:discord:channel:1122", "OpenClaw #design-crit", "OpenClaw #design-crit"],
+  ])("names channel conversation %s for people", (key, displayName, expected) => {
+    expect(resolveSessionDisplayName(key, displayName ? { displayName } : undefined)).toBe(
+      expected,
+    );
+  });
+
+  it("keeps a renamed channel conversation's own name", () => {
+    expect(
+      resolveSessionDisplayName("agent:main:signal:direct:+447700900123", {
+        label: "Sam (work) id:+447700900123",
+        displayName: "Sam Rivera id:+447700900123",
+      }),
+    ).toBe("Sam (work) id:+447700900123");
   });
 
   it("does not split UTF-16 surrogate pairs when shortening peer ids", () => {

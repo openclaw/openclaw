@@ -167,6 +167,8 @@ export type SidebarRecentSession = Readonly<{
   unread: boolean;
   hiddenFromInvolvingMe?: boolean;
   lastMessagePreview?: string;
+  /** Latest conversation activity, the clock channel rows show. */
+  activityAt?: number;
   lastReadAt?: number;
   attention: SidebarSessionAttention;
   /** Own state remains distinct from the collapsed-tree projection. */

@@ -1,5 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { formatInternationalPhoneNumberForDisplay } from "./phone-presentation.js";
+import {
+  formatInternationalPhoneNumber,
+  formatInternationalPhoneNumberForDisplay,
+} from "./phone-presentation.js";
+
+describe("formatInternationalPhoneNumber", () => {
+  it("formats without a region name", () => {
+    expect(formatInternationalPhoneNumber("+5561985930031")).toBe("+55 61 98593 0031");
+    expect(formatInternationalPhoneNumber("5561985930031")).toBeUndefined();
+  });
+});
 
 describe("formatInternationalPhoneNumberForDisplay", () => {
   it.each([

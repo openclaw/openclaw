@@ -14,8 +14,10 @@ type Page = Parameters<typeof installMockGateway>[0];
 type Session = ReturnType<typeof sessionRow>;
 const rowFor = (page: Page, key: string) =>
   page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
-const channelVisible = (row: ReturnType<typeof rowFor>, name: string) =>
-  row.locator(".sidebar-recent-session__channel").getByText(name, { exact: true }).isVisible();
+const channelBadgeVisible = (row: ReturnType<typeof rowFor>, channel: string) =>
+  row.locator(`.channel-session-avatar[data-channel="${channel}"]`).isVisible();
+const latestLine = (row: ReturnType<typeof rowFor>) =>
+  row.locator(".sidebar-recent-session__subtitle").textContent();
 const pageOptions = {
   colorScheme: "dark" as const,
   hasTouch: false,
@@ -82,10 +84,13 @@ suite.define(() => {
     await withSessions([selected, group, imessage, direct], async ({ page, gateway }) => {
       const groupRow = rowFor(page, group.key);
       const imessageRow = rowFor(page, imessage.key);
-      await expect.poll(() => channelVisible(groupRow, "WhatsApp")).toBe(true);
+      await expect.poll(() => channelBadgeVisible(groupRow, "whatsapp")).toBe(true);
       expect(await groupRow.getByRole("link", { name: /Linked to WhatsApp/ }).count()).toBe(1);
-      expect(await channelVisible(imessageRow, "iMessage")).toBe(true);
+      expect(await latestLine(groupRow)).toBe("The picnic is booked for Saturday.");
+      expect(await channelBadgeVisible(imessageRow, "imessage")).toBe(true);
       expect(await imessageRow.getByRole("link", { name: /Linked to iMessage/ }).count()).toBe(1);
+      // Without a latest message, the line names the channel.
+      expect(await latestLine(imessageRow)).toBe("iMessage");
 
       await groupRow.hover();
       const card = page.locator(".session-progress-hovercard");
@@ -107,7 +112,8 @@ suite.define(() => {
 
       await rowFor(page, direct.key).hover();
       await expect.poll(() => detail("title")).toBe("Ada");
-      expect(await detail("conversation")).toContain("+15555550123");
+      // Phone metadata loads after the first paint; the number reformats in place.
+      await expect.poll(() => detail("conversation")).toContain("+1 555 555 0123");
       expect(await card.textContent()).not.toContain("@s.whatsapp.net");
     });
   });
@@ -157,6 +163,7 @@ suite.define(() => {
       const row = rowFor(page, dashboard.key);
       await row.waitFor({ state: "visible" });
       expect(await row.locator(".sidebar-recent-session__channel").count()).toBe(0);
+      expect(await row.locator(".channel-session-avatar").count()).toBe(0);
       await row.hover();
       const card = page.locator(".session-progress-hovercard");
       await card.waitFor({ state: "visible" });

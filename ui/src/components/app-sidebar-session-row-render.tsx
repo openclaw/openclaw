@@ -13,9 +13,11 @@ import {
 } from "solid-js";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { formatUiError } from "../lib/format-error.ts";
+import { formatDateTimeMs } from "../lib/format.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { i18nRevision, t } from "../lib/reactive/i18n.ts";
+import { readVisibleTime } from "../lib/reactive/visible-clock.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import { canArchiveSessionRow, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
@@ -23,6 +25,7 @@ import type {
   CatalogBackingSessionDisplay,
   CatalogRowControls,
 } from "./app-sidebar-session-catalogs.ts";
+import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
 import { renderSidebarSessionIndicators } from "./app-sidebar-session-indicators.tsx";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import { visibleSessionChildren } from "./app-sidebar-session-types.ts";
@@ -135,6 +138,34 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const subtitle = createMemo(() => subtitleState().subtitle),
     narration = createMemo(() => subtitleState().narration),
     toolName = createMemo(() => subtitleState().toolName);
+  // Roster rows stay one line under their agent; elsewhere a channel conversation
+  // reads as a message thread: who, when, and the latest line.
+  const channel = createMemo(() => (team() ? undefined : session().channelPresentation));
+  const channelLine = createMemo(() => {
+    const presentation = channel();
+    if (!presentation || subtitle()) {
+      return undefined;
+    }
+    const detail = presentation.contactDetail;
+    return (
+      session().lastMessagePreview ||
+      (detail && detail !== label() ? detail : undefined) ||
+      presentation.channelLabel
+    );
+  });
+  const channelTime = createMemo(() => {
+    const timestamp = channel() ? session().activityAt : undefined;
+    if (!timestamp) {
+      return undefined;
+    }
+    i18nRevision();
+    readVisibleTime(60_000);
+    return {
+      label: formatSidebarTimestamp(timestamp),
+      title: formatDateTimeMs(timestamp),
+      datetime: new Date(timestamp).toISOString(),
+    };
+  });
   const indicators = renderSidebarSessionIndicators(host, session, display, icon);
   const { running, stateId, metaId, pullRequest, childrenExpanded } = indicators;
   const controls: CatalogRowControls = {};
@@ -223,6 +254,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           "sidebar-recent-session--child": session().isChild,
           "sidebar-recent-session--single-line":
             team() || (!subtitle() && !session().channelPresentation),
+          "sidebar-recent-session--channel": Boolean(channel()),
           "sidebar-session--archived": session().archived,
           "sidebar-recent-session--active": session().visuallyActive,
           "sidebar-recent-session--selected": host().selectedSessionKeys.has(session().key),
@@ -326,18 +358,47 @@ function renderRecentSessionRow(params: RecentSessionParams) {
                 </Loading>
               )}
             </Show>
+            <Show when={!rename() && channelTime()}>
+              {(time) => (
+                <time
+                  class="sidebar-recent-session__time"
+                  datetime={time().datetime}
+                  title={time().title}
+                >
+                  {time().label}
+                </time>
+              )}
+            </Show>
           </span>
           <span class="sidebar-recent-session__details">
             <Show when={session().channelPresentation}>
-              {(channel) => (
-                <span class="sidebar-recent-session__channel">
+              {(presentation) => (
+                <>
                   <span class="sr-only">
                     {t("sessionHovercard.linkedChannel", {
-                      channel: channel().channelLabel,
+                      channel: presentation().channelLabel,
                     })}
                   </span>
-                  <span aria-hidden="true">{channel().channelLabel}</span>
-                </span>
+                  <Show
+                    when={channel()}
+                    fallback={
+                      <span class="sidebar-recent-session__channel" aria-hidden="true">
+                        {presentation().channelLabel}
+                      </span>
+                    }
+                  >
+                    <Show when={channelLine()}>
+                      {(line) => (
+                        <span
+                          class="sidebar-recent-session__subtitle"
+                          aria-hidden={line() === presentation().channelLabel ? "true" : undefined}
+                        >
+                          {line()}
+                        </span>
+                      )}
+                    </Show>
+                  </Show>
+                </>
               )}
             </Show>
             {team() ? undefined : (
