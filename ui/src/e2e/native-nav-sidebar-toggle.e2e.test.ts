@@ -492,7 +492,8 @@ suite.define(() => {
       .first()
       .boundingBox();
     expect(titleBox).not.toBeNull();
-    expect(titleBox!.x - (toolbarBox!.x + toolbarBox!.width)).toBeGreaterThanOrEqual(8);
+    // The session title continues the titlebar row instead of floating away from it.
+    expect(titleBox!.x - (toolbarBox!.x + toolbarBox!.width)).toBeCloseTo(8, 0);
     const titlebarControls = toolbar.locator("button:visible");
     const centerlines = await titlebarControls.evaluateAll((buttons) =>
       buttons.map((button) => {

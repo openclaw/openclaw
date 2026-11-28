@@ -314,11 +314,12 @@ html.openclaw-native-macos.openclaw-native-web-chrome
   );
   --shell-native-titlebar-controls-left: var(--shell-native-titlebar-controls-inset);
   --shell-native-titlebar-controls-width: 124px;
+  /* With the sidebar collapsed, the session title continues the controls row. */
   --shell-titlebar-inset: max(
     12px,
     calc(
       var(--shell-native-titlebar-controls-inset) + var(--shell-native-titlebar-controls-width) +
-        20px - var(--shell-nav-width)
+        8px - var(--shell-nav-width)
     )
   );
 
