@@ -307,7 +307,7 @@ export async function prepareUpdate(params: {
         } catch {
           return await fail(
             "package-not-writable",
-            `The global package at ${params.runningRoot} is not writable. Run the update as the user that owns it, or, if OpenClaw runs as a system service, run: sudo openclaw update`,
+            `The global package at ${params.runningRoot} is not writable. Run the update as the user that owns it${process.platform !== "win32" ? ", or, if OpenClaw runs as a system service, run: sudo openclaw update" : "."}`,
           );
         }
       }

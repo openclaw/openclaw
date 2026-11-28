@@ -537,45 +537,55 @@ describe("package release conversion", () => {
     },
   );
 
-  it("refuses an unwritable global package before preparing or forwarding it", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-    const runningRoot = path.join(root, "global-package");
-    await fs.mkdir(runningRoot);
-    vi.spyOn(targets, "resolveTarget").mockResolvedValue({
-      kind: "package",
-      version: "2026.11.21",
-      spec: "openclaw@2026.11.21",
-    });
-    const access = vi.mocked(fs.access).getMockImplementation()!;
-    vi.mocked(fs.access).mockImplementation(async (file, mode) => {
-      if (file === runningRoot) {
-        throw Object.assign(new Error("Read-only global package"), { code: "EACCES" });
-      }
-      return access(file, mode);
-    });
-    try {
-      openOpenClawStateDatabase({ env: process.env });
-      const run = await createUpdateRunAsync({ trigger: "cli", before: { version: "2026.11.6" } });
-      expect(
-        await prepareUpdate({
-          runId: run.runId,
-          runningRoot,
-          runningVersion: "2026.11.6",
-          channel: "stable",
-          node,
-        }),
-      ).toMatchObject({
-        status: "failed",
-        reason: "package-not-writable",
-        message: `The global package at ${runningRoot} is not writable. Run the update as the user that owns it, or, if OpenClaw runs as a system service, run: sudo openclaw update`,
+  it.each([false, true])(
+    "refuses an unwritable global package before preparing or forwarding it (Windows=%s)",
+    async (windows) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+      const runningRoot = path.join(root, "global-package");
+      await fs.mkdir(runningRoot);
+      vi.spyOn(targets, "resolveTarget").mockResolvedValue({
+        kind: "package",
+        version: "2026.11.21",
+        spec: "openclaw@2026.11.21",
       });
-      expect(await fs.readdir(runningRoot)).toEqual([]);
-      expect(await readTrial()).toBeNull();
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-    }
-  });
+      const access = vi.mocked(fs.access).getMockImplementation()!;
+      vi.mocked(fs.access).mockImplementation(async (file, mode) => {
+        if (file === runningRoot) {
+          vi.stubGlobal("process", { ...process, platform: windows ? "win32" : "darwin" });
+          throw Object.assign(new Error("Read-only global package"), { code: "EACCES" });
+        }
+        return access(file, mode);
+      });
+      try {
+        openOpenClawStateDatabase({ env: process.env });
+        const run = await createUpdateRunAsync({
+          trigger: "cli",
+          before: { version: "2026.11.6" },
+        });
+        expect(
+          await prepareUpdate({
+            runId: run.runId,
+            runningRoot,
+            runningVersion: "2026.11.6",
+            channel: "stable",
+            node,
+          }),
+        ).toMatchObject({
+          status: "failed",
+          reason: "package-not-writable",
+          message: windows
+            ? `The global package at ${runningRoot} is not writable. Run the update as the user that owns it.`
+            : `The global package at ${runningRoot} is not writable. Run the update as the user that owns it, or, if OpenClaw runs as a system service, run: sudo openclaw update`,
+        });
+        expect(await fs.readdir(runningRoot)).toEqual([]);
+        expect(await readTrial()).toBeNull();
+      } finally {
+        vi.unstubAllGlobals();
+        await closeOpenClawStateDatabaseAsync();
+        closeOpenClawStateDatabaseForTest();
+      }
+    },
+  );
 
   it.each([
     { releaseAware: true, runtime: "node", adopt: false, readOnly: false },

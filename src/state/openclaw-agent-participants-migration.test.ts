@@ -145,7 +145,7 @@ describe("participant identity migration", () => {
             scenario === "rollback"
               ? /injected/
               : scenario === "marker-mismatch"
-                ? /markers disagree/
+                ? `Agent schema markers disagree for ${databasePath}; stop the Gateway and preserve the state directory. Restore a verified backup into a fresh directory with openclaw backup restore <archive.tar.gz> --target <fresh-directory>, or see https://docs.openclaw.ai/cli/update/repair-and-recovery#agent-schema-markers-disagree.`
                 : /column definitions differ for session_participants/,
           );
           expect(

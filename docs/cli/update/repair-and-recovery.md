@@ -356,6 +356,35 @@ that it ran in an earlier boot of the same machine. Windows, containers, and
 updates killed while running an older version keep the refusal. See
 [how updates run](/cli/update/how-updates-run#replacing-the-package-directory).
 
+### Agent schema markers disagree
+
+`Agent schema markers disagree for <path>` means the agent database's SQLite
+`user_version` and its ownership metadata's `schema_version` disagree. OpenClaw
+refuses migration because neither marker alone proves which data conversions ran.
+`openclaw doctor --fix` cannot safely reconcile this state.
+
+Do not edit either marker by hand to bypass the refusal.
+
+1. Stop the Gateway through its service owner. Preserve the whole state directory,
+   including the database at the reported path and its SQLite sidecars (`-wal`,
+   `-shm`, and `-journal`, if present); keep the original files untouched.
+2. If you have a verified backup from before the disagreement, restore it into a
+   fresh directory:
+
+   ```bash
+   openclaw backup restore <archive.tar.gz> --target <fresh-directory>
+   ```
+
+   Follow [Restore a full archive](/install/backups#restore-a-full-archive)
+   before activating the restored state. Restoring an older backup does not
+   preserve changes made after that backup.
+
+3. Without a verified backup, [get support](/help/support). Collect the reported
+   database path, the full refusal text, and the output (or failure) of
+   `openclaw status --json` using the same profile and state/config overrides.
+   Keep the database file untouched for recovery; do not upload it publicly.
+   Review status output for private details before sharing it.
+
 ### Interrupted state restore
 
 Update commands, including `update repair`, refuse with
