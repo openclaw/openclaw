@@ -453,12 +453,13 @@ extension OpenClawChatComposer {
         #endif
     }
 
-    /// Capture UI replaces the model menu; otherwise sign-in stays in that menu.
+    /// Keep recovery visible while voice-note capture runs or when Talk hides the picker during an auth failure.
     var showsModelSignInRow: Bool {
         #if os(iOS)
         guard self.composerChrome == .clean else { return true }
-        return self.cleanShowsCameraFlip ||
-            self.voiceNoteControl?.recorder.isRecording == true
+        let recoveryNeeded = self.viewModel.composerModelAvailabilityMessage != nil
+        return self.voiceNoteControl?.recorder.isRecording == true ||
+            (self.cleanShowsCameraFlip && recoveryNeeded)
         #else
         !self.usesDesktopModelMenu
         #endif
