@@ -247,7 +247,7 @@ extension OpenClawChatViewModel {
         let profile = OpenClawChatThinkingProfile.resolve(
             session: session, defaults: self.sessionDefaults, model: modelChoice)
         let options = profile?.levels ?? []
-        if modelChoice?.reasoning == false ||
+        if Self.reasoningOptOutForcesOff(modelChoice, options: options) ||
             (!options.isEmpty && options.allSatisfy { $0.id == "off" })
         {
             return "off"
@@ -261,7 +261,8 @@ extension OpenClawChatViewModel {
         return Self.normalizedThinkingLevel(
             storedLevel,
             options: options,
-            fallback: session?.thinkingLevel) ?? storedLevel
+            fallback: session?.thinkingLevel,
+            defaultLevel: profile?.defaultLevel) ?? storedLevel
     }
 
     func syncThinkingLevelOptions() {
@@ -270,7 +271,8 @@ extension OpenClawChatViewModel {
         let profile = OpenClawChatThinkingProfile.resolve(
             session: currentSession, defaults: self.sessionDefaults, model: modelChoice)
         let options = profile?.levels ?? []
-        showsThinkingPicker = options.contains { $0.id != "off" } && modelChoice?.reasoning != false
+        showsThinkingPicker = options.contains { $0.id != "off" } &&
+            !Self.reasoningOptOutForcesOff(modelChoice, options: options)
         let target = currentModelPatchTarget()
         let preferredLevel = self.prefersExplicitThinkingLevel
             ? self.preferredThinkingLevel
@@ -280,7 +282,8 @@ extension OpenClawChatViewModel {
             Self.normalizedThinkingLevel(
                 preferredLevel,
                 options: options,
-                fallback: currentSession?.thinkingLevel)
+                fallback: currentSession?.thinkingLevel,
+                defaultLevel: profile?.defaultLevel)
         } else {
             self.thinkingLevelWithoutGatewayMetadata(
                 preferredLevel,
@@ -292,6 +295,16 @@ extension OpenClawChatViewModel {
             self.thinkingLevel = current
         }
         thinkingLevelOptions = options
+    }
+
+    /// A catalog `reasoning: false` row gates thinking to Off only when the Gateway's
+    /// thinking levels include Off. Runtimes with mandatory thinking (Claude CLI) keep
+    /// the opt-out on the row but advertise no Off level, and reject an Off override.
+    private static func reasoningOptOutForcesOff(
+        _ modelChoice: OpenClawChatModelChoice?,
+        options: [OpenClawChatThinkingLevelOption]) -> Bool
+    {
+        modelChoice?.reasoning == false && (options.isEmpty || options.contains { $0.id == "off" })
     }
 
     private func thinkingLevelWithoutGatewayMetadata(
@@ -391,16 +404,22 @@ extension OpenClawChatViewModel {
     static func normalizedThinkingLevel(
         _ level: String?,
         options: [OpenClawChatThinkingLevelOption],
-        fallback: String? = nil) -> String?
+        fallback: String? = nil,
+        defaultLevel: String? = nil) -> String?
     {
         guard let normalized = normalizedThinkingLevel(level) else { return nil }
-        guard normalized == "ultra" else { return normalized }
+        guard normalized == "off" || normalized == "ultra" else { return normalized }
         let advertised = options.compactMap { self.normalizedThinkingLevel($0.id) }
-        if advertised.contains("ultra") {
-            return "ultra"
-        }
+        if advertised.contains(normalized) { return normalized }
         if let fallback = normalizedThinkingLevel(fallback), advertised.contains(fallback) {
             return fallback
+        }
+        // A fresh chat stores Off before it receives the Gateway's mandatory levels.
+        if normalized == "off" {
+            if let defaultLevel = normalizedThinkingLevel(defaultLevel), advertised.contains(defaultLevel) {
+                return defaultLevel
+            }
+            return advertised.first ?? normalized
         }
         return advertised
             .filter { $0 != "off" }
