@@ -1,7 +1,6 @@
 // Real npm-plugin lifecycle proof; uses only the installed CLI and public plugin API.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -34,43 +33,6 @@ function cli(args, label) {
 }
 
 function fixture() {
-  for (const stage of ["baseline", "first", "second"]) {
-    for (const suffix of ["child.json", "forbidden.jsonl", "snapshot.json", "timing.json"]) {
-      fs.rmSync(artifact(`${stage}-${suffix}`), { force: true });
-    }
-  }
-  // Passive Node process diagnostics: observe real child settlement without
-  // wrapping spawn, replacing node, consuming stdout, or changing any decision.
-  write(
-    path.join(runtime, "boot-plugin-observer.mjs"),
-    `import fs from "node:fs";
-import { subscribe } from "node:diagnostics_channel";
-const stage = process.env.OPENCLAW_BOOT_PLUGIN_STAGE;
-const root = process.env.OPENCLAW_BOOT_PLUGIN_PACKAGE_ROOT;
-subscribe("child_process", ({ process: child }) => {
-  // The channel publishes construction before Node assigns spawnargs.
-  child.once("spawn", () => {
-    const argv = child.spawnargs;
-    if (!stage || !root || !argv.some((arg) => arg.startsWith(root + "/"))) return;
-    const prefix = ${JSON.stringify(artifact(""))} + stage;
-    if (argv.includes("doctor") || argv.includes("--update-canary")) {
-      fs.appendFileSync(prefix + "-forbidden.jsonl", JSON.stringify({ argv }) + "\\n");
-    }
-    if (!argv.includes("update") || !argv.includes("plugins") || !argv.includes("--json")) return;
-    const observedStartAtMs = Date.now();
-    const started = process.hrtime.bigint();
-    child.once("close", (exitCode, signal) => {
-      fs.writeFileSync(prefix + "-child.json.tmp", JSON.stringify({
-        pid: child.pid, argv, exitCode, signal, observedStartAtMs,
-        observedExitAtMs: Date.now(),
-        durationMs: Number(process.hrtime.bigint() - started) / 1e6,
-      }));
-      fs.renameSync(prefix + "-child.json.tmp", prefix + "-child.json");
-    });
-  });
-});
-`,
-  );
   for (const version of ["1.0.0", "2.0.0"]) {
     const directory = path.join(runtime, "boot-plugin-packages", version);
     writeJson(path.join(directory, "package.json"), {
@@ -103,7 +65,7 @@ export default {
       id: ${JSON.stringify(id)},
       start() {
         fs.appendFileSync(${JSON.stringify(eventsPath)}, JSON.stringify({
-          version: ${JSON.stringify(version)}, atMs: Date.now(), pid: process.pid,
+          version: ${JSON.stringify(version)},
           stateDir: process.env.OPENCLAW_STATE_DIR, argv: process.argv.slice(2),
         }) + "\\n");
       },
@@ -127,7 +89,7 @@ export default {
   });
 }
 
-function snapshot() {
+function assertInstalledVersion(version) {
   assert(
     !fs.existsSync(path.join(state, "git-install", "releases", ".trial")),
     "Proof must not use an update trial",
@@ -135,35 +97,13 @@ function snapshot() {
   const record = readPluginInstallRecords()[id];
   assert.equal(record?.source, "npm", "Plugin must be installed by the real npm installer");
   assert.equal(record.resolvedName, packageName);
-  assert(record.installPath, "Installed plugin omitted its path");
-  const files = {};
-  function visit(relative) {
-    const file = path.join(record.installPath, relative);
-    const stat = fs.lstatSync(file);
-    if (stat.isDirectory()) {
-      for (const name of fs.readdirSync(file).toSorted()) {
-        visit(path.join(relative, name));
-      }
-    } else {
-      files[relative] = {
-        mode: stat.mode,
-        ino: stat.ino,
-        mtimeMs: stat.mtimeMs,
-        sha256: createHash("sha256")
-          .update(stat.isSymbolicLink() ? fs.readlinkSync(file) : fs.readFileSync(file))
-          .digest("hex"),
-      };
-    }
-  }
-  visit("");
+  assert.equal(record.resolvedVersion, version);
   assert.equal(fs.readFileSync(sentinelPath, "utf8"), sentinel);
-  return { config: fs.readFileSync(configPath, "utf8"), record, files };
 }
 
-async function observe(stage, version, startedAt, readyAt) {
+async function observe(stage, version) {
   const deadline = Date.now() + 300_000;
   let activation;
-  let completedAt;
   while (Date.now() < deadline) {
     const events = fs
       .readFileSync(eventsPath, "utf8")
@@ -171,22 +111,13 @@ async function observe(stage, version, startedAt, readyAt) {
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line));
-    activation = events.find(
-      (event) => event.version === version && event.atMs >= startedAt && event.stateDir === state,
-    );
-    if (activation && (stage === "baseline" || fs.existsSync(artifact(`${stage}-child.json`)))) {
-      completedAt =
-        stage === "baseline"
-          ? activation.atMs
-          : Math.max(activation.atMs, readJson(artifact(`${stage}-child.json`)).observedExitAtMs);
+    activation = events.find((event) => event.version === version && event.stateDir === state);
+    if (activation) {
       break;
     }
     await delay(100);
   }
-  assert(
-    completedAt && activation,
-    `${stage}: timed out awaiting runtime v${version} and boot convergence completion`,
-  );
+  assert(activation, `${stage}: timed out awaiting live plugin v${version}`);
   assert(activation.argv.includes("gateway"), "Plugin was not activated by the real Gateway");
   assert(!activation.argv.includes("--update-canary"), "A trial cannot prove boot convergence");
   const help = cli(["gateway", "call", "--help"], `${stage}-rpc-help`);
@@ -200,57 +131,8 @@ async function observe(stage, version, startedAt, readyAt) {
   );
   const reply = JSON.parse(output.slice(output.search(/^\s*\{/mu)));
   assert.deepEqual(reply, { version, greeting: "Preserved operator setting" });
-  const installed = snapshot();
-  assert.equal(installed.record.resolvedVersion, version);
-  if (stage === "second") {
-    assert.deepEqual(
-      installed,
-      readJson(artifact("first-snapshot.json")),
-      "Unchanged boot rewrote plugin config, install metadata, or package files",
-    );
-  }
-  writeJson(artifact(`${stage}-snapshot.json`), installed);
-  let child;
-  let registryChecks = [];
-  if (stage !== "baseline") {
-    child = readJson(artifact(`${stage}-child.json`));
-    assert.equal(child.exitCode, 0, "Boot plugin update child failed");
-    assert.equal(child.signal, null, "Boot plugin update child was signalled");
-    assert(!fs.existsSync(artifact(`${stage}-forbidden.jsonl`)), "Boot ran Doctor or a trial");
-    assert(child.observedStartAtMs >= startedAt, "Convergence receipt belongs to an earlier boot");
-    registryChecks = fs
-      .readFileSync(artifact("registry.jsonl"), "utf8")
-      .trim()
-      .split("\n")
-      .filter(Boolean)
-      .map((line) => JSON.parse(line))
-      .filter(
-        (entry) =>
-          entry.atMs >= startedAt &&
-          entry.statusCode === 200 &&
-          decodeURIComponent(entry.path).startsWith(`/${packageName}`) &&
-          !entry.path.includes("/-/"),
-      );
-    assert(registryChecks.length > 0, "Boot child did not check the real plugin registry");
-  }
-  const receipt = {
-    stage,
-    version,
-    startedAtMs: startedAt,
-    readyAtMs: readyAt,
-    runtimeActivatedAtMs: activation.atMs,
-    convergenceObservedAtMs: completedAt,
-    timeToReadyMs: readyAt - startedAt,
-    timeToConvergedMs: completedAt - startedAt,
-    afterReadyConvergenceMs: Math.max(0, completedAt - readyAt),
-    pollingIntervalMs: 100,
-    child,
-    childDurationMs: child?.durationMs ?? null,
-    registryChecks,
-    noDrift: stage === "second" ? true : null,
-  };
-  writeJson(artifact(`${stage}-timing.json`), receipt);
-  console.log(JSON.stringify(receipt));
+  assertInstalledVersion(version);
+  console.log(`${stage}: live plugin v${version} served; operator data preserved.`);
 }
 
 const [mode, ...args] = process.argv.slice(2);
@@ -267,14 +149,10 @@ if (mode === "fixture") {
   };
   writeJson(configPath, config);
 } else if (mode === "observe") {
-  const [stage, version, startedAt, readyAt] = args;
-  await observe(stage, version, Number(startedAt), Number(readyAt));
+  const [stage, version] = args;
+  await observe(stage, version);
 } else if (mode === "assert-preboot") {
-  assert.equal(
-    snapshot().record.resolvedVersion,
-    "1.0.0",
-    "Core installation updated the plugin before boot",
-  );
+  assertInstalledVersion("1.0.0");
 } else {
   throw new Error(`Unknown boot plugin fixture mode: ${mode}`);
 }

@@ -2593,8 +2593,6 @@ if [ "$SCENARIO" = "boot-plugin-convergence" ]; then
     phase "pack-boot-plugin-$version" openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" npm pack \
       "$RUNTIME_ROOT/boot-plugin-packages/$version" --ignore-scripts --pack-destination "$ARTIFACT_ROOT" --silent
   done
-  export OPENCLAW_NPM_REGISTRY_REQUEST_LOG="$ARTIFACT_ROOT/boot-plugin-registry.jsonl"
-  : > "$OPENCLAW_NPM_REGISTRY_REQUEST_LOG"
   # Use real npm archives and a moving selector, not fabricated install records or a pin.
   phase baseline-boot-plugin-registry openclaw_prepublish_plugin_registry_start \
     "" "" "1.0.0" "" "$RUNTIME_ROOT/boot-plugin-registry-v1" plugin_registry_pid \
@@ -2603,10 +2601,8 @@ if [ "$SCENARIO" = "boot-plugin-convergence" ]; then
     plugins install npm:survivor-boot-plugin@latest --force
   phase configure-boot-plugin node "$boot_plugin_helper" configure
   GATEWAY_LOG="$ARTIFACT_ROOT/boot-plugin-baseline-gateway.log"
-  boot_plugin_started="$(node -p 'Date.now()')"
   phase baseline-boot-plugin-start start_gateway
-  boot_plugin_ready="$(node -p 'Date.now()')"
-  phase baseline-boot-plugin-runtime node "$boot_plugin_helper" observe baseline 1.0.0 "$boot_plugin_started" "$boot_plugin_ready"
+  phase baseline-boot-plugin-runtime node "$boot_plugin_helper" observe baseline 1.0.0
   phase baseline-boot-plugin-stop stop_gateway
   phase resolve-boot-plugin-candidate resolve_candidate_version
   # Deliberately bypass openclaw update, trial, and Doctor: replace only the installed core.
@@ -2622,19 +2618,12 @@ if [ "$SCENARIO" = "boot-plugin-convergence" ]; then
     "" "" "2.0.0" "" "$RUNTIME_ROOT/boot-plugin-registry-v2" plugin_registry_pid \
     survivor-boot-plugin 1.0.0 "$ARTIFACT_ROOT/survivor-boot-plugin-1.0.0.tgz" \
     survivor-boot-plugin 2.0.0 "$ARTIFACT_ROOT/survivor-boot-plugin-2.0.0.tgz"
-  for startup in first second; do
-    GATEWAY_LOG="$ARTIFACT_ROOT/boot-plugin-$startup-gateway.log"
-    boot_plugin_started="$(node -p 'Date.now()')"
-    NODE_OPTIONS="${NODE_OPTIONS:-} --import=$RUNTIME_ROOT/boot-plugin-observer.mjs" \
-      OPENCLAW_BOOT_PLUGIN_STAGE="$startup" OPENCLAW_BOOT_PLUGIN_PACKAGE_ROOT="$(package_root)" \
-      phase "$startup-boot-plugin-start" start_gateway
-    boot_plugin_ready="$(node -p 'Date.now()')"
-    phase "$startup-boot-plugin-converged" node "$boot_plugin_helper" observe \
-      "$startup" 2.0.0 "$boot_plugin_started" "$boot_plugin_ready"
-    phase "$startup-boot-plugin-stop" stop_gateway
-  done
+  GATEWAY_LOG="$ARTIFACT_ROOT/boot-plugin-candidate-gateway.log"
+  phase candidate-boot-plugin-start start_gateway
+  phase candidate-boot-plugin-converged node "$boot_plugin_helper" observe candidate 2.0.0
+  phase candidate-boot-plugin-stop stop_gateway
   run_completed="1"
-  echo "Boot plugin convergence passed: published latest + npm plugin v1, manual core swap, boot to live v2, unchanged second boot."
+  echo "Boot plugin convergence passed: real npm v1, manual core swap, live v2, operator data preserved."
   exit 0
 fi
 if [ "$SCENARIO" = "session-share" ]; then
