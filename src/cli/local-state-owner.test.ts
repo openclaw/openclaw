@@ -55,7 +55,7 @@ it("keeps the command's databases open until detached work it admitted settles",
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
   const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-  const release = createDeferredCore<void>();
+  const release = createDeferredCore();
   let detached: Promise<void> | undefined;
   let ownerSettled = false;
   // Subagent completion and announcements run as detached root work after the command returns.
