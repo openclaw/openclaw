@@ -204,11 +204,20 @@ async function createSweep(
     throw new Error("dreaming trigger hook was not registered");
   }
   const beforeReply = registration[1] as BeforeReply;
-  const run = async (trigger: "heartbeat" | "cron" = "heartbeat") => {
+  const run = async (
+    trigger: "heartbeat" | "cron" = "heartbeat",
+    reportProgress?: (detail?: string) => void,
+  ) => {
     const sessionKey = "agent:main:main";
     return await beforeReply(
       { cleanedBody: MEMORY_DREAMING_SYSTEM_EVENT_TEXT },
-      { trigger, agentId: "main", workspaceDir, sessionKey },
+      {
+        trigger,
+        agentId: "main",
+        workspaceDir,
+        sessionKey,
+        ...(reportProgress ? { reportProgress } : {}),
+      },
     );
   };
   const readDreams = () =>
@@ -474,5 +483,16 @@ describe("dreaming sweep diary publication", () => {
     expect(sweep.narratives).toHaveLength(0);
     const dreams = await sweep.readDreams();
     expect(diaryEntryCount(dreams)).toBe(0);
+  });
+
+  it("reports semantic progress across ingestion, phases, and workspace completion when provided", async () => {
+    const sweep = await createSweep();
+    const progressDetails: Array<string | undefined> = [];
+    expectHandled(await sweep.run("cron", (detail) => progressDetails.push(detail)));
+    expect(progressDetails).toContain("dreaming:light:ingest");
+    expect(progressDetails).toContain("dreaming:rem:ingest");
+    expect(progressDetails).toContain("dreaming:light:prepare");
+    expect(progressDetails).toContain("dreaming:rem:prepare");
+    expect(progressDetails).toContain("dreaming:workspace_done");
   });
 });

@@ -46,6 +46,7 @@ export async function runDreamingSweepPhases(
       const phaseParams = { ...params, config, nowMs: sweepNowMs, admissionPolicy };
       if (!prepare) {
         await ingestDreamingPhaseSignals(phaseParams);
+        params.reportProgress?.(`dreaming:${phase}:ingest`);
         return true;
       }
       // Keep source selection and report publication inside the forget boundary;
@@ -73,6 +74,7 @@ export async function runDreamingSweepPhases(
       if (data) {
         narratives.push({ data, timezone: config.timezone, model: config.execution?.model });
       }
+      params.reportProgress?.(`dreaming:${phase}:prepare`);
       return true;
     } catch (err) {
       await appendFailedDreamingEvent({

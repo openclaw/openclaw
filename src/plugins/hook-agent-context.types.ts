@@ -103,4 +103,9 @@ export type PluginHookAgentContext = PluginHookContextWindow & {
   toolAuthority?: PluginHookToolAuthority;
   /** Checks this prompt hook handler's result-acceptance lifetime. */
   readonly hookInvocation?: Readonly<{ assertActive(): void }>;
+  /**
+   * Reports semantic progress for the active run while a long-running hook is executing.
+   * Bound to the current dispatch; calls after the hook settles or the run stops are no-ops.
+   */
+  reportProgress?: (detail?: string) => void;
 };

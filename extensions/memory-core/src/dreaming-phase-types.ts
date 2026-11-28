@@ -37,6 +37,7 @@ export type DreamingSweepParams = {
   cfg?: OpenClawConfig;
   logger: Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
   nowMs?: number;
+  reportProgress?: (detail?: string) => void;
 };
 export type DreamingPhaseRunParams<TConfig extends LightDreamingConfig | RemDreamingConfig> =
   DreamingSweepParams & {

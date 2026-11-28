@@ -69,6 +69,7 @@ async function runShortTermDreamingPromotion(params: {
   subagent?: OpenClawPluginApi["runtime"]["subagent"];
   narrativeTimeoutMs: number;
   consolidationTimeoutMs?: number;
+  reportProgress?: (detail?: string) => void;
 }): Promise<{ handled: true; reason: string } | undefined> {
   const recencyHalfLifeDays = params.config.recencyHalfLifeDays;
   const fallbackWorkspaceDir = normalizeOptionalString(params.workspaceDir);
@@ -150,12 +151,14 @@ async function runShortTermDreamingPromotion(params: {
         cfg: params.cfg,
         logger: params.logger,
         nowMs: sweepNowMs,
+        reportProgress: params.reportProgress,
       });
     } catch (err) {
       failedWorkspaces += 1;
       params.logger.error(
         `memory-core: dreaming sweep failed for workspace ${workspaceDir}: ${formatErrorMessage(err)}`,
       );
+      params.reportProgress?.("dreaming:workspace_failed");
       continue;
     }
 
@@ -300,6 +303,7 @@ async function runShortTermDreamingPromotion(params: {
         });
       }
     }
+    params.reportProgress?.("dreaming:workspace_done");
     // The sweep owns diary publication, not the individual phases. Preserve prepared
     // Light/REM material even when promotion/reporting failed, and publish only once.
     const firstNarrative = narratives[0];
@@ -640,6 +644,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
           logger: api.logger,
           subagent: api.runtime.subagent,
           narrativeTimeoutMs: api.runtime.agent.resolveAgentTimeoutMs({ cfg: currentConfig }),
+          reportProgress: ctx.reportProgress,
           ...(typeof currentConfig.agents?.defaults?.timeoutSeconds === "number"
             ? {
                 consolidationTimeoutMs: api.runtime.agent.resolveAgentTimeoutMs({

@@ -2,7 +2,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { runOncePerAgentRun } from "../infra/agent-events.js";
+import type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
+import { emitCoreSemanticRunProgressDiagnosticEvent } from "../infra/diagnostic-semantic-run-progress.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
+import {
+  closeDiagnosticEmbeddedRunOwner,
+  createDiagnosticEmbeddedRunOwner,
+} from "../logging/diagnostic-run-activity.js";
+import type { SessionControllerWatchdog } from "../sessions/session-controller.watchdog.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { readClaimingHookAdmission, withClaimingHookAdmission } from "./hook-claim-admission.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
@@ -51,12 +58,15 @@ export function runBeforeAgentReplyForTurn(params: {
   awaitSessionDiffBaseline?: () => Promise<void>;
   onDispatch?: () => void;
   onDeclined?: () => void;
+  onProgress?: (detail?: string) => void;
+  diagnosticOwner?: DiagnosticEmbeddedRunOwner;
+  watchdog?: Pick<SessionControllerWatchdog, "attachAttempt">;
 }): Promise<PluginHookBeforeAgentReplyResult | undefined> {
   const trigger = params.trigger;
   if (!isPluginHookAgentTrigger(trigger)) {
     return Promise.resolve(undefined);
   }
-  const context = { ...params.context, trigger };
+  const context: PluginHookAgentContext = { ...params.context, trigger };
   const inherited = readClaimingHookAdmission(context);
   const assertCurrent = params.assertCurrent
     ? () => {
@@ -88,7 +98,63 @@ export function runBeforeAgentReplyForTurn(params: {
       assertCurrent?.();
       params.onDispatch?.();
       assertCurrent?.();
-      let result = await hookRunner.runBeforeAgentReply(params.event, context);
+      const ownedWatchdogAttempt =
+        !params.diagnosticOwner && params.watchdog
+          ? params.watchdog.attachAttempt({
+              assertCurrent: () => assertCurrent?.(),
+            })
+          : undefined;
+      const sessionId = context.sessionId?.trim();
+      const ownedDiagnosticOwner =
+        !params.diagnosticOwner && ownedWatchdogAttempt && sessionId
+          ? createDiagnosticEmbeddedRunOwner({
+              runId: params.runId,
+              sessionId,
+              sessionKey: context.sessionKey,
+              watchdogAttempt: ownedWatchdogAttempt,
+            })
+          : undefined;
+      const progressOwner = params.diagnosticOwner ?? ownedDiagnosticOwner;
+      let dispatchActive = false;
+      if (params.onProgress || progressOwner || ownedWatchdogAttempt) {
+        context.reportProgress = (detail?: string) => {
+          if (!dispatchActive) {
+            return;
+          }
+          try {
+            assertCurrent?.();
+          } catch {
+            return;
+          }
+          params.onProgress?.(detail);
+          const trimmed = detail?.trim();
+          const reason = trimmed ? `before_agent_reply:${trimmed}` : "before_agent_reply:progress";
+          if (progressOwner) {
+            emitCoreSemanticRunProgressDiagnosticEvent(
+              {
+                runId: params.runId,
+                sessionId: progressOwner.sessionId,
+                sessionKey: context.sessionKey,
+                reason,
+              },
+              progressOwner,
+            );
+            return;
+          }
+          ownedWatchdogAttempt?.progress("semantic", reason);
+        };
+      }
+      let result: PluginHookBeforeAgentReplyResult | undefined;
+      dispatchActive = true;
+      try {
+        result = await hookRunner.runBeforeAgentReply(params.event, context);
+      } finally {
+        dispatchActive = false;
+        if (ownedDiagnosticOwner) {
+          closeDiagnosticEmbeddedRunOwner(ownedDiagnosticOwner);
+        }
+        ownedWatchdogAttempt?.close();
+      }
       assertCurrent?.();
       if (!result?.handled) {
         params.onDeclined?.();
