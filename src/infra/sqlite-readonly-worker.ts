@@ -471,7 +471,10 @@ export function runOneShotSqliteInspection<T>(
   const pathname = params.mode === "staging-sweep" ? "snapshot staging" : params.pathname;
   const env = withSelectedSqliteLibraryEnv(params.env ?? resolveNodeCompileCacheEnv());
   const executable = process.execPath;
-  const cwd = params.cwd ?? tryProcessCwd();
+  // Inheriting the current directory avoids a redundant chdir that fails with EACCES when this
+  // user cannot enter it, as under `runuser -u <user>` from root's home.
+  const processCwd = tryProcessCwd();
+  const cwd = params.cwd === undefined || params.cwd === processCwd ? undefined : params.cwd;
   let stopped = false;
   let stop = () => {
     stopped = true;
