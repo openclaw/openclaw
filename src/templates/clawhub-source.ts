@@ -1,4 +1,5 @@
 // ClawHub discovery and exact-artifact resolution for public Templates.
+import { isUtf8 } from "node:buffer";
 import fs from "node:fs/promises";
 import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
@@ -368,13 +369,27 @@ async function readClawHubTemplateContents(
       timeoutMs: params.timeoutMs ?? CLAWHUB_TIMEOUT_MS,
       rootMarkers: ["package.json", "CLAW.md"],
       onExtracted: async (rootDir) => {
-        const verified = await readVerifiedArtifactSource({
-          sourceRoot: rootDir,
-          packageName: params.packageName,
-          version: params.version,
-          artifactSha256: expected.sha256,
-          artifactByteLength,
-        });
+        // Project excerpts from the same bounded reads that verified the workspace. The
+        // projection stays request-local and is returned only after full verification.
+        const workspaceExcerpts = requestedPreview ? undefined : new Map<string, string>();
+        const verified = await readVerifiedArtifactSource(
+          {
+            sourceRoot: rootDir,
+            packageName: params.packageName,
+            version: params.version,
+            artifactSha256: expected.sha256,
+            artifactByteLength,
+          },
+          workspaceExcerpts &&
+            ((source, bytes) => {
+              if (!workspaceExcerpts.has(source)) {
+                workspaceExcerpts.set(
+                  source,
+                  isUtf8(bytes) ? toCatalogExcerpt(bytes.toString("utf8")) : "",
+                );
+              }
+            }),
+        );
         const manifest = verified.manifest;
         const instructions = [
           ...Object.entries(manifest.workspace.bootstrapFiles)
@@ -401,15 +416,23 @@ async function readClawHubTemplateContents(
           : await Promise.all([
               Promise.all(
                 instructions.map(async (instruction) => {
-                  const preview = await readClawHubCatalogExcerpt({
-                    params,
-                    requested: { kind: "instruction", name: instruction.name },
-                    instructions,
-                    skills,
-                    verified,
-                    rootDir,
-                  });
-                  const excerpt = toCatalogExcerpt(preview?.content);
+                  let excerpt: string | undefined;
+                  if (instruction.source === "CLAW.md#body") {
+                    excerpt = toCatalogExcerpt(verified.templateMarkdownBody?.toString("utf8"));
+                  } else if (instruction.source === verified.packageBootstrap?.sourcePath) {
+                    // The package-root seed has its own limits; keep its existing preview path.
+                    const preview = await readClawHubCatalogExcerpt({
+                      params,
+                      requested: { kind: "instruction", name: instruction.name },
+                      instructions,
+                      skills,
+                      verified,
+                      rootDir,
+                    });
+                    excerpt = toCatalogExcerpt(preview?.content);
+                  } else {
+                    excerpt = workspaceExcerpts?.get(instruction.source);
+                  }
                   return { ...instruction, ...(excerpt ? { excerpt } : {}) };
                 }),
               ),

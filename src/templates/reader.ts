@@ -282,7 +282,10 @@ async function resolveSource(
   };
 }
 
-export async function readTemplateManifestFile(path: string): Promise<TemplateReadResult> {
+export async function readTemplateManifestFile(
+  path: string,
+  onWorkspaceSource?: (sourcePath: string, bytes: Buffer) => void,
+): Promise<TemplateReadResult> {
   const sourceResult = await resolveSource(path);
   if (!sourceResult.ok) {
     return sourceResult;
@@ -469,6 +472,7 @@ export async function readTemplateManifestFile(path: string): Promise<TemplateRe
       }
       const digest = digestTemplateBytes(bytes);
       add(`workspace:${sourcePath}`, bytes);
+      onWorkspaceSource?.(sourcePath, bytes);
       workspaceSources.push({
         sourcePath,
         realPath: opened.realPath,
