@@ -107,6 +107,8 @@ export type PassContext = Readonly<{
   preparations: Map<string, AbortController>;
   isAdmitted: () => boolean;
   activeDemand: ReturnType<PassContext["presence"]["current"]>;
+  /** The demand read failed, so absence is unknown rather than proven. */
+  demandUnavailable: boolean;
   presenceDeferred: boolean;
   preserveReconstructing: ReturnType<PassContext["presence"]["captureReconstruction"]>;
   inventory: readonly Environment[];
