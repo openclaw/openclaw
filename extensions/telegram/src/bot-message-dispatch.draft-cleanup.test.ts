@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 import { cleanupDrafts, ingestDraftLaneSegments } from "./bot-message-dispatch-draft.js";
 import type { TelegramDispatchTurn as Turn } from "./bot-message-dispatch.types.js";
 
 type RetainedPage = { messageId: number; text: string };
+type DeleteMessage = (chatId: number, messageId: number) => Promise<boolean>;
 
 function makeTurn(
   params: {
@@ -13,11 +14,11 @@ function makeTurn(
     reasoningPages?: RetainedPage[];
     dispatchError?: unknown;
     agentRunFailed?: boolean;
-    deleteMessage?: (chatId: number, messageId: number) => Promise<boolean>;
+    deleteMessage?: Mock<DeleteMessage>;
     streamMode?: "partial" | "progress";
   } = {},
 ) {
-  const deleteMessage = params.deleteMessage ?? vi.fn(async () => true);
+  const deleteMessage = params.deleteMessage ?? vi.fn<DeleteMessage>(async () => true);
   const cleanup = vi.fn(async () => undefined);
   const lane = (finalized: boolean, pages: RetainedPage[] = []) => ({
     stream: undefined,
@@ -118,7 +119,7 @@ describe("cleanupDrafts suppressed-final reclamation", () => {
     const rejecting = makeTurn({
       finalSuppressed: true,
       answerPages: [{ messageId: 3367, text: "page" }],
-      deleteMessage: vi.fn(async () => {
+      deleteMessage: vi.fn<DeleteMessage>(async () => {
         throw new Error("flood");
       }),
     });
@@ -126,7 +127,7 @@ describe("cleanupDrafts suppressed-final reclamation", () => {
     const unconfirmed = makeTurn({
       finalSuppressed: true,
       answerPages: [{ messageId: 3368, text: "page" }],
-      deleteMessage: vi.fn(async () => false),
+      deleteMessage: vi.fn<DeleteMessage>(async () => false),
     });
     await expect(cleanupDrafts(unconfirmed.turn, false)).resolves.toBeUndefined();
     expect(unconfirmed.cleanup).toHaveBeenCalled();

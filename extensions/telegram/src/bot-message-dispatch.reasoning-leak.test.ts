@@ -1,6 +1,21 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { describe, expect, it, vi } from "vitest";
 import { createTelegramDispatchHttpFixture } from "./bot-message-dispatch.telegram-http.test-support.js";
+
+function row(id: string, compat?: ModelDefinitionConfig["compat"]): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+    ...(compat ? { compat } : {}),
+  };
+}
 
 // Incident regression: a provider/model that emits its own reasoning into the
 // OpenAI-compatible content stream (compat.emitsReasoningInContent) must not leak
@@ -12,14 +27,12 @@ describe("Telegram reasoning-in-content leak cleanup", () => {
   type Scenario = NonNullable<Parameters<typeof dispatchProgressTurn>[1]>;
   type Producer = NonNullable<Scenario["producer"]>;
 
-  const flaggedCfg = {
+  const flaggedCfg: OpenClawConfig = {
     models: {
       providers: {
         "local-endpoint": {
-          models: [
-            { id: "leaky", compat: { emitsReasoningInContent: true } },
-            { id: "well-behaved" },
-          ],
+          baseUrl: "https://llm.example.test/v1",
+          models: [row("leaky", { emitsReasoningInContent: true }), row("well-behaved")],
         },
       },
     },
@@ -51,7 +64,7 @@ describe("Telegram reasoning-in-content leak cleanup", () => {
     const leaked = "Leaked chain-of-thought that must never reach Telegram. ";
     await produce(async ({ dispatcher, replyOptions }) => {
       // Failover selects the flagged provider/model mid-turn.
-      await selectModel(replyOptions, "leaky");
+      selectModel(replyOptions, "leaky");
       // The flagged endpoint streams reasoning into the content lane.
       await replyOptions?.onPartialReply?.({ text: leaked });
       // The model produced no user-facing reply; the final settles silently.
@@ -78,7 +91,7 @@ describe("Telegram reasoning-in-content leak cleanup", () => {
       const untagged = "Let me reason through this privately first.";
       await produce(
         async ({ dispatcher, replyOptions }) => {
-          await selectModel(replyOptions, model);
+          selectModel(replyOptions, model);
           // Untagged reasoning arrives as an ordinary block; no tag marks it.
           dispatcher.sendBlockReply({ text: untagged });
           await dispatcher.waitForIdle();
@@ -111,12 +124,12 @@ describe("Telegram reasoning-in-content leak cleanup", () => {
     let previewId: number | undefined;
     await produce(
       async ({ dispatcher, replyOptions }) => {
-        await selectModel(replyOptions, "well-behaved");
+        selectModel(replyOptions, "well-behaved");
         await replyOptions?.onPartialReply?.({ text: streamed });
         await http.waitForContaining("Primary model preview", "sendMessage");
         previewId = [...http.visibleMessages.keys()][0];
         // Failover hands the turn to the flagged model, whose final is reasoning only.
-        await selectModel(replyOptions, "leaky");
+        selectModel(replyOptions, "leaky");
         dispatcher.sendFinalReply({ text: "<think>private reasoning</think>" });
         const counts = dispatcher.getQueuedCounts();
         return { queuedFinal: counts.final > 0, counts };
@@ -137,7 +150,7 @@ describe("Telegram reasoning-in-content leak cleanup", () => {
     const streamed = "Normal streamed answer that should preview.";
     const final = "The complete normal answer.";
     await produce(async ({ dispatcher, replyOptions }) => {
-      await selectModel(replyOptions, "well-behaved");
+      selectModel(replyOptions, "well-behaved");
       await replyOptions?.onPartialReply?.({ text: streamed });
       // Wait for the preview to land so the streamed text is recorded deterministically.
       await http.waitForContaining(streamed, "sendMessage");

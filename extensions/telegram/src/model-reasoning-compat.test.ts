@@ -1,6 +1,20 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { describe, expect, it } from "vitest";
 import { resolveEmitsReasoningInContent } from "./model-reasoning-compat.js";
+
+function row(id: string, compat?: ModelDefinitionConfig["compat"]): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8_192,
+    ...(compat ? { compat } : {}),
+  };
+}
 
 const cfg: OpenClawConfig = {
   models: {
@@ -8,14 +22,14 @@ const cfg: OpenClawConfig = {
       "local-endpoint": {
         baseUrl: "https://llm.example.test/v1",
         models: [
-          { id: "reasoning-in-content", compat: { emitsReasoningInContent: true } },
-          { id: "separate-reasoning" },
-          { id: "explicit-off", compat: { emitsReasoningInContent: false } },
+          row("reasoning-in-content", { emitsReasoningInContent: true }),
+          row("separate-reasoning"),
+          row("explicit-off", { emitsReasoningInContent: false }),
         ],
       },
     },
   },
-} as OpenClawConfig;
+};
 
 describe("resolveEmitsReasoningInContent", () => {
   it("opts in for the flagged provider/model row", () => {
@@ -41,13 +55,11 @@ describe("resolveEmitsReasoningInContent", () => {
         providers: {
           "local-endpoint": {
             baseUrl: "https://llm.example.test/v1",
-            models: [
-              { id: "local-endpoint/prefixed-row", compat: { emitsReasoningInContent: true } },
-            ],
+            models: [row("local-endpoint/prefixed-row", { emitsReasoningInContent: true })],
           },
         },
       },
-    } as OpenClawConfig;
+    };
     expect(resolveEmitsReasoningInContent(prefixed, "local-endpoint", "prefixed-row")).toBe(true);
   });
 
@@ -56,7 +68,7 @@ describe("resolveEmitsReasoningInContent", () => {
     expect(resolveEmitsReasoningInContent(cfg, "local-endpoint", "unknown-model")).toBe(false);
     expect(resolveEmitsReasoningInContent(cfg, "", "reasoning-in-content")).toBe(false);
     expect(resolveEmitsReasoningInContent(cfg, "local-endpoint", "")).toBe(false);
-    const empty: OpenClawConfig = {} as OpenClawConfig;
+    const empty: OpenClawConfig = {};
     expect(resolveEmitsReasoningInContent(empty, "local-endpoint", "reasoning-in-content")).toBe(
       false,
     );
