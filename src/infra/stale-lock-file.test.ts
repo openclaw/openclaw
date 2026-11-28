@@ -41,8 +41,10 @@ describe("stale lock file ownership", () => {
   it("keeps expired locks when a pid owner is not definitely dead", () => {
     vi.spyOn(pidAlive, "isPidDefinitelyDead").mockReturnValue(false);
     expect(
-      isLockOwnerDefinitelyStale({
+      shouldRemoveDeadOwnerOrExpiredLock({
         payload: { pid: 123, createdAt: "2026-05-23T00:00:00.000Z" },
+        staleMs: 10,
+        nowMs: Date.parse("2026-05-23T00:00:11.000Z"),
       }),
     ).toBe(false);
   });
