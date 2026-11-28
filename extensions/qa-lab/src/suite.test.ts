@@ -100,6 +100,7 @@ describe("qa suite", () => {
         return { process: "confirmed-stopped", errors: [] };
       },
       disposeAgentHarnesses: step("agent harnesses"),
+      captureProviderArtifacts: step("provider artifacts"),
       stopProvider: step("provider", providerFailure),
       finishLab: step("lab"),
     });
@@ -110,6 +111,7 @@ describe("qa suite", () => {
       "gateway",
       "transport after gateway",
       "agent harnesses",
+      "provider artifacts",
       "provider",
       "lab",
     ]);

@@ -190,6 +190,7 @@ export async function runQaFlowSuiteCleanupPlan(params: {
   cleanupTransportAfterGatewayStop: () => Promise<void>;
   stopGateway: () => Promise<QaGatewayStopResult>;
   disposeAgentHarnesses: () => Promise<void>;
+  captureProviderArtifacts?: () => Promise<void>;
   stopProvider?: () => Promise<void>;
   finishLab: () => Promise<void>;
 }) {
@@ -219,6 +220,9 @@ export async function runQaFlowSuiteCleanupPlan(params: {
     // that the isolated runtime reached its terminal boundary.
     { phase: "transport after gateway stop", run: cleanupTransportAfterGatewayStop },
     { phase: "agent harnesses", run: params.disposeAgentHarnesses },
+    ...(params.captureProviderArtifacts
+      ? [{ phase: "provider artifacts", run: params.captureProviderArtifacts }]
+      : []),
     ...(params.stopProvider ? [{ phase: "provider stop", run: params.stopProvider }] : []),
     { phase: "lab finish", run: params.finishLab },
   ]);
