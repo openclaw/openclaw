@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Command } from "commander";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { runWithLocalStateOwner } from "openclaw/plugin-sdk/cli-state-owner";
+import { getAsyncWorkSignal } from "openclaw/plugin-sdk/concurrency-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { readByteStreamWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
@@ -42,10 +43,14 @@ export function withMatrixVerificationBootstrapOptions(command: Command): Comman
 }
 
 async function readMatrixCliRecoveryKeyFromStdin(): Promise<string> {
+  const signal = getAsyncWorkSignal();
   const bytes = await readByteStreamWithLimit(process.stdin, {
     maxBytes: MATRIX_CLI_RECOVERY_KEY_STDIN_MAX_BYTES,
+    signal,
     onOverflow: ({ maxBytes }) => new Error(`Matrix recovery key stdin exceeds ${maxBytes} bytes.`),
   });
+  // A cancellation accepted after EOF must not bootstrap/backup cross-signing identity.
+  signal?.throwIfAborted();
   const recoveryKey = bytes.toString("utf8").trim();
   if (!recoveryKey) {
     throw new Error("Matrix recovery key was requested from stdin, but stdin was empty.");

@@ -27,4 +27,86 @@ describe("readByteStreamWithLimit", () => {
     expect(destroySpy).toHaveBeenCalledWith();
     expect(errorSpy).not.toHaveBeenCalled();
   });
+
+  it("rejects immediately with AbortError when the signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      readByteStreamWithLimit(Readable.from([Buffer.from("ab")]), {
+        maxBytes: 4,
+        signal: controller.signal,
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("destroys the stream and rejects with AbortError when the signal aborts mid-read", async () => {
+    const controller = new AbortController();
+    const stream = new Readable({
+      read() {
+        // Hold the stream open until the signal aborts it; this mimics a
+        // held-open stdin waiting for EOF after Ctrl-C.
+      },
+    });
+    const destroySpy = vi.spyOn(stream, "destroy");
+
+    const reading = readByteStreamWithLimit(stream, {
+      maxBytes: 4,
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    await expect(reading).rejects.toMatchObject({ name: "AbortError" });
+    expect(destroySpy).toHaveBeenCalled();
+  });
+
+  it("reads a WHATWG ReadableStream through an owned reader", async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([0x61]));
+        controller.enqueue(new Uint8Array([0x62]));
+        controller.close();
+      },
+    });
+
+    const buffer = await readByteStreamWithLimit(stream, { maxBytes: 4 });
+    expect(buffer).toEqual(Buffer.from("ab"));
+  });
+
+  it("cancels the owned reader and rejects with AbortError when a WHATWG ReadableStream stalls", async () => {
+    const controller = new AbortController();
+    const stream = new ReadableStream({
+      start() {
+        // Never enqueue or close; mimics a stalled HTTP response body held open
+        // by the network while the operator cancels the command.
+      },
+    });
+
+    const reading = readByteStreamWithLimit(stream, {
+      maxBytes: 1024,
+      signal: controller.signal,
+    });
+
+    controller.abort();
+
+    await expect(reading).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("throws and cancels the owned reader after a WHATWG ReadableStream overflow", async () => {
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(new Uint8Array([0x61]));
+        controller.enqueue(new Uint8Array([0x62]));
+        controller.close();
+      },
+    });
+
+    await expect(
+      readByteStreamWithLimit(stream, {
+        maxBytes: 1,
+        onOverflow: ({ size, maxBytes }) => new Error(`too large ${size}/${maxBytes}`),
+      }),
+    ).rejects.toThrow("too large 2/1");
+  });
 });

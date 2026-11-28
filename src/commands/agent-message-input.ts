@@ -4,6 +4,7 @@ import { TextDecoder } from "node:util";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
 
@@ -32,10 +33,14 @@ export async function readBoundedCliTextInput(
   const label = options?.label ?? "Message";
   let buffer: Buffer;
   if (inputFile === "-") {
+    const signal = getAsyncWorkSignal();
     buffer = await readByteStreamWithLimit(process.stdin, {
       maxBytes,
+      signal,
       onOverflow: () => new Error(`${label} stdin exceeds ${maxBytes} bytes`),
     });
+    // A cancellation accepted after EOF must not dispatch the message as an agent turn.
+    signal?.throwIfAborted();
   } else {
     // Open the original path so the kernel preserves symlink and procfs magic-link
     // behavior (notably piped /dev/stdin), then inspect that exact descriptor.

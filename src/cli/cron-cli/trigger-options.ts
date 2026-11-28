@@ -4,6 +4,7 @@ import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-w
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { isErrno } from "../../infra/errno.js";
 import { FsSafeError, readRegularFile } from "../../infra/fs-safe.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { CronCliError } from "./cron-cli-error.js";
 
 const MAX_CRON_TRIGGER_SCRIPT_BYTES = 65_536;
@@ -23,12 +24,18 @@ async function readCronInput(
   label: string,
 ): Promise<Buffer> {
   const onOverflow = () => new CronCliError(`${label} exceeds ${maxBytes} bytes`);
+  const signal = getAsyncWorkSignal();
+  let bytes: Buffer;
   try {
     if (source === "-") {
-      return await readByteStreamWithLimit(stdin ?? process.stdin, { maxBytes, onOverflow });
+      bytes = await readByteStreamWithLimit(stdin ?? process.stdin, {
+        maxBytes,
+        onOverflow,
+        signal,
+      });
+    } else {
+      bytes = (await readRegularFile({ filePath: await realpath(source), maxBytes })).buffer;
     }
-    const { buffer } = await readRegularFile({ filePath: await realpath(source), maxBytes });
-    return buffer;
   } catch (error) {
     if (error instanceof FsSafeError && error.code === "too-large") {
       throw onOverflow();
@@ -44,6 +51,10 @@ async function readCronInput(
     }
     throw error;
   }
+  // Reject accepted cancellation that lands after the read but before the caller
+  // turns the bytes into a cron mutation RPC.
+  signal?.throwIfAborted();
+  return bytes;
 }
 
 async function readScriptStream(
