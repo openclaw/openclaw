@@ -78,6 +78,7 @@ const repositoryScriptEntries = [
   // Forked by server-startup-legacy-completion.test.ts to model a schema-40 verifier.
   "src/gateway/legacy-schema40-driver.test-support.ts!",
   // Their source headers document standalone benchmark and measurement commands.
+  "scripts/bench-personal-vocabulary.mts!",
   "scripts/bench-ci-lint-plan.mts!",
   "scripts/bench-ci-planner.mts!",
   "scripts/bench-android-release-history.mts!",
