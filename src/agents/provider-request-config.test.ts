@@ -26,7 +26,7 @@ import {
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 function buildProviderMetadataOwners(
-  endpoints: NonNullable<PluginMetadataSnapshotOwnerMaps["providerEndpoints"]> = [],
+  endpoints: NonNullable<PluginMetadataSnapshotOwnerMaps["providerEndpoints"]>,
   requests: NonNullable<PluginMetadataSnapshotOwnerMaps["providerRequests"]> = new Map(),
 ): PluginMetadataSnapshotOwnerMaps {
   const empty = new Map<string, readonly string[]>();
@@ -369,7 +369,7 @@ describe("provider request config", () => {
     const resolved = resolveProviderRequestHeaders({
       provider: "custom-openai",
       callerHeaders: {
-        __proto__: "polluted",
+        ["__proto__"]: "polluted",
         constructor: "polluted",
         "X-Custom": "1",
       } as Record<string, string>,

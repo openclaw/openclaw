@@ -355,9 +355,9 @@ function endpointAlias(baseUrls = ["https://openrouter.ai/api/v1"]) {
 }
 
 function installAuthFixture(
-  config: Parameters<typeof createProviderAuthResolver>[2] = {},
-  env: NodeJS.ProcessEnv = {},
-  profiles: AuthProfileStore["profiles"] = {},
+  config: Parameters<typeof createProviderAuthResolver>[2],
+  env: NodeJS.ProcessEnv,
+  profiles: AuthProfileStore["profiles"],
   plugins = [createFixtureProviderManifest()],
 ) {
   setCurrentPluginMetadataSnapshot(createPluginMetadataSnapshot({ config, plugins }), {
