@@ -112,6 +112,21 @@ describe("agent roster activity", () => {
     expect(rows).toEqual(before);
   });
 
+  it("uses conversation activity clocks without sorting the shared roster", () => {
+    const cards = agentRosterCards(roster(["main", "legacy", "created", "empty"]), [
+      row("agent:main:main", { updatedAt: 9_000, lastActivityAt: 10 }),
+      row("agent:main:work", { updatedAt: 8_000, lastActivityAt: 40, lastInteractionAt: 80 }),
+      row("agent:legacy:main", { updatedAt: 70 }),
+      row("agent:created:main", { createdAt: 60 }),
+    ]);
+    expect(cards.map(({ id, lastActiveAt }) => ({ id, lastActiveAt }))).toEqual([
+      { id: "main", lastActiveAt: 80 },
+      { id: "legacy", lastActiveAt: 70 },
+      { id: "created", lastActiveAt: 60 },
+      { id: "empty", lastActiveAt: 0 },
+    ]);
+  });
+
   it("uses the canonical global main stream rather than a synthesized agent key", () => {
     const cards = agentRosterCards(roster(["main"], { scope: "global" }), [
       previewRow("global", 1, "Main stream", { kind: "global" }),

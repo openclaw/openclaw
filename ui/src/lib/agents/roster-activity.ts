@@ -1,3 +1,5 @@
+import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
+import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.ts";
 import {
   isSubagentSessionRow,
   isSystemCreatedSessionRow,
@@ -41,7 +43,8 @@ export function agentRosterCards(
     ).sessionKey;
     const sessions = sessionsByAgent.get(agent.id) ?? [];
     const recent = sessions.reduce<GatewaySessionRow | undefined>(
-      (latest, row) => (!latest || (row.updatedAt ?? 0) > (latest.updatedAt ?? 0) ? row : latest),
+      (latest, row) =>
+        !latest || sessionActivityTimestamp(row) > sessionActivityTimestamp(latest) ? row : latest,
       undefined,
     );
     const lastAssistantMessage = sessions.reduce<GatewaySessionRow["lastAssistantMessage"]>(
@@ -64,7 +67,10 @@ export function agentRosterCards(
       textAvatar: resolveAgentTextAvatar(agent, identity),
       mainKey,
       activeNow: sessions.some(isSessionRunStateActive),
-      lastActiveAt: recent?.updatedAt ?? 0,
+      unread: sessions.some(
+        (row) => row.unread === true && !row.incognito && !isIncognitoSessionKey(row.key),
+      ),
+      lastActiveAt: recent ? sessionActivityTimestamp(recent) : 0,
       preview: (main ?? recent)?.lastMessagePreview,
       assistantPreview: lastAssistantMessage?.text,
     };
