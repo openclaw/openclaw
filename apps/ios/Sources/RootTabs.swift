@@ -407,6 +407,9 @@ struct RootTabs: View {
                 onRouteChange: self.handleSettingsRouteChange,
                 onApprovalNotificationsRoute: self.openNotificationSettings)
                 .id(path)
+        case .usage:
+            NativeUsageScreen(headerSidebarAction: self.sidebarHeaderAction)
+                .id(self.appModel.operatorAuthorityGeneration)
         case .sessions:
             CommandSessionsScreen(
                 sidebarModel: self.sidebarModel,
