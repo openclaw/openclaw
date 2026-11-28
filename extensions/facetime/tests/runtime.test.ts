@@ -54,15 +54,15 @@ function outgoingCall(
 describe("FaceTime runtime call sequencing", () => {
   beforeEach(resetRuntimeTestState);
 
-  it("answers muted after suppression, then waits for provider and route readiness", async () => {
+  it("waits for provider and route readiness before answering, then activates", async () => {
     const order: string[] = [];
     let releaseReadiness = () => {};
+    const readiness = new Promise<void>((resolve) => {
+      releaseReadiness = resolve;
+    });
     const talk = createTalkDriver({
       order,
-      readyForAudio: () =>
-        new Promise<void>((resolve) => {
-          releaseReadiness = resolve;
-        }),
+      readyForAudio: () => readiness,
     });
     mocks.startTalk.mockImplementationOnce(async () => {
       order.push("suppression-ready");
@@ -99,15 +99,18 @@ describe("FaceTime runtime call sequencing", () => {
     void mocks.helperParams?.onMessage(incomingCall());
     await vi.waitFor(() => expect(talk.readyForAudio).toHaveBeenCalledOnce());
 
-    expect(order).toEqual(["suppression-ready", "answer-muted", "provider-and-route-readiness"]);
+    expect(order).toEqual(["suppression-ready", "provider-and-route-readiness"]);
+    expect(mocks.helper.answerCall).not.toHaveBeenCalled();
     expect(mocks.helper.setMuted).not.toHaveBeenCalled();
     expect(mocks.helper.startTransmission).not.toHaveBeenCalled();
     expect(talk.activate).not.toHaveBeenCalled();
 
     releaseReadiness();
+    await vi.waitFor(() => expect(mocks.helper.answerCall).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledOnce());
     expect(order).toEqual([
       "suppression-ready",
+      "provider-and-route-readiness",
       "answer-muted",
       "provider-and-route-readiness",
       "unmute",
