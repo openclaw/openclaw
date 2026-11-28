@@ -61,7 +61,7 @@ function expectCompletedTool(
   });
   expect(
     called,
-    `chat.history omitted tool call ${params.name}: ${JSON.stringify(messages).slice(-16_384)}`,
+    `chat.history omitted tool call ${params.name} with marker ${params.marker}: ${JSON.stringify(messages).slice(-16_384)}`,
   ).toBe(true);
   const result = messages.find(
     (candidate) =>
@@ -208,14 +208,16 @@ describe.skipIf(!LIVE_ENABLED)("OpenAI cross-placement MCP model proof", () => {
         expect(descriptors.map(({ name, mcp }) => ({ name, mcp }))).toEqual([
           { name: "nodeLive_parity_probe", mcp: { server: "nodeLive", tool: "parity_probe" } },
         ]);
-        const gatewayMarker = `gateway-${randomUUID()}`;
-        const nodeMarker = `node-${randomUUID()}`;
+        // Keep the per-run markers short enough for the model to copy verbatim.
+        const gatewayMarker = `gateway-${randomUUID().slice(0, 8)}`;
+        const nodeMarker = `node-${randomUUID().slice(0, 8)}`;
         const expectedToken = `MCP_LIVE_OK_${randomUUID().replaceAll("-", "")}`;
         const sessionKey = `agent:qa:mcp-live-${randomUUID()}`;
         const idempotencyKey = randomUUID();
         const prompt =
-          `Call parity_probe on MCP server gatewayLive with marker ${gatewayMarker}. ` +
-          `Call nodeLive_parity_probe with marker ${nodeMarker}. ` +
+          `Call parity_probe on MCP server gatewayLive with marker "${gatewayMarker}". ` +
+          `Call nodeLive_parity_probe with marker "${nodeMarker}". ` +
+          `Copy each marker exactly as written. ` +
           `Only after both calls return successfully, reply with exactly ${expectedToken} and nothing else.`;
         const completed = (await gateway.call(
           "agent",
