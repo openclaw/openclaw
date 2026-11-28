@@ -56,6 +56,7 @@ import { createCronRunDiagnosticsFromError, mergeCronRunDiagnostics } from "../r
 import {
   resolveCronAgentErrorClassification,
   resolveCronAgentTerminalOutcome,
+  resolveCronRateLimitResetAt,
 } from "../run-error-reason.js";
 import {
   normalizeCronRunErrorText,
@@ -602,6 +603,7 @@ async function runCronIsolatedAgentTurnInTrace(
                     ? readAgentTerminalSnapshot(err)
                     : undefined,
                 interruptedByRestart,
+                rateLimitResetAt: resolveCronRateLimitResetAt(err),
                 errorClassification:
                   err instanceof CronOperatorSourceError
                     ? { kind: "permanent" }

@@ -17,7 +17,11 @@ import { cronScriptFailureMetadata } from "../script-failure.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronStoredJob } from "../types.js";
-import { needsCronTimerMaintenance, resolveJobErrorBackoffUntilMs } from "./jobs-scheduling.js";
+import {
+  computeJobNextRunAtMs,
+  needsCronTimerMaintenance,
+  resolveJobErrorBackoffUntilMs,
+} from "./jobs-scheduling.js";
 import type { CronServiceDeps, DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
 import { applyJobResult } from "./timer-outcomes.js";
@@ -267,6 +271,46 @@ it("preserves every cadence after a transient recurring retry succeeds", () => {
   apply({ status: "ok", endedAt: retryStartedAt });
   expect(job.state.lastStatus).toBe("ok");
   expect(job.state.nextRunAtMs).toBe(scheduledAt + everyTwelveHoursMs);
+});
+
+// Production: hourly and weekday jobs retried a provider limit with a 6-day reset every slot.
+it.each([
+  ["every", { kind: "every", everyMs: 60 * 60_000, anchorMs: startedAt }],
+  ["cron", { kind: "cron", expr: "0 6,10,14,18 * * 1-5", tz: "UTC" }],
+] as const)("runs a %s job on its first slot after the provider's reset", (_, jobSchedule) => {
+  const resetAt = startedAt + 6 * 24 * 60 * 60 * 1000 + 30 * 60_000;
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
+    schedule: jobSchedule,
+    failureAlert: { after: 1, cooldownMs: 0 },
+  });
+  apply({
+    status: "error",
+    error: "429 rate limited",
+    provider: "openai",
+    rateLimitResetAt: resetAt,
+  });
+  expect(job.enabled).toBe(true);
+  expect(job.state.nextRunAtMs).toBe(computeJobNextRunAtMs(job, resetAt - 1));
+  // An on-slot time that schedule maintenance keeps, not an off-slot floor it would rewrite.
+  for (const nowMs of [startedAt + 10 * 60_000, startedAt + 2 * 60 * 60_000]) {
+    expect(needsCronTimerMaintenance(job, nowMs)).toBe(false);
+  }
+  // A days-long wait does not hold the failure alert for a quick retry.
+  expect(deferredNotifications.map((notice) => notice.kind)).toContain("failure-alert");
+});
+
+it("moves a quick retry to a reset just past its backoff instead of the next daily slot", () => {
+  const resetAt = startedAt + 45_000;
+  const { job, apply } = outcomeFixture(startedAt, {
+    schedule: { kind: "cron", expr: "0 6 * * *", tz: "UTC" },
+  });
+  apply({
+    status: "error",
+    error: "429 rate limited",
+    provider: "openai",
+    rateLimitResetAt: resetAt,
+  });
+  expect(job.state.nextRunAtMs).toBe(resetAt);
 });
 
 it.each(["timer maintenance", "startup catch-up"] as const)(

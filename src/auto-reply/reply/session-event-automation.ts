@@ -6,6 +6,7 @@ import {
   createCronRunDiagnosticsFromError,
   mergeCronRunDiagnostics,
 } from "../../cron/run-diagnostics.js";
+import { resolveCronRateLimitResetAt } from "../../cron/run-error-reason.js";
 import { projectCronRunUsage } from "../../cron/run-telemetry.js";
 import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -237,6 +238,8 @@ export async function settleSessionEventTurn(params: {
             finalStatus: failed ? "error" : "ok",
           }),
       ...configurationRefusal,
+      // The settled cause is in-process only; cron keeps the reset as a transient schedule fact.
+      ...(failed ? { rateLimitResetAt: resolveCronRateLimitResetAt(failureCause) } : {}),
     },
   };
 

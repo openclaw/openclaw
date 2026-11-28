@@ -50,6 +50,7 @@ export type SessionEventOutcome = {
       | "result"
       | "errorClassification"
       | "failureNotificationDetail"
+      | "rateLimitResetAt"
     >;
   /** Recorded by the turn owner before delivery/cleanup can flatten its cause. */
   terminalOutcome?: AgentRunTerminalOutcome;
