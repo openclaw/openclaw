@@ -176,9 +176,18 @@ async function startGatewayServerWithRuntime(
         return withAgentDatabaseStartupAdmission(
           async (admission) => {
             stopDatabaseAdmission = () => admission.stop();
+            await using stateSchemaReader = admission.hasPreparedStateSchema()
+              ? undefined
+              : (
+                  await import("../state/openclaw-agent-schema-inspection-worker.js")
+                ).prestartGatewayStateSchemaReader(process.env);
             const mod = await loadServerStart();
             opts.gatewayStateOwner?.assertDatabaseAccess(resolveOpenClawStateSqlitePath());
-            return mod.startGatewayServerCore(port, { ...opts, startupStartedAt });
+            return await mod.startGatewayServerCore(port, {
+              ...opts,
+              startupStartedAt,
+              stateSchemaReader,
+            });
           },
           { deferInspections: !opts.updateCanary },
         );

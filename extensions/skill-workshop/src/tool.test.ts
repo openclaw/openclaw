@@ -60,6 +60,14 @@ function workshop(options: Omit<SkillWorkshopToolOptions, "config" | "agentId"> 
 }
 
 describe("skill_workshop", () => {
+  it("describes user-owned skill edits and undo when the tool is discovered", () => {
+    const tool = run(() => createSkillWorkshopTool({ config: {}, agentId: "main" }));
+    expect(tool.description).toContain("ordinary files: edit them directly when asked");
+    expect(tool.description).toContain("never through skill_workshop");
+    expect(tool.description).toContain("Undo right after a 💾 Learned notice");
+    expect(tool.description).toContain("archive it if the notice says it was created");
+  });
+
   it("requires viewing an existing skill before a background run edits or archives it", async () => {
     const tool = workshop({ runId: "review-run", reviewOf: "agent:main:main" });
 

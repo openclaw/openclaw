@@ -21,12 +21,14 @@ import { filterParticipationTools } from "./participation-ceiling.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
 import { compactToolInputHint, compactToolOutputHint } from "./tool-schema-hints.js";
+import { createFamilyVisibility, dispatchRepeatable } from "./tool-search-catalog-visibility.js";
 import {
   getToolSearchCatalogDescriptors,
   prepareToolSearchCatalogDescriptors,
   type ToolSearchCatalogDescriptor,
 } from "./tool-search-prepared-catalog.js";
 import {
+  TOOL_CALL_RAW_TOOL_NAME,
   TOOL_SEARCH_CONTROL_TOOL_NAMES,
   type CatalogSource,
   type CatalogVisibilityOptions,
@@ -234,7 +236,8 @@ export function isOnDemandCatalogTool(tool: CatalogTool): boolean {
  * Core file/shell primitives and caller-required names (e.g. message when it is
  * the only reply path) stay visible while remaining searchable. Both must
  * resolve to trusted OpenClaw tools: an MCP lookalike must never become a
- * direct delivery or core-coding tool.
+ * direct delivery or core-coding tool. Tools that poll by design stay deferred:
+ * dispatch_action carries their `repeatable` declarations to the repeat guard.
  */
 export function isDirectVisibleCatalogTool(
   tool: AnyAgentTool,
@@ -246,6 +249,52 @@ export function isDirectVisibleCatalogTool(
     (directToolNames.has(tool.name) ||
       (isCoreCodingSurfaceToolName(tool.name) && classified.sourceName === "core"))
   );
+}
+
+/**
+ * A run whose MCP tools need at most this many schema bytes declares them directly. Each
+ * avoided discovery step saves one re-sent request (about 51.5 KB measured on a fresh
+ * install) plus its tool_describe result (about 1 KB) and the directory rows, so over an
+ * eight-request session direct schemas break even near 8 KB. Measured catalogs: a 5-tool
+ * tracker 2.1 KB and server-everything 7.8 KB fit; filesystem 14 KB, github 16 KB and
+ * playwright 19 KB keep search.
+ */
+const MAX_DIRECT_MCP_SCHEMA_BYTES = 8_192;
+
+/**
+ * MCP tools a pinning runner declares directly. Without pinned names this chooses by the
+ * catalog's schema bytes, for a series' first request; with them it keeps exactly the MCP tools
+ * the session pin already sends, so the provider tool list stays fixed while server inventory
+ * changes reach the directory. A name another tool also uses stays deferred: a lookalike never
+ * shadows a trusted direct tool. A server with instructions stays deferred too: tool_describe is
+ * where the model reads them.
+ */
+export function selectDirectMcpToolNames(
+  tools: readonly AnyAgentTool[],
+  pinnedToolNames: ReadonlySet<string> | undefined,
+): ReadonlySet<string> {
+  const nameCounts = new Map<string, number>();
+  for (const tool of tools) {
+    nameCounts.set(tool.name, (nameCounts.get(tool.name) ?? 0) + 1);
+  }
+  const mcpTools = tools.filter((tool) => {
+    const { source, mcp } = classifyAgentToolSource(tool);
+    return source === "mcp" && !mcp?.instructions && nameCounts.get(tool.name) === 1;
+  });
+  if (pinnedToolNames) {
+    return new Set(
+      mcpTools.filter((tool) => pinnedToolNames.has(tool.name)).map((tool) => tool.name),
+    );
+  }
+  let bytes = 0;
+  for (const tool of mcpTools) {
+    const { name, description, parameters } = tool;
+    bytes += Buffer.byteLength(JSON.stringify({ name, description, parameters }), "utf8");
+    if (bytes > MAX_DIRECT_MCP_SCHEMA_BYTES) {
+      return new Set();
+    }
+  }
+  return new Set(mcpTools.map((tool) => tool.name));
 }
 
 export function registerHeadlessToolSearchCatalog(params: {
@@ -609,6 +658,16 @@ export function applyToolCatalogCompaction(
     isOnDemandCatalogTool(tool) &&
     (catalogRef.loadsOnDemandTools !== true ||
       catalogRef.promotedToolNames?.has(tool.name) === true);
+  const catalogsTool = (tool: AnyAgentTool) =>
+    shouldCatalogTool(tool) &&
+    !keepOnDemandDirect(tool) &&
+    (params.shouldCatalogTool?.(tool) ?? true) &&
+    selected({ ...classifyAgentToolSource(tool), name: tool.name });
+  const isDirectVisible = createFamilyVisibility({
+    tools,
+    catalogsTool,
+    isVisibleCatalogTool: params.isVisibleCatalogTool,
+  });
   for (const tool of tools) {
     if (params.isVisibleControlTool(tool)) {
       visible.push(
@@ -621,13 +680,8 @@ export function applyToolCatalogCompaction(
     if (TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)) {
       continue;
     }
-    if (
-      shouldCatalogTool(tool) &&
-      !keepOnDemandDirect(tool) &&
-      (params.shouldCatalogTool?.(tool) ?? true) &&
-      selected({ ...classifyAgentToolSource(tool), name: tool.name })
-    ) {
-      const directVisible = params.isVisibleCatalogTool?.(tool) === true;
+    if (catalogsTool(tool)) {
+      const directVisible = isDirectVisible(tool);
       catalog.push({ ...toCatalogEntry(tool, undefined, toolHookContext), directVisible });
       if (!directVisible) {
         continue;
@@ -650,6 +704,11 @@ export function applyToolCatalogCompaction(
       .map((tool) => tool.name),
   );
   catalogRef.baselineDirectOnlyToolNames = catalogRef.directOnlyToolNames;
+  // dispatch_action executes any catalog entry, so it carries every entry's own declaration.
+  const dispatcher = visible.find((tool) => tool.name === TOOL_CALL_RAW_TOOL_NAME);
+  if (dispatcher) {
+    dispatcher.repeatable = dispatchRepeatable(catalog);
+  }
   return {
     tools: visible,
     compacted: catalog.length > 0,

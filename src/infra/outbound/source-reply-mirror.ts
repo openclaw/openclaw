@@ -528,6 +528,19 @@ export async function mirrorDeliveredSourceReplyToTranscript(
                     includeSensitiveMedia: false,
                   });
                   preparedBlocks = assistantContent ?? [];
+                  // A platform receipt establishes delivery, not permission to embed the file.
+                  if (
+                    deliveryFact?.primaryPlatformMessageId &&
+                    assistantContent?.some((block) => block.type === "attachment_error")
+                  ) {
+                    return [
+                      ...assistantContent.filter((block) => block.type !== "attachment_error"),
+                      {
+                        type: "text",
+                        text: "Attachment sent to the channel. Preview unavailable in chat history.",
+                      },
+                    ];
+                  }
                   return assistantContent;
                 },
                 onMessageCommitted: (message, acceptCompletion) => {

@@ -20,6 +20,7 @@ export type {
   EmbeddingUsage,
 } from "../plugins/embedding-provider-runtime-types.js";
 export type {
+  EmbeddingMediaModality,
   EmbeddingProviderAdapter,
   EmbeddingProviderCreateOptions,
   EmbeddingProviderCreateResult,

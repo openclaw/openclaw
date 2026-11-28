@@ -14,7 +14,6 @@ describe.skipIf(!useNodeModuleHooks())("plugin generation demanded work", () => 
       "entry.ts":
         "export const resolve = () => require.resolve('./deferred.ts'); export const read = () => import('./deferred.ts');",
       "deferred.ts": "export const value = 42;",
-      "unused.ts": "export const unused = 1;",
     });
     using guard = observeMainThreadFs();
     const plugin = host(root).load("entry.ts") as {

@@ -501,7 +501,7 @@ it("settles a requester cohort after concurrently admitted children complete", a
   });
 });
 
-it("retains history settlement without creating another parent input after publication fails", async () => {
+it("retains a committed settlement without another parent input after publication fails", async () => {
   await withSubagentCompletionWorkerState(async (database) => {
     const { subagent } = armRequesterWake(requesterRecords());
     seedSubagentCompletionOwner({ subagent, databaseOptions: { database } });
@@ -510,7 +510,6 @@ it("retains history settlement without creating another parent input after publi
       settleRequesterCompletionBatch({
         entries: [subagent],
         outcome: { delivered: false, path: "none", error: "Requester unavailable" },
-        databaseOptions: { database },
         committed,
         onCommitted: (receipt) => {
           committed = receipt;

@@ -83,6 +83,8 @@ extension OpenClawChatViewModel {
         self.composerDraftAttachmentPositions = [:]
         self.composerDraftSync.insertingAttachmentIDs = []
         self.composerDraftKey = nil
+        // A tile still preparing or failed belongs to the chat being left; its read is dropped.
+        self.preparingAttachments = []
         self.applyComposerDraft(text: "", attachments: [])
     }
 
@@ -319,7 +321,7 @@ extension OpenClawChatViewModel {
                 guard self.attachments.contains(where: { $0.id == id }) else { return }
                 self.errorText = String(
                     format: String(
-                        localized: "Could not save %@ with this draft. Send or remove it before switching chats."),
+                        localized: "Couldn’t save %@ with this draft. Send or remove it before switching chats."),
                     stored.fileName)
             }
         }
@@ -356,18 +358,18 @@ extension OpenClawChatViewModel {
         let typed = history.draftForSessionSwitch(currentDraft: self.input)
         let replacesStoredText = self.composerDraftSync.replacesStoredDraftKey == key
         self.composerDraftSync.replacesStoredDraftKey = nil
-        let text = if replacesStoredText {
+        let text = if replacesStoredText || typed == draft.text {
             typed
-        } else if typed.isEmpty || typed == draft.text {
+        } else if typed.isEmpty {
             draft.text
         } else {
             draft.text.isEmpty ? typed : draft.text + "\n\n" + typed
         }
         // Seeding from the row keeps a detached or recreated model's late
         // clear from deleting text saved after it.
-        var revision = max(self.composerRevisionsBySession[key, default: 0], draft.revision)
-        if text != draft.text { revision &+= 1 }
-        self.composerRevisionsBySession[key] = revision
+        let revision = max(self.composerRevisionsBySession[key, default: 0], draft.revision)
+        let textChanged = !text.utf8.elementsEqual(draft.text.utf8)
+        self.composerRevisionsBySession[key] = textChanged ? revision &+ 1 : revision
         self.composerDraftSync.savedRevision = draft.revision
         var positions: [OpenClawPendingAttachment.ID: Int] = [:]
         let loaded = draft.attachments.map { stored in
@@ -388,7 +390,7 @@ extension OpenClawChatViewModel {
         for attachment in typedAttachments {
             self.persistComposerDraftAttachment(attachment, key: key)
         }
-        if text != draft.text {
+        if textChanged {
             self.flushComposerDraftText()
         }
         self.applyDeferredExternalStateIfReady()

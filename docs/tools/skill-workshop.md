@@ -58,8 +58,12 @@ Gateway, see [Personal library authoring](/tools/skill-workshop/personal-library
 - **Skill diet:** once a day, one oversized learned skill is shrunk without
   changing its rules. See [Skill diet](#skill-diet).
 
-Changed skills load in new sessions. A running session keeps the skill snapshot
-it started with.
+When you edit a Workshop skill, the current turn keeps the skill catalog it
+received in its prompt. If the run reads the local file directly, a later
+`skills_read` call in that turn sees the updated `SKILL.md`. A worker that
+received a copy keeps using that copy for the rest of the turn. Once OpenClaw
+publishes the refreshed catalog, the next turn uses it in the same session or
+a new one.
 
 <a id="changes-and-recovery" />
 
@@ -337,7 +341,9 @@ and why) lives in the state database and keeps the newest 500 entries per agent.
   The Workshop's **History** view lists the latest change per skill. Select a
   change to open the skill's own **History** tab, where you can compare versions,
   restore an earlier version, or undo a change. **Archive** and **Restore**
-  switch a skill between the Active and Archived lists. The **Drafts** list
+  move the skill to the other list immediately. The row says **Archiving…** or
+  **Restoring…** until the Gateway confirms. If the request is refused, the skill
+  returns to its original list and the Workshop shows the error. The **Drafts** list
   appears in `propose` mode or while drafts wait; see [Drafts](#drafts). The page
   header holds the learning mode switch and
   **Learn from history**. If the learning configuration cannot be loaded, the

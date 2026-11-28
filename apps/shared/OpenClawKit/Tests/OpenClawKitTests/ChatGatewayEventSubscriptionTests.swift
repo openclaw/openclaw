@@ -110,6 +110,10 @@ struct ChatGatewayEventSubscriptionTests {
                 }
                 """#,
                 "agent:run-1:future-stream"),
+            (
+                "session.tool",
+                #"{"runId":"run-1","stream":"tool","data":{"phase":"start","name":"exec","args":{"command":"ls"}}}"#,
+                "agent:run-1:tool"),
             ("progressCard.changed", #"{"sessionKey":"global","revision":7}"#, "progress:global"),
             (
                 "question.requested",
@@ -203,6 +207,7 @@ struct ChatGatewayEventSubscriptionTests {
             "message:\(message.agentId ?? ""):\(message.message?.transcriptMessageID ?? "")"
         case let .agent(agent): "agent:\(agent.runId):\(agent.stream)"
         case let .progressCardChanged(card): "progress:\(card.sessionkey)"
+        case let .sessionPullRequestsChanged(event): "pullRequests:\(event.sessions.keys.sorted())"
         case let .questionRequested(question): "question:\(question.id)"
         case let .questionResolved(question): "resolved:\(question.id)"
         case .routeChanged: "routeChanged"

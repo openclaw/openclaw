@@ -26,6 +26,8 @@ suite.define(() => {
         },
         async ({ page }) => {
           const sessionKey = "agent:cloud:unicode-placement-proof";
+          const sessions = createdSessionListResult(sessionKey);
+          const [session] = sessions.sessions;
           const message = "Keep this task after a Unicode placement failure";
           const lead = "Unicode placement diagnostic: ";
           const prefix = writeFails ? storageWarning : "";
@@ -54,11 +56,11 @@ suite.define(() => {
                 repositoryStatus: "git",
               },
               "sessions.create": { key: sessionKey },
-              "sessions.list": createdSessionListResult(sessionKey),
-              "sessions.describe": { session: {} },
+              "sessions.list": sessions,
+              "sessions.describe": { session },
               "chat.history": {
                 messages: [],
-                sessionInfo: { hasActiveRun: false, status: "done" },
+                sessionInfo: { ...session, hasActiveRun: false, status: "done" },
               },
             },
           });

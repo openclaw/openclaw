@@ -3,7 +3,6 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import {
-  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -38,7 +37,7 @@ it.each([
   { retainActor: false, revoke: true },
   { retainActor: true, revoke: true },
 ])(
-  "commits only current mention authority (actor: $retainActor, revoke: $revoke)",
+  "commits the mention invitation admitted at turn start (actor: $retainActor, revoke: $revoke)",
   async ({ retainActor, revoke }) => {
     await withOpenClawTestState(
       { label: "manager-mention-authority", prepareProfileCatalog: true },
@@ -101,15 +100,7 @@ it.each([
           target,
           async () => {
             const manager = await SessionManager.openAsync(target, state.workspaceDir);
-            // Establish the independent session header before taking rollback snapshots.
-            await manager.appendMessageAsync({
-              role: "user",
-              content: "Existing context",
-              timestamp: 0,
-            });
             const before = await readSessionMembersInWorker(target);
-            const beforeEvents = await loadTranscriptEvents(target);
-            const beforeEntries = manager.getPersistedEntries();
             const databaseIdentity = readDatabasePathIdentitySync(target.storePath).key;
             const retained = retainPreparedSessionSharingFacts({
               databaseIdentity,
@@ -182,46 +173,21 @@ it.each([
                 (beforeFreshMessageCommit) =>
                   manager.appendMessageAsync(message, { beforeFreshMessageCommit }),
               );
-              if (revoke) {
-                await expect(append).rejects.toMatchObject({
-                  name: "MessageInjectionAuthorityError",
-                  message: "The message input is no longer available. Start a new turn to retry.",
-                  // Actor failure serialization preserves name/message, not the nested cause.
-                  ...(!retainActor
-                    ? {
-                        cause: expect.objectContaining({
-                          message: "Mention invitation is not authorized",
-                        }),
-                      }
-                    : {}),
-                });
-                expect(revoked).toBe(true);
-              } else {
-                await expect(append).resolves.toBeTypeOf("string");
-              }
+              await expect(append).resolves.toBeTypeOf("string");
+              expect(revoked).toBe(revoke);
               // Observe existing readers before a fresh DB read could repair their facts.
-              expect(retained.readCurrent()?.membership.has(bob.id)).toBe(!revoke);
+              expect(retained.readCurrent()?.membership.has(bob.id)).toBe(true);
               expect(
                 acquiring
                   .initialize({ entry: before.entry, membership: new Set() })
                   .membership.has(bob.id),
-              ).toBe(!revoke);
-              const members = (await readSessionMembersInWorker(target)).members;
-              if (revoke) {
-                expect(manager.getPersistedEntries()).toEqual(beforeEntries);
-                expect(await loadTranscriptEvents(target)).toEqual(beforeEvents);
-                expect(members).toEqual([]);
-                expect(
-                  loadSessionEntry(target)?.profileInvolvement?.profiles[bob.id],
-                ).toBeUndefined();
-              } else {
-                expect(members).toEqual([
-                  expect.objectContaining({ identityId: bob.id, addedBy: alice.id }),
-                ]);
-                expect(await loadTranscriptEvents(target)).toContainEqual(
-                  expect.objectContaining({ message }),
-                );
-              }
+              ).toBe(true);
+              expect((await readSessionMembersInWorker(target)).members).toEqual([
+                expect.objectContaining({ identityId: bob.id, addedBy: alice.id }),
+              ]);
+              expect(await loadTranscriptEvents(target)).toContainEqual(
+                expect.objectContaining({ message }),
+              );
             } finally {
               retained.release();
               acquiring.release();

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import {
+  buildFileEntry,
   isFileMissingError,
   retryTransientMemoryRead,
   type MemorySource,
@@ -9,7 +10,31 @@ import { readSessionResetRecallCutoffMetadata } from "../session-reset-recall-me
 import { prepareSessionIndexInWorker } from "./manager-cpu-worker-runtime.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import type { SessionIndexPreparation } from "./manager-session-index-preparation.js";
+import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
+
+export async function verifyMemoryIndexFile(
+  replacement: MemorySourceIndexReplacement,
+  absolutePath: string,
+  workspaceDir: string,
+  multimodal: Parameters<typeof buildFileEntry>[2],
+  memoryFiles?: MemoryWorkspaceFiles,
+): Promise<boolean> {
+  const current = await (memoryFiles?.inspectFile ?? buildFileEntry)(
+    absolutePath,
+    workspaceDir,
+    multimodal,
+  );
+  const { entry } = replacement;
+  if (current?.hash !== entry.hash) {
+    return false;
+  }
+  // A busy transaction revalidates. Replace the previous observation on each attempt.
+  const { mtimeMs, size } = current;
+  replacement.verifiedFile =
+    mtimeMs !== entry.mtimeMs || size !== entry.size ? { mtimeMs, size } : undefined;
+  return true;
+}
 
 export async function readMemoryIndexSource({
   absolutePath,

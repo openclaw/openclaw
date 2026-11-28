@@ -18,6 +18,7 @@ import {
   resolveOfficialExternalProviderContractPluginIds,
 } from "../../../plugins/official-external-plugin-catalog.js";
 import { VERSION } from "../../../version.js";
+import type { DoctorMaintenancePending } from "../../doctor-maintenance-pending.js";
 import { listDoctorConfiguredChannelIds } from "./configured-channel-ids.js";
 import {
   collectConfiguredWebFetchPluginIds,
@@ -26,7 +27,10 @@ import {
 import { collectConfiguredProviderPluginIds } from "./configured-provider-plugin-installs.js";
 import { acpxRuntimeIsConfigured } from "./configured-runtime-plugin-installs.js";
 import { collectBlockedPluginIds as collectBlockedPluginIdSet } from "./missing-configured-plugin-install.ids.js";
-import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
+import {
+  isMissingPluginInstallRepairNoOpForIds,
+  repairMissingPluginInstallsForIds,
+} from "./missing-configured-plugin-install.js";
 import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
@@ -199,6 +203,41 @@ function collectReleaseConfiguredPluginIds(params: {
     pluginIds: [...pluginIds].toSorted((left, right) => left.localeCompare(right)),
     channelIds,
   };
+}
+
+/**
+ * Read-only: whether `maybeRunConfiguredPluginInstallReleaseStep` would change a package, an
+ * install record or the config. A config that has not crossed the release gate counts as work,
+ * because a completed step stamps its touched version.
+ */
+export async function checkConfiguredPluginInstallReleaseStepPending(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  touchedVersion?: string | null;
+  currentVersion?: string | null;
+}): Promise<DoctorMaintenancePending> {
+  const env = params.env ?? process.env;
+  const configured = collectReleaseConfiguredPluginIds({ cfg: params.cfg, env });
+  if (configured.pluginIds.length === 0 && configured.channelIds.length === 0) {
+    return "none";
+  }
+  if (
+    shouldRunConfiguredPluginInstallReleaseStep({
+      currentVersion: params.currentVersion,
+      touchedVersion: params.touchedVersion,
+    })
+  ) {
+    return "work";
+  }
+  return (await isMissingPluginInstallRepairNoOpForIds({
+    cfg: params.cfg,
+    env,
+    pluginIds: configured.pluginIds,
+    channelIds: configured.channelIds,
+    blockedPluginIds: collectBlockedPluginIdSet(params.cfg),
+  }))
+    ? "none"
+    : "work";
 }
 
 /** Run the configured-plugin install release backfill when the config still needs it. */

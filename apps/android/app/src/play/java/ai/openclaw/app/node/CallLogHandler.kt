@@ -1,6 +1,6 @@
 package ai.openclaw.app.node
 
-import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.InvokeResult
 import android.content.Context
 
 class CallLogHandler(
@@ -8,5 +8,5 @@ class CallLogHandler(
 ) {
   fun handleCallLogSearch(
     @Suppress("unused") paramsJson: String?,
-  ): GatewaySession.InvokeResult = nodeInvokeError("CALL_LOG_UNAVAILABLE", "call log not available on this build")
+  ): InvokeResult = nodeInvokeError("CALL_LOG_UNAVAILABLE", "call log not available on this build")
 }

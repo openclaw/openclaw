@@ -147,6 +147,15 @@ export function captureFreshDoctorMigrationTables(
   };
 }
 
+/** Doctor backs up the shared state database before a repair its schema needs. */
+export async function needsSharedStateMigrationBackup(sharedPath: string): Promise<boolean> {
+  return (
+    !isStatePostgres() &&
+    existsSync(sharedPath) &&
+    (await needsOpenClawStateDatabaseSchemaRepair(sharedPath))
+  );
+}
+
 /** Preserve the old database generation before Doctor advances its schemas. */
 export async function backupDoctorMigrationDatabases(params: {
   env: NodeJS.ProcessEnv;
@@ -168,11 +177,7 @@ export async function backupDoctorMigrationDatabases(params: {
 > {
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
   const pending = new Set(params.pendingDatabasePaths);
-  if (
-    !isStatePostgres() &&
-    existsSync(sharedPath) &&
-    (await needsOpenClawStateDatabaseSchemaRepair(sharedPath))
-  ) {
+  if (await needsSharedStateMigrationBackup(sharedPath)) {
     pending.add(sharedPath);
   }
   if (pending.size === 0) {

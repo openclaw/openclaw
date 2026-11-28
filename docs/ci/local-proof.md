@@ -345,10 +345,14 @@ all unsuppressed over-cap files.
 `pnpm check:baseline-ratchets --base <commit> --no-merge-base` runs the CI
 ratchets in two managed child slots, retaining all results after ordinary
 failures. `RATCHET_PR_HEAD_SHA` adds the existing PR-only line-cap comparison.
-The database-worker inventory starts first and shares the runner with at most
-one smaller check; it never runs two semantic inventories concurrently. When
-the complete current and historical source snapshots have identical paths and
-contents, its fresh current analysis also supplies the comparison counts.
+One slot runs the database-worker inventory, the database-dialect ratchet and
+the Plugin SDK surface budget in sequence, so their large TypeScript snapshots
+never overlap. The other slot runs smaller checks, including the Plugin SDK
+export check; both slots drain that queue once the large checks finish. Every PR
+runs both SDK checks: the SDK import closure reaches far outside
+`src/plugin-sdk`, so no changed-path rule can tell which changes move it.
+When current and historical source snapshots have identical paths and contents,
+the worker inventory reuses its fresh current analysis for comparison counts.
 Changed snapshots retain both full analyses and historical-cache validation.
 Frozen targets without the aggregate command retain their original commands.
 
@@ -358,6 +362,12 @@ do not compare identities and are excluded; adjacent comparisons between IDs
 and explicit pin names still count. Its per-file allowlist may only shrink.
 After removing counted sites, run the checker with `--prune` and verify again
 without pruning.
+
+`pnpm check:provider-branching-ratchet` rejects growth in request and history
+branches keyed on a provider id, model id, API name or URL in `src/agents`,
+`packages/ai`, `packages/llm-core` and the provider replay helpers. Declare the
+behavior as model compat in the owning plugin instead. Its per-file allowlist
+may only shrink; after removing branches, run the checker with `--prune`.
 
 <a id="test-line-budget" />
 
@@ -790,7 +800,7 @@ Crabbox path before treating a direct Blacksmith run as maintainer proof.
 
 For admission/queue handling, follow the canonical proof policy above.
 For explicitly selected AWS capacity, use the
-[direct-provider commands](https://github.com/openclaw/openclaw/blob/main/.agents/skills/crabbox/references/operations.md#direct-aws).
+[direct-provider commands](https://github.com/openclaw/agent-skills/blob/main/skills/crabbox/references/providers-and-desktop.md#direct-aws).
 
 Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-class CPU. A `beast` request starts at 192 vCPUs and is the easiest way to trip regional EC2 Spot or On-Demand Standard quota. The repo-owned `.crabbox.yaml` keeps `class: standard` for explicit AWS proof; on-demand market and `capacity.hints: true` retain AWS capacity diagnostics. Use `fast` for heavier broad checks, `large` only after standard/fast are not enough, and `beast` only for exceptional CPU-bound lanes such as full-suite or all-plugin Docker matrices, explicit release/blocker validation, or high-core performance profiling. Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work, ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Use `--market on-demand` for capacity diagnosis so Spot market churn is not mixed into the signal.
 

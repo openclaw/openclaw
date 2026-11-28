@@ -112,6 +112,7 @@ export const AgentEntryBaseSchema = z.strictObject({
     .optional(),
   bootstrapMaxChars: z.number().int().positive().optional(),
   bootstrapTotalMaxChars: z.number().int().positive().optional(),
+  sharedUserDir: z.string().trim().min(1).optional(),
   experimental: z
     .strictObject({
       localModelLean: z.boolean().optional(),

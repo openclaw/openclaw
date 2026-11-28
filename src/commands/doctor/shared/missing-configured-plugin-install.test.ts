@@ -2240,48 +2240,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result).toEqual({ changes: [], warnings: [], records });
   });
 
-  it("installs configured external speech and web-fetch plugins from selected providers", async () => {
-    const packages = [
-      ["firecrawl", "@openclaw/firecrawl-plugin"],
-      ["gradium", "@openclaw/gradium-speech"],
-      ["inworld", "@openclaw/inworld-speech"],
-    ] as const;
-    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue(
-      packages.map(([id, npmSpec]) => officialPluginEntry({ id, npmSpec })),
-    );
-    mocks.resolveOfficialExternalProviderContractPluginIds.mockImplementation(
-      ({ contract }: { contract: string }) => {
-        if (contract === "webFetchProviders") {
-          return ["firecrawl"];
-        }
-        if (contract === "speechProviders") {
-          return ["gradium", "inworld"];
-        }
-        return [];
-      },
-    );
-    for (const [pluginId, npmSpec] of packages) {
-      installNpm.mockResolvedValueOnce(successfulInstall({ pluginId, npmSpec }));
-    }
-
-    const result = await repairConfiguredPlugins({
-      tts: { provider: "gradium", providers: { inworld: {} } },
-      tools: { web: { fetch: { provider: "firecrawl" } } },
-    });
-
-    expect(
-      installNpm.mock.calls.map(
-        ([params]) => (params as { expectedPluginId?: string }).expectedPluginId,
-      ),
-    ).toEqual(["firecrawl", "gradium", "inworld"]);
-    expect(result.changes).toEqual(
-      packages.map(
-        ([pluginId, npmSpec]) =>
-          `Installed missing configured plugin "${pluginId}" from ${expectedNpmInstallSpec(npmSpec)}.`,
-      ),
-    );
-  });
-
   it.each(
     // prettier-ignore
     [

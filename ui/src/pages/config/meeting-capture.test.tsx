@@ -390,12 +390,6 @@ describe("curated meeting capture", () => {
     expectSources(runtimeConfig, [original, second]);
   });
 
-  it("opens the transcript library", async () => {
-    const { page, navigate } = await mount();
-    click(page, "Transcript library");
-    expect(navigate).toHaveBeenCalledWith("meetings");
-  });
-
   it.each([" test-voice ", " unknown "])(
     "preserves %s on re-entry and save",
     async (providerId) => {

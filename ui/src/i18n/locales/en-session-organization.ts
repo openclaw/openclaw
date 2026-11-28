@@ -50,6 +50,12 @@ const enSessionOrganization = {
     sessionArchived: "Session archived",
     deleteAllArchived: "Delete all archived…",
     deleteAllArchivedTitle: "Delete {count} archived sessions?",
+    deleteArchivedListMissing:
+      "OpenClaw couldn’t load the list of archived sessions, so it didn’t delete any. To try again, choose Delete all archived in Filters.",
+    deleteArchivedListStalled:
+      "OpenClaw couldn’t load the next page of archived sessions, so it didn’t delete any. To try again, choose Delete all archived in Filters.",
+    deleteArchivedListIncomplete:
+      "OpenClaw couldn’t list every archived session, so it didn’t delete any. To try again, choose Delete all archived in Filters.",
     archivedOnlyTooltip: sharedSessions.archivedOnlyTooltip,
     minutesPlaceholder: "min",
     searchPlaceholder: "Search sessions…",
@@ -152,7 +158,6 @@ const enSessionOrganization = {
     space: "Space",
     sessionId: "Session ID",
     activeRun: en.sessionsView.activeRun,
-    backgroundWorkRunning: en.sessionsView.backgroundWorkRunning,
     subagentsWorking: en.sessionsView.subagentsWorking,
     showChildSessions: en.sessionsView.showChildSessions,
     hideChildSessions: en.sessionsView.hideChildSessions,
@@ -317,7 +322,7 @@ const enSessionOrganization = {
     empty: "No managed worktrees.",
     restorable: "Restorable",
     restore: "Restore",
-    confirmDelete: "Snapshot and delete {name}?",
+    confirmDeleteCheckout: "Snapshot and delete this worktree?",
     confirmDeleteBody: "OpenClaw saves a safety snapshot first.",
     confirmForceDeleteTitle: "Delete without a snapshot?",
     confirmForceDelete: "Snapshot failed: {error}\n\nUncommitted changes are lost.",

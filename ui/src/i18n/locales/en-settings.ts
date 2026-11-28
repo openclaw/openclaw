@@ -1232,6 +1232,11 @@ const enSettings = {
       sourceExternal: "External CLI",
       sourceInherited: "Shared account",
       sourceSaved: "Saved in OpenClaw",
+      nameManagedByConfig: "Name managed in configuration",
+      renameAccount: "Rename",
+      renameAccountFor: "Rename {account}",
+      accountName: "Account name",
+      accountNamePlaceholder: "Leave blank to use the default",
     },
     apiKey: {
       label: "API key",
@@ -1944,6 +1949,8 @@ const enSettings = {
       testAllBrowsersHint: "Tests include browsers registered by other people on this Gateway.",
       sendingTest: "Sending test…",
       updateFailed: "Couldn’t complete the notification request. Try again.",
+      retryAgentSelection: "Couldn’t confirm the selection. Reopen to review and retry.",
+      reviewAgentSelection: "Couldn’t confirm your last save. Review your selection and try again.",
       testError: "Not sent",
       testOutcome: "Test notification",
       testQueued: "Test notification queued",
@@ -2122,7 +2129,7 @@ const enSettings = {
         lobster: "Lobster",
         empty: "No lobsters unlocked in this browser yet.",
         localCollection: "Unlocked in this browser. Your collection is not synced.",
-        unavailable: "This lobster is not unlocked in this browser. Using Default until it is.",
+        unavailable: "This lobster isn’t unlocked in this browser. Using Default until it is.",
       },
       textSize: "Text size",
     },
@@ -2317,9 +2324,13 @@ const enSettings = {
       description: "These plugins add features to your memory engine. You can use more than one.",
       activeMemory: {
         title: activeMemoryPresentation.memoryAddon.label,
+        knowledgeDescription:
+          "Recalls relevant Knowledge records before a reply. Knowledge does not support private conversation transcript recall.",
       },
       memoryWiki: {
         title: memoryWikiPresentation.memoryAddon.label,
+        knowledgeDescription:
+          "Browse and search the selected agent’s Knowledge records alongside compiled wiki insights.",
       },
       toggleAriaLabel: "Enable or disable {plugin}",
       changeFailed: "Couldn’t update {plugin}. Try again.",

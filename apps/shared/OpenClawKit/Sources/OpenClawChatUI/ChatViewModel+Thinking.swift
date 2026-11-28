@@ -50,16 +50,28 @@ extension OpenClawChatViewModel {
             level: next,
             isExplicit: !clearsOverride))
         self.reconcileThinkingPreferenceRequests()
-        enqueueSessionSettingsPatch(requestID: requestID, target: target) { [weak self] routeLease in
+        enqueueSessionSettingsPatch(
+            requestID: requestID,
+            target: target,
+            mayFinishAfterSend: true)
+        { [weak self] routeLease in
             guard let self else { return }
+            // Latest wins: a level that a newer pick replaced before its turn is never sent.
+            guard requestID == self.latestThinkingSelectionRequestIDsByTarget[target] else {
+                self.thinkingPreferenceRequests.removeValue(forKey: requestID)
+                self.reconcileThinkingPreferenceRequests()
+                return
+            }
             var patchError: Error?
             do {
                 guard let routeLease else { throw OpenClawChatTransportSendError.notDispatched }
-                let patchResult = try await routeLease.patchSessionSettings(
-                    target.canonicalSessionKey,
-                    target.agentID,
-                    OpenClawChatSessionSettingsPatch(
-                        thinkingLevel: .some(clearsOverride ? nil : next)))
+                let patchResult = try await Self.retryingOnce {
+                    try await routeLease.patchSessionSettings(
+                        target.canonicalSessionKey,
+                        target.agentID,
+                        OpenClawChatSessionSettingsPatch(
+                            thinkingLevel: .some(clearsOverride ? nil : next)))
+                }
                 let acceptedLevel = Self.normalizedThinkingLevel(patchResult?.thinkingLevel) ?? next
                 let acceptedResult = self.mergedThinkingPatchSuccess(
                     patchResult,
@@ -109,7 +121,18 @@ extension OpenClawChatViewModel {
                 // the gateway-confirmed rollback value.
                 self.thinkingLevel = acceptedLevel
                 self.updateCurrentSessionThinkingLevel(sessionLevel, sessionKey: sessionKey)
-                self.errorText = patchError.localizedDescription
+                #if os(iOS)
+                chatUILogger
+                    .error("sessions.patch(thinking) failed \(patchError.localizedDescription, privacy: .public)")
+                self.reportSettingsChangeFailure(String(localized: "Couldn’t change effort")) { [weak self] in
+                    self?.selectThinkingLevel(level)
+                }
+                #else
+                self.reportFailure(
+                    String(localized: "Couldn’t change the thinking level."),
+                    patchError,
+                    while: "select thinking level")
+                #endif
             }
         }
     }
@@ -224,7 +247,7 @@ extension OpenClawChatViewModel {
         let profile = OpenClawChatThinkingProfile.resolve(
             session: session, defaults: self.sessionDefaults, model: modelChoice)
         let options = profile?.levels ?? []
-        if modelChoice?.reasoning == false ||
+        if Self.reasoningOptOutForcesOff(modelChoice, options: options) ||
             (!options.isEmpty && options.allSatisfy { $0.id == "off" })
         {
             return "off"
@@ -238,7 +261,8 @@ extension OpenClawChatViewModel {
         return Self.normalizedThinkingLevel(
             storedLevel,
             options: options,
-            fallback: session?.thinkingLevel) ?? storedLevel
+            fallback: session?.thinkingLevel,
+            defaultLevel: profile?.defaultLevel) ?? storedLevel
     }
 
     func syncThinkingLevelOptions() {
@@ -247,7 +271,8 @@ extension OpenClawChatViewModel {
         let profile = OpenClawChatThinkingProfile.resolve(
             session: currentSession, defaults: self.sessionDefaults, model: modelChoice)
         let options = profile?.levels ?? []
-        showsThinkingPicker = options.contains { $0.id != "off" } && modelChoice?.reasoning != false
+        showsThinkingPicker = options.contains { $0.id != "off" } &&
+            !Self.reasoningOptOutForcesOff(modelChoice, options: options)
         let target = currentModelPatchTarget()
         let preferredLevel = self.prefersExplicitThinkingLevel
             ? self.preferredThinkingLevel
@@ -257,7 +282,8 @@ extension OpenClawChatViewModel {
             Self.normalizedThinkingLevel(
                 preferredLevel,
                 options: options,
-                fallback: currentSession?.thinkingLevel)
+                fallback: currentSession?.thinkingLevel,
+                defaultLevel: profile?.defaultLevel)
         } else {
             self.thinkingLevelWithoutGatewayMetadata(
                 preferredLevel,
@@ -269,6 +295,16 @@ extension OpenClawChatViewModel {
             self.thinkingLevel = current
         }
         thinkingLevelOptions = options
+    }
+
+    /// A catalog `reasoning: false` row gates thinking to Off only when the Gateway's
+    /// thinking levels include Off. Runtimes with mandatory thinking (Claude CLI) keep
+    /// the opt-out on the row but advertise no Off level, and reject an Off override.
+    private static func reasoningOptOutForcesOff(
+        _ modelChoice: OpenClawChatModelChoice?,
+        options: [OpenClawChatThinkingLevelOption]) -> Bool
+    {
+        modelChoice?.reasoning == false && (options.isEmpty || options.contains { $0.id == "off" })
     }
 
     private func thinkingLevelWithoutGatewayMetadata(
@@ -305,7 +341,7 @@ extension OpenClawChatViewModel {
         return self.sessionModelChoice(for: currentSession)
     }
 
-    private func sessionModelChoice(
+    func sessionModelChoice(
         for currentSession: OpenClawChatSessionEntry?) -> OpenClawChatModelChoice?
     {
         if ChatPayloadDecoding.trimmedNonEmptyString(currentSession?.model) != nil {
@@ -314,7 +350,7 @@ extension OpenClawChatViewModel {
         return self.modelChoice(modelID: sessionDefaults?.model, provider: sessionDefaults?.modelProvider)
     }
 
-    private func modelChoice(modelID: String?, provider: String?) -> OpenClawChatModelChoice? {
+    func modelChoice(modelID: String?, provider: String?) -> OpenClawChatModelChoice? {
         guard let modelID = ChatPayloadDecoding.trimmedNonEmptyString(modelID) else { return nil }
         if let provider = ChatPayloadDecoding.trimmedNonEmptyString(provider) {
             let selectionID = Self.providerQualifiedModelSelectionID(modelID: modelID, provider: provider)
@@ -324,7 +360,9 @@ extension OpenClawChatViewModel {
             })
         }
 
-        let matches = modelChoices.filter { $0.selectionID == modelID || $0.modelID == modelID }
+        // A route's model ID can be another provider's full selection ID. The exact pick wins.
+        if let exact = self.modelChoices.first(where: { $0.selectionID == modelID }) { return exact }
+        let matches = self.modelChoices.filter { $0.modelID == modelID }
         return matches.count == 1 ? matches[0] : nil
     }
 
@@ -366,16 +404,22 @@ extension OpenClawChatViewModel {
     static func normalizedThinkingLevel(
         _ level: String?,
         options: [OpenClawChatThinkingLevelOption],
-        fallback: String? = nil) -> String?
+        fallback: String? = nil,
+        defaultLevel: String? = nil) -> String?
     {
         guard let normalized = normalizedThinkingLevel(level) else { return nil }
-        guard normalized == "ultra" else { return normalized }
+        guard normalized == "off" || normalized == "ultra" else { return normalized }
         let advertised = options.compactMap { self.normalizedThinkingLevel($0.id) }
-        if advertised.contains("ultra") {
-            return "ultra"
-        }
+        if advertised.contains(normalized) { return normalized }
         if let fallback = normalizedThinkingLevel(fallback), advertised.contains(fallback) {
             return fallback
+        }
+        // A fresh chat stores Off before it receives the Gateway's mandatory levels.
+        if normalized == "off" {
+            if let defaultLevel = normalizedThinkingLevel(defaultLevel), advertised.contains(defaultLevel) {
+                return defaultLevel
+            }
+            return advertised.first ?? normalized
         }
         return advertised
             .filter { $0 != "off" }

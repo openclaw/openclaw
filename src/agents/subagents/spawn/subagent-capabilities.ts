@@ -10,13 +10,14 @@ import {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
   isSubagentSpawnDepthAllowed,
 } from "../../../config/agent-limits.js";
-import { resolveSessionStorePathCore } from "../../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   isAcpSessionKey,
   isSubagentSessionKey,
   parseAgentSessionKey,
 } from "../../../routing/session-key.js";
+import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import { readDelegatedToolPolicy, type DelegatedToolPolicy } from "../../delegated-tool-policy.js";
 import {
   normalizeInheritedToolAllowlist,
@@ -275,6 +276,18 @@ export function isVisibleSpawnedSession(
     entry?.createdVia === "spawn" &&
     isStoredSubagentEnvelopeSession({ sessionKey, cfg: opts?.cfg, store: opts?.store, entry })
   );
+}
+
+export function visibleParentInputProvenance(
+  sourceSessionKey: string | undefined,
+  targetSessionKey: string,
+  entry: SessionCapabilityEntry | undefined,
+): Pick<InputProvenance, "sourceRelation"> {
+  return sourceSessionKey &&
+    entry?.spawnedBy === sourceSessionKey &&
+    isVisibleSpawnedSession(targetSessionKey, { entry })
+    ? { sourceRelation: "parent" }
+    : {};
 }
 
 /**

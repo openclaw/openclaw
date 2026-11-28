@@ -6,6 +6,12 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { shortenHomePath } from "../utils.js";
 import { probeSqliteDatabaseHeaders } from "./sqlite-header-probe.js";
 import { injectHeaderReadFailure } from "./sqlite-header-probe.test-support.js";
+import { createUpdateErrorFact } from "./update-failure-facts.js";
+import { preparePublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
+import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+import { failedUpdateRun } from "./update-failure-report.test-support.js";
+
+await preparePublicUpdateFailureIdentifiers();
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
@@ -89,6 +95,46 @@ it.each([
     expect.objectContaining({ cause: failure.error, message: expect.stringMatching(message) }),
   );
 });
+
+const unreadable = {
+  ...child,
+  stdout: "",
+  status: 3,
+  signal: null,
+  stderr: JSON.stringify({ code: "EACCES", path: "/Users/jdoe/acme/state/openclaw.sqlite" }),
+};
+
+it.each([
+  [failed("ETIMEDOUT"), "backup-sqlite-probe-timeout", "headers timed out (ETIMEDOUT)"],
+  [unreadable, "backup-sqlite-probe-failed", "Check read access to the state directory"],
+] as const)(
+  "publishes the backup probe's fixed sentence, never its path: %$",
+  async (result, code, sentence) => {
+    vi.spyOn(childProcess, "spawnSync").mockReturnValue(result);
+    let failure: unknown;
+    try {
+      probeSqliteDatabaseHeaders(["/Users/jdoe/acme/state/openclaw.sqlite"]);
+    } catch (error) {
+      failure = error;
+    }
+    const { body } = await prepareUpdateFailureReport(
+      failedUpdateRun({
+        steps: [
+          {
+            step: "package-update",
+            status: "failed",
+            exitCode: 1,
+            failureFacts: [createUpdateErrorFact("package-update", failure, {})],
+          },
+        ],
+      }),
+      { env: {}, stateDir: "/report-test-state" },
+    );
+    expect(body).toContain(`(${code})`);
+    expect(body).toContain(sentence);
+    expect(body).not.toMatch(/jdoe|acme/u);
+  },
+);
 
 it("splits a batch that misses its deadline so slow storage still gets an answer", () => {
   const spawn = vi.spyOn(childProcess, "spawnSync").mockReturnValueOnce(failed("ETIMEDOUT"));

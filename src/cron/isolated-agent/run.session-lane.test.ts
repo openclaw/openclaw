@@ -9,6 +9,7 @@ import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/
 import { contextBudgetStatusFixture } from "../../config/sessions/context-budget.test-support.js";
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
@@ -73,6 +74,33 @@ describe("session-bound cron lane admission", () => {
     harness.mockRunCronFallbackPassthrough();
     realSession.install();
     harness.runEmbeddedAgentMock.mockImplementation(async () => completedTurn());
+  });
+
+  it("starts a fresh isolated run while its previous run still has work", async () => {
+    const storePath = path.join(sessionDirs.make(), "openclaw-agent.sqlite");
+    const params = makeIsolatedAgentParamsFixture({
+      cfg: { session: { store: storePath } },
+      agentId: "main",
+      sessionKey: "cron:daily-monitor",
+      job: makeIsolatedAgentJobFixture({ id: "daily-monitor", delivery: { mode: "none" } }),
+    });
+    const first = await runCron(params);
+    assert(first.status === "ok" && first.sessionKey && first.sessionId);
+    const previous = await beginSessionEffect({
+      scope: storePath,
+      identities: [first.sessionKey, first.sessionId],
+    });
+    try {
+      const next = await runCron(params);
+      expect(next.status).toBe("ok");
+      expect(next.sessionId).not.toBe(first.sessionId);
+      expect(previous.isActive()).toBe(true);
+      expect(
+        accessor.loadSessionEntry({ storePath, sessionKey: first.sessionKey })?.sessionId,
+      ).toBe(first.sessionId);
+    } finally {
+      previous.release();
+    }
   });
 
   it.for([

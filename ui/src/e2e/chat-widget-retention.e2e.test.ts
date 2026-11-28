@@ -84,7 +84,7 @@ suite.define(() => {
         sessionKey,
         historyMessages: messages,
         inFlightRun: { runId, startedAt, text: "" },
-        sessionInfo: { hasActiveRun: true, activeRunIds: [runId] },
+        sessionInfo: { key: sessionKey, hasActiveRun: true, activeRunIds: [runId] },
         methodResponses: { "canvas.document.view": canvasView(html) },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));

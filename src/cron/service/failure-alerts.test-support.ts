@@ -13,11 +13,7 @@ export type SendCronFailureAlert = NonNullable<
   Parameters<typeof createCronServiceState>[0]["sendCronFailureAlert"]
 >;
 
-export function createAlertJob(params: {
-  id: string;
-  dueAt: number;
-  includeSkipped?: boolean;
-}): CronJob {
+export function createAlertJob(params: { id: string; dueAt: number }): CronJob {
   const job = createDueIsolatedJob({
     id: params.id,
     nowMs: params.dueAt,
@@ -27,7 +23,6 @@ export function createAlertJob(params: {
   job.failureAlert = {
     after: 1,
     cooldownMs: 60_000,
-    ...(params.includeSkipped ? { includeSkipped: true } : {}),
   };
   job.state.runningAtMs = params.dueAt;
   return job;

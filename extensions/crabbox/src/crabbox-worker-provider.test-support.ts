@@ -15,7 +15,7 @@ import { createNodeBootstrapFixture } from "./crabbox-worker-node-enrollment.tes
 import { createCrabboxWorkerProvider } from "./crabbox-worker-provider.js";
 
 export const OPENCLAW_ROOT = path.resolve(path.sep, "workspace", "openclaw");
-export const WORKER_WALLPAPER_PATH = fileURLToPath(
+const WORKER_WALLPAPER_PATH = fileURLToPath(
   new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
 );
 type ProviderDependencies = Parameters<typeof createCrabboxWorkerProvider>[0];

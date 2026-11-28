@@ -214,6 +214,33 @@ describe("Control UI theme contrast", () => {
     }
   });
 
+  it("keeps composer placeholders readable and quieter than draft text", () => {
+    const chatSelector = ".agent-chat__composer-placeholder";
+    const chatRules = cssRules(readStyle("chat/composer-surface.css"));
+    const chatPlaceholder = readPaint(
+      readRule(
+        chatRules.filter((rule) => rule.selector === chatSelector),
+        chatSelector,
+      ),
+      "color",
+    );
+    const palettePlaceholder = readPaint(
+      readRule(componentsRules, ".cmd-palette__input::placeholder"),
+      "color",
+    );
+    expect(palettePlaceholder).toBe(chatPlaceholder);
+    for (const [theme, tokens] of themes) {
+      const surface = resolveOpaqueColor("var(--chat-composer-surface)", tokens);
+      const onComposer = (ink: string) => contrastRatio(resolveOpaqueColor(ink, tokens), surface);
+      const placeholderContrast = onComposer(chatPlaceholder);
+      expectFloor(placeholderContrast, contrastFloor(theme), theme);
+      expect(placeholderContrast, theme).toBeLessThan(onComposer("var(--text-strong)"));
+      if (theme === "light" || theme.endsWith("-light")) {
+        expect(placeholderContrast, theme).toBeLessThan(onComposer("var(--muted)"));
+      }
+    }
+  });
+
   it("keeps user code block syntax colors at AA over every sender bubble", () => {
     const toHex = (rgb: RGB) =>
       `#${rgb.map((value) => Math.round(value).toString(16).padStart(2, "0")).join("")}`;

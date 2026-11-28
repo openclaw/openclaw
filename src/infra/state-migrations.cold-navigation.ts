@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { performance } from "node:perf_hooks";
+import { storeReadsNeedCopies } from "../commands/doctor-live-store-pending.js";
 import { backupDoctorPostgresMigration } from "../commands/doctor-postgres-migration.js";
 import { backfillSessionColdNavigationInTransaction } from "../config/sessions/session-cold-storage-navigation.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
@@ -7,6 +8,7 @@ import { agentEngineInput, openAgentEngineStore } from "../state/openclaw-agent-
 import { assertAgentDatabaseMaintenanceAuthority } from "../state/openclaw-agent-db-maintenance-authority.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
 import { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
+import { openOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { formatErrorMessage } from "./errors.js";
@@ -17,6 +19,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import type { EngineConnection } from "./sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
@@ -34,6 +37,51 @@ import type { MigrationMessages } from "./state-migrations.types.js";
 
 const COLD_NAVIGATION_WORK_BUDGET_MS = 10 * 60_000;
 
+/** Cold archives whose transcript has no retained navigation events, first by session. */
+function selectPendingColdNavigation(database: EngineConnection) {
+  return getNodeSqliteKysely<DB>(database)
+    .selectFrom("session_transcript_cold_archives as archive")
+    .select("archive.session_id")
+    .where((eb) =>
+      eb.not(
+        eb.exists(
+          eb
+            .selectFrom("transcript_events as event")
+            .select("event.seq")
+            .whereRef("event.session_id", "=", "archive.session_id"),
+        ),
+      ),
+    )
+    .orderBy("archive.session_id")
+    .limit(1);
+}
+
+/** Read-only: whether `migrateSessionColdNavigation` has an archive to backfill here. */
+export function hasPendingSessionColdNavigation(database: EngineConnection): boolean {
+  return Boolean(executeSqliteQueryTakeFirstSync(database, selectPendingColdNavigation(database)));
+}
+
+/** True only when a read-only open of the target positively finds nothing to backfill. */
+function hasNoPendingColdNavigation(target: AgentDatabaseMigrationTarget, env: NodeJS.ProcessEnv) {
+  try {
+    const opened = openOpenClawAgentDatabaseReadOnly({
+      agentId: target.agentId,
+      env,
+      path: target.path,
+    });
+    if (!opened.found) {
+      return false;
+    }
+    try {
+      return !hasPendingSessionColdNavigation(opened.database.db);
+    } finally {
+      opened.database.close();
+    }
+  } catch {
+    return false;
+  }
+}
+
 /** Doctor adds reconstructible navigation one archive at a time; failures retain the source for retry. */
 export async function migrateSessionColdNavigation(
   params: {
@@ -49,8 +97,13 @@ export async function migrateSessionColdNavigation(
   const warnings: string[] = [];
   let remainingWorkMs = COLD_NAVIGATION_WORK_BUDGET_MS;
   signal?.throwIfAborted();
+  // Admitted targets whose read-only check finds no pending archive need no lease.
+  const preparedTargets =
+    params.preparedTargets && !agentEngineInput() && !storeReadsNeedCopies()
+      ? params.preparedTargets.filter((target) => !hasNoPendingColdNavigation(target, env))
+      : params.preparedTargets;
   // Empty admitted discovery has no work; acquiring a lease would dirty shared state.
-  if (params.preparedTargets?.length === 0) {
+  if (preparedTargets?.length === 0) {
     return { changes, warnings };
   }
   try {
@@ -62,7 +115,7 @@ export async function migrateSessionColdNavigation(
       };
       assertCurrent();
       const targets =
-        params.preparedTargets ??
+        preparedTargets ??
         resolveAgentDatabaseMigrationTargets({
           ...params,
           env,
@@ -94,21 +147,7 @@ export async function migrateSessionColdNavigation(
           const database = { db: native, path: target.path };
           try {
             const db = getNodeSqliteKysely<DB>(database.db);
-            const pending = db
-              .selectFrom("session_transcript_cold_archives as archive")
-              .select("archive.session_id")
-              .where((eb) =>
-                eb.not(
-                  eb.exists(
-                    eb
-                      .selectFrom("transcript_events as event")
-                      .select("event.seq")
-                      .whereRef("event.session_id", "=", "archive.session_id"),
-                  ),
-                ),
-              )
-              .orderBy("archive.session_id")
-              .limit(1);
+            const pending = selectPendingColdNavigation(database.db);
             let cursor: string | undefined;
             let backedUp = false;
             let migrated = 0;

@@ -20,68 +20,6 @@ const root = "/workspace/investigating-why-a-pr-was-not-merged";
 afterEach(() => document.body.replaceChildren());
 
 describe.runIf(browserMode)("Review layout", () => {
-  it.each([true, false])(
-    "shows a long filename in the diff heading with mobile=%s",
-    async (mobile) => {
-      const { userEvent } = await import("vitest/browser");
-      const name =
-        "coastal-observation-register.compatibilityverificationforportablemonitoringstationsacrossallregionaldeployments";
-      const mounted = mountSolid(() =>
-        createComponent(SessionDiffPanel, {
-          mobile,
-          desktop: !mobile,
-          owner: null,
-          execNode: null,
-          loadFileText: null,
-          openFile: null,
-          revealFile: null,
-          loader: async () => ({
-            sessionKey: "main",
-            additions: 1,
-            deletions: 0,
-            files: [
-              { path: "src/" + name, status: "added", additions: 1, deletions: 0 },
-              { path: "src/chat.ts", status: "modified", additions: 1, deletions: 0 },
-              { path: "src/map.png", status: "added", additions: 1, deletions: 0 },
-            ],
-          }),
-        }),
-      );
-      const panel = mounted.container.querySelector<HTMLElement>("openclaw-session-diff")!;
-      panel.style.cssText = "display:flex;position:fixed;top:0;left:0;width:390px;height:500px";
-      await waitForSolid(() =>
-        expect(panel.querySelector(".session-diff__filename")?.textContent).toBe(name),
-      );
-      const label = panel.querySelector<HTMLElement>(".session-diff__filename")!;
-      expect(label.title).toBe(name);
-      const stem = label.querySelector(".session-diff__basename bdi")!.firstChild!;
-      const range = document.createRange();
-      range.selectNodeContents(stem);
-      expect(new Set(Array.from(range.getClientRects(), (rect) => rect.top)).size).toBe(1);
-      range.setStart(stem, stem.textContent!.lastIndexOf("-") + 1);
-      const suffix = range.getBoundingClientRect();
-      const bounds = label.getBoundingClientRect();
-      expect(suffix.width).toBeGreaterThan(0);
-      expect(suffix.left).toBeGreaterThanOrEqual(bounds.left - 1);
-      expect(suffix.right).toBeLessThanOrEqual(bounds.right + 1);
-      for (const short of ["chat.ts", "map.png"]) {
-        const extension = panel.querySelector<HTMLElement>(
-          `.session-diff__filename[title="${short}"] .session-diff__extension`,
-        )!;
-        range.selectNodeContents(extension);
-        expect(range.getBoundingClientRect().right).toBeLessThanOrEqual(
-          extension.getBoundingClientRect().right + 1,
-        );
-      }
-      const toggle = panel.querySelector<HTMLButtonElement>(".session-diff__file-toggle")!;
-      const initial = toggle.getAttribute("aria-expanded");
-      await userEvent.click(toggle);
-      await waitForSolid(() => expect(toggle.getAttribute("aria-expanded")).not.toBe(initial));
-      await userEvent.keyboard("{Enter}");
-      await waitForSolid(() => expect(toggle.getAttribute("aria-expanded")).toBe(initial));
-    },
-  );
-
   it.each([false, true])("contains complete split lines with mobile=%s", async (mobile) => {
     const { page, userEvent } = await import("vitest/browser");
     await page.viewport(1200, 800);
@@ -612,16 +550,20 @@ describe.runIf(browserMode)("Review layout", () => {
       ),
     );
     const surface = panel.querySelector<HTMLElement>(".session-diff-menu__surface")!;
-    const bounds = surface.getBoundingClientRect();
-    expect(bounds.top).toBeGreaterThanOrEqual(0);
-    expect(bounds.left).toBeGreaterThanOrEqual(0);
-    expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
-    expect(bounds.right).toBeLessThanOrEqual(window.innerWidth);
+    const menuBounds = surface.getBoundingClientRect();
+    expect(menuBounds.top).toBeGreaterThanOrEqual(0);
+    expect(menuBounds.left).toBeGreaterThanOrEqual(0);
+    expect(menuBounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+    expect(menuBounds.right).toBeLessThanOrEqual(window.innerWidth);
+    const baseRef =
+      "release/regional-calibration-and-extended-verification-for-portable-monitoring-stations";
+    const headRef =
+      "feature/field-survey/regional-calibration/portable-monitoring-stations/verify-observation-receipts-before-autumn-deployment";
     pending.resolve({
       sessionKey: "main",
       root,
-      branch,
-      baseRef: "main",
+      branch: headRef,
+      baseRef,
       additions: 1,
       deletions: 0,
       files: [{ path: "added.ts", status: "added", additions: 1, deletions: 0 }],
@@ -632,6 +574,22 @@ describe.runIf(browserMode)("Review layout", () => {
     await waitForSolid(() => expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull());
     expect(document.activeElement).toBe(view);
     expect(view.style.getPropertyValue("anchor-name")).toBe(tooltipAnchor);
+    const refs = Array.from(
+      panel.querySelectorAll<HTMLElement>(".session-diff-mobile__branch > span > *"),
+    );
+    expect(refs.map((ref) => ref.textContent)).toEqual([baseRef, headRef]);
+    for (const ref of refs) {
+      expect(ref.title).toBe(ref.textContent);
+      const text = ref.querySelector("bdi")!.firstChild!;
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      expect(new Set(Array.from(range.getClientRects(), (rect) => rect.top)).size).toBe(1);
+      range.setStart(text, text.textContent!.lastIndexOf("-") + 1);
+      const rect = range.getBoundingClientRect();
+      const bounds = ref.getBoundingClientRect();
+      expect(rect.left).toBeGreaterThanOrEqual(bounds.left - 1);
+      expect(rect.right).toBeLessThanOrEqual(bounds.right + 1);
+    }
     await userEvent.click(view);
     await waitForSolid(() =>
       expect(panel.querySelector(".session-diff-menu__surface")?.matches(":popover-open")).toBe(

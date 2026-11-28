@@ -301,7 +301,6 @@ internal class MicCaptureManager(
     synchronized(messageQueueLock) { messageQueue.clear() }
     _conversation.value = emptyList()
     _liveTranscript.value = null
-    flushedPartialTranscript = null
     _isSending.value = false
     stopRequested = true
     stopTranscription(preserveStatus = true)
@@ -446,6 +445,7 @@ internal class MicCaptureManager(
       val status = _statusText.value
       val session = transcriptionSession
       transcriptionSession = null
+      flushedPartialTranscript = null
       audioInputGeneration.incrementAndGet()
       onAppliedAudioInputChanged(null)
       if (session != null) {
@@ -773,11 +773,13 @@ internal class MicCaptureManager(
         transcriptFlushJob?.cancel()
         transcriptFlushJob = null
         val text = obj["text"].asJsonStringOrNull()?.trim().orEmpty()
+        // An idle flush suppresses only its own final, never a later utterance.
+        val flushed = flushedPartialTranscript
+        flushedPartialTranscript = null
         if (text.isNotEmpty()) {
-          if (text != flushedPartialTranscript) {
+          if (text != flushed) {
             submitTranscribedMessage(text)
           } else {
-            flushedPartialTranscript = null
             _liveTranscript.value = null
           }
         }

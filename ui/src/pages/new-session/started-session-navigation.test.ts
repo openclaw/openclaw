@@ -97,6 +97,7 @@ describe("confirmed session navigation", () => {
         agentId: "main",
       });
       await vi.mocked(context.navigateAndWait).mock.results[0]?.value;
+      expect(context.chatSubmissions.readAcceptedCreate()?.displayName).toBeUndefined();
       if (retire === "stop") {
         lifecycle.abort();
       } else {

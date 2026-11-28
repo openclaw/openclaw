@@ -13,6 +13,10 @@ import type {
   SubagentRunMaintenanceRecord,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
+import {
+  hasPendingRequesterTurnResult,
+  isSubagentPausedByYield,
+} from "./subagent-requester-turn-custody.js";
 
 export function resetRequesterSettleWakeRetry(
   wake?: RequesterSettleWakeState,
@@ -30,7 +34,7 @@ export function resetRequesterSettleWakeRetry(
 /** A pause uses the existing retry owner, but never consumes the completion cohort. */
 export function consumeSubagentPauseNotice(entry: SubagentRunRecord): boolean {
   const wake = entry.requesterSettleWake;
-  if (entry.pauseReason !== "sessions_yield" || !wake?.pauseNotice) {
+  if (!isSubagentPausedByYield(entry) || !wake?.pauseNotice) {
     return false;
   }
   const { pauseNotice: _notice, ...completionWake } = wake;
@@ -269,7 +273,7 @@ export function isDeliveryTerminalForRequesterSettle(
 ): boolean {
   return (
     entry.delivery?.status === "delivered" ||
-    (entry.delivery?.status === "not_required" && entry.pauseReason !== "sessions_yield") ||
+    (entry.delivery?.status === "not_required" && !isSubagentPausedByYield(entry)) ||
     entry.delivery?.status === "discarded" ||
     entry.delivery?.disposition === "delivered" ||
     // A yielded requester's batch owns an ended child's delivery; the earlier per-child
@@ -389,11 +393,11 @@ export function isSubagentRetirementSettled(entry: SubagentRunRecord): boolean {
   return (
     entry.retireAfterSettle === true &&
     entry.requesterSettleWake === undefined &&
-    !(entry.requesterTurnRunId && entry.expectsCompletionMessage === true)
+    !hasPendingRequesterTurnResult(entry)
   );
 }
 
 export function completeRequesterSettleWakeState(entry: SubagentRunRecord): boolean {
   entry.requesterSettleWake = undefined;
-  return entry.pauseReason !== "sessions_yield" && isSubagentRetirementSettled(entry);
+  return !isSubagentPausedByYield(entry) && isSubagentRetirementSettled(entry);
 }

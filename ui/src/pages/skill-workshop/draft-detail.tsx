@@ -101,10 +101,11 @@ export function DraftDetail(props: {
                             "sw-file-chip",
                             { "sw-file-chip--active": file === target().filePath },
                           ]}
+                          title={file}
                           aria-current={file === target().filePath ? "true" : undefined}
                           onClick={() => props.view().onOpen({ ...target(), filePath: file })}
                         >
-                          {file}
+                          <bdi>{file}</bdi>
                         </button>
                       )}
                     </For>

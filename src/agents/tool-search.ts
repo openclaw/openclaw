@@ -2,11 +2,13 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Type } from "typebox";
+import { prepareDispatchArguments } from "../../packages/agent-core/src/dispatch-call.js";
 import {
   attachInternalToolResultContentSource,
   copyInternalToolResultState,
 } from "../../packages/agent-core/src/internal-hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
 import { bindGatewayToolPolicyControl } from "./agent-tool-metadata.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
@@ -20,6 +22,7 @@ import {
   isDirectVisibleCatalogTool,
   omitDescribedOutputSchema,
   resolveCatalog,
+  selectDirectMcpToolNames,
 } from "./tool-search-catalog.js";
 import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { renderToolSearchControlText } from "./tool-search-control-result.js";
@@ -37,7 +40,6 @@ import {
   type ToolSearchMode,
 } from "./tool-search-protocol.js";
 import {
-  prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
   readToolSearchId,
   readToolSearchRequest,
@@ -219,7 +221,7 @@ function formatToolSearchBatchResponse(
 }
 
 const TOOL_SEARCH_DESCRIPTION =
-  "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action. Use tool_describe when you need its input schema or when a result includes instructionsHint; call it before dispatch_action to load the complete server instructions.";
+  "Search the effective Tool Search catalog. Pass query for one search or queries for several independent searches in one call; a non-empty query joins a non-empty batch first, with its own limit. Batch results stay grouped in request order. Queries must be in English: matching is lexical against tool names and descriptions, which are written in English, so another language will usually match nothing. Pass an exact result id or name to dispatch_action. When a result includes instructionsHint, call tool_describe before dispatch_action to load the complete server instructions.";
 
 function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
   return mode === "tools" && TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(name);
@@ -236,6 +238,13 @@ export function applyToolSearchCatalog(params: {
 }) {
   const config = resolveToolSearchConfig(params.config);
   const directToolNames = new Set(normalizeStringEntries(Array.from(params.directToolNames ?? [])));
+  // Configured selectors already choose which MCP tools are deferred. Without a session pin's
+  // choice, every MCP tool stays deferred so the tool list never follows one run's inventory.
+  const pinnedToolNames = params.catalogRef?.sessionPinnedToolNames;
+  const directMcpToolNames =
+    config.include || config.exclude || !pinnedToolNames
+      ? new Set<string>()
+      : selectDirectMcpToolNames(params.tools, pinnedToolNames);
   // The MCP directory goes in the system prompt's deferred-tool section, so a server
   // that connects later changes an appended prompt update, never this definition.
   return applyToolCatalogCompaction({
@@ -243,7 +252,9 @@ export function applyToolSearchCatalog(params: {
     enabled: config.enabled,
     selection: config,
     isVisibleControlTool: (tool) => shouldExposeControlTool(tool.name, config.mode),
-    isVisibleCatalogTool: (tool) => isDirectVisibleCatalogTool(tool, directToolNames),
+    isVisibleCatalogTool: (tool) =>
+      isDirectVisibleCatalogTool(tool, directToolNames) ||
+      (directMcpToolNames.has(tool.name) && classifyAgentToolSource(tool).source === "mcp"),
   });
 }
 
@@ -324,30 +335,34 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       parameters: resolveSearchParameters(config.searchDefaultLimit),
       execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
         const request = readToolSearchRequest(args, config);
-        if (request.kind === "single") {
-          return formatToolSearchControlResult(
-            await runtime.search(request.search.query, {
-              limit: request.search.limit,
-              parentToolCallId: toolCallId,
-            }),
-            runtime,
-            { parentToolCallId: toolCallId, allowPartial: true },
+        try {
+          if (request.kind === "single") {
+            return formatToolSearchControlResult(
+              await runtime.search(request.search.query, {
+                limit: request.search.limit,
+                parentToolCallId: toolCallId,
+              }),
+              runtime,
+              { parentToolCallId: toolCallId, allowPartial: true },
+            );
+          }
+          const results = await Promise.all(
+            request.searches.map(async (search) => ({
+              query: search.query,
+              candidates: await runtime.search(search.query, {
+                limit: search.limit,
+                parentToolCallId: toolCallId,
+              }),
+            })),
           );
+          return formatToolSearchBatchResponse(
+            results,
+            runtime.hasNetworkContent(toolCallId),
+            runtime.resultBudget,
+          );
+        } finally {
+          runtime.clearControlInvocation(toolCallId);
         }
-        const results = await Promise.all(
-          request.searches.map(async (search) => ({
-            query: search.query,
-            candidates: await runtime.search(search.query, {
-              limit: search.limit,
-              parentToolCallId: toolCallId,
-            }),
-          })),
-        );
-        return formatToolSearchBatchResponse(
-          results,
-          runtime.hasNetworkContent(toolCallId),
-          runtime.resultBudget,
-        );
       },
     },
     {
@@ -356,27 +371,31 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       description:
         "Load the full input schema and metadata, including complete server instructions, for one tool id or name. Use this when the input is not already clear or when discovery returned instructionsHint.",
       parameters: describeParameters,
-      prepareArguments: prepareToolSearchDispatcherArguments,
+      prepareArguments: prepareDispatchArguments,
       execute: async (toolCallId: string, args: unknown): Promise<AgentToolResult<unknown>> => {
-        const described = await runtime.describe(readToolSearchId(args), {
-          parentToolCallId: toolCallId,
-        });
-        const includeOutputSchema =
-          isRecord(args) && args[TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION] === true;
-        return formatToolSearchControlResult(described, runtime, {
-          parentToolCallId: toolCallId,
-          modelPayload: includeOutputSchema ? described : omitDescribedOutputSchema(described),
-          allowPartial: true,
-        });
+        try {
+          const described = await runtime.describe(readToolSearchId(args), {
+            parentToolCallId: toolCallId,
+          });
+          const includeOutputSchema =
+            isRecord(args) && args[TOOL_DESCRIBE_OUTPUT_SCHEMA_OPTION] === true;
+          return formatToolSearchControlResult(described, runtime, {
+            parentToolCallId: toolCallId,
+            modelPayload: includeOutputSchema ? described : omitDescribedOutputSchema(described),
+            allowPartial: true,
+          });
+        } finally {
+          runtime.clearControlInvocation(toolCallId);
+        }
       },
     },
     {
       name: TOOL_CALL_RAW_TOOL_NAME,
       label: "Tool Call",
       description:
-        "Call an exact Tool Search result id or name through OpenClaw. If arguments are not already clear, call tool_describe with the same id for the full description and schema; do not guess omitted fields from compact input hints.",
+        "Call an exact Tool Search result id or name through OpenClaw. Invalid arguments to OpenClaw and MCP tools return the input schema; retry from that error. Use tool_describe for a full description; do not invent values the task does not supply.",
       parameters: callParameters,
-      prepareArguments: prepareToolSearchDispatcherArguments,
+      prepareArguments: prepareDispatchArguments,
       execute: async (
         toolCallId: string,
         args: unknown,
@@ -421,6 +440,8 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
           });
         } catch (error) {
           throw formatToolSearchControlError(error, runtime, toolCallId, signal ?? ctx.abortSignal);
+        } finally {
+          runtime.clearControlInvocation(toolCallId);
         }
       },
     },

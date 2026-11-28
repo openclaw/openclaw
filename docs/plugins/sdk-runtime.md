@@ -217,8 +217,9 @@ when its manifest declares `contracts.conversationAccess: ["read"]`, or set with
 bundled plugins). The caller must also have the target session's `sessions.get`
 read access. That authority, the Gateway binding and conversation access remain
 live through the run and its settlement. Tool policy is checked as the anchored
-turn's requester: the sender, owner flag, group and channel that the turn's
-stored user message recorded. Plugins cannot supply requester facts.
+turn's requester: the sender, group and channel that the turn's stored user
+message recorded. The owner flag is the caller's admitted authority, never the
+turn's. Plugins cannot supply requester facts.
 
 A session whose model runs on a subscription login that a CLI backend owns (for
 example `claude-cli` with a Claude login or Claude subscription token) forks
@@ -296,12 +297,15 @@ if (result.status === "refused") {
   must name that same session. Without `sessionAccess`, the fork needs the
   caller's permission to run the agent.
 - A request for `exec` returns `{ status: "refused", reason: "tool_policy" }`
-  unless the anchored turn came from the owner. Through a `sessionAccess`
-  method with a signed-in caller, the anchored turn must also come from that
-  caller. When the turn may come from someone else, request only `read` and
-  `ls`. A fork never asks for approval: a command the agent's exec approvals
-  would ask about is denied, and nothing is queued for approval. Allowlist
-  entries and full-permission exec apply as they do for the session's own turns.
+  unless the caller holds owner authority (the `operator.admin` scope), decided
+  once when the fork starts. Who sent the anchored turn does not matter: an
+  owner may fork a turn whose latest input is an internal wake, such as a
+  subagent or exec completion. A fork with no admitted operator caller, such as
+  background work no Gateway request started, never gets `exec`; request only
+  `read` and `ls` there. A fork never asks for approval: a command the agent's
+  exec approvals would ask about is denied, and nothing is queued for approval.
+  Allowlist entries and full-permission exec apply as they do for the session's
+  own turns.
 - A manifest's `contracts.tools` may claim a core catalog id only when the
   catalog marks it plugin-built (as `browser` and `skill_workshop`); claiming
   `exec`, `read` or another core-built tool grants nothing.
@@ -969,6 +973,18 @@ all of that runtime's managers as best-effort cleanup; it cannot identify depend
 managers or prevent concurrent manager acquisition.
 
 ## Browser meeting transport builders
+
+Use `MeetingPlatformAdapter.defineBrowserMeetingPlugin` from
+`openclaw/plugin-sdk/meeting-runtime` for browser-only meeting plugins. A plugin
+that also supports dial-in can extend `MeetingSessionRuntime` and delegate its
+`releaseBrowserTab` callback to the protected `releaseTrackedBrowserTab` method.
+Supply the platform's leave operation and operator messages. The runtime checks
+for another active session on the same tab. After a confirmed leave, status reports
+the final audio state without searching for a replacement tab.
+
+Official plugins with a custom meeting entry can use `registerMeetingPluginRuntime`
+from `openclaw/plugin-sdk/meeting-plugin-entry`. Gateway handlers and the registered
+live-caption source share one runtime and wait for its initial transcript policy.
 
 `MeetingPlatformAdapter.createBrowserAdapterOptions` builds the `browser` and
 `parsing` options for `MeetingPlatformAdapter.create` from platform page scripts,
