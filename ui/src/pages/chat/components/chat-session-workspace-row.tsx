@@ -27,6 +27,7 @@ import { createLayoutMeasurement } from "../../../lib/reactive/layout-measuremen
 import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
+import { workspaceFileCopyPath } from "./chat-session-workspace-file-content.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import {
   splitWorkspaceFilename,
@@ -316,7 +317,11 @@ export function RailRow(props: {
                 </Show>
                 <span ref={nativeListener("click", (event) => event.stopPropagation())}>
                   <CopyButton
-                    text={props.file.path}
+                    text={workspaceFileCopyPath(
+                      props.workspace.list?.root,
+                      props.file.origin,
+                      props.file.path,
+                    )}
                     idleLabel={t("chat.workspaceFiles.copyPath")}
                   />
                 </span>
