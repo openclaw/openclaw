@@ -151,13 +151,14 @@ describe("models cli", () => {
     expectCommandOptions(mocks[command], { agent: "poe", ...expected });
   });
 
-  it("maps --device-code to the provider device-code auth method", async () => {
+  it("maps --device-code and rejects a conflicting --method as an expected error", async () => {
     await runModelsCommand("models auth login --provider openai --device-code");
-
     expectCommandOptions(mocks.modelsAuthLoginCommand, {
       provider: "openai",
       method: "device-code",
     });
+    const conflict = runModelsCommand("models auth login --device-code --method password");
+    await expect(conflict).rejects.toMatchObject({ name: "ExpectedCliError" });
   });
 
   it.each([
