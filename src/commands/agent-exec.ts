@@ -338,6 +338,7 @@ export async function agentExecCommand(
             target: "agent state",
             onForeignOwner: "refuse",
             onlineAlternative: "Omit --state-dir to use isolated temporary state.",
+            signal: abortSignal,
             runLocal: run,
           }),
     );
