@@ -144,7 +144,9 @@ beforeEach(() => {
     JSON.stringify({ name: "openclaw", version: "2026.11.16" }),
   );
   // A real process running this release, so its /proc entry identifies the served build.
-  const child = spawn(process.execPath, [path.join(root, "dist", "index.js")], { stdio: "ignore" });
+  const child = spawn(process.execPath, [path.join(root, "dist", "index.js"), "gateway"], {
+    stdio: "ignore",
+  });
   children.push(child);
   native.startPid = child.pid ?? 0;
 });

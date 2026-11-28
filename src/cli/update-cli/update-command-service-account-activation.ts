@@ -72,7 +72,13 @@ const log = (message) => console.log(message);
 const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 const systemctl = (...args) => spawnSync("/usr/bin/systemctl", args, { stdio: "inherit" }).status === 0;
 const active = () => spawnSync("/usr/bin/systemctl", ["show", "-p", "ActiveState", "--value", p.unit], { encoding: "utf8" }).stdout.trim();
-const asAccount = (...args) => spawnSync(p.runuser, ["-u", p.account, "--", process.execPath, "-e", p.loader, p.envFile, p.root + "/dist/index.js", ...args], { env: { PATH: p.path }, cwd: "/", stdio: "inherit", timeout: 60 * 60000 }).status === 0;
+// The account's answer is untrusted: success needs exit 0 and the expected status word on
+// the last line of bounded output.
+const asAccount = (expected, ...args) => {
+  const run = spawnSync(p.runuser, ["-u", p.account, "--", process.execPath, "-e", p.loader, p.envFile, p.root + "/dist/index.js", ...args], { env: { PATH: p.path }, cwd: "/", stdio: ["ignore", "pipe", "inherit"], encoding: "utf8", maxBuffer: 256 * 1024, timeout: 60 * 60000 });
+  if (run.status !== 0 || run.error) return false;
+  try { return JSON.parse(run.stdout.trim().split("\n").at(-1)).status === expected; } catch { return false; }
+};
 const deadline = Date.now() + 2 * 60 * 60000;
 const settle = () => {
   let version;
@@ -85,18 +91,24 @@ const settle = () => {
   }
   if (!rolledBack) {
     log("update kept; recording it as " + p.account);
-    if (!asAccount("update", "finish", "--backup-root", p.backupRoot)) log("update finish failed; retry it as " + p.account);
+    if (!asAccount("finished", "update", "finish", "--backup-root", p.backupRoot)) log("update finish did not confirm; the backup is kept; retry update finish as " + p.account);
     return;
   }
   log("the installed updater restored " + version + "; restoring " + p.account + "'s state");
   systemctl("stop", p.unit);
   for (let i = 0; i < 90 && !["inactive", "failed"].includes(active()); i++) spawnSync("/bin/sleep", ["1"]);
   if (!["inactive", "failed"].includes(active())) { log(p.unit + " did not stop; state not restored, backup kept at " + p.backupRoot); return; }
-  if (asAccount("update", "restore", "--backup-root", p.backupRoot)) systemctl("start", p.unit);
-  else log("restore failed; " + p.unit + " left stopped, backup kept at " + p.backupRoot);
+  if (asAccount("restored", "update", "restore", "--backup-root", p.backupRoot)) systemctl("start", p.unit);
+  else log("restore did not confirm; " + p.unit + " left stopped, backup kept at " + p.backupRoot);
 };
 const tick = () => {
-  if (alive(p.driverPid) && Date.now() < deadline) { setTimeout(tick, 1000); return; }
+  if (alive(p.driverPid)) {
+    if (Date.now() < deadline) { setTimeout(tick, 1000); return; }
+    // The package is not final while the updater runs; keep the backup for the operator.
+    log("the installed updater is still running; nothing settled, backup kept at " + p.backupRoot);
+    fs.rmSync(p.handoffDir, { recursive: true, force: true });
+    return;
+  }
   try { settle(); } finally { fs.rmSync(p.handoffDir, { recursive: true, force: true }); }
 };
 tick();
