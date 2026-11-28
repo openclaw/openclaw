@@ -1,0 +1,2 @@
+# Authentic DNS-SD TXT escaping and marker-free records at the existing discovery boundary.
+19
