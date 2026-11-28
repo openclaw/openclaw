@@ -11,6 +11,7 @@ import type {
 } from "./types.config.js";
 
 function cloneRuntimeIssue(issue: unknown): ChannelConfigRuntimeIssue {
+  // SAFETY: Only object properties are copied, and path is checked before reading its segments.
   const record = issue && typeof issue === "object" ? (issue as Record<string, unknown>) : {};
   const path = Array.isArray(record.path)
     ? record.path.filter((segment): segment is string | number => {
@@ -75,7 +76,7 @@ export function buildChannelConfigSchema(
           target: "draft-07",
           ...(options?.jsonSchemaMode ? { io: options.jsonSchemaMode } : {}),
           unrepresentable: "any",
-        }) as JsonSchemaObject)
+        }) as JsonSchemaObject) // SAFETY: The host converter returns a draft-07 schema object.
       : { type: "object", additionalProperties: true };
   return {
     schema: jsonSchema,
