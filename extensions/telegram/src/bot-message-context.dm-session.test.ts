@@ -21,6 +21,7 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import * as replyRuntime from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import {
   deleteSessionEntry,
@@ -29,7 +30,7 @@ import {
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   apiCalls,
   chat,
@@ -407,6 +408,26 @@ describe("Telegram recorded session destinations", () => {
     );
     expect(entry(sessionKey)).toBeUndefined();
     expect(harness.replySpy).not.toHaveBeenCalled();
+  });
+
+  it("titles a private topic session with its auto label, which Telegram never echoes", async () => {
+    cfg.channels = { telegram: { ...cfg.channels?.telegram, autoTopicLabel: true } };
+    const label = vi
+      .spyOn(replyRuntime, "generateConversationLabel")
+      .mockResolvedValue("Invoice review");
+    onTestFinished(() => label.mockRestore());
+    const bot = await createBot(false, true, cfg, true);
+    const topic = { message_thread_id: 77, is_topic_message: true };
+    await receive(
+      bot,
+      serviceMessage({
+        ...topic,
+        forum_topic_created: { name: "Review an i...", icon_color: 7322096 },
+      }),
+    );
+    await receive(bot, { ...commandMessage("Review an invoice"), chat, ...topic });
+    await vi.waitFor(() => expect(entry(privateTopicKey)?.topicName).toBe("Invoice review"));
+    expect(apiCalls.mock.calls.filter(([method]) => method === "editForumTopic")).toHaveLength(1);
   });
 
   it("learns reply topic names and restores them after plugin-state reopen", async () => {

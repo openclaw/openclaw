@@ -563,6 +563,15 @@ export const dispatchTelegramMessage = async (
           { name: label },
           topicNameScope,
         );
+        // Without that echo the session title would also keep the placeholder; record it
+        // as the title-update path in bot-message.ts does for observed renames.
+        await context.turn.recordInboundSession({
+          storePath: context.turn.storePath,
+          sessionKey: dispatchContext.ctxPayload.SessionKey,
+          ctx: { ...dispatchContext.ctxPayload, ThreadLabel: label },
+          createIfMissing: false,
+          onRecordError: context.turn.record.onRecordError,
+        });
         logVerbose(`auto-topic-label: renamed topic ${dispatchContext.chatId}/${topicThreadId}`);
       } catch (err) {
         logVerbose(`auto-topic-label: failed: ${String(err)}`);
