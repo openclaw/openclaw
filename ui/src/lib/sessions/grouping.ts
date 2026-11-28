@@ -1,3 +1,5 @@
+/// <reference lib="es2024.collection" />
+
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -177,13 +179,7 @@ export function groupSessionRows(params: {
     params.mode === "date"
       ? createDateGroupResolver(Date.now())
       : (row: GatewaySessionRow) => resolveSessionGroupId(row, params.mode);
-  const byId = new Map<string, GatewaySessionRow[]>();
-  for (const row of params.rows) {
-    const id = groupId(row);
-    const bucket = byId.get(id) ?? [];
-    bucket.push(row);
-    byId.set(id, bucket);
-  }
+  const byId = Map.groupBy(params.rows, groupId);
   const ids = orderedGroupIds(params.mode, byId, params.knownCategories ?? []);
   return ids.map((id) => ({ id, rows: byId.get(id) ?? [] }));
 }
