@@ -10,7 +10,8 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
 import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
-import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
+import { inspectTelegramAccount } from "./account-inspect.js";
+import { resolveDefaultTelegramAccountId } from "./accounts.js";
 import { isNumericTelegramSenderUserId, normalizeTelegramAllowFromEntry } from "./allow-from.js";
 import { namedAccountPromotionKeys, singleAccountKeysToMove } from "./setup-contract.js";
 
@@ -55,7 +56,7 @@ export async function promptTelegramAllowFromForAccount(params: {
   accountId?: string;
 }) {
   const accountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
-  const resolved = resolveTelegramAccount({ cfg: params.cfg, accountId });
+  const resolved = inspectTelegramAccount({ cfg: params.cfg, accountId });
   await params.prompter.note(
     getTelegramUserIdHelpLines().join("\n"),
     t("wizard.telegram.userIdTitle"),

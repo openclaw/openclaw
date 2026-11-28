@@ -31,11 +31,14 @@ export function createChannelSetupDisabledHints(params: {
       return undefined;
     }
     const cfg = params.getConfig();
-    const account = await resolveChannelAccount({
-      plugin,
-      cfg,
-      accountId: accountId ?? resolveChannelDefaultAccountId({ plugin, cfg }),
-    });
+    const resolvedAccountId = accountId ?? resolveChannelDefaultAccountId({ plugin, cfg });
+    // Setup runs on the source config, where credential SecretRefs stay unresolved. Without a
+    // plugin enabled hook, read `enabled` from the read-only inspection, which tolerates them.
+    if (!plugin.config.isEnabled && plugin.config.inspectAccount) {
+      const inspected = await plugin.config.inspectAccount(cfg, resolvedAccountId);
+      return isAccountEnabled(inspected) ? undefined : "disabled";
+    }
+    const account = await resolveChannelAccount({ plugin, cfg, accountId: resolvedAccountId });
     // Setup steps replace config; retain the current view after account preparation yields.
     const enabled = plugin.config.isEnabled
       ? plugin.config.isEnabled(account, params.getConfig())
