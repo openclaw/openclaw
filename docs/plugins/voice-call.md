@@ -12,7 +12,7 @@ Voice calls for OpenClaw via a plugin: outbound notifications, multi-turn
 conversations, full-duplex realtime voice, streaming transcription, and
 inbound calls with allowlist policies.
 
-**Providers:** `mock` (dev, no network), `plivo` (Voice API + XML transfer +
+**Providers:** `livekit` (SIP + native RTC), `mock` (dev, no network), `plivo` (Voice API + XML transfer +
 GetInput speech), `telnyx` (Call Control v2), `twilio` (Programmable Voice +
 Media Streams).
 
@@ -50,7 +50,8 @@ offline, start it after configuration.
   <Step title="Configure provider and webhook">
     Set config under `plugins.entries.voice-call.config` (see
     [Configuration](/plugins/voice-call/configuration)). At minimum: `provider`, provider
-    credentials, `fromNumber`, and a publicly reachable webhook URL. With
+    credentials, `fromNumber`, and a publicly reachable webhook URL (except
+    outbound-only LiveKit). With
     multiple agents, also set `agentId` to the agent that should own calls.
 
     For an inbound Twilio number, set its **Voice webhook** to the public Voice
