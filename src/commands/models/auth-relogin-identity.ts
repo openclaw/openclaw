@@ -11,6 +11,16 @@ type ReloginMethod = Pick<
   "matchesPersonalAccount" | "matchesSharedAccount" | "canReplaceGeneratedProfile"
 >;
 
+function keepReloginDisplayName(
+  profile: ProviderAuthResult["profiles"][number],
+  previous: AuthProfileCredential | undefined,
+): ProviderAuthResult["profiles"][number] {
+  if (!previous?.displayName) {
+    return profile;
+  }
+  return { ...profile, credential: { ...profile.credential, displayName: previous.displayName } };
+}
+
 export async function snapshotReloginAuthProfiles(params: {
   agentDir: string;
   method: ReloginMethod;
@@ -41,6 +51,7 @@ export function resolveReloginProfileIdentity(params: {
   method?: ReloginMethod;
   allowMissingReusedProfile?: boolean;
 }) {
+  const matcher = params.method?.matchesSharedAccount ?? params.method?.matchesPersonalAccount;
   const requestedProfileId = params.requestedProfileId?.trim();
   if (requestedProfileId) {
     if (params.profiles.length !== 1) {
@@ -48,14 +59,23 @@ export function resolveReloginProfileIdentity(params: {
         "--profile-id requires exactly one returned auth profile from the selected auth method.",
       );
     }
-    return {
-      profiles: [
-        {
-          ...expectDefined(params.profiles[0], "auth profile"),
-          profileId: requestedProfileId,
-        },
-      ],
+    const profile = {
+      ...expectDefined(params.profiles[0], "auth profile"),
+      profileId: requestedProfileId,
     };
+    const previous = params.existingProfiles?.[requestedProfileId];
+    // An explicit slot can intentionally replace an account. Preserve the name
+    // only when the provider confirms the same account; never change slot routing.
+    if (previous?.displayName && matcher) {
+      try {
+        if (matcher(profile.credential, previous)) {
+          return { profiles: [keepReloginDisplayName(profile, previous)] };
+        }
+      } catch {
+        // Unknown identity means no carried name, not a failed explicit sign-in.
+      }
+    }
+    return { profiles: [profile] };
   }
 
   const canReplaceGeneratedProfile = params.method?.canReplaceGeneratedProfile;
@@ -83,7 +103,6 @@ export function resolveReloginProfileIdentity(params: {
       },
     }),
   };
-  const matcher = params.method?.matchesSharedAccount ?? params.method?.matchesPersonalAccount;
   if (!matcher || !params.existingProfiles || params.profiles.length !== 1) {
     return generated;
   }
@@ -104,7 +123,12 @@ export function resolveReloginProfileIdentity(params: {
 
   const reusedProfileId = expectDefined(matchingProfileIds[0], "matched auth profile id");
   return {
-    profiles: [{ ...returnedProfile, profileId: reusedProfileId }],
+    profiles: [
+      keepReloginDisplayName(
+        { ...returnedProfile, profileId: reusedProfileId },
+        params.existingProfiles[reusedProfileId],
+      ),
+    ],
     validateCurrentCredential: (profileId: string, current: AuthProfileCredential | undefined) => {
       let currentMatches = false;
       if (current) {
