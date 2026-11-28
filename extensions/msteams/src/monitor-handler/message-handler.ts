@@ -480,6 +480,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       conversation: {
         kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",
         id: conversationId,
+        // Group chats otherwise fall back to the prefixed `conversation:<id>` reply
+        // target; publish the routed peer so broadcast lookup and participant
+        // sessions keep the room identity. Channels and DMs keep their existing
+        // broadcast identity (Graph channel id / sender) until a migration exists.
+        ...(!isDirectMessage && !isChannel
+          ? { routePeer: { kind: "group" as const, id: conversationId } }
+          : {}),
         label: envelopeFrom,
         spaceId: teamId,
         nativeChannelId,

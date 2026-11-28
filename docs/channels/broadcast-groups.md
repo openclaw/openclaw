@@ -27,7 +27,10 @@ The live WhatsApp QA lane includes `whatsapp-broadcast-group-fanout`, which veri
 
 Use a key in the form `"<channel>:<peerId>"`, such as
 `"discord:123456789"`, `"slack:C0123"`, `"telegram:-100123"`, or
-`"whatsapp:1203@g.us"`. The value can be an agent ID array or a strict object:
+`"whatsapp:1203@g.us"`. Microsoft Teams group chats use the bare conversation id, such as
+`"msteams:19:abc@thread.v2"` (not the `conversation:`-prefixed reply target). Teams
+channels keep the `"msteams:<teamAadGroupId>/<graphChannelId>"` form, and Teams direct
+messages keep the `"msteams:conversation:<id>"` form. The value can be an agent ID array or a strict object:
 
 ```json5
 {
