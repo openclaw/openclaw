@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/allow-from";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { resolveMatrixTargets } from "../../resolve-targets.js";
 import type { CoreConfig, MatrixRoomConfig } from "../../types.js";
@@ -35,12 +36,19 @@ function normalizeMatrixRoomLookupEntry(raw: string): string {
     .trim();
 }
 
+// Group references are case-sensitive and are expanded by channel ingress, not resolved.
+function matrixAllowlistEntryKey(entry: string): string {
+  const trimmed = entry.trim();
+  return parseAccessGroupAllowFromEntry(trimmed) != null ? trimmed : normalizeMatrixUserId(trimmed);
+}
+
 function filterMatrixAllowlistEntries(entries: string[], failClosedOnUnresolved = false): string[] {
   return entries.filter((entry) => {
     const trimmed = entry.trim();
     return (
       Boolean(trimmed) &&
       (failClosedOnUnresolved ||
+        parseAccessGroupAllowFromEntry(trimmed) != null ||
         trimmed === "*" ||
         isMatrixQualifiedUserId(normalizeMatrixUserLookupEntry(trimmed)))
     );
@@ -121,6 +129,10 @@ async function resolveMatrixMonitorUserEntries(params: {
     if (!input) {
       continue;
     }
+    // Access groups are expanded by channel ingress, not resolved into user ids.
+    if (parseAccessGroupAllowFromEntry(input) != null) {
+      continue;
+    }
     const query = normalizeMatrixUserLookupEntry(input);
     if (!query || query === "*") {
       continue;
@@ -190,7 +202,7 @@ async function resolveMatrixMonitorUserAllowlist(params: {
   const canonicalized = canonicalizeAllowlistWithResolvedIds({
     existing: allowList,
     resolvedMap: resolution.resolvedMap,
-    entryKey: normalizeMatrixUserId,
+    entryKey: matrixAllowlistEntryKey,
   });
 
   logMatrixAllowlistResolution({
@@ -230,7 +242,9 @@ export async function resolveMatrixMonitorLiveUserAllowlist(params: {
   const seen = new Set<string>();
   const addEntry = (entry: string) => {
     const trimmed = entry.trim();
-    const key = normalizeMatrixUserId(trimmed);
+    // Group references are deliberately case-sensitive and never user-id normalized.
+    const key =
+      parseAccessGroupAllowFromEntry(trimmed) != null ? trimmed : normalizeMatrixUserId(trimmed);
     if (trimmed && !seen.has(key)) {
       seen.add(key);
       effective.push(trimmed);
@@ -244,6 +258,11 @@ export async function resolveMatrixMonitorLiveUserAllowlist(params: {
   for (const entry of liveEntries) {
     const query = normalizeMatrixUserLookupEntry(entry);
     if (entry === "*") {
+      addEntry(entry);
+      continue;
+    }
+    // Access groups are expanded by channel ingress, not resolved into user ids.
+    if (parseAccessGroupAllowFromEntry(entry) != null) {
       addEntry(entry);
       continue;
     }
@@ -279,7 +298,7 @@ export async function resolveMatrixMonitorLiveUserAllowlist(params: {
   const canonicalized = canonicalizeAllowlistWithResolvedIds({
     existing: pending,
     resolvedMap: resolution.resolvedMap,
-    entryKey: normalizeMatrixUserId,
+    entryKey: matrixAllowlistEntryKey,
   });
   const resolvedEntries = filterMatrixAllowlistEntries(
     canonicalized,
@@ -404,7 +423,7 @@ export async function resolveMatrixMonitorConfig(params: {
       entries: nextRooms,
       resolvedMap: resolution.resolvedMap,
       strategy: "canonicalize",
-      entryKey: normalizeMatrixUserId,
+      entryKey: matrixAllowlistEntryKey,
     });
   }
 
