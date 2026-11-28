@@ -30,6 +30,10 @@ const EXPECTED: Record<string, { levels: string[]; defaultLevel: string }> = {
     levels: ["minimal", "low", "medium", "high", "xhigh", "max"],
     defaultLevel: "medium",
   },
+  "openai/gpt-6.1-terra": {
+    levels: ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+    defaultLevel: "medium",
+  },
   "particle/particle-ai/particle-1": deepSeekV4(),
   "moonshot/kimi-k2.7-code": { levels: ["low:on"], defaultLevel: "low" },
   "moonshot/kimi-k2.7-code-highspeed": { levels: ["low:on"], defaultLevel: "low" },

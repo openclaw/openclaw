@@ -766,9 +766,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(composerSurface.waitForExistence(timeout: 5))
         let agentIdentity = self.agentIdentity(in: app)
         XCTAssertTrue(agentIdentity.waitForExistence(timeout: 5))
-        XCTAssertEqual(agentIdentity.value as? String, "Collapsed")
-        agentIdentity.tap()
-        self.waitForValue("Expanded", of: agentIdentity)
+        let collapsedSurfaceHeight = composerSurface.frame.height
         let sendButton = app.buttons["chat-send-message"]
         XCTAssertFalse(sendButton.exists)
         XCTAssertLessThanOrEqual(agentIdentity.frame.maxY, composerSurface.frame.minY)
@@ -781,8 +779,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.assertMinimumTouchTarget(attachmentButton)
         self.assertMinimumTouchTarget(dictationButton)
         self.assertMinimumTouchTarget(talkButton)
-        let contextUsage = app.buttons["chat-context-usage"]
-        XCTAssertTrue(contextUsage.waitForExistence(timeout: 5))
+        textField.tap()
         let inlinePermissions = app.buttons["chat-composer-inline-permissions"]
         let inlineModel = app.buttons["chat-composer-inline-model"]
         let inlineEffort = app.buttons["chat-composer-inline-effort"]
@@ -792,7 +789,7 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.assertMinimumTouchTarget(inlinePermissions)
         self.assertMinimumTouchTarget(inlineModel)
         self.assertMinimumTouchTarget(inlineEffort)
-        for inlineControl in [inlinePermissions, contextUsage, inlineModel, inlineEffort] {
+        for inlineControl in [inlinePermissions, inlineModel, inlineEffort] {
             XCTAssertGreaterThanOrEqual(inlineControl.frame.minX, composerSurface.frame.minX)
             XCTAssertLessThanOrEqual(inlineControl.frame.maxX, composerSurface.frame.maxX)
             XCTAssertLessThanOrEqual(abs(inlineControl.frame.midY - dictationButton.frame.midY), 1)
@@ -800,20 +797,18 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertEqual(inlinePermissions.value as? String, "Guarded")
         XCTAssertFalse((inlineModel.value as? String ?? "").isEmpty)
         XCTAssertFalse((inlineEffort.value as? String ?? "").isEmpty)
-        self.assertMinimumTouchTarget(contextUsage)
         self.assertNoHorizontalOverlap([
             attachmentButton,
             inlinePermissions,
-            contextUsage,
             inlineModel,
             inlineEffort,
             dictationButton,
             talkButton,
         ])
-        XCTAssertEqual(contextUsage.value as? String, "19 percent of the context window used")
+        XCTAssertFalse(app.buttons["chat-context-usage"].exists)
         let compactHeight = textField.frame.height
         let compactSurfaceHeight = composerSurface.frame.height
-        XCTAssertGreaterThanOrEqual(compactSurfaceHeight, 96)
+        XCTAssertGreaterThan(compactSurfaceHeight, collapsedSurfaceHeight)
         XCTAssertLessThanOrEqual(compactHeight, 44)
         XCTAssertLessThanOrEqual(textField.frame.maxY, attachmentButton.frame.minY + 2)
         XCTAssertLessThanOrEqual(abs(attachmentButton.frame.midY - dictationButton.frame.midY), 1)
