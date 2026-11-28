@@ -116,9 +116,30 @@ struct ChatEffortSpeedPicker: View {
             }
         } label: {
             Text("Speed").font(OpenClawChatTypography.settingsBody).foregroundStyle(.primary)
+        } currentValueLabel: {
+            let selection = self.viewModel.composerSpeedSelection
+            let title = Text(verbatim: ChatEffortBar.speedLabel(selection))
+            if self.showsMenuIcons, let icon = ChatSpeedBolt(rawValue: selection)?.closedRowIcon {
+                Label { title } icon: { Image(uiImage: icon) }
+            } else {
+                title
+            }
         }
         .disabled(self.viewModel.composerPhoneEffortLockReason != nil)
         .accessibilityIdentifier("chat-effort-bar-speed")
+    }
+}
+
+extension ChatSpeedBolt {
+    /// The closed menu row draws its icon at the artwork's own size, flush against the name. The zap
+    /// artwork has no side bearing like an SF Symbol, so a transparent trailing margin gives it the
+    /// same gap to the name that a system icon has.
+    fileprivate var closedRowIcon: UIImage? {
+        guard let image = UIImage(named: self.assetName, in: .module, with: nil) else { return nil }
+        let size = CGSize(width: image.size.width + 1.5, height: image.size.height)
+        return UIGraphicsImageRenderer(size: size)
+            .image { _ in image.draw(at: .zero) }
+            .withRenderingMode(.alwaysTemplate)
     }
 }
 

@@ -97,15 +97,20 @@ enum CleanChatComposerMetrics {
 
 #if !os(macOS)
 /// The speed mark shared by the composer dial and the speed menu. Standard keeps the needle.
+/// Both marks use the Control UI zap so Ultrafast reads as the Fast bolt plus a second one.
 enum ChatSpeedBolt: String {
     case fast = "on"
     case ultrafast
 
-    var image: Image {
+    var assetName: String {
         switch self {
-        case .fast: Image(systemName: "bolt.fill")
-        case .ultrafast: Image("zapDouble", bundle: .module)
+        case .fast: "zapFilled"
+        case .ultrafast: "zapDouble"
         }
+    }
+
+    var image: Image {
+        Image(self.assetName, bundle: .module)
     }
 }
 
@@ -150,7 +155,9 @@ struct CleanChatEffortGauge: View {
                     .offset(x: -0.25 * unit, y: 1.75 * unit)
             case .fast:
                 ChatSpeedBolt.fast.image
-                    .font(.system(size: 9.5 * unit, weight: .semibold))
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 14 * unit, height: 14 * unit)
                     .foregroundStyle(OpenClawChatTheme.accent)
                     .offset(y: 2.5 * unit)
             case nil:
