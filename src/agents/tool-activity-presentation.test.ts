@@ -15,7 +15,6 @@ function complete(owner: ToolActivityPresentation, id: string, hidden = false) {
     } satisfies AgentItemEventData,
   };
   owner.complete(call);
-  return call;
 }
 const drain = (owner: ToolActivityPresentation) => [...owner.drain()].map((item) => item.itemId);
 

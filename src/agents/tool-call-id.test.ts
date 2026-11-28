@@ -59,7 +59,7 @@ function idAt(out: AgentMessage[], message = 0, block = 0): string {
 }
 const sanitizeId = (id: string, mode: Mode = "strict") => idAt(sanitize(transcript([id]), mode));
 
-function expectPair(out: AgentMessage[], mode: Mode, aliases = false) {
+function expectPair(out: AgentMessage[], mode: Mode, aliases: boolean) {
   const ids = [idAt(out, 0, 0), idAt(out, 0, 1)];
   expect(ids[0]).not.toBe(ids[1]);
   ids.forEach((id, i) => {
