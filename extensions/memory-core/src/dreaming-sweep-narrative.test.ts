@@ -75,6 +75,7 @@ async function createSweep(
     timeoutSeconds?: number | null;
     managedBackground?: boolean;
     remLookbackDays?: number;
+    consolidate?: (input: CompletionInput) => string;
   } = {},
 ) {
   const workspaceDir = await createTempWorkspace("sweep-narrative-");
@@ -146,7 +147,7 @@ async function createSweep(
     if (!input.extraSystemPrompt?.includes("You are keeping a dream diary")) {
       // Deliberately use the real append-only promotion fallback, not a fabricated plan.
       consolidations.push(input);
-      return { text: "" };
+      return { text: options.consolidate?.(input) ?? "" };
     }
     narratives.push(input);
     await options.narrativeGate;
@@ -264,6 +265,37 @@ function diaryEntryCount(dreams: string): number {
       ?.split("<!-- openclaw:dreaming:diary:end -->")[0] ?? "";
   return diary.match(/\n---\n/g)?.length ?? 0;
 }
+
+describe("dreaming sweep consolidation", () => {
+  it("merges a promoted fragment into its MEMORY.md duplicate when the model follows the instructions", async () => {
+    // An older unsourced copy of the same fact; append-only promotion would keep both.
+    const duplicate = `- ${FRAGMENT.toLowerCase()}`;
+    const sweep = await createSweep({
+      promote: true,
+      // A model that follows the instructions returns the candidateKey it was given.
+      consolidate: ({ message }) => {
+        const prompt = JSON.parse(message) as { candidates: Array<{ candidateKey?: unknown }> };
+        return JSON.stringify({
+          operations: prompt.candidates.map(({ candidateKey }) => ({
+            candidateKey,
+            action: "merged",
+            priorEntries: [duplicate],
+          })),
+        });
+      },
+    });
+    const memoryPath = path.join(sweep.workspaceDir, "MEMORY.md");
+    await fs.writeFile(memoryPath, `# Memory\n\n${duplicate}\n- Two.\n- Three.\n- Four.\n`);
+
+    expectHandled(await sweep.run());
+    expect(sweep.consolidations).toHaveLength(1);
+    expect(logText(sweep.logger.warn)).not.toContain("append-only fallback");
+    const memory = await fs.readFile(memoryPath, "utf8");
+    expect(memory).toContain(`- ${FRAGMENT} Source: memory/${DAY}.md`);
+    expect(memory).not.toContain(duplicate);
+    expect(memory).toContain("- Two.");
+  });
+});
 
 describe("dreaming sweep diary publication", () => {
   it("retains the bounded consolidation timeout when agents.defaults.timeoutSeconds is absent", async () => {
