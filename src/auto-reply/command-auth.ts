@@ -51,6 +51,12 @@ export type CommandAuthorization = {
   to?: string;
 };
 
+/** Command-context view: adds the reset-only fact without widening the published SDK result. */
+export type CommandContextAuthorization = CommandAuthorization & {
+  /** Channel-admitted sender limited to session resets because explicit owners are configured. */
+  resetOnly?: true;
+};
+
 type CommandAuthorizationParams = {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -425,17 +431,19 @@ function retainCommandAuthorization(
   params: CommandAuthorizationParams,
   prepared: CommandAuthorizationPreparation | undefined,
   readConfig: () => OpenClawConfig,
-): CommandAuthorization {
+): CommandContextAuthorization {
   const captured = { ...params, ctx: { ...params.ctx }, cfg: readConfig() };
-  const { authorization, prepared: admitted } = resolveCommandAuthorizationState(
-    captured,
-    prepared,
-  );
+  const {
+    authorization,
+    access,
+    prepared: admitted,
+  } = resolveCommandAuthorizationState(captured, prepared);
   const plugin = authorization.providerId
     ? getLoadedChannelPluginById(authorization.providerId)
     : undefined;
   return {
     ...authorization,
+    ...(access === "reset-only" ? { resetOnly: true as const } : {}),
     assertAuthorizedCurrent: () => {
       // Channel admission stays with its prepared worker/channel owner. Reuse
       // that fact while the command-policy owner evaluates the current config.
@@ -466,7 +474,12 @@ export function resolveCommandAuthorization(
     method: "resolveCommandAuthorization",
     replacement: "resolveCommandAuthorizationAsync",
   });
-  return retainCommandAuthorization(params, undefined, createRuntimeConfigReader(params.cfg));
+  const { resetOnly: _resetOnly, ...authorization } = retainCommandAuthorization(
+    params,
+    undefined,
+    createRuntimeConfigReader(params.cfg),
+  );
+  return authorization;
 }
 
 async function prepareCommandAuthorization(params: CommandAuthorizationParams) {
@@ -496,6 +509,15 @@ async function prepareCommandAuthorization(params: CommandAuthorizationParams) {
 export async function resolveCommandAuthorizationAsync(
   params: CommandAuthorizationParams,
 ): Promise<CommandAuthorization> {
+  const { resetOnly: _resetOnly, ...authorization } =
+    await resolveCommandContextAuthorizationAsync(params);
+  return authorization;
+}
+
+/** Same authority as resolveCommandAuthorizationAsync, plus the reset-only fact for command gates. */
+export async function resolveCommandContextAuthorizationAsync(
+  params: CommandAuthorizationParams,
+): Promise<CommandContextAuthorization> {
   const readConfig = createRuntimeConfigReader(params.cfg);
   const prepared = await prepareCommandAuthorization(params);
   return retainCommandAuthorization(params, prepared, readConfig);

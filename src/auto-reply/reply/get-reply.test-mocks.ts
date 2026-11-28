@@ -50,6 +50,7 @@ vi.mock("../../runtime.js", () => ({
 // mock-isolation: Reply fixtures authorize their sender without command-owner database admission.
 vi.mock("../command-auth.js", () => ({
   resolveCommandAuthorizationAsync: vi.fn(() => ({ isAuthorizedSender: true })),
+  resolveCommandContextAuthorizationAsync: vi.fn(() => ({ isAuthorizedSender: true })),
 }));
 
 vi.mock("./directive-handling.defaults.js", () => ({

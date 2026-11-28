@@ -32,6 +32,8 @@ export type CommandContext = {
   ownerList: string[];
   senderIsOwner: boolean;
   isAuthorizedSender: boolean;
+  /** Channel-admitted sender limited to session resets (explicit owners configured). */
+  resetOnly?: true;
   /** Original command admission, rechecked after awaited preparation. */
   assertAuthorizedCurrent?: () => void;
   senderId?: string;

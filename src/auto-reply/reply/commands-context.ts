@@ -4,7 +4,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CommandAuthorization } from "../command-auth.js";
+import type { CommandContextAuthorization } from "../command-auth.js";
 import { normalizeCommandBody } from "../commands-registry-normalize.js";
 import type { MsgContext } from "../templating.js";
 import type { CommandContext, HandleCommandsParams } from "./commands-types.js";
@@ -45,7 +45,7 @@ export function buildCommandContext(
     isGroup: boolean;
     triggerBodyNormalized: string;
   },
-  auth: CommandAuthorization,
+  auth: CommandContextAuthorization,
 ): CommandContext {
   const { ctx, cfg, agentId, sessionKey, isGroup, triggerBodyNormalized } = params;
   const surface = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider);
@@ -70,6 +70,7 @@ export function buildCommandContext(
     ownerList: auth.ownerList,
     senderIsOwner: auth.senderIsOwner,
     isAuthorizedSender: auth.isAuthorizedSender,
+    ...(auth.resetOnly ? { resetOnly: auth.resetOnly } : {}),
     ...(auth.assertAuthorizedCurrent
       ? { assertAuthorizedCurrent: auth.assertAuthorizedCurrent }
       : {}),

@@ -66,7 +66,7 @@ beforeEach(async ({ onTestFinished }) => {
         source: `/tmp/${channel}/index.js`,
         plugin: channels.createChannelTestPluginBase({
           id: channel,
-          capabilities: { chatTypes: ["group"], nativeCommands: true },
+          capabilities: { chatTypes: ["direct", "group"], nativeCommands: true },
         }),
       },
     ]),
@@ -111,8 +111,15 @@ async function send(
   options: {
     replyOptions?: DispatchFromConfigParams["replyOptions"];
     onDelivery?: (payload: ReplyPayload) => void;
+    direct?: boolean;
   } = {},
 ) {
+  const directKey = `agent:main:${channel}:direct:${sender}`;
+  const sessionKey = native
+    ? `agent:main:${channel}:slash:${sender}`
+    : options.direct
+      ? directKey
+      : targetKey;
   const texts: Array<ReplyPayload["text"]> = [];
   const dispatcher = createReplyDispatcher({
     deliver: async (payload) => {
@@ -129,11 +136,11 @@ async function send(
           Surface: channel,
           OriginatingChannel: channel,
           OriginatingTo: `${channel}:room`,
-          From: `${channel}:group:room`,
+          From: options.direct ? `${channel}:${sender}` : `${channel}:group:room`,
           To: `${channel}:room`,
-          ChatType: "group",
-          SessionKey: native ? `agent:main:${channel}:slash:${sender}` : targetKey,
-          ...(native ? { CommandTargetSessionKey: targetKey } : {}),
+          ChatType: options.direct ? "direct" : "group",
+          SessionKey: sessionKey,
+          ...(native ? { CommandTargetSessionKey: options.direct ? directKey : targetKey } : {}),
           SenderId: sender,
           MessageSid: `${sender}-${body}`,
           Body: body,
@@ -189,7 +196,7 @@ it.each<
   [string, string, boolean, typeof statusReply.outcome, "silent" | "notice" | "throw" | RegExp]
 >([
   ["member", "/tell hi", false, "real", "silent"],
-  ["member", "/status", true, "real", "silent"],
+  ["member", "/status", true, "real", /You are not authorized to use this command/u],
   ["owner", "/status", true, "real", /OpenClaw/u],
   ["member", "/new@bot", true, "real", /New session started/u],
   ["member", "/new", true, "real", /New session started/u],
@@ -213,6 +220,22 @@ it.each<
     }
   }
 });
+
+it.each<[string, string, boolean, boolean, RegExp | "silent"]>([
+  ["member", "/help", false, true, /\/help is limited to this bot's owners.*\/new or \/reset/u],
+  ["member", "/commands", true, true, /\/commands is limited to this bot's owners/u],
+  ["member", "/status", true, true, /\/status is limited to this bot's owners/u],
+  ["member", "/tools", false, true, /\/tools is limited to this bot's owners/u],
+  ["member", "/help", false, false, "silent"],
+  ["owner", "/help", false, true, /\/model/u],
+])(
+  "answers %s %s (native=%s, direct=%s) for an admitted non-owner",
+  async (sender, body, native, direct, expected) => {
+    const { texts } = await send(sender, body, native, { direct });
+    expect(texts).toEqual(expected === "silent" ? [] : [expect.stringMatching(expected)]);
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  },
+);
 
 it("runs commands without a model and refuses only the agent turn", async () => {
   const { model: _model, ...defaults } = createReplyAgentDefaults(state.workspaceDir);
