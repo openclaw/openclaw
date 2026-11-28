@@ -33,7 +33,23 @@ const systemd = vi.hoisted(() => ({
       ) => Promise<SystemdServiceReadTarget | null>
     >(),
   readCommand: vi.fn<(env: NodeJS.ProcessEnv) => Promise<unknown>>(),
+  readAsRoot: vi.fn<() => Promise<unknown>>(),
+  readAccount: vi.fn<(user: string) => Promise<unknown>>(),
+  runuser: vi.fn<() => Promise<string | undefined>>(),
+  entry: vi.fn<() => Promise<string | undefined>>(),
+  candidateRoot: undefined as string | undefined,
+  /** The runner could not confirm the account's processes gone. */
+  uncertainCleanup: false,
 }));
+vi.mock("../../infra/openclaw-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/openclaw-root.js")>();
+  return {
+    ...actual,
+    resolveOpenClawPackageRootSync: (
+      options: Parameters<typeof actual.resolveOpenClawPackageRootSync>[0],
+    ) => systemd.candidateRoot ?? actual.resolveOpenClawPackageRootSync(options),
+  };
+});
 vi.mock("../../daemon/systemd-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd-scope.js")>()),
   findInstalledSystemdGatewayScope: systemd.findScope,
@@ -41,10 +57,41 @@ vi.mock("../../daemon/systemd-scope.js", async (importOriginal) => ({
 vi.mock("../../daemon/systemd-service-files.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd-service-files.js")>()),
   readSystemdServiceExecStart: systemd.readCommand,
+  readSystemdServiceExecStartAsRoot: systemd.readAsRoot,
+}));
+vi.mock("../../daemon/systemd-state-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-state-identity.js")>()),
+  readSystemdAccount: systemd.readAccount,
+}));
+// The switch path finds runuser by root-owned paths; tests put a stand-in for the account's
+// process there, so everything it returns is what a service account could return.
+vi.mock("../../daemon/systemd-service-account-command.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-service-account-command.js")>()),
+  findRootOwnedRunuser: systemd.runuser,
+}));
+vi.mock("../../process/exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../process/exec.js")>();
+  return {
+    ...actual,
+    runCommandBuffered: async (...args: Parameters<typeof actual.runCommandBuffered>) => {
+      const result = await actual.runCommandBuffered(...args);
+      const { CommandProcessCleanupError } = await import("../../process/exec-result.js");
+      return systemd.uncertainCleanup
+        ? { ...result, error: new CommandProcessCleanupError() }
+        : result;
+    },
+  };
+});
+vi.mock("../../daemon/gateway-entrypoint.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/gateway-entrypoint.js")>()),
+  resolveGatewayInstallEntrypoint: systemd.entry,
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+const geteuid = Object.getOwnPropertyDescriptor(process, "geteuid")!;
+const setEuid = (uid: number) =>
+  Object.defineProperty(process, "geteuid", { configurable: true, value: () => uid });
 const previousExitCode = process.exitCode;
 const candidateVersion = (
   JSON.parse(fs.readFileSync(new URL("../../../package.json", import.meta.url), "utf8")) as {
@@ -70,6 +117,17 @@ const account = (username: string, uid: number) => ({
   shell: "/bin/sh",
 });
 const otherInstall = ["/usr/bin/node", "/opt/other/openclaw/dist/index.js"];
+let serviceHome: string;
+const serviceCommand = (overrides: Record<string, unknown> = {}) => ({
+  programArguments: ["/usr/bin/node", path.join(root, "dist", "index.js"), "gateway"],
+  environment: {
+    HOME: serviceHome,
+    OPENCLAW_STATE_DIR: "/var/lib/openclaw/.openclaw",
+    OPENAI_API_KEY: "unit-only-value",
+  },
+  sourcePath: unit.unitPath,
+  ...overrides,
+});
 
 function mismatch(overrides: Partial<SystemdServiceAccountMismatch> = {}) {
   return new SystemdServiceAccountRefusalError({
@@ -93,12 +151,15 @@ async function admit(): Promise<UpdateAdmissionVerdict> {
 
 beforeEach(() => {
   process.exitCode = undefined;
+  systemd.uncertainCleanup = false;
   stdout = "";
   vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
     stdout += String(chunk);
     return true;
   });
   vi.spyOn(console, "error").mockImplementation(() => {});
+  // The installed updater's admission deadline runs from when it started this process.
+  vi.spyOn(process, "uptime").mockReturnValue(1);
   Object.defineProperty(process, "platform", { ...platform, value: "linux" });
   vi.spyOn(os, "userInfo").mockReturnValue(account("root", 0));
   home = dirs.make("service-account-admission-");
@@ -146,10 +207,29 @@ beforeEach(() => {
   }
   systemd.findScope.mockReset().mockResolvedValue(unit);
   systemd.readCommand.mockReset().mockRejectedValue(mismatch());
+  // The account's HOME, which it owns and can write; tests run as that account.
+  serviceHome = dirs.make("service-account-home-");
+  if (process.getuid?.() === 0) {
+    // A root test runner stands in for an account with UID 1001, which owns its HOME.
+    fs.chownSync(serviceHome, 1001, process.getgid?.() ?? 0);
+  }
+  // Root by default; refusal cases below remove one requirement for switching accounts.
+  setEuid(0);
+  systemd.readAccount.mockReset().mockResolvedValue({
+    // A root test runner may hand files to any account; others only to themselves.
+    uid: process.getuid?.() || 1001,
+    gid: process.getgid?.() ?? 0,
+    home: "/var/lib/openclaw",
+  });
+  systemd.runuser.mockReset().mockResolvedValue(undefined);
+  systemd.readAsRoot.mockReset().mockResolvedValue(serviceCommand());
+  systemd.entry.mockReset().mockResolvedValue(path.join(root, "dist", "index.js"));
+  systemd.candidateRoot = undefined;
 });
 
 afterEach(() => {
   Object.defineProperty(process, "platform", platform);
+  Object.defineProperty(process, "geteuid", geteuid);
   process.exitCode = previousExitCode;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
@@ -172,6 +252,7 @@ describe("candidate admission for a system unit run by another account", () => {
         code: "service-account-mismatch",
         message,
         nextAction:
+          "Automatic update as the service account is not possible: no root-owned runuser was found. " +
           "Nothing was changed: the package, the service state and the running Gateway are as they were. " +
           "Update this system service by hand (https://docs.openclaw.ai/install/updating#linux-system-service-run-by-another-account). " +
           "First make a verified backup of its state as openclaw: sudo -u openclaw env HOME=/var/lib/openclaw OPENCLAW_STATE_DIR=/var/lib/openclaw/.openclaw openclaw backup create --verify --output /var/lib/openclaw. " +
@@ -310,5 +391,330 @@ describe("candidate admission for a system unit run by another account", () => {
     const checks = verdict.facts.checks.map((check) => check.name);
     expect(checks).toContain("config");
     expect(checks).not.toContain("managed-service-account");
+  });
+});
+
+/** A runuser stand-in: records what root handed the account and answers as the account would. */
+function installAccountProcess(answer: { stdout: string; code: number; hangs?: boolean }) {
+  const dir = dirs.make("service-account-process-");
+  const shim = path.join(dir, "runuser");
+  fs.writeFileSync(path.join(dir, "stdout"), answer.stdout);
+  fs.writeFileSync(
+    shim,
+    [
+      "#!/bin/sh",
+      'dir=$(dirname "$0")',
+      'printf "%s\\n" "$@" > "$dir/argv"',
+      'env > "$dir/launch-env"',
+      'ls -ln "$7" > "$dir/env-mode"',
+      'cp "$7" "$dir/env.json"',
+      "for last; do :; done",
+      'ls -ln "$last" > "$dir/context-mode"',
+      'cp "$last" "$dir/context"',
+      ...(answer.hangs ? ["sleep 60"] : []),
+      'cat "$dir/stdout"',
+      `exit ${answer.code}`,
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  systemd.runuser.mockResolvedValue(shim);
+  const read = (name: string) => fs.readFileSync(path.join(dir, name), "utf8");
+  return { read, exists: (name: string) => fs.existsSync(path.join(dir, name)) };
+}
+
+function serviceVerdict(overrides: Partial<UpdateAdmissionVerdict> = {}): UpdateAdmissionVerdict {
+  return {
+    protocol: 1,
+    verdict: "admit",
+    reasons: [],
+    warnings: [
+      {
+        code: "retired-state-format",
+        message: "Doctor will migrate or archive retired state with original bytes preserved.",
+      },
+    ],
+    facts: {
+      candidateVersion,
+      installedVersion: "2026.11.10",
+      checks: [
+        { name: "config", status: "ok" },
+        { name: "database-schema", status: "ok" },
+      ],
+    },
+    ...overrides,
+  };
+}
+
+/** Rewrites the fixture context with the installed updater's admission budget. */
+function setAdmissionBudget(timeoutMs: number) {
+  const context = JSON.parse(fs.readFileSync(contextPath, "utf8")) as UpdateAdmissionContext;
+  fs.writeFileSync(
+    contextPath,
+    JSON.stringify({ ...context, request: { ...context.request, timeoutMs } }),
+    { mode: 0o600 },
+  );
+}
+
+describe("candidate admission run as the unit's account", () => {
+  it("refuses before the installed updater's deadline when the account does not answer", async () => {
+    installAccountProcess({ stdout: JSON.stringify(serviceVerdict()), code: 0, hangs: true });
+    // 12 s budget: the installed updater gives up at about 10.8 s and then checks root's state.
+    setAdmissionBudget(12_000);
+    const started = Date.now();
+
+    const verdict = await admit();
+
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(process.exitCode).toBe(3);
+    expect(verdict.reasons[0]?.message).toContain("(admission timeout)");
+  });
+
+  it("refuses a valid admit verdict while the account's processes may still run", async () => {
+    installAccountProcess({ stdout: JSON.stringify(serviceVerdict()), code: 0 });
+    systemd.uncertainCleanup = true;
+
+    const verdict = await admit();
+
+    expect(process.exitCode).toBe(3);
+    expect(verdict.reasons[0]?.message).toContain(
+      "(the account's admission processes could not be confirmed stopped)",
+    );
+  });
+
+  it("refuses without starting the account's checks when no time is left", async () => {
+    const accountProcess = installAccountProcess({
+      stdout: JSON.stringify(serviceVerdict()),
+      code: 0,
+    });
+    setAdmissionBudget(12_000);
+    vi.spyOn(process, "uptime").mockReturnValue(6);
+
+    const verdict = await admit();
+
+    expect(verdict.reasons[0]?.message).toContain("no time was left for the account's checks");
+    expect(accountProcess.exists("argv")).toBe(false);
+  });
+
+  it("admits with the verdict the service account's own admission gave for its state", async () => {
+    // Installed updaters stage the candidate in a private directory of their own.
+    const stage = dirs.make("service-account-stage-");
+    fs.chmodSync(stage, 0o755);
+    const privateStage = path.join(stage, ".openclaw.update-stage-test");
+    systemd.candidateRoot = path.join(privateStage, "lib", "node_modules", "openclaw");
+    fs.mkdirSync(systemd.candidateRoot, { recursive: true, mode: 0o755 });
+    fs.chmodSync(privateStage, 0o700);
+    fs.copyFileSync(
+      new URL("../../../package.json", import.meta.url),
+      path.join(systemd.candidateRoot, "package.json"),
+    );
+    const accountProcess = installAccountProcess({
+      stdout: JSON.stringify(serviceVerdict()),
+      code: 0,
+    });
+    const before = snapshotUpdateFixtureFiles(home);
+
+    const verdict = await admit();
+
+    expect(process.exitCode).toBe(0);
+    expect(verdict.verdict).toBe("admit");
+    expect(verdict.facts.checks).toEqual([
+      {
+        name: "managed-service-account",
+        status: "ok",
+        detail: "Checked as openclaw with openclaw-gateway.service's state.",
+      },
+      { name: "config", status: "ok" },
+      { name: "database-schema", status: "ok" },
+    ]);
+    expect(verdict.warnings.map((warning) => warning.code)).toEqual(["retired-state-format"]);
+    // Root ran the candidate's own admission as the account, by argument vector.
+    expect(accountProcess.read("argv").trim().split("\n").slice(0, 5)).toEqual([
+      "-u",
+      "openclaw",
+      "--",
+      process.execPath,
+      "-e",
+    ]);
+    expect(accountProcess.read("argv").trim().split("\n").slice(-5)).toEqual([
+      path.join(root, "dist", "index.js"),
+      "update",
+      "admit",
+      "--context",
+      expect.stringMatching(/context\.json$/u),
+    ]);
+    // runuser itself runs with a trusted environment; the unit's environment, including
+    // loader variables it may set, applies only after the switch.
+    const launchEnv = accountProcess.read("launch-env");
+    expect(launchEnv).not.toContain("unit-only-value");
+    expect(launchEnv).not.toContain(stateDir);
+    const env = JSON.parse(accountProcess.read("env.json")) as Record<string, string>;
+    expect(env).toMatchObject({
+      HOME: serviceHome,
+      OPENCLAW_STATE_DIR: "/var/lib/openclaw/.openclaw",
+      OPENAI_API_KEY: "unit-only-value",
+      USER: "openclaw",
+      OPENCLAW_DEV_SOURCE_ROOT: expect.any(String),
+    });
+    expect(Object.values(env)).not.toContain(stateDir);
+    // Only the account can read what it is handed, and nobody else can replace it.
+    expect(accountProcess.read("env-mode")).toMatch(/^-r--------[@+.]? /u);
+    expect(JSON.parse(accountProcess.read("context"))).toMatchObject({ installation: { root } });
+    expect(accountProcess.read("context-mode")).toMatch(/^-r--------[@+.]? /u);
+    const handoff = accountProcess.read("argv").trim().split("\n").at(-1)!;
+    expect(fs.existsSync(path.dirname(handoff))).toBe(false);
+    // The stage keeps its mode: here the account owns it, so nothing needed widening.
+    expect(fs.statSync(privateStage).mode & 0o777).toBe(0o700);
+    // Nothing of this process's own (broken) state was read or changed.
+    expect(snapshotUpdateFixtureFiles(home)).toEqual(before);
+  });
+
+  it("passes on the account's refusal for its own state", async () => {
+    installAccountProcess({
+      stdout: JSON.stringify(
+        serviceVerdict({
+          verdict: "refuse",
+          warnings: [],
+          reasons: [{ code: "invalid-config", message: "skills: Unrecognized key: workshop" }],
+          facts: {
+            candidateVersion,
+            installedVersion: "2026.11.10",
+            checks: [{ name: "config", status: "refuse", detail: "skills: Unrecognized key" }],
+          },
+        }),
+      ),
+      code: 3,
+    });
+
+    const verdict = await admit();
+
+    expect(process.exitCode).toBe(3);
+    expect(verdict.reasons).toEqual([
+      { code: "invalid-config", message: "skills: Unrecognized key: workshop" },
+    ]);
+    expect(verdict.facts.checks[0]).toMatchObject({ name: "managed-service-account" });
+  });
+
+  it.each([
+    {
+      name: "output that is not a verdict",
+      stdout: "not json",
+      code: 0,
+      problem: "malformed verdict",
+    },
+    {
+      name: "an admit verdict with a refusal exit status",
+      stdout: JSON.stringify(serviceVerdict()),
+      code: 3,
+      problem: "invalid verdict",
+    },
+    {
+      name: "a verdict for another candidate",
+      stdout: JSON.stringify(
+        serviceVerdict({
+          facts: { candidateVersion: "2099.1.1", installedVersion: null, checks: [] },
+        }),
+      ),
+      code: 0,
+      problem: "invalid verdict",
+    },
+    {
+      name: "a verdict that claims the account check itself",
+      stdout: JSON.stringify(
+        serviceVerdict({
+          facts: {
+            candidateVersion,
+            installedVersion: null,
+            checks: [{ name: "managed-service-account", status: "ok" }],
+          },
+        }),
+      ),
+      code: 0,
+      problem: "invalid verdict",
+    },
+    {
+      name: "output beyond its bound",
+      stdout: JSON.stringify(serviceVerdict()) + " ".repeat(1024 * 1024),
+      code: 0,
+      problem: "admission output-limit",
+    },
+    { name: "a failed run", stdout: "", code: 2, problem: "exit 2" },
+  ])("refuses before any change when the account returns $name", async (answer) => {
+    installAccountProcess({ stdout: answer.stdout, code: answer.code });
+    const before = snapshotUpdateFixtureFiles(home);
+
+    const verdict = await admit();
+
+    expect(process.exitCode).toBe(3);
+    expect(verdict.reasons).toEqual([
+      {
+        code: "service-account-mismatch",
+        message: `Gateway service openclaw-gateway.service runs as openclaw; its state could not be checked as openclaw (${answer.problem}).`,
+        nextAction:
+          "Nothing was changed. See https://docs.openclaw.ai/install/updating#linux-system-service-run-by-another-account to update this system service by hand.",
+      },
+    ]);
+    expect(snapshotUpdateFixtureFiles(home)).toEqual(before);
+  });
+
+  it.each([
+    {
+      name: "this update is not root",
+      setup: () => setEuid(1000),
+      blocker: "only root can run the service account's steps",
+    },
+    {
+      name: "User= is numeric",
+      setup: () => systemd.readCommand.mockRejectedValue(mismatch({ serviceUser: "1001" })),
+      blocker: "the unit's User= (1001) is not a named service account",
+    },
+    {
+      name: "the account does not resolve",
+      setup: () => systemd.readAccount.mockResolvedValue(undefined),
+      blocker: "the account openclaw could not be resolved",
+    },
+    {
+      name: "the account cannot write its HOME",
+      setup: () => fs.chmodSync(serviceHome, 0o500),
+      blocker: "the unit's HOME (",
+    },
+    {
+      name: "the unit's environment file cannot be read",
+      setup: () => systemd.readAsRoot.mockRejectedValue(new Error("EnvironmentFile unreadable")),
+      blocker: "the unit's effective environment could not be read",
+    },
+    {
+      name: "this update selects the service's config itself",
+      setup: () => vi.stubEnv("OPENCLAW_CONFIG_PATH", "/var/lib/openclaw/.openclaw/openclaw.json"),
+      blocker:
+        "this update selects the service's state or config itself, so the installed updater would write it as root; run the update again without OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH or other state selectors",
+    },
+    {
+      name: "this update selects a directory inside the service's state",
+      setup: () => vi.stubEnv("OPENCLAW_STATE_DIR", "/var/lib/openclaw/.openclaw/nested"),
+      blocker:
+        "this update selects the service's state or config itself, so the installed updater would write it as root; run the update again without OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH or other state selectors",
+    },
+    {
+      name: "sandboxing hides the unit's state",
+      setup: () =>
+        systemd.readAsRoot.mockResolvedValue(serviceCommand({ stateIdentityUnverified: true })),
+      blocker: "the unit's sandboxing or environment hides where its state is",
+    },
+  ])("falls back to the documented refusal when $name", async ({ setup, blocker }) => {
+    const accountProcess = installAccountProcess({
+      stdout: JSON.stringify(serviceVerdict()),
+      code: 0,
+    });
+    setup();
+
+    const verdict = await admit();
+
+    expect(process.exitCode).toBe(3);
+    expect(verdict.reasons[0]?.code).toBe("service-account-mismatch");
+    expect(verdict.reasons[0]?.nextAction).toContain(
+      `Automatic update as the service account is not possible: ${blocker}`,
+    );
+    expect(accountProcess.exists("argv")).toBe(false);
   });
 });

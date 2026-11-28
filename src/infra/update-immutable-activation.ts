@@ -5,6 +5,7 @@ import { isDeepStrictEqual } from "node:util";
 import { captureUpdateCommandExecutorAuthority } from "../cli/update-cli/update-command-executor.js";
 import { withGatewayMaintenanceDrain } from "../cli/update-cli/update-command-service-drain.js";
 import { withGatewayServiceOperationLock } from "../daemon/service-operation-lock.js";
+import { serviceAccountArgv } from "../daemon/systemd-service-account-command.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
@@ -540,21 +541,21 @@ export async function activateImmutableUpdate(
       assertCurrent();
       try {
         const result = await runCommandWithTimeout(
-          [
-            "/usr/sbin/runuser",
-            "-u",
-            record.descriptor.service.account,
-            "--",
-            "/usr/bin/env",
-            "-i",
-            ..."HOME TMPDIR TMP TEMP NODE_COMPILE_CACHE NODE_DISABLE_COMPILE_CACHE"
-              .split(" ")
-              .flatMap((key) =>
-                service.state.env[key] === undefined ? [] : [`${key}=${service.state.env[key]}`],
-              ),
-            record.descriptor.runtime.path,
-            path.join(candidate.path, "gateway-prewarm.mjs"),
-          ],
+          serviceAccountArgv({
+            runuser: "/usr/sbin/runuser",
+            account: record.descriptor.service.account,
+            argv: [
+              "/usr/bin/env",
+              "-i",
+              ..."HOME TMPDIR TMP TEMP NODE_COMPILE_CACHE NODE_DISABLE_COMPILE_CACHE"
+                .split(" ")
+                .flatMap((key) =>
+                  service.state.env[key] === undefined ? [] : [`${key}=${service.state.env[key]}`],
+                ),
+              record.descriptor.runtime.path,
+              path.join(candidate.path, "gateway-prewarm.mjs"),
+            ],
+          }),
           { cwd: candidate.path, baseEnv: {}, env: {}, timeoutMs: 120_000, killProcessTree: true },
         );
         if (result.code !== 0) {

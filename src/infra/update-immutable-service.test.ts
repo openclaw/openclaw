@@ -169,6 +169,12 @@ describe("immutable activation service", () => {
       stderr: "",
       stdout: `Id=example.service\nLoadState=loaded\nActiveState=${activating ? "activating" : alive ? "active" : "inactive"}\nSubState=${alive ? "running" : "dead"}\nMainPID=${alive ? currentPid : 0}\nControlGroup=${controlGroup}\nTasksCurrent=${populated ? 1 : 0}\nKillMode=control-group\nDynamicUser=no\nRootDirectory=\nRootImage=\nJob=${pendingJob}\n`,
     }));
+    // A unified cgroup hierarchy, as on current systemd hosts.
+    const statfs = fsSync.statfsSync;
+    vi.spyOn(fsSync, "statfsSync").mockImplementation(((dir: string) =>
+      dir === "/sys/fs/cgroup"
+        ? Object.assign(statfs("/"), { type: 0x63677270 })
+        : statfs(dir)) as typeof fsSync.statfsSync);
     const read = fsSync.readFileSync;
     vi.spyOn(fsSync, "readFileSync").mockImplementation((file, ...args) => {
       if ([pid, currentPid].some((candidate) => String(file) === `/proc/${candidate}/stat`)) {

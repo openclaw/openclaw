@@ -1,6 +1,7 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveStateDir } from "../../config/paths.js";
+import { resolveConfigPath, resolveStateDir } from "../../config/paths.js";
 import { isBunRuntime, isNodeRuntime } from "../../daemon/runtime-binary.js";
 import {
   findSystemdServiceAccountMismatch,
@@ -8,8 +9,14 @@ import {
 } from "../../daemon/service-inspection-error.js";
 import { gatewayServiceCommandMatchesRoot } from "../../daemon/service-layout.js";
 import { findInstalledSystemdGatewayScope } from "../../daemon/systemd-scope.js";
-import { readSystemdServiceExecStart } from "../../daemon/systemd-service-files.js";
-import { readSystemdAccountHome } from "../../daemon/systemd-state-identity.js";
+import { findRootOwnedRunuser } from "../../daemon/systemd-service-account-command.js";
+import {
+  readSystemdServiceExecStart,
+  readSystemdServiceExecStartAsRoot,
+} from "../../daemon/systemd-service-files.js";
+import { readSystemdAccount, readSystemdAccountHome } from "../../daemon/systemd-state-identity.js";
+import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { parseTcpPortFromArgs } from "../../infra/tcp-port.js";
 import type { UpdateAdmissionContext } from "../../infra/update-admission-contract.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { buildParseArgv } from "../argv.js";
@@ -21,25 +28,67 @@ const SYSTEM_SERVICE_UPDATE_DOCS =
 
 const INSPECTION_TIMEOUT_MS = 10_000;
 
+/** How a root update reaches a system unit that runs this installation as another account. */
+export type SystemServiceAccountPlan =
+  | {
+      kind: "switch";
+      unitName: string;
+      unitPath: string;
+      account: string;
+      /** The unit's HOME, where the account keeps its update backup. */
+      home: string;
+      uid: number;
+      gid: number;
+      runuser: string;
+      /** The unit's effective environment and profile, the only environment its account child gets. */
+      env: Record<string, string>;
+      /** The unit's ExecStart as root read it. */
+      programArguments: string[];
+      /** The unit's `--port`, which its account's clients must use to reach it. */
+      port?: number;
+    }
+  | { kind: "refuse"; message: string; nextAction: string };
+
 /**
  * Shipped drivers back up and validate the state selected by their own environment.
- * When the selected system unit runs this package as another account, that is not the
- * unit's state (plain sudo) or it would be written by the wrong account (explicit state
- * selectors), so admission refuses before the package is replaced. Only a positive
- * observation of the unit's account refuses; an unreadable unit leaves the other checks
- * in charge.
+ * When the selected system unit runs this package as another account, every state step has
+ * to run as that account with the unit's environment. When that is possible the plan says
+ * how; otherwise admission refuses before the package is replaced. Only a positive
+ * observation of the unit's account changes anything; an unreadable unit leaves the other
+ * checks in charge.
  */
 export async function inspectSystemServiceAccountForAdmission(params: {
   env: NodeJS.ProcessEnv;
   root: string;
   packageManager: UpdateAdmissionContext["installation"]["packageManager"];
   candidateVersion: string;
-}): Promise<{ message: string; nextAction: string } | undefined> {
+}): Promise<SystemServiceAccountPlan | undefined> {
+  const mismatch = await findSystemServiceAccountMismatch(params);
+  if (!mismatch) {
+    return undefined;
+  }
+  const execution = await resolveServiceAccountExecution(mismatch, params.env);
+  if ("blocker" in execution) {
+    const refusal = await formatRefusal(mismatch, params);
+    return {
+      kind: "refuse",
+      message: refusal.message,
+      nextAction: `Automatic update as the service account is not possible: ${execution.blocker}. ${refusal.nextAction}`,
+    };
+  }
+  return execution;
+}
+
+/** The selected system unit runs this installation as another account. */
+async function findSystemServiceAccountMismatch(params: {
+  env: NodeJS.ProcessEnv;
+  root: string;
+}): Promise<SystemdServiceAccountMismatch | undefined> {
   if (process.platform !== "linux") {
     return undefined;
   }
   // A custom-named unit is skipped by discovery when it runs as another account;
-  // discovery reports it so the same observation can refuse here.
+  // discovery reports it so the same observation can decide here.
   const skipped: SystemdServiceAccountMismatch[] = [];
   const candidates: SystemdServiceAccountMismatch[] = [];
   try {
@@ -71,10 +120,126 @@ export async function inspectSystemServiceAccountForAdmission(params: {
       workingDirectory: mismatch.workingDirectory,
     });
     if (runsThisInstallation === true) {
-      return await formatRefusal(mismatch, params);
+      return mismatch;
     }
   }
   return undefined;
+}
+
+// systemd's default PATH for system services, used when the unit sets none.
+const SYSTEMD_DEFAULT_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+/**
+ * Root re-derives everything from systemd and NSS; nothing the service account wrote decides
+ * which account, unit or environment is used.
+ */
+async function resolveServiceAccountExecution(
+  mismatch: SystemdServiceAccountMismatch,
+  env: NodeJS.ProcessEnv,
+): Promise<Extract<SystemServiceAccountPlan, { kind: "switch" }> | { blocker: string }> {
+  const account = mismatch.serviceUser;
+  if (process.geteuid?.() !== 0) {
+    return { blocker: "only root can run the service account's steps" };
+  }
+  if (!/^[A-Za-z_][A-Za-z0-9_.-]*$/u.test(account) || account === "root") {
+    return { blocker: `the unit's User= (${account || "empty"}) is not a named service account` };
+  }
+  const ids = await readSystemdAccount(account);
+  if (!ids) {
+    return { blocker: `the account ${account} could not be resolved` };
+  }
+  if (ids.uid === 0) {
+    return { blocker: `the account ${account} is root` };
+  }
+  const runuser = await findRootOwnedRunuser();
+  if (!runuser) {
+    return { blocker: "no root-owned runuser was found" };
+  }
+  let command: Awaited<ReturnType<typeof readSystemdServiceExecStartAsRoot>>;
+  try {
+    command = await readSystemdServiceExecStartAsRoot(
+      env,
+      { scope: "system", unitName: mismatch.unitName, unitPath: mismatch.unitPath },
+      account,
+      undefined,
+      true,
+    );
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    return { blocker: `the unit's effective environment could not be read` };
+  }
+  const home = command?.environment?.HOME;
+  if (!command || !home || command.reloadPending) {
+    return { blocker: "the unit's effective environment could not be read" };
+  }
+  // The account keeps its update backup under its HOME; find out now, before the package
+  // is replaced, whether it can.
+  const homeInfo = await fs.stat(home).catch(() => null);
+  if (!homeInfo?.isDirectory() || homeInfo.uid !== ids.uid || (homeInfo.mode & 0o200) === 0) {
+    return {
+      blocker: `the unit's HOME (${home}) is not a directory ${account} owns and can write`,
+    };
+  }
+  if (command.stateIdentityUnverified) {
+    return { blocker: "the unit's sandboxing or environment hides where its state is" };
+  }
+  const unitEnv: Record<string, string> = {
+    PATH: SYSTEMD_DEFAULT_PATH,
+    ...command.environment,
+    USER: account,
+    LOGNAME: account,
+  };
+  const executable = command.programArguments[0] ?? "";
+  const runtime = isNodeRuntime(executable) || isBunRuntime(executable);
+  const profile = parseCliProfileArgs(
+    buildParseArgv(command.programArguments, runtime ? "openclaw" : executable),
+  );
+  if (!profile.ok) {
+    return { blocker: "the unit's --profile could not be read" };
+  }
+  if (profile.profile) {
+    applyCliProfileEnv({ profile: profile.profile, env: unitEnv, homedir: () => home });
+  }
+  // An installed updater that selects the unit's state or config itself writes its snapshot,
+  // log and report there, and its own Doctor repairs them, as root; only plain sudo keeps
+  // them out. Compare canonical paths so aliases and nesting are caught too.
+  const canonical = (target: string) => resolvePathViaExistingAncestorSync(path.resolve(target));
+  const within = (inner: string, outer: string) =>
+    inner === outer || inner.startsWith(outer.endsWith(path.sep) ? outer : outer + path.sep);
+  const unitState = canonical(resolveStateDir(unitEnv, () => home));
+  const unitConfig = canonical(resolveConfigPath(unitEnv, undefined, () => home));
+  const callerState = canonical(resolveStateDir(env));
+  const callerConfig = canonical(resolveConfigPath(env));
+  if (
+    within(unitState, callerState) ||
+    within(callerState, unitState) ||
+    unitConfig === callerConfig ||
+    within(callerConfig, unitState)
+  ) {
+    return {
+      blocker:
+        "this update selects the service's state or config itself, so the installed updater would write it as root; run the update again without OPENCLAW_STATE_DIR, OPENCLAW_CONFIG_PATH or other state selectors",
+    };
+  }
+  return {
+    kind: "switch",
+    unitName: mismatch.unitName,
+    unitPath: command.sourcePath ?? mismatch.unitPath,
+    account,
+    home,
+    uid: ids.uid,
+    gid: ids.gid,
+    runuser,
+    programArguments: command.programArguments,
+    port: parseTcpPortFromArgs(command.programArguments) ?? undefined,
+    env: Object.fromEntries(
+      Object.entries(unitEnv).flatMap(([key, value]) =>
+        typeof value === "string" ? [[key, value]] : [],
+      ),
+    ),
+  };
 }
 
 async function formatRefusal(

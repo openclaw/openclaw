@@ -87,8 +87,8 @@ This recovery repair is supplied by the candidate CLI; older updaters using
 
 For a Linux system service, run maintenance as the account in its `User=` setting
 with the service's existing `HOME`, `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`,
-`OPENCLAW_CONFIG_PATH`, and profile selectors. When that account differs from
-the one running `openclaw update`, the update is refused before anything changes;
+`OPENCLAW_CONFIG_PATH`, and profile selectors. When root updates a package whose
+system unit runs as another account, the update runs those steps as that account;
 see [Linux system service run by another account](#linux-system-service-run-by-another-account).
 
 App-owned packages declare their update owner in `openclaw-install-owner.json`
@@ -133,17 +133,71 @@ backup.
 A common Linux layout has an administrator-managed global npm package owned by
 root and a systemd system unit whose `User=` is a service account, with the
 service's state in that account's `HOME` or in the unit's `OPENCLAW_STATE_DIR`.
-`openclaw update` cannot back up and check that state for the service account:
-a plain `sudo openclaw update` would check root's own state, and
-`sudo env OPENCLAW_STATE_DIR=<service state> openclaw update` would write the
-service's state as root. So when the selected system unit runs the installation
-being updated as another account, the update is refused before the package is
-replaced. The package, the service state and the running Gateway are unchanged,
-and the refusal prints the commands below with the unit's name, account and
-selectors filled in. Single-account installs and system units that run as the
-updating account are not affected.
+Update it with a plain `sudo openclaw update`. Root replaces the package; every
+step that touches the service's state runs as the unit's account, with the unit's
+effective environment (including `EnvironmentFile=` settings) and any `--profile`
+in its `ExecStart`:
 
-If the refused run pointed `OPENCLAW_STATE_DIR` at the service's state, the
+1. Before the package is replaced, the new release's update checks (config and
+   database schemas) run as the service account against the service's state. A
+   problem there stops the update with nothing changed.
+2. After the package is replaced, root stops the unit. As the service account,
+   the new release backs up the databases it migrates and the configuration, then
+   runs Doctor and the migrations. Root starts the unit and waits until systemd
+   runs the new release and the service account's own `openclaw gateway health`
+   reaches it.
+3. Once the installed updater has exited, a transient root unit
+   (`openclaw-update-settle-<id>.service`, see its journal) writes the update
+   record to the service's state as the service account, so `openclaw update
+   status` run as that account shows it, and removes the backup. If the
+   installed updater put the previous package back after a later failure, that
+   unit instead stops the service, restores its state from the backup as the
+   service account, and starts it again. If the updater stopped before it
+   confirmed the new release ready, and the service does not answer its account's
+   `openclaw gateway health` now, the backup is not removed: the unit restores the
+   state and leaves the service stopped.
+
+If the new release does not come ready, or systemd keeps restarting it, the
+service's state is restored from that backup as the service account, only after
+the unit is confirmed stopped (systemd reports it stopped and no process is left in
+its cgroup, read from cgroup v2 or the legacy systemd hierarchy), and the
+update fails, so the installed updater restores the previous package. The unit
+starts again on its own once the previous package is back; it is never started on
+the new package with the restored state. If the unit cannot be confirmed stopped
+or the restore fails, the unit is left stopped and the backup is kept; the
+failure names where. If a step run as the service account could not be confirmed
+stopped, nothing more is changed and the settle unit settles nothing: once no
+process of that account's update remains, and the previous package is back,
+restore the state as the service account with the unit's environment
+(`openclaw update restore --backup-root <path from the failure>`), then start the
+unit.
+
+Root runs only `runuser` (a root-owned copy), `systemctl`, `systemd-run`, and the
+package manager, with its own trusted environment; the unit's environment is
+handed to the service account's process in a file only that account can read,
+and applies only after the switch. Root never runs anything the service account
+wrote, never writes into the service's state, and reads back only exit statuses
+and a few status words, checked and size limited. Updaters released before this behavior write their own run record and
+report into root's state (`/root/.openclaw`), not the service's.
+
+The update instead refuses before the package is replaced, with nothing changed,
+when the steps cannot run as the service account:
+
+- `User=` is numeric, empty or root, or the account does not resolve;
+- this host has no root-owned `runuser`;
+- the unit's effective environment cannot be read (for example an unreadable
+  `EnvironmentFile=`), or its sandboxing (`RootDirectory=`, `BindPaths=`,
+  `PrivateTmp=` and similar) hides where its state is;
+- the update was started with `OPENCLAW_STATE_DIR` or other selectors pointing at
+  the service's state (`sudo env OPENCLAW_STATE_DIR=… openclaw update`): the
+  installed updater would write that state as root before any step of the new
+  release runs. Run plain `sudo openclaw update` instead;
+- the service account's checks do not return a valid answer.
+
+The refusal names the reason and prints the manual procedure below with the
+unit's name, account and selectors filled in.
+
+If a refused run pointed `OPENCLAW_STATE_DIR` at the service's state, the
 installed updater still wrote its log and report there as root, and the service
 account's backup refuses directories it cannot read. Give those files back to the
 service account first; the refusal prints this command with the real path:
