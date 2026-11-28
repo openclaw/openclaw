@@ -18,6 +18,7 @@ import {
 } from "../../config/sessions/session-mcp-store-admission.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -30,6 +31,7 @@ import { TEST_SCHEDULED_EXECUTION } from "../scheduled-occurrence.test-support.j
 import { createCronSessionRowWriter } from "./run-prepare-runtime.js";
 import {
   adoptCronRunSessionMetadata,
+  beginCronPreparationEffect,
   createCronRunContinuationSession,
   createPersistCronSessionEntry,
   syncCronSessionLiveSelection,
@@ -68,6 +70,45 @@ function makeGuardedPersistSessionEntry(persistedStore: Record<string, SessionEn
     return entry;
   });
 }
+
+it.each([
+  [
+    "previous",
+    "OpenClaw mixed up this run with unfinished work from the previous run, so the agent didn’t start.",
+  ],
+  ["unrelated", "The agent didn’t start. OpenClaw found conflicting session records for this run."],
+])("explains a preparation conflict with work from the %s run", async (heldId, message) => {
+  const storePath = path.join(sessionDirs.make(), "sessions.json");
+  const agentSessionKey = "agent:main:cron:briefing";
+  const runSessionKey = agentSessionKey + ":run:current";
+  const base = await beginSessionEffect({ scope: storePath, identities: [agentSessionKey] });
+  onTestFinished(() => base.release());
+  // Two distinct owners match preparation even if it no longer requests the previous session ID.
+  const hold = (id: string) =>
+    beginSessionEffect({
+      scope: storePath,
+      identities: [agentSessionKey + ":run:" + id, runSessionKey],
+    });
+  const original = await hold("previous");
+  onTestFinished(() => original.release());
+  const held = await hold(heldId);
+  onTestFinished(() => held.release());
+  original.release();
+  await expect(
+    beginCronPreparationEffect({
+      agentId: "main",
+      agentSessionKey,
+      runSessionKey,
+      usesDetachedRunSession: true,
+      cronSession: {
+        ...makeCronSession(makeSessionEntry({ sessionId: "current" }), storePath),
+        initialSessionEntry: makeSessionEntry({ sessionId: "previous" }),
+      },
+      onInterrupt: () => {},
+    }),
+  ).rejects.toThrow(message);
+  expect(held.isActive()).toBe(true);
+});
 
 describe("syncCronSessionLiveSelection", () => {
   it("clears model-derived state when only the agent runtime changes", () => {

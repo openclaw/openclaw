@@ -14,6 +14,7 @@ import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.j
 import { assertTurnAdmission } from "./session-controller.admission-rule.js";
 import {
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+  AmbiguousSessionControllerError,
   ReplyRunAlreadyActiveError,
   type ReplyBackendHandle,
   type ReplyOperation,
@@ -199,7 +200,7 @@ export function getSessionControllerEntry(
     if (matches.some((entry) => entry.active)) {
       throw new ReplyRunAlreadyActiveError(canonicalKey);
     }
-    throw new Error("OpenClaw found more than one match and couldn’t tell which session to use.");
+    throw new AmbiguousSessionControllerError(matches);
   }
   let entry = matches[0];
   if (!entry) {
