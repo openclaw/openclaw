@@ -1,6 +1,29 @@
 import Foundation
 
 extension GatewayProcessManager {
+    func gatewayReadinessContext(
+        purpose: GatewayReadinessPurpose,
+        port: Int,
+        generation: UInt64,
+        readinessPID: Int32? = nil,
+        launchAgentInstalled: Bool = false,
+        inspectionFailure: String? = nil,
+        migrationDrain: Bool = false) -> GatewayReadinessContext
+    {
+        GatewayReadinessContext(
+            purpose: purpose,
+            port: port,
+            generation: generation,
+            readinessPID: readinessPID,
+            readinessRevision: self.launchAgentReadinessRevision,
+            readinessCandidate: self.launchAgentReadinessCandidate,
+            readinessFailure: self.launchAgentReadinessFailure,
+            endpointPIDBeforeProbe: self.lastObservedGatewayPID,
+            launchAgentInstalled: launchAgentInstalled,
+            inspectionFailure: inspectionFailure,
+            migrationDrain: migrationDrain)
+    }
+
     func canonicalUpdateResult(
         for receipt: PostAppUpdateReceipt?,
         generation: UInt64) -> CLIInstaller.CanonicalUpdateResult?
@@ -334,11 +357,26 @@ extension GatewayProcessManager {
             }
             guard self.isCurrentGatewayStart(startGeneration) else { return }
             let port = GatewayEnvironment.gatewayPort()
-            if await PortGuardian.shared.describe(port: port) != nil {
+            let inspection = await PortGuardian.shared.inspect(port: port)
+            // The probe can take up to 5s; a stop may have started meanwhile.
+            guard self.isCurrentGatewayStart(startGeneration) else { return }
+            switch inspection {
+            case .free:
+                break
+            case .owned:
+                // A readable owner may still be a Gateway we can attach to.
                 _ = await self.attachExistingGatewayIfAvailable(port: port, startGeneration: startGeneration)
                 return
+            case .unknown:
+                // An unreadable port may still be held; attach before starting a child.
+                // Attachment re-inspects the port, so only a start that finds it free
+                // continues. A port that is still unreadable must never get a child.
+                guard await self.attachExistingGatewayIfAvailable(
+                    port: port,
+                    startGeneration: startGeneration)
+                else { break }
+                return
             }
-            guard self.isCurrentGatewayStart(startGeneration) else { return }
             let environment = try self.appHostedEnvironment(runtime: runtime)
             try OpenClawConfigFile.ensureAppHostedGatewayAuth(environment: environment)
             let pid = try await self.childSupervisor.start(configuration: .init(

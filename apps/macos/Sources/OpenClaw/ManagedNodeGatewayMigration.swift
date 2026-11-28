@@ -364,7 +364,16 @@ enum ManagedNodeGatewayMigration {
             throw Failure(message: "Gateway runtime intent changed while its service was absent; it was preserved.")
         }
         let port = GatewayEnvironment.gatewayPort()
-        guard await PortGuardian.shared.describe(port: port) == nil else { return nil }
+        let inspection = await PortGuardian.shared.inspect(port: port)
+        switch inspection {
+        case .free:
+            break
+        case .owned:
+            return nil
+        case .unknown:
+            // The port may still hold a service; capturing would risk taking over its owner.
+            throw Failure(message: "The Gateway port could not be inspected; the existing owner was preserved.")
+        }
         guard try await GatewayLaunchAgentManager.serviceIsConfirmedAbsent(installedCLI: cli) else {
             throw Failure(message: "The Gateway service is still loaded; its existing owner was preserved.")
         }
@@ -381,8 +390,17 @@ enum ManagedNodeGatewayMigration {
 
     private static func checkAbsentService(_ candidate: Candidate) async throws {
         guard candidate.snapshot == nil else { return }
-        guard await PortGuardian.shared.describe(port: candidate.port) == nil,
-              try await GatewayLaunchAgentManager.serviceIsConfirmedAbsent(installedCLI: candidate.cli)
+        let inspection = await PortGuardian.shared.inspect(port: candidate.port)
+        switch inspection {
+        case .free:
+            break
+        case .owned:
+            throw Failure(
+                message: "A Gateway is already running or its service is loaded; the existing owner was preserved.")
+        case .unknown:
+            throw Failure(message: "The Gateway port could not be inspected; the existing owner was preserved.")
+        }
+        guard try await GatewayLaunchAgentManager.serviceIsConfirmedAbsent(installedCLI: candidate.cli)
         else {
             throw Failure(
                 message: "A Gateway is already running or its service is loaded; the existing owner was preserved.")

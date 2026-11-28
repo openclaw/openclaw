@@ -282,19 +282,30 @@ extension OnboardingView {
 
     func refreshLocalGatewayProbe() async {
         let port = GatewayEnvironment.gatewayPort()
-        let desc = await PortGuardian.shared.describe(port: port)
-        let managedServicePID: Int32? = if AppProfile.current.isActive, desc != nil {
+        let inspection = await PortGuardian.shared.inspect(port: port)
+        guard case let .owned(desc) = inspection else {
+            switch inspection {
+            case .free:
+                self.localGatewayProbe = nil
+            case .unknown:
+                // Startup will not install on an unreadable port, so the page must not
+                // keep promising an automatic install or a stale listener.
+                self.localGatewayProbe = .init(unreadablePort: port)
+            case .owned:
+                break
+            }
+            return
+        }
+        let managedServicePID = if AppProfile.current.isActive {
             await GatewayLaunchAgentManager.runningGatewayPID()
         } else {
-            nil
+            Int32?.none
         }
-        self.localGatewayProbe = desc.map { desc in
-            LocalGatewayProbe(
-                port: port,
-                pid: desc.pid,
-                command: desc.command.trimmingCharacters(in: .whitespacesAndNewlines),
-                profile: .current,
-                managedServicePID: managedServicePID)
-        }
+        self.localGatewayProbe = LocalGatewayProbe(
+            port: port,
+            pid: desc.pid,
+            command: desc.command.trimmingCharacters(in: .whitespacesAndNewlines),
+            profile: .current,
+            managedServicePID: managedServicePID)
     }
 }
