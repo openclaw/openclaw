@@ -114,6 +114,30 @@ enum ChatImageViewerSources {
     }
 }
 
+/// The responder that has the keyboard, found the way UIKit routes an action to it.
+@MainActor
+private enum ChatFirstResponder {
+    private static var found: UIResponder?
+
+    static func current() -> UIResponder? {
+        self.found = nil
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.openClawReportFirstResponder), to: nil, from: nil, for: nil)
+        defer { self.found = nil }
+        return self.found
+    }
+
+    fileprivate static func report(_ responder: UIResponder) {
+        self.found = responder
+    }
+}
+
+extension UIResponder {
+    @objc fileprivate func openClawReportFirstResponder() {
+        ChatFirstResponder.report(self)
+    }
+}
+
 /// The transcript thumbnail. A UIKit image view, because the system zoom transition grows the
 /// viewer out of a real view and hides that view while the viewer covers it.
 struct ChatImageViewerThumbnail: UIViewRepresentable {
@@ -274,6 +298,8 @@ final class ChatImageViewerController: UIViewController,
     private let providedThumbnails: [String: UIImage]
     private var pages: [Int: ChatImageViewerPageController] = [:]
     private(set) var currentIndex: Int
+    /// The text view that had the keyboard when the viewer opened.
+    fileprivate weak var restoresFirstResponder: UIResponder?
 
     /// Opens the viewer on `artifactId`, growing out of its thumbnail.
     static func present(
@@ -293,6 +319,11 @@ final class ChatImageViewerController: UIViewController,
         }
         let viewer = ChatImageViewerController(
             items: items, index: index, thumbnail: thumbnail, thumbnails: thumbnails, load: load)
+        // The keyboard would cover the image: put it away for the viewer and bring it back, with the
+        // same cursor, once the viewer closes.
+        if let responder = ChatFirstResponder.current(), responder.resignFirstResponder() {
+            viewer.restoresFirstResponder = responder
+        }
         // Over, not instead of, the transcript: a removed transcript rebuilds its rows and loses its
         // scroll position, and the image would have no thumbnail to return to.
         viewer.modalPresentationStyle = .overFullScreen
@@ -471,6 +502,13 @@ final class ChatImageViewerController: UIViewController,
         UIView.animate(withDuration: 0.15) {
             views.forEach { $0?.alpha = 0 }
             self.view.backgroundColor = OpenClawChatTheme.canvasUIColor.withAlphaComponent(0)
+        }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        if self.isBeingDismissed {
+            self.restoresFirstResponder?.becomeFirstResponder()
         }
     }
 

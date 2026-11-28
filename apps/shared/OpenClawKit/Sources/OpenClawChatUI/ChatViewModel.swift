@@ -99,6 +99,8 @@ public final class OpenClawChatViewModel {
     @ObservationIgnored
     var isCreatingSession = false
     var attachmentStagingCount = 0
+    /// iPhone: one tile per picked item, shown until its attachment is staged or the tile is removed.
+    public internal(set) var preparingAttachments: [OpenClawPreparingAttachment] = []
     public private(set) var isAborting = false
     public var errorText: String?
     public var attachments: [OpenClawPendingAttachment] = [] {
