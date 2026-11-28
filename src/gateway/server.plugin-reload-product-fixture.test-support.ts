@@ -3,12 +3,14 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { afterAll, it } from "vitest";
+import { createInterface } from "node:readline";
+import { afterAll, beforeEach, it } from "vitest";
 import type { JsonTestResults } from "vitest/node";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { writePrivateUpdateHandoffChildGuard } from "../../test/helpers/private-update-handoff-child-guard.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { runVitestShutdownCommand } from "../../test/helpers/vitest-shutdown-command.js";
 import { assertTestHomeSelection } from "../../test/test-home-policy.mts";
@@ -17,6 +19,7 @@ import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 // Shared external-plugin fixture for the reload continuation product entries.
 export const PLUGIN = "send-continuation-proof";
 export const TOOL = "send_continuation_probe";
+const scenariosReadyLine = "RELOAD_PRODUCT_STAGE scenarios-imported";
 
 export type InputItem = {
   type?: string;
@@ -119,6 +122,7 @@ export async function definePluginReloadProductTest(
     );
     // No Gateway/handoff consumer is imported before this qualification.
     await options.loadScenarios();
+    process.stderr.write(scenariosReadyLine + "\n");
     return;
   }
   const lifetime = createFixtureLifetime();
@@ -136,8 +140,10 @@ export async function definePluginReloadProductTest(
     await fixtureWorkers.dispose();
     throw error;
   }
-  it(options.name, async ({ signal }) =>
-    lifetime.run(async () => {
+  let completed: Promise<void>;
+  beforeEach(async ({ signal }) => {
+    const ready = createDeferred();
+    completed = lifetime.run(async () => {
       const root = lifetime.createTempDir(options.prefix);
       const handoff = path.join(root, "handoff");
       fsSync.mkdirSync(handoff, { mode: 0o700 });
@@ -198,13 +204,19 @@ export async function definePluginReloadProductTest(
           env,
           onReady(child) {
             childPid = child.pid;
+            assert(child.stderr);
+            createInterface({ input: child.stderr }).on("line", (line) => {
+              if (line === scenariosReadyLine) {
+                ready.resolve();
+              }
+            });
             child.stdout?.on("data", (chunk) => {
               capturedOutput += String(chunk);
               if (options.relayOutput) {
                 process.stdout.write(chunk);
               }
             });
-            child.stderr?.on("data", (chunk) => {
+            child.stderr.on("data", (chunk) => {
               capturedOutput += String(chunk);
               if (options.relayOutput) {
                 process.stderr.write(chunk);
@@ -215,6 +227,13 @@ export async function definePluginReloadProductTest(
       );
       const report = JSON.parse(fsSync.readFileSync(reportPath, "utf8")) as JsonTestResults;
       assertResult({ code, output: capturedOutput, report, binding, handoff, childPid });
-    }),
-  );
+    });
+    // Importing the scenarios belongs to setup, not to the send verification deadline.
+    await awaitGateBeforeSettlement(
+      ready.promise,
+      completed,
+      "Child exited before loading scenarios",
+    );
+  });
+  it(options.name, () => completed);
 }
