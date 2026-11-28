@@ -15,7 +15,7 @@ extension OpenClawChatViewModel {
         self.agentChoices.first { $0.id.lowercased() == self.selectedAgentID }
     }
 
-    var selectedAgentMainSessionKey: String {
+    public var selectedAgentMainSessionKey: String {
         guard let agentID = self.selectedAgentID else { return self.resolvedMainSessionKey }
         return self.mainSessionKey(forAgent: agentID)
     }

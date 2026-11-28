@@ -85,3 +85,16 @@ extension View {
         modifier(NotificationPermissionGuidanceDialogModifier(openNotifications: openNotifications))
     }
 }
+
+@MainActor
+private func approvalDialogButton(
+    _ title: Text,
+    role: ButtonRole? = nil,
+    action: @escaping () -> Void) -> some View
+{
+    Button(role: role, action: action) {
+        title
+            .font(OpenClawType.subheadSemiBold)
+            .frame(maxWidth: .infinity)
+    }
+}
