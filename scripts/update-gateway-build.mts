@@ -4,6 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { resolveGatewayRestartProbeContext } from "../src/cli/daemon-cli/restart-health-probe.js";
+import { verifyPreviousGatewayForUpdate } from "../src/cli/update-cli/update-command-readiness.js";
 import { assertManagedGatewayArtifactPublication } from "../src/cli/update-cli/update-command-service-revalidation.js";
 import { resolvePathViaExistingAncestorSync } from "../src/infra/boundary-path.js";
 import { sha256File } from "../src/infra/crypto-digest.js";
@@ -37,6 +39,36 @@ import { inspectOwnedSourceUpdateArtifacts } from "./lib/source-update-artifact-
 import { preserveNativeCleanupFailure, runSourceUpdateBuild } from "./lib/source-update-build.mts";
 
 const PROBE_TIMEOUT_MS = 120_000;
+
+// Only these native commands own the still-starting exit-2 contract. Arbitrary
+// shell callbacks can use that status for a real failure and must remain failures.
+async function settleSourceRestart(
+  code: number,
+  command: string,
+  root: string,
+  env: NodeJS.ProcessEnv,
+  assertCurrent?: () => void,
+): Promise<number> {
+  if (code !== 2 || !/^openclaw gateway (?:restart|start)$/u.test(command.trim())) {
+    return code;
+  }
+  try {
+    const { config } = await resolveGatewayRestartProbeContext(env);
+    const ready = await verifyPreviousGatewayForUpdate({
+      root,
+      config,
+      env,
+      opts: {},
+      waitForStartup: true,
+      assertCurrent,
+    });
+    return ready ? 0 : code;
+  } catch {
+    // Keep an unavailable probe unverified so the transaction reports the
+    // retained recovery artifacts rather than losing their location.
+    return code;
+  }
+}
 
 // The script deliberately accepts local build inputs. Runtime outputs and caches
 // remain with their existing owners rather than becoming candidate source inputs.
@@ -700,7 +732,13 @@ async function runReferenceSourceUpdate(
                     { cause: error },
                   );
                 }
-                const restartCode = await lifecycle(restartCommand);
+                const restartCode = await settleSourceRestart(
+                  await lifecycle(restartCommand),
+                  restartCommand,
+                  root,
+                  env,
+                  assertCurrent,
+                );
                 if (restartCode !== 0) {
                   throw new Error(
                     `Previous runtime restart failed (${restartCode}); retained ${promotion.backupRoot}`,
@@ -728,7 +766,13 @@ async function runReferenceSourceUpdate(
             // Once restart is attempted a new process may serve the candidate. Keep its
             // artifacts in place on failure; retained originals are for operator recovery.
             preserve = true;
-            const restarted = await lifecycle(restartCommand);
+            const restarted = await settleSourceRestart(
+              await lifecycle(restartCommand),
+              restartCommand,
+              root,
+              env,
+              assertCurrent,
+            );
             if (restarted !== 0) {
               throw new Error(
                 `New runtime restart failed (${restarted}); retained ${promotion.backupRoot}`,
@@ -836,7 +880,8 @@ export async function runUpdateGatewayBuild(
     build,
     lifecycle: {
       stop: () => lifecycle(stopCommand),
-      restart: () => lifecycle(restartCommand),
+      restart: async () =>
+        settleSourceRestart(await lifecycle(restartCommand), restartCommand, root, process.env),
       successRestartOwner: "adapter",
     },
   });
