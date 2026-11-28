@@ -1,5 +1,4 @@
 import { action, createMemo, createOptimisticStore, createSignal, onSettled } from "solid-js";
-import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/users.js";
 import type { ChannelsPairingListResult, ChannelsPairingRequest } from "../../api/types.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
@@ -20,16 +19,11 @@ import {
 } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
-import { profileDirectory } from "../../lib/profile-directory.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectChannels, projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { getLocale, t } from "../../lib/reactive/i18n.ts";
-import {
-  projectMutableSource,
-  projectOwner,
-  projectSource,
-} from "../../lib/reactive/projection.ts";
+import { projectMutableSource, projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -42,14 +36,15 @@ import {
   rebaseChannelConfigEdits,
 } from "./channel-config-draft.ts";
 import { createChannelConfigNavigation } from "./channel-config-navigation.ts";
+import {
+  formatPairingApprovalNotice,
+  pairingLinkLabel,
+  projectPairingPeople,
+  readPairingLinkTargets,
+} from "./pairing-link.ts";
 import { createChannelPluginPresentation } from "./plugin-presentation-loader.ts";
 import { ChannelsView, resolveChannelLabel, resolveChannelOrder } from "./view.tsx";
-import type {
-  ChannelPairingLinkTargets,
-  ChannelPairingPrompt,
-  ChannelSaveFeedback,
-  ChannelsProps,
-} from "./view.types.ts";
+import type { ChannelPairingPrompt, ChannelSaveFeedback, ChannelsProps } from "./view.types.ts";
 import { createChannelSetup } from "./wizard-setup.ts";
 
 registerRouteSubtitlesEnglish();
@@ -88,7 +83,7 @@ export function ChannelsPage() {
   const gatewayProjection = projectGateway(context.gateway);
   const channelsProjection = projectChannels(channelCapability);
   const configProjection = projectRuntimeConfig(context.runtimeConfig);
-  const directory = projectOwner(profileDirectory(context.gateway), (owner) => owner);
+  const people = projectPairingPeople(context.gateway);
   const settings = projectSource(context.theme, {
     read: () => loadSettings().showAdvancedSettings === true,
     // The projection owns theme observation for the persisted advanced-settings preference.
@@ -582,11 +577,7 @@ export function ChannelsPage() {
     });
   }
 
-  function patchPairingPrompt(
-    patch: Partial<
-      Pick<ChannelPairingPrompt, "notify" | "bootstrapCommandOwner" | "linkProfileId">
-    >,
-  ) {
+  function patchPairingPrompt(patch: Parameters<ChannelsProps["onPairingPromptChange"]>[0]) {
     if (!operations.prompt) {
       return;
     }
@@ -612,6 +603,9 @@ export function ChannelsPage() {
       return;
     }
 
+    const linked = prompt.linkProfileId
+      ? pairingLinkLabel(people.read(), prompt.linkProfileId)
+      : "";
     const result = await channelCapability.approvePairing({
       ...target,
       notify: prompt.notify,
@@ -622,55 +616,7 @@ export function ChannelsPage() {
       return;
     }
     updateOperations({ prompt: null });
-    const linkedName = pairingLinkTargets()?.people.find(
-      (person) => person.id === prompt.linkProfileId,
-    )?.label;
-    const linkNotice =
-      result.identityLink === "linked"
-        ? t("channels.pairing.linkedNotice", { name: linkedName ?? prompt.linkProfileId ?? "" })
-        : result.identityLink === "linked-elsewhere"
-          ? t("channels.pairing.linkedElsewhereNotice")
-          : result.identityLink === "unavailable"
-            ? t("channels.pairing.linkFailedNotice")
-            : null;
-    setPairingNotice(
-      [
-        t(
-          result.commandOwnerBootstrap === "unavailable"
-            ? result.notification === "failed"
-              ? "channels.pairing.approvedFollowupsFailedNotice"
-              : "channels.pairing.approvedOwnerFailedNotice"
-            : result.notification === "failed"
-              ? "channels.pairing.approvedNotificationFailedNotice"
-              : result.commandOwnerBootstrap === "configured"
-                ? "channels.pairing.approvedOwnerNotice"
-                : "channels.pairing.approvedNotice",
-        ),
-        linkNotice,
-      ]
-        .filter(Boolean)
-        .join(" "),
-    );
-  }
-
-  /** Only an administrator approving a request reads the people directory. */
-  function pairingLinkTargets(): ChannelPairingLinkTargets | null {
-    if (!canAdmin || operations.prompt?.kind !== "approve") {
-      return null;
-    }
-    const profiles = directory.read().result?.profiles ?? [];
-    const selfId = context.gateway.snapshot.selfUser?.id;
-    const self = profiles.find((profile) => profile.id === selfId);
-    return {
-      selfProfileId: self?.mergedInto ?? selfId ?? null,
-      people: profiles
-        .filter((profile) => !profile.mergedInto && profile.id !== GATEWAY_OWNER_PROFILE_ID)
-        .map((profile) => ({
-          id: profile.id,
-          label:
-            profile.displayName ?? profile.githubIdentity?.login ?? profile.emails[0] ?? profile.id,
-        })),
-    };
+    setPairingNotice(formatPairingApprovalNotice(result, linked));
   }
 
   function presentWhatsApp(pending: Promise<void>) {
@@ -705,7 +651,11 @@ export function ChannelsPage() {
       pairingNotice: pairingNotice(),
       canManagePairing,
       canAdmin,
-      pairingLinkTargets: pairingLinkTargets(),
+      // Only an administrator approving a request reads the people directory.
+      pairingLinkTargets:
+        canAdmin && operations.prompt?.kind === "approve"
+          ? readPairingLinkTargets(people.read(), context.gateway.snapshot.selfUser?.id)
+          : null,
       showAdvancedSettings: settings.read(),
       onPairingRoot: (element) => {
         pairingRoot = element;

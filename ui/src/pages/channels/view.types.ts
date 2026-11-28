@@ -20,6 +20,10 @@ export type ChannelPairingPrompt = {
   linkProfileId: string | null;
 };
 
+export type ChannelPairingPromptPatch = Partial<
+  Pick<ChannelPairingPrompt, "notify" | "bootstrapCommandOwner" | "linkProfileId">
+>;
+
 /** People an administrator can link an approved sender to; `selfProfileId` is the approver. */
 export type ChannelPairingLinkTargets = {
   selfProfileId: string | null;
@@ -68,11 +72,7 @@ export type ChannelsProps = {
   onPairingReviewAccount: (channel: string, accountId: string) => void;
   onPairingApprove: (request: ChannelsPairingRequest) => void;
   onPairingDismiss: (request: ChannelsPairingRequest) => void;
-  onPairingPromptChange: (
-    patch: Partial<
-      Pick<ChannelPairingPrompt, "notify" | "bootstrapCommandOwner" | "linkProfileId">
-    >,
-  ) => void;
+  onPairingPromptChange: (patch: ChannelPairingPromptPatch) => void;
   onPairingPromptCancel: () => void;
   onPairingPromptConfirm: () => void;
   onWhatsAppStart: (force: boolean) => void | Promise<void>;

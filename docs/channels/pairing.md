@@ -94,7 +94,9 @@ administer this installation. **Skip for now** leaves ownership unchanged.
 When you run channel setup from the Control UI signed in with your own
 administrator profile, the wizard then asks whether to also link that account to
 your profile. Linking happens after the channel config is saved, and the wizard
-reports whether it succeeded. Setup from the CLI, or signed in as the shared
+reports whether it succeeded. The link uses the personal ID exactly as entered,
+so enter it in the form the channel reports for incoming messages (for example,
+Signal UUID senders appear as `uuid:<UUID>`). Setup from the CLI, or signed in as the shared
 **Owner**, does not offer the link. The DM allowlist step never links anyone: an
 allowlist decides who may message the bot, not who they are.
 

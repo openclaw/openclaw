@@ -9,6 +9,7 @@ import {
 } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { updatePickers, openPicker, choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { formatPairingApprovalNotice, pairingLinkLabel } from "./pairing-link.ts";
 import {
   pairingAccount as personal,
   pairingRequest as request,
@@ -309,4 +310,25 @@ it("lets an admin link the approved sender to themselves or another person", asy
   ]);
   await choosePickerValue(picker, "grace");
   expect(onPairingPromptChange).toHaveBeenCalledWith({ linkProfileId: "grace" });
+});
+
+it("names the linked person and keeps approval visible when the link fails", () => {
+  const profiles = [
+    { id: "ada", displayName: "Ada", githubIdentity: null, emails: [], mergedInto: null },
+  ] as never;
+  const approved = {
+    requestId: request.requestId,
+    senderId: request.senderId,
+    notification: "not-requested",
+    commandOwnerBootstrap: "not-requested",
+  } as const;
+  expect(
+    formatPairingApprovalNotice(
+      { ...approved, identityLink: "linked" },
+      pairingLinkLabel(profiles, "ada"),
+    ),
+  ).toBe("DM access approved. Linked to Ada.");
+  expect(formatPairingApprovalNotice({ ...approved, identityLink: "linked-elsewhere" }, "")).toBe(
+    "DM access approved. This sender is already linked to another person. Unlink it from that person first.",
+  );
 });
