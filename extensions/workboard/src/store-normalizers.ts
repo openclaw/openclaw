@@ -712,7 +712,7 @@ export function appendCompletionProof(
 ): WorkboardProof[] {
   const entries = [...(existing ?? [])];
   if (!proofId) {
-    return proof ? [...entries, proof].slice(-MAX_CARD_PROOF) : entries;
+    return proof ? [...entries, proof] : entries;
   }
   const index = entries.findIndex((entry) => entry.id === proofId);
   const pending = index >= 0 ? entries[index] : undefined;
@@ -737,7 +737,7 @@ export function appendCompletionProof(
     // Preserve the stored evidence identity and timestamp when resolving its status.
     entries[index] = { ...pending, status: completionProof.status };
   }
-  return entries.slice(-MAX_CARD_PROOF);
+  return entries;
 }
 
 function normalizeList<T>(
@@ -745,13 +745,18 @@ function normalizeList<T>(
   normalize: (entry: Record<string, unknown>) => T | null,
   limit: number,
   fallback?: T[],
+  historyKind?: "attempt" | "proof",
 ): T[] | undefined {
-  return Array.isArray(value)
-    ? value
-        .map((entry) => (isRecord(entry) ? normalize(entry) : null))
-        .filter((entry): entry is T => entry !== null)
-        .slice(-limit)
-    : fallback;
+  if (!Array.isArray(value)) {
+    return fallback;
+  }
+  const entries = value
+    .map((entry) => (isRecord(entry) ? normalize(entry) : null))
+    .filter((entry): entry is T => entry !== null);
+  if (historyKind && entries.length > limit) {
+    throw new Error(`card ${historyKind} limit exceeded: ${limit}`);
+  }
+  return entries.slice(-limit);
 }
 
 export function normalizeMetadata(
@@ -801,6 +806,7 @@ export function normalizeMetadata(
       normalizeAttempt,
       MAX_CARD_ATTEMPTS,
       fallback.attempts,
+      "attempt",
     ),
     comments: normalizeList(
       record.comments,
@@ -809,7 +815,7 @@ export function normalizeMetadata(
       fallback.comments,
     ),
     links: normalizedLinks,
-    proof: normalizeList(record.proof, normalizeProof, MAX_CARD_PROOF, fallback.proof),
+    proof: normalizeList(record.proof, normalizeProof, MAX_CARD_PROOF, fallback.proof, "proof"),
     artifacts: normalizeList(
       record.artifacts,
       normalizeArtifact,
@@ -976,10 +982,8 @@ export function trimMetadataToBudget(
   while (metadataByteSize(next) > MAX_CARD_METADATA_BYTES) {
     const currentSize = metadataByteSize(next);
     for (const key of [
-      "attempts",
       "diagnostics",
       "notifications",
-      "proof",
       "artifacts",
       "attachments",
       "workerLogs",
@@ -990,10 +994,9 @@ export function trimMetadataToBudget(
       if (!entries?.length) {
         continue;
       }
-      const preserveId = key === "proof" ? options.preserveProofId : options.preserveNotificationId;
       const index =
-        key === "proof" || key === "notifications"
-          ? (next[key]?.findIndex((entry) => entry.id !== preserveId) ?? -1)
+        key === "notifications"
+          ? (next[key]?.findIndex((entry) => entry.id !== options.preserveNotificationId) ?? -1)
           : key === "links"
             ? (next.links?.findIndex((link) => !isDependencyLink(link)) ?? -1)
             : 0;
@@ -1014,6 +1017,9 @@ export function trimMetadataToBudget(
         throw new Error(
           `card metadata cannot retain notification: ${options.preserveNotificationId}`,
         );
+      }
+      if (next.proof?.length || next.attempts?.length) {
+        throw new Error("card metadata cannot retain proof or attempt history");
       }
       break;
     }
