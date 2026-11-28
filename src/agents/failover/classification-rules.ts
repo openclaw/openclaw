@@ -403,7 +403,7 @@ export function isClaudeCliAuthError(raw: string, provider?: string): boolean {
   if (normalizeOptionalLowercaseString(provider) !== "claude-cli") {
     return false;
   }
-  return /\bnot logged in\b\s*·\s*please run \/login\b|\bfailed to authenticate:\s*oauth session expired and could not be refreshed\b/i.test(
+  return /\bnot logged in\b\s*·\s*please run \/login\b|\bfailed to authenticate:\s*(?:oauth session expired and could not be refreshed|this login reached its time limit and cannot be renewed)\b/i.test(
     raw,
   );
 }

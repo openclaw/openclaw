@@ -21,6 +21,8 @@ const validationSignal = (status: number) => ({
   ...validation,
 });
 const rateLimitCode = "rate_limit_exceeded";
+const claudeLoginTimeLimit =
+  "Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again, or use `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs";
 const rejected = { code: rateLimitCode, message: "Request rejected" };
 const promptRejection = {
   code: rateLimitCode,
@@ -87,6 +89,8 @@ describe("failover classification", () => {
       noPlugin,
     ],
     ["auth", { message: "Not logged in · Please run /login", provider: "claude-cli" }],
+    ["auth", { message: claudeLoginTimeLimit, provider: "claude-cli" }],
+    [null, { message: claudeLoginTimeLimit, provider: "openai" }],
     [null, { message: "Not logged in · Please run /login", provider: "openai" }],
     [null, "Not logged in · Please run /login"],
     [
