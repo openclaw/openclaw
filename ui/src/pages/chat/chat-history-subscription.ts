@@ -6,6 +6,7 @@ import {
 } from "../../../../src/shared/monotonic-time.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { canSubscribeSessionApprovals } from "../../app/session-approval-access.ts";
+import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveGatewayReadRetryDelayMs } from "../../lib/gateway-availability.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -21,10 +22,12 @@ import { captureChatHistoryRun, chatHistoryRequestParams } from "./chat-history-
 import {
   CHAT_HISTORY_RETRY_WINDOW_MS,
   formatChatHistoryLoadError,
+  isChatSubscriptionTargetChanged,
   isRetryableChatReadError,
 } from "./chat-history-retry.ts";
 import {
   chatHistoryRequests,
+  shouldRequestCompactOpening,
   getChatHistoryLoadState,
   setChatHistoryLoad,
   setChatHistoryRetrying,
@@ -241,7 +244,9 @@ async function synchronizeSelectedSessionMessageSubscription(
     }
   };
   const publishError = (error: unknown) => {
-    const message = formatChatHistoryLoadError(error);
+    const message = isChatSubscriptionTargetChanged(error)
+      ? t("chat.historySessionChanged")
+      : formatChatHistoryLoadError(error);
     paneRequests.subscriptionError = message;
     // The history surface owns observer failures; copying them into global,
     // roster and composer errors produces three alerts for one failed read.
@@ -289,6 +294,7 @@ async function synchronizeSelectedSessionMessageSubscription(
               cursor,
               readChatInputRunIds(state),
               readChatHistoryState(state, cursor),
+              shouldRequestCompactOpening(state),
             )
           : undefined;
         admit();

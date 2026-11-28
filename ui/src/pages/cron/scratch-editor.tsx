@@ -1,3 +1,4 @@
+import { readMissingScopeError } from "@openclaw/gateway-client/browser";
 import {
   action,
   affects,
@@ -12,9 +13,11 @@ import {
   refresh,
   Show,
 } from "solid-js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { CronScratchGetResult, CronScratchSetResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
+import { ErrorDetails } from "../../components/config-error.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { redactToolDetail } from "../../lib/browser-redact.ts";
@@ -105,8 +108,11 @@ function ScratchFields(props: {
     conflict: false,
     redacted: false,
   });
-  const [receipt, setReceipt] = createSignal<Promise<void>>();
-  const read = createMemo(() => receipt());
+  const [receipt, setReceipt] = createSignal<{
+    completion: Promise<void>;
+    failureCopy: "loadFailed" | "reloadFailed" | "saveUnconfirmed" | "removeUnconfirmed";
+  }>();
+  const read = createMemo(() => receipt()?.completion);
   const readResult = () => {
     read();
     return null;
@@ -224,7 +230,16 @@ function ScratchFields(props: {
         pending = false;
       }
     })();
-    void setReceipt(completion);
+    void setReceipt({
+      completion,
+      failureCopy: isSave
+        ? content === null
+          ? "removeUnconfirmed"
+          : "saveUnconfirmed"
+        : snapshot
+          ? "reloadFailed"
+          : "loadFailed",
+    });
     // A retired or disposed editor may no longer consume its completion.
     void completion.catch(() => undefined);
     return completion;
@@ -302,11 +317,29 @@ function ScratchFields(props: {
           </Show>
           <Loading on={receipt()}>
             <Errored
-              fallback={(error) => (
-                <p class="cron-help" role="status">
-                  {formatUiError(error())}
-                </p>
-              )}
+              fallback={(error) => {
+                const recovery = createMemo(() => {
+                  const failure = error();
+                  const copy = receipt()?.failureCopy;
+                  return copy &&
+                    failure instanceof GatewayRequestError &&
+                    failure.gatewayCode === "UNAVAILABLE" &&
+                    !readMissingScopeError(failure)
+                    ? t(`cron.scratch.${copy}`)
+                    : undefined;
+                });
+                const diagnostic = createMemo(() => formatUiError(error()));
+                return (
+                  <>
+                    <p class="cron-help" role="status">
+                      {recovery() ?? diagnostic()}
+                    </p>
+                    <Show when={recovery()}>
+                      <ErrorDetails error={diagnostic()} />
+                    </Show>
+                  </>
+                );
+              }}
             >
               {readResult()}
             </Errored>

@@ -41,6 +41,7 @@ export type WorkshopView = () => {
   onStartView: (view: WorkshopStartView) => void;
   /** Learned skills: the active or the archived list. */
   filter: WorkshopFilter;
+  membership: { name: string; destination: WorkshopFilter } | null;
   sort: WorkshopSort;
   tab: WorkshopTab;
   pendingAction: string | null;
@@ -55,7 +56,7 @@ export type WorkshopView = () => {
   onSelectSkill: (name: string) => void;
   onSelectDraft: (draftId: string) => void;
   onOpen: (target: WorkshopViewerTarget) => void;
-  onMutate: (mutation: WorkshopMutation, key: string) => void;
+  onMutate: (mutation: WorkshopMutation, key: string, destination?: WorkshopFilter) => void;
   onModeChange: (mode: SkillWorkshopMode) => void;
   onLearn: () => void;
   onFilter: (filter: WorkshopFilter) => void;
@@ -84,10 +85,20 @@ export function MutationButton(props: {
   title?: string;
   mutation: WorkshopMutation;
   actionKey: string;
+  destination?: WorkshopFilter;
   variant?: "default" | "primary" | "danger" | "link";
   icon?: IconName;
 }) {
   const allowed = () => canRunWorkshopMutation(props.view().access, props.mutation.method);
+  const membership = () =>
+    props.view().pendingAction === props.actionKey && props.view().membership;
+  const label = () => {
+    if (props.view().pendingAction !== props.actionKey) {
+      return props.label;
+    }
+    const move = props.view().membership;
+    return move ? membershipLabel(move.destination) : t("skillWorkshop.viewer.loading");
+  };
   const icon = () => props.icon ?? (props.variant === "danger" ? "archive" : undefined);
   return (
     <Show when={allowed()}>
@@ -106,10 +117,14 @@ export function MutationButton(props: {
               ]
         }
         title={props.title}
-        disabled={props.view().pendingAction !== null}
+        disabled={props.view().pendingAction !== null && !membership()}
+        aria-disabled={membership() ? "true" : undefined}
+        aria-busy={membership() ? "true" : undefined}
         onClick={(event) => {
           event.stopPropagation();
-          props.view().onMutate(props.mutation, props.actionKey);
+          if (!props.view().pendingAction) {
+            props.view().onMutate(props.mutation, props.actionKey, props.destination);
+          }
         }}
       >
         <Show when={props.variant !== "link" && icon()}>
@@ -119,9 +134,7 @@ export function MutationButton(props: {
             </span>
           )}
         </Show>
-        {props.view().pendingAction === props.actionKey
-          ? t("skillWorkshop.viewer.loading")
-          : props.label}
+        {label()}
       </button>
     </Show>
   );
@@ -196,6 +209,14 @@ export type WorkshopReads = {
 export type WorkshopPage = { open: () => void; close: () => void };
 
 export type WorkshopFilter = "active" | "archived";
+
+export function membershipLabel(destination: WorkshopFilter) {
+  return t(
+    destination === "archived"
+      ? "skillWorkshop.viewer.archiving"
+      : "skillWorkshop.viewer.restoring",
+  );
+}
 export type WorkshopStartView = "drafts" | "history" | "skills";
 export type WorkshopSort = "uses" | "recent" | "name";
 export type WorkshopTab = "instructions" | "files" | "history";

@@ -589,6 +589,7 @@ async function executeDetachedCronJob(
     agentTerminal: res.agentTerminal,
     diagnostics: res.diagnostics,
     failureNotificationDetail: res.failureNotificationDetail,
+    rateLimitResetAt: res.rateLimitResetAt,
     model: res.model,
     provider: res.provider,
     usage: res.usage,

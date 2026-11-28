@@ -78,6 +78,8 @@ export type RetainedNativeWorkerSource = {
   }>;
   /** The domain joins admitted work and its resources before shared native cleanup. */
   retain(owner: object, closeOwner: () => Promise<void>): void;
+  /** Stop remaining shared-host endpoints only after the domains using them have drained. */
+  retainSharedHost(closeEndpoints: () => Promise<void>): void;
   /** Join an idle broker without closing registered domains or their independent work. */
   retireIdleBroker(): Promise<boolean>;
   /** Let successive native captures reuse the broker before attempting to join it. */
@@ -394,6 +396,7 @@ export function captureRetainedNativeWorkerSource(options?: {
           if (errors.length) {
             throw new AggregateError(errors, "Native worker execution owner cleanup failed");
           }
+          await closeSharedHost?.();
           if (source.hasActiveWorkers) {
             throw new Error("Native worker execution owners have not joined");
           }
@@ -548,11 +551,15 @@ export function captureRetainedNativeWorkerSource(options?: {
           : undefined,
       });
     },
+    retainSharedHost(closeEndpoints) {
+      closeSharedHost = closeEndpoints;
+    },
     retain(owner, closeOwner) {
       owners.set(owner, closeOwner);
       captured.runtimeGeneration?.retain(source, () => source.close());
     },
   };
+  let closeSharedHost: (() => Promise<void>) | undefined;
   const owners = new Map<object, () => Promise<void>>();
   let closingOwners: Promise<void> | undefined;
   if (captured.runtimeGeneration) {

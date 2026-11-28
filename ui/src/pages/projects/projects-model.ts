@@ -26,6 +26,13 @@ registerSessionOrganizationEnglish();
 
 export type ProjectsOperation = "register" | "clone" | "rename" | "remove" | "access";
 
+const byDisplayName = (left: ProjectRecord, right: ProjectRecord) =>
+  left.displayName.localeCompare(right.displayName);
+
+function withProjectName(records: ProjectRecord[], projectId: string, displayName: string) {
+  return records.map((record) => (record.id === projectId ? { ...record, displayName } : record));
+}
+
 /** Request admission stays synchronous while Solid projects this page's presentation. */
 export class ProjectsModel {
   records: ProjectRecord[] = [];
@@ -38,6 +45,8 @@ export class ProjectsModel {
   browserOpen = false;
   /** The switch a role-access write is saving, shown until the write settles. */
   pendingAccess: { role: string; projectId: string; enabled: boolean } | null = null;
+  pendingRename: ProjectsRenameParams | null = null;
+  private readonly rejectedNames = new Map<string, string>();
   readonly browser: PlaceBrowserState;
   gateway!: ReturnType<typeof useGatewayPage>;
   private presentationLifetime = Promise.withResolvers<void>();
@@ -45,9 +54,7 @@ export class ProjectsModel {
     task: (scope: GatewayConnectionScope, { signal }) =>
       scope.client.request<ProjectsListResult>("projects.list", {}, { signal }),
     onComplete: (result) => {
-      this.records = result.projects.toSorted((left, right) =>
-        left.displayName.localeCompare(right.displayName),
-      );
+      this.records = result.projects.toSorted(byDisplayName);
       this.listLoaded = true;
       if (this.selectedId && !this.records.some((project) => project.id === this.selectedId)) {
         this.selectedId = null;
@@ -87,6 +94,7 @@ export class ProjectsModel {
         | "selectedId"
         | "browserOpen"
         | "pendingAccess"
+        | "pendingRename"
       >
     >,
   ) {
@@ -100,7 +108,8 @@ export class ProjectsModel {
     this.presentationLifetime = Promise.withResolvers<void>();
     this.listRequest.cancel();
     this.browser.reset();
-    this.update({ operation: null, pendingAccess: null, browserOpen: false });
+    this.rejectedNames.clear();
+    this.update({ operation: null, pendingAccess: null, pendingRename: null, browserOpen: false });
   }
 
   get retired() {
@@ -111,8 +120,13 @@ export class ProjectsModel {
     return readGatewayOperatorAccess(this.context.gateway.snapshot);
   }
 
+  get displayedRecords(): ProjectRecord[] {
+    const pending = this.pendingRename;
+    return pending ? withProjectName(this.records, pending.projectId, pending.name) : this.records;
+  }
+
   get selected(): ProjectRecord | undefined {
-    return this.records.find((project) => project.id === this.selectedId);
+    return this.displayedRecords.find((project) => project.id === this.selectedId);
   }
 
   /** Writes to `gateway.roles` go through the shared config editor; read-only configs refuse them. */
@@ -269,28 +283,47 @@ export class ProjectsModel {
 
   rename(project: ProjectRecord) {
     return this.run("rename", async (scope) => {
-      let renamed = false;
-      await showInputDialog({
+      const name = await showInputDialog({
         title: t("projectsPage.renameTitle"),
         label: t("projectsPage.renameLabel"),
         defaultValue: project.displayName,
+        draftValue: this.rejectedNames.get(project.id),
         submitLabel: t("projectsPage.rename"),
         requireValue: true,
         requireChange: true,
         gateway: this.context.gateway,
         canSubmit: () => this.gateway.isCurrent(scope),
-        submit: async (name) => {
-          try {
-            const params: ProjectsRenameParams = { projectId: project.id, name };
-            await scope.client.request<ProjectsRenameResult>("projects.rename", params);
-            renamed = true;
-            return null;
-          } catch (error) {
-            return formatUiError(error);
-          }
-        },
       });
-      return renamed;
+      if (!this.gateway.isCurrent(scope)) {
+        return false;
+      }
+      this.rejectedNames.delete(project.id);
+      if (name === null) {
+        return false;
+      }
+      const params = { projectId: project.id, name };
+      this.update({ pendingRename: params });
+      try {
+        const receipt = await scope.client.request<ProjectsRenameResult>("projects.rename", params);
+        if (this.gateway.isCurrent(scope)) {
+          this.update({
+            pendingRename: null,
+            records: withProjectName(this.records, receipt.id, receipt.displayName).toSorted(
+              byDisplayName,
+            ),
+          });
+        }
+        return true;
+      } catch (error) {
+        if (this.gateway.isCurrent(scope)) {
+          this.rejectedNames.set(project.id, name);
+          this.update({
+            pendingRename: null,
+            error: `${project.displayName}: ${formatUiError(error)}`,
+          });
+        }
+        return false;
+      }
     });
   }
 

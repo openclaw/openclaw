@@ -615,6 +615,10 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     return isTranscriptProgrammaticScroll(this.offsetState, this.scrollElement);
   }
 
+  get hasMessageRows(): boolean {
+    return this.#acceptedRows?.some((row) => row.kind === "item") ?? false;
+  }
+
   get isPositionSettled(): boolean {
     return this.layout.ready && !this.initialRange.pending && !this.offsetState.pendingScrollOffset;
   }

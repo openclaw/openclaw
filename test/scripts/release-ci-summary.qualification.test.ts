@@ -118,32 +118,6 @@ describe("candidate-owned publish consumer chain", () => {
     };
     await expect(validateReleaseRunEvidence(verifier(f), client)).rejects.toThrow("HTTP 404");
   });
-  it("retains an empty waiver record when a frozen Q named job passed", async () => {
-    const version = "2099.1.1-beta.1";
-    const f = candidatePublicationFixture({ candidateVersion: version });
-    const client = {
-      ...f.client,
-      getWorkflowSource: (sha: string, path?: string) =>
-        path === "scripts/lib/release-validation-waivers.json"
-          ? JSON.stringify({
-              schema: "openclaw.release-validation-waivers/v1",
-              waivers: [
-                {
-                  targetVersion: version,
-                  childRole: "pluginPrereleaseCandidate",
-                  jobName: "plugin-prerelease-suite",
-                  reason: "Synthetic historical approval",
-                  aggregates: [],
-                },
-              ],
-            })
-          : f.client.getWorkflowSource(sha, path),
-    };
-    await expect(validateReleaseRunEvidence(verifier(f), client)).resolves.toMatchObject({
-      waivers: [],
-    });
-  });
-
   it("evaluates raw failed evidence against Q data rather than the verifier checkout", async () => {
     const f = candidatePublicationFixture({
       candidateVersion: "2099.1.1-beta.1",

@@ -609,7 +609,6 @@ extension SettingsProTab {
     func title(for route: SettingsRoute) -> String {
         switch route {
         case .deviceSettings: String(localized: "Device Settings")
-        case .gateway: String(localized: "Gateway")
         case .voiceAndTalk: String(localized: "Voice & Talk")
         case .permissions: String(localized: "Permissions")
         case .accessories: String(localized: "Accessories")
@@ -619,6 +618,13 @@ extension SettingsProTab {
         case .skills: String(localized: "Skills")
         case .plugins: String(localized: "Plugins")
         case .advanced: String(localized: "Advanced")
+        case .gateway:
+            self.gatewayRegistry.entries.first {
+                GatewayStableIdentifier.matches(
+                    $0.stableID,
+                    self.appModel.activeGatewayConnectConfig?.effectiveStableID ??
+                        self.appModel.connectedGatewayID ?? self.gatewayRegistry.activeStableID)
+            }.map(self.gatewayRegistry.compactName) ?? String(localized: "Connection")
         case .gatewayDetails: String(localized: "Connection details")
         case .appleWatch: String(localized: "Apple Watch")
         case .espSetup: String(localized: "ESP device setup")
