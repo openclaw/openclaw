@@ -12,10 +12,18 @@ export function createComposerDictationOptions(
   setError: (error: string | null) => void,
   onTap?: () => void,
 ) {
+  const getDraft = props.getDraft;
+  const draftSource = props.draftSource;
+  const draft = props.draft;
   return {
     client: props.gatewayClient ?? null,
     sessionKey: props.sessionKey,
     draftKey: composerDraftKey(props),
+    accountId: props.userId ?? undefined,
+    getDraftRevision: () => state.editRevision,
+    getDraftText: () =>
+      getDraft?.() ?? draftSource?.read().draft ?? state.composerTextarea?.value ?? draft,
+    refinementAvailable: true,
     connected: props.connected,
     enabled: props.composerHoldToRecord !== false,
     dictationAvailable: devicePicker.dictationStatus === "ready",

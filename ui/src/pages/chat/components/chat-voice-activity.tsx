@@ -183,3 +183,23 @@ export function ComposerDictationStatus(props: {
     </Show>
   );
 }
+
+const DictationRefinementView = lazy(() => import("./composer-dictation-status.tsx"), {
+  export: "DictationRefinementView",
+});
+
+export function ComposerDictationReview(props: {
+  readDictation: () => ComposerDictationOwner | undefined;
+}) {
+  return (
+    <Show
+      when={
+        props.readDictation()?.refinementOptionsOpen || props.readDictation()?.refinementEnabled
+      }
+    >
+      <ChatLazyBoundary>
+        <DictationRefinementView readDictation={props.readDictation} />
+      </ChatLazyBoundary>
+    </Show>
+  );
+}

@@ -44,7 +44,11 @@ import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types
 import { ComposerWidthEdge, prepareComposerWidthEdge } from "./chat-composer-width-ref.tsx";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { ChatPermissionPicker } from "./chat-permission-picker.tsx";
-import { ChatVoiceStatus, ComposerDictationStatus } from "./chat-voice-activity.tsx";
+import {
+  ChatVoiceStatus,
+  ComposerDictationReview,
+  ComposerDictationStatus,
+} from "./chat-voice-activity.tsx";
 
 type ChatComposerViewContext = ReturnType<typeof createChatComposerContext>;
 
@@ -513,6 +517,7 @@ export function renderChatComposerView(
                   ) : undefined}
                 </div>
               ) : undefined}
+              <ComposerDictationReview readDictation={() => context().dictation} />
             </div>
 
             <div class="agent-chat__composer-input-row">
@@ -594,6 +599,17 @@ export function renderChatComposerView(
                   {context().runStatusAnnouncement}
                 </span>
               </div>
+              <Show when={!props.realtimeTalkActive && context().dictation?.refinementAvailable}>
+                <button
+                  type="button"
+                  class="chat-controls__provider-settings"
+                  aria-label={t("chat.composer.dictationTextOptions")}
+                  aria-expanded={context().dictation?.refinementOptionsOpen ? "true" : "false"}
+                  onClick={() => context().dictation?.toggleRefinementOptions()}
+                >
+                  <Icon name="settings" />
+                </button>
+              </Show>
             </div>
 
             <div class="agent-chat__composer-footer">

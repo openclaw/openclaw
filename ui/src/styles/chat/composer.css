@@ -532,7 +532,7 @@
   height: 100%;
 }
 
-/* Timeline meter: 2px dots on a 4px pitch (BAR_WIDTH/BAR_PITCH in microphone-meter.ts)
+/* Timeline meter: 2px dots on a 4px pitch (BAR_WIDTH/BAR_PITCH in microphone-meter-renderer.ts)
    across whatever width the surrounding row gives it. The canvas draws the moving
    bars over the resting dots; the mask softens both ends so bars drift in and out. */
 .agent-chat__voice-activity {
