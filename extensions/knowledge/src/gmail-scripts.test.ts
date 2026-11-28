@@ -97,9 +97,22 @@ it("prefilters Gmail threads and asks the decision model about the rest", async 
       payload: { headers: [{ name: "List-Unsubscribe", value: "<mailto:u@acme.example>" }] },
     }),
     alert: mail("18c0ffee00a2", { sender: "Bank <no-reply@bank.example>" }),
+    // A calendar request is known by its MIME part, whatever its subject says.
     invite: mail("18c0ffee00a3", {
       sender: "Ann Lee <ann@acme.example>",
-      subject: "Invitation: Pilot review @ Mon Nov 30",
+      subject: "Project sync",
+      payload: {
+        mimeType: "multipart/mixed",
+        parts: [
+          {
+            mimeType: "text/calendar",
+            headers: [
+              { name: "Content-Type", value: "text/calendar; charset=UTF-8; method=REQUEST" },
+            ],
+            body: { data: b64("BEGIN:VCALENDAR") },
+          },
+        ],
+      },
     }),
     promo: mail("18c0ffee00a4", {
       sender: "Shop <hello@shop.example>",
@@ -109,6 +122,24 @@ it("prefilters Gmail threads and asks the decision model about the rest", async 
     update: mail("18c0ffee00a5", {
       sender: "Docs <docs@sign.example>",
       labelIds: ["INBOX", "CATEGORY_UPDATES"],
+    }),
+    // An HTML-only reply: the quoted commitment is not the sender's new text.
+    html: mail("18c0ffee00a6", {
+      sender: "Ann Lee <ann@acme.example>",
+      messageText: undefined,
+      payload: {
+        mimeType: "multipart/alternative",
+        parts: [
+          {
+            mimeType: "text/html",
+            body: {
+              data: b64(
+                '<div>Thanks.</div><div class="gmail_quote"><div>On Fri, Bo wrote:</div><blockquote type="cite"><div>I will send the contract Friday.</div></blockquote></div>',
+              ),
+            },
+          },
+        ],
+      },
     }),
   };
   const inputs = [];
@@ -127,7 +158,9 @@ it("prefilters Gmail threads and asks the decision model about the rest", async 
     ["18c0ffee00a3", "calendar-notice"],
     ["18c0ffee00a4", "bulk-category"],
     ["18c0ffee00a5", null],
+    ["18c0ffee00a6", null],
   ]);
+  expect(rows[6].decision.state.value.messages[0].text).toBe("Thanks.");
   // The owner replied, so the promotions label does not leave the thread out; the draft is no message.
   expect(rows[0]).toMatchObject({
     history_id: "900",
@@ -137,6 +170,18 @@ it("prefilters Gmail threads and asks the decision model about the rest", async 
     link: "https://mail.google.com/mail/?authuser=owner%40example.com#all/18c0ffee0001",
   });
   expect(rows[1].decision).toBeUndefined();
+  // The message digest follows which messages the thread holds, not their labels.
+  const opened = structuredClone(contract);
+  opened.messages[1]!.labelIds = ["INBOX"];
+  const pruned = { ...structuredClone(contract), messages: contract.messages.slice(0, 1) };
+  const digest = async (thread: unknown) => {
+    await writeFile(path.join(dir, "again.json"), JSON.stringify(thread));
+    return JSON.parse(
+      run("gmail-normalize.mjs", ["triage", "--account", "owner@example.com", "--input", path.join(dir, "again.json")]),
+    ).messages_digest;
+  };
+  expect(await digest(opened)).toBe(rows[0].messages_digest);
+  expect(await digest(pruned)).not.toBe(rows[0].messages_digest);
   const { decision } = rows[0];
   expect(Object.keys(decision)).toStrictEqual(["contractVersion", "state", "questions"]);
   expect(decision.contractVersion).toBe(2);
@@ -300,7 +345,11 @@ if (args[1] === "GMAIL_GET_PROFILE") {
     answer({ threads: [{ id: "18c0ffee00b1", historyId: "99", snippet: "a" }] });
   }
 } else if (args[1] === "GMAIL_FETCH_MESSAGE_BY_THREAD_ID") {
-  answer({ threadId: input.thread_id, messages: [] });
+  answer(
+    input.page_token === "more"
+      ? { threadId: input.thread_id, messages: [{ messageId: "m2" }] }
+      : { threadId: input.thread_id, messages: [{ messageId: "m1" }], nextPageToken: "more" },
+  );
 } else {
   process.exit(9);
 }
@@ -364,8 +413,9 @@ it("reads Gmail through the Composio CLI with read-only tools only", async () =>
 
   const fetched = read(["threads", "--id", "18c0ffee0001", "--id", "18c0ffee00b1", "--output-dir", "t"]);
   expect(JSON.parse(fetched.stdout).files).toHaveLength(2);
+  // Every page of a long thread is read into one file.
   expect(JSON.parse(await readFile(path.join(dir, "t", "18c0ffee0001.json"), "utf8"))).toStrictEqual(
-    { threadId: "18c0ffee0001", messages: [] },
+    { threadId: "18c0ffee0001", messages: [{ messageId: "m1" }, { messageId: "m2" }] },
   );
   // Every tool the script ran reads Gmail; nothing else reached the CLI.
   const slugs = new Set([...listCalls, ...(await calls())].flatMap((call) => (call[0] === "execute" ? [call[1]] : [])));

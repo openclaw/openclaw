@@ -16,7 +16,7 @@ const USAGE =
   "          mail, chats and drafts, and the owner's sent mail unless --sent also lists threads\n" +
   "          with mail they sent. Writes {account, after, queries, threads} with threads as\n" +
   "          {id, historyId, snippet}, oldest change first.\n" +
-  "threads   Fetches each thread's messages and writes <THREAD_ID>.json per thread.\n\n" +
+  "threads   Fetches every page of each thread's messages and writes <THREAD_ID>.json per thread.\n\n" +
   "--account picks a Composio connected account (an id or alias) when several are linked.\n" +
   "A failure prints {ok: false, problem, detail} and exits 2. problem is cli-missing, signed-out,\n" +
   "gmail-not-linked, temporary (the CLI says the same command can safely run again) or gmail-error.\n";
@@ -168,9 +168,23 @@ async function fetchThreads(ids, account, dir) {
   const written = [];
   const worker = async () => {
     for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
-      const data = await read("thread", { user_id: "me", thread_id: id }, account);
+      // A long thread comes in pages; the file holds every message or is not written.
+      let data;
+      const messages = [];
+      for (let pageToken, page = 0; ; page++) {
+        if (page === MAX_PAGES) {
+          throw new ReadError("gmail-error", "Thread " + id + " has more than " + MAX_PAGES + " pages");
+        }
+        data = await read("thread", { user_id: "me", thread_id: id, ...(pageToken ? { page_token: pageToken } : {}) }, account);
+        messages.push(...(Array.isArray(data?.messages) ? data.messages : []));
+        pageToken = data?.nextPageToken ?? data?.next_page_token;
+        if (typeof pageToken !== "string" || !pageToken) {
+          break;
+        }
+      }
+      const { nextPageToken: _next, next_page_token: _nextSnake, ...thread } = data ?? {};
       const file = path.join(dir, id + ".json");
-      await writeFile(file, JSON.stringify(data));
+      await writeFile(file, JSON.stringify({ ...thread, messages }));
       written.push(file);
     }
   };

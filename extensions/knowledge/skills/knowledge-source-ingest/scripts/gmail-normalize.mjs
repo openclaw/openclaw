@@ -6,7 +6,8 @@ const USAGE =
   "Usage: node gmail-normalize.mjs triage --account ADDRESS --input THREAD.json [--input ...] [--output PATH|-]\n" +
   "       node gmail-normalize.mjs messages --account ADDRESS --input THREAD.json [--input ...] [--output PATH|-]\n\n" +
   "Reads threads gmail-read.mjs saved. ADDRESS is the Gmail address gmail-read.mjs check printed.\n\n" +
-  "triage    One JSON line per thread: its newest message, whether the owner wrote in it, a Gmail\n" +
+  "triage    One JSON line per thread: a digest of its message IDs, its newest message, whether the\n" +
+  "          owner wrote in it, a Gmail\n" +
   "          link, and the deterministic prefilter's reason to leave it out (list-mail,\n" +
   "          automated-sender, bulk-category, calendar-notice, spam-or-trash or no-mail), or null.\n" +
   "          A thread the prefilter keeps carries a decision_evaluate input (contractVersion 2),\n" +
@@ -37,13 +38,16 @@ function messagesOf(data, file) {
   throw new Error(file + " holds no Gmail thread messages");
 }
 
-const headerOf = (message, name) => {
-  const headers = record(message.payload)?.headers;
+const headerOf = (message, name) => partHeader(record(message.payload), name);
+
+// One header of a payload or MIME part, which carry their headers themselves.
+function partHeader(part, name) {
+  const headers = part?.headers;
   const found = (Array.isArray(headers) ? headers : [])
     .map(record)
     .find((header) => typeof header?.name === "string" && header.name.toLowerCase() === name);
   return typeof found?.value === "string" ? found.value.trim() : undefined;
-};
+}
 
 // "Ann <ann@x.com>, bo@y.com" as {name, address} pairs, addresses lower-cased.
 function addresses(text) {
@@ -83,7 +87,31 @@ function allParts(part, out = []) {
   return out;
 }
 
-const fromHtml = (html) =>
+const QUOTE_START = "\u0001quote-start\u0001";
+const QUOTE_END = "\u0001quote-end\u0001";
+
+// HTML as text. Quoted replies (<blockquote>) become lines starting with ">", as in plain text.
+function fromHtml(html) {
+  const text = flatHtml(
+    html
+      .replace(/<blockquote\b[^>]*>/gi, "\n" + QUOTE_START + "\n")
+      .replace(/<\/blockquote\s*>/gi, "\n" + QUOTE_END + "\n"),
+  );
+  let depth = 0;
+  const lines = [];
+  for (const line of text.split("\n")) {
+    if (line === QUOTE_START) {
+      depth++;
+    } else if (line === QUOTE_END) {
+      depth = Math.max(0, depth - 1);
+    } else {
+      lines.push(depth ? "> " + line : line);
+    }
+  }
+  return lines.join("\n");
+}
+
+const flatHtml = (html) =>
   html
     .replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, "")
     .replace(/<br\s*\/?>|<\/(?:p|div|li|tr|h\d)>/gi, "\n")
@@ -183,7 +211,7 @@ function parse(message, threadId, account) {
   const parts = allParts(record(message.payload));
   const calendar =
     parts.some((part) => {
-      const type = String(part.mimeType ?? "") + " " + String(headerOf(part, "content-type") ?? "");
+      const type = String(part.mimeType ?? "") + " " + String(partHeader(part, "content-type") ?? "");
       return /text\/calendar/i.test(type) && /\bmethod=\s*"?(?:REQUEST|REPLY|CANCEL|PUBLISH|COUNTER|DECLINECOUNTER|REFRESH|ADD)\b/i.test(type);
     }) || CALENDAR_SUBJECT.test(subject);
   const precedence = (headerOf(message, "precedence") ?? "").toLowerCase();
@@ -306,6 +334,11 @@ function triage(thread, account) {
   const row = {
     thread_id: thread.id,
     ...(thread.historyId ? { history_id: thread.historyId } : {}),
+    // Which messages the thread holds: it changes when one is added or deleted, not with labels.
+    messages_digest: createHash("sha256")
+      .update(messages.map((message) => message.id).sort().join("\n"))
+      .digest("hex")
+      .slice(0, 16),
     newest_message_id: newest?.id ?? null,
     newest_at: newest ? new Date(newest.at).toISOString() : null,
     message_count: messages.length,

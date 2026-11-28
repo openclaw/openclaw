@@ -152,7 +152,7 @@ owner's time zone) and whether threads with mail the owner sent are listed too.
    `Start: YYYY-MM-DD` (the start date the prompt set when the page was
    created), `Account: <address>` and `Listed through: <RFC 3339 time>`. Then
    one line per thread:
-   `<thread id> · history <history id> · newest <message id> <YYYY-MM-DD> · <outcome>`,
+   `<thread id> · history <history id> · messages <messages digest> · newest <YYYY-MM-DD> · <outcome>`,
    where the outcome is `ingested` or `skipped (<reason>)`. Drop a thread line
    once its newest message is 90 days old. Lines record outcomes only: never
    write resume notes, plans or instructions for a later run on the page.
@@ -174,9 +174,11 @@ owner's time zone) and whether threads with mail the owner sent are listed too.
    threads it picked (step 7), then take the next batch. Fetch with
    `node scripts/gmail-read.mjs threads --id <thread id> ... --output-dir threads`. Then run
    `node scripts/gmail-normalize.mjs triage --account <address> --input threads/<id>.json ...`.
-   A thread whose newest message ID is the one on its checkpoint line only
-   changed labels (it was read, starred or archived): update its history ID and
-   keep its outcome.
+   A thread whose `messages_digest` is the one on its checkpoint line holds the
+   same messages and only changed labels (it was read, starred or archived):
+   update its history ID and keep its outcome. Any other digest means a message
+   was added or deleted: triage it again, and ingest an `ingested` thread again
+   whatever the triage says, so the manifest plan reconciles the change.
 5. **Prefilter.** A triage row with a `prefilter` reason (`list-mail`,
    `automated-sender`, `bulk-category`, `calendar-notice`, `spam-or-trash` or
    `no-mail`) is skipped with that reason, without reading it further. The
