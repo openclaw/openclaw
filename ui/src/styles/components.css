@@ -3160,7 +3160,8 @@ select.data-table-pagination__size {
 }
 
 .cmd-palette__input::placeholder {
-  color: var(--muted);
+  color: var(--chat-composer-placeholder);
+  opacity: 1;
 }
 
 /* Fades cover only text, never the native far-right scrollbar. */
