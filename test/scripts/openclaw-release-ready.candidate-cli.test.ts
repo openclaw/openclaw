@@ -62,7 +62,7 @@ async function dispatchPrepare(revokeBeforeDispatch: boolean) {
         }
         return "name: immutable Q plugin policy\n# Fixture data only; never executed.\n";
       }
-      return qualification.client.getWorkflowSource();
+      return qualification.client.getWorkflowSource(sha, path);
     },
   };
   const argv = process.argv;

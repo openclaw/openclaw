@@ -67,3 +67,28 @@ export function createServiceChildCleanupDeadline(params: {
     clear,
   };
 }
+
+/** Bounded expiry report: pending joins in the message, owner identity in the cause. */
+export function createCleanupExpiryError(
+  pending: Record<string, boolean>,
+  owner: Record<string, string | number | undefined>,
+  diagnostics: { durationMs: number; escalationAfterMs?: number; signalError?: Error },
+): Error {
+  return new Error(
+    "service child cleanup did not complete before its hard deadline; pending: " +
+      JSON.stringify(pending),
+    {
+      // Stability bundles retain bounded Error messages, not arbitrary cause objects.
+      // Keep owner attribution payload-free and the signaling failure in the error graph.
+      cause: new Error(
+        "service child cleanup owner: " +
+          JSON.stringify({
+            ...owner,
+            durationMs: diagnostics.durationMs,
+            escalationAfterMs: diagnostics.escalationAfterMs,
+          }),
+        { cause: diagnostics.signalError },
+      ),
+    },
+  );
+}

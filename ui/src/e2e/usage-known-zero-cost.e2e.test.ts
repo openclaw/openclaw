@@ -72,7 +72,7 @@ suite.define(() => {
             stage: "unknown",
             query: 'label:"Unpriced usage"',
             count: 1,
-            value: "$0.00",
+            value: "Unpriced",
             missing: true,
           },
         ];

@@ -27,7 +27,9 @@ import {
 } from "./service-inspection-budget.js";
 import {
   findServiceOwnershipRefusal,
+  findSystemdServiceAccountMismatch,
   SystemdInspectionTimeout,
+  type SystemdServiceAccountMismatch,
 } from "./service-inspection-error.js";
 import { resolveServiceEntrypointIndex, summarizeGatewayServiceLayout } from "./service-layout.js";
 import type {
@@ -54,7 +56,10 @@ import { parseSystemdInlineEnvironment } from "./systemd-unit.js";
 type SystemdDiscoveryOptions = Pick<
   GatewayServiceReadOptions,
   "requireLoaded" | "loadForInspection" | "timeoutMs"
->;
+> & {
+  /** Custom units skipped because they run as another account; discovery still skips them. */
+  onAccountMismatch?: (mismatch: SystemdServiceAccountMismatch) => void;
+};
 
 /** Proves service absence without interpreting failed manager commands as absence. */
 export async function isSystemdServiceAbsent(
@@ -261,14 +266,19 @@ async function readSystemdGatewayCommand(
   options?: SystemdDiscoveryOptions,
 ): Promise<(GatewayServiceCommandConfig & { environment: GatewayServiceEnv }) | null> {
   let command: GatewayServiceCommandConfig | null;
+  const { onAccountMismatch, ...readOptions } = options ?? {};
   try {
     command = await readSystemdServiceExecStart(env, {
-      ...options,
+      ...readOptions,
       systemdReadTarget: target,
       requireEffective: true,
     });
   } catch (error) {
     if (findServiceOwnershipRefusal(error)?.reason === "systemd-account-refused") {
+      const mismatch = findSystemdServiceAccountMismatch(error);
+      if (mismatch) {
+        onAccountMismatch?.(mismatch);
+      }
       return null;
     }
     throw error;
@@ -436,15 +446,17 @@ async function findMarkerOwnedSystemSystemdUnit(
   const deadline =
     options?.timeoutMs && options.timeoutMs > 0 ? now() + options.timeoutMs : undefined;
   const allowedNames = new Set(resolveInstalledSystemdServiceNameCandidates(env));
+  const explicitUnit = Boolean(env.OPENCLAW_SYSTEMD_UNIT?.trim());
+  const matchesIdentity = (label: string) =>
+    systemdUnitMatchesIdentity(label, allowedNames, explicitUnit);
   const allowCustom =
-    discoverCustom &&
-    !env.OPENCLAW_SYSTEMD_UNIT?.trim() &&
-    !isNamedProfile(env) &&
-    isDefaultInstallIdentity(env);
+    discoverCustom && !explicitUnit && !isNamedProfile(env) && isDefaultInstallIdentity(env);
   const custom = new Map<string, SystemdServiceReadTarget>();
 
   const { findSystemGatewayServices } = await import("./inspect.js");
-  const services = await findSystemGatewayServices();
+  // Custom units need their contents to identify the installation. For a scoped
+  // lookup, only matching names (including templates) can establish ownership.
+  const services = await findSystemGatewayServices(allowCustom ? undefined : matchesIdentity);
   for (const svc of services) {
     if (
       svc.platform !== "linux" ||
@@ -461,13 +473,7 @@ async function findMarkerOwnedSystemSystemdUnit(
         unitName: resolveSystemdTemplateInstanceName(svc.label, env),
         unitPath,
       };
-      if (
-        systemdUnitMatchesIdentity(
-          svc.label,
-          allowedNames,
-          Boolean(env.OPENCLAW_SYSTEMD_UNIT?.trim()),
-        )
-      ) {
+      if (matchesIdentity(svc.label)) {
         return target;
       }
       if (allowCustom && !custom.has(target.unitName)) {

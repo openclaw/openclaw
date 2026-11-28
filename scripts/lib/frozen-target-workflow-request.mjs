@@ -90,11 +90,13 @@ export function buildFrozenTargetWorkflowRequest(env) {
       root: frozenAdmissionText(env.ADMISSION_TOOLING_ROOT, "tooling root"),
       sha: frozenAdmissionText(env.ADMISSION_TOOLING_SHA, "tooling SHA"),
     },
+    // Verified P admission requires full coverage; explicit diagnostic flags cannot relax it.
     allowFrozenTargetScenarioOmissions:
-      flag(get("allow_frozen_target_scenario_omissions")) ||
-      (workflow === "parent" &&
-        Boolean(get("target_context_ref")) &&
-        env.ADMISSION_SELECTED_SHA !== env.ADMISSION_TOOLING_SHA),
+      !env.QUALIFICATION_ADMISSION_JSON &&
+      (flag(get("allow_frozen_target_scenario_omissions")) ||
+        (workflow === "parent" &&
+          Boolean(get("target_context_ref")) &&
+          env.ADMISSION_SELECTED_SHA !== env.ADMISSION_TOOLING_SHA)),
     workflow,
     options,
     requestedBaselines: {

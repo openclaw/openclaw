@@ -33,7 +33,6 @@ import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { safeStatSync } from "../infra/path-guards.js";
 import { loadLegacySessionStore } from "../infra/state-migrations.legacy-session-store.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
-import { preparePluginDoctorContractModules } from "../plugins/doctor-contract-preparation.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
@@ -42,6 +41,7 @@ import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import {
   createPluginSessionStateDoctorScanner,
+  preparePluginSessionStateDoctorScan,
   runPluginSessionStateDoctorRepairs,
 } from "./doctor-session-state-providers.js";
 import { countLabel } from "./doctor-state-integrity-format.js";
@@ -657,7 +657,7 @@ export async function noteStateIntegrity(
         `- Found ${countLabel(orphanAgentDirs.length, "agent directory", "agent directories")} on disk without a matching ${authoredAgentRosterPath} entry.`,
         "  These agents can still have sessions/auth state on disk, but config-driven routing, identity, and model selection will ignore them.",
         `  Examples: ${labels.join(", ")}${remaining > 0 ? `, and ${remaining} more` : ""}`,
-        `  Restore the missing ${authoredAgentRosterPath} entries or remove stale dirs after confirming they are no longer needed: ${shortenHomePath(path.join(stateDir, "agents"))}`,
+        `  Restore the missing ${authoredAgentRosterPath} entries, or retire an agent that is no longer needed with ${formatCliCommand(`openclaw agents delete ${orphanAgentDirs[0]!.agentId}`, env)}, which also removes its database registration. If that reports the agent not found, it has no registration and its directory can be removed by hand from ${shortenHomePath(path.join(stateDir, "agents"))}.`,
       ].join("\n"),
     );
   }
@@ -674,11 +674,7 @@ export async function noteStateIntegrity(
     (left, right) =>
       left.agentId === compatibilityAgentId ? -1 : right.agentId === compatibilityAgentId ? 1 : 0,
   );
-  await preparePluginDoctorContractModules({
-    config: cfg,
-    env,
-    surfaces: ["sessionRouteStateOwners"],
-  });
+  await preparePluginSessionStateDoctorScan({ cfg, env });
 
   const inspectAgentSessionIntegrity = async (
     target: SessionStoreTarget,

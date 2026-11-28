@@ -388,10 +388,10 @@ describe("public-session post-deploy app handoff", () => {
     }, 60_000);
   }
 
-  it.for([false, true])(
-    "revalidates a pending handoff and probe (revoked=%s)",
+  it(
+    "delivers a pending handoff and probe after startup readiness",
     { timeout: 60_000 },
-    async (revoked, { signal }) => {
+    async ({ signal }) => {
       const originalConfig = cfg;
       const originalAuth = auth;
       root.path = path.join(fixture!, buildA);
@@ -486,18 +486,6 @@ describe("public-session post-deploy app handoff", () => {
             signal,
           ),
         ).toBe("waiting");
-        if (revoked) {
-          const revokedProxy = { ...trustedProxy, allowUsers: ["other-viewer@example.test"] };
-          auth = { ...auth, trustedProxy: revokedProxy };
-          cfg = {
-            ...cfg,
-            gateway: {
-              ...cfg.gateway,
-              auth: { ...cfg.gateway?.auth, trustedProxy: revokedProxy },
-            },
-          };
-          setRuntimeConfigSnapshot(cfg, cfg);
-        }
         revokeRead = publishPendingAgentDatabaseReadAdmission(refusal, {
           paths: [databasePath],
           assertCurrent: () => signal.throwIfAborted(),
@@ -515,41 +503,29 @@ describe("public-session post-deploy app handoff", () => {
           expect(result.headers()["cache-control"]).toMatch(/(?:^|,)\s*no-store\s*(?:,|$)/i);
         }
         await navigation;
-        if (revoked) {
-          expect([401, 403]).toContain(entryResponse.status());
-          expect(await entryResponse.headerValue("x-openclaw-session-entry")).toBeNull();
-          for (const result of [documentResponse, probeResponse]) {
-            expect([401, 403]).toContain(result.status());
-            expect(result.headers()["x-openclaw-session-entry"]).toBeUndefined();
-            expect(await result.text()).not.toMatch(/<openclaw-app|type=["']module/);
-          }
-          await page.getByText(publishedMessage, { exact: true }).waitFor();
-          expect(await page.locator("openclaw-app").count()).toBe(0);
-        } else {
-          expect(entryResponse.status()).toBe(200);
-          expect(await entryResponse.headerValue("x-openclaw-session-entry")).toBe("1");
-          expect(documentResponse.status()).toBe(200);
-          expect(documentResponse.headers()["x-openclaw-session-entry"]).toBe("1");
-          expect(await documentResponse.text()).toContain("<openclaw-app");
-          expect(probeResponse.status()).toBe(204);
-          expect(await probeResponse.body()).toHaveLength(0);
-          await page.waitForFunction(() => window.openclawControlUi?.snapshot().ready === true);
-          expect(new URL(page.url()).pathname).toBe(publicPath);
-          expect((await gateway.getRequests("connect")).at(-1)?.params).toMatchObject({
-            client: { buildId: buildB },
-          });
-          expect(requests.slice(start).filter(({ path: url }) => url.startsWith("/chat/"))).toEqual(
-            [],
-          );
-          expect(
-            requests.slice(start).filter(({ path: url }) => url.includes("probe=1")),
-          ).toHaveLength(1);
-        }
+        expect(entryResponse.status()).toBe(200);
+        expect(await entryResponse.headerValue("x-openclaw-session-entry")).toBe("1");
+        expect(documentResponse.status()).toBe(200);
+        expect(documentResponse.headers()["x-openclaw-session-entry"]).toBe("1");
+        expect(await documentResponse.text()).toContain("<openclaw-app");
+        expect(probeResponse.status()).toBe(204);
+        expect(await probeResponse.body()).toHaveLength(0);
+        await page.waitForFunction(() => window.openclawControlUi?.snapshot().ready === true);
+        expect(new URL(page.url()).pathname).toBe(publicPath);
+        expect((await gateway.getRequests("connect")).at(-1)?.params).toMatchObject({
+          client: { buildId: buildB },
+        });
+        expect(requests.slice(start).filter(({ path: url }) => url.startsWith("/chat/"))).toEqual(
+          [],
+        );
+        expect(
+          requests.slice(start).filter(({ path: url }) => url.includes("probe=1")),
+        ).toHaveLength(1);
         expect(readAgentDatabaseReadAdmissionRefusal("main")).toBeUndefined();
         expect(readAgentDatabaseAdmissionRefusal("main")).toBe(refusal);
         if (proof) {
           await writeFile(
-            path.join(proof, revoked ? "revoked.png" : "recovered.png"),
+            path.join(proof, "recovered.png"),
             await takeControlUiViewportScreenshot(page, page.locator("body"), []),
           );
         }

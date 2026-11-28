@@ -11,7 +11,7 @@ import {
   type WorkshopChange,
 } from "openclaw/plugin-sdk/skill-workshop-host-runtime";
 import { resolveSkillWorkshopConfig } from "./config.js";
-import { archiveWorkshopSkill, listWorkshopSkills, WorkshopWriteError } from "./library.js";
+import { archiveUnusedWorkshopSkill, listWorkshopSkills, WorkshopWriteError } from "./library.js";
 import { getWorkshopRuntime, readWorkshopRuntimeConfig, workshopLog } from "./runtime.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
@@ -50,6 +50,9 @@ export async function archiveUnusedWorkshopSkills(
     return [];
   }
   const model = runtime.modelConfig.resolveDefaultModelForAgent({ cfg: config, agentId });
+  if (!model) {
+    return [];
+  }
   const agentRuntime = resolveEffectiveAgentRuntime({
     cfg: config,
     provider: model.provider,
@@ -109,12 +112,14 @@ export async function archiveUnusedWorkshopSkills(
       break;
     }
     try {
-      archived.push(
-        await archiveWorkshopSkill(
-          { config, agentId, actor: "curator", assertLive },
-          { name: skill.name, reason: UNUSED_ARCHIVE_REASON },
-        ),
+      const change = await archiveUnusedWorkshopSkill(
+        { config, agentId, actor: "curator", assertLive },
+        { name: skill.name, reason: UNUSED_ARCHIVE_REASON },
+        cutoffMs,
       );
+      if (change) {
+        archived.push(change);
+      }
     } catch (error) {
       workshopLog().warn(
         `unused skill archive failed: skill=${skill.name} ${formatErrorMessage(error)}`,

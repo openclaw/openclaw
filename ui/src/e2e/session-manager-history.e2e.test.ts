@@ -85,10 +85,10 @@ suite.define(() =>
       await mainRow.waitFor({ state: "visible" });
       await page.keyboard.press("Escape");
 
-      const transcriptSearch = page.getByRole("search", { name: "Search transcripts" });
-      await ui.button(transcriptSearch, "Search transcripts", false).click();
+      const transcriptSearch = page.getByRole("search", { name: "Search chats" });
+      await ui.button(transcriptSearch, "Search chats", false).click();
       const transcriptInput = transcriptSearch.getByRole("searchbox", {
-        name: "Search session transcripts",
+        name: "Search chats",
       });
       await transcriptInput.fill("deployment history");
       await transcriptInput.press("Enter");

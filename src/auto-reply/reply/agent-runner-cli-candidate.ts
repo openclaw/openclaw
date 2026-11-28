@@ -1,3 +1,4 @@
+import { readRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId,
@@ -21,6 +22,7 @@ import {
 } from "../../agents/media-generation-activity.js";
 import { resolveCyberAccessProgramForProvider } from "../../agents/model-catalog-access-programs.js";
 import { findModelByNativeAlias, findModelInCatalog } from "../../agents/model-catalog-lookup.js";
+import { assertParticipationRuntime } from "../../agents/participation-ceiling.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -62,6 +64,7 @@ export async function runCliFallbackCandidate(
     onCompactionAccounting: (fact: CompactionAccountingFact) => void;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
+  assertParticipationRuntime(readRunOperatorAuthority(params)?.participationCeiling, "cli");
   const accessProgram = resolveCyberAccessProgramForProvider(
     params.candidateRun.cyberAccessProgram,
     params.provider,
@@ -121,6 +124,7 @@ export async function runCliFallbackCandidate(
   const lifecycleBackstop = createAgentLifecycleTerminalBackstop({
     runId: params.runId,
     sessionKey: turn.sessionKey,
+    onTerminalEvent: turn.followupRun.run.internalEventExecution?.onTerminalEvent,
     startedAt: cliLifecycleStartedAt,
     getLifecycleGeneration: () => params.lifecycleGeneration,
     resolveTerminationFields: (error) =>
@@ -452,6 +456,11 @@ export async function runCliFallbackCandidate(
             ...buildReplyRunStateParams(turn.followupRun.run),
             diagnosticOwner,
             sessionId: turn.followupRun.run.sessionId,
+            // The stranded-reply retry keeps the human turn's provenance and authority; only
+            // its native input is host-generated, so the CLI must not save it as user text.
+            ...(turn.followupRun.strandedReplyRetry === true
+              ? { promptOrigin: "host" as const }
+              : {}),
             sessionKey,
             sessionTarget,
             sessionEntry,

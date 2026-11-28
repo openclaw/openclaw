@@ -24,6 +24,8 @@ import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 export type QueuedAgentRunParams = {
   requesterOrigin?: RequesterOrigin;
   operatorProfileId?: string;
+  /** Server-verified human principal for personal MCP; not a transport sender. */
+  mcpRequesterProfileId?: string;
   conversationId?: string | null;
   messageThreadId?: string | number;
   providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
@@ -34,6 +36,12 @@ export type QueuedAgentRunParams = {
   clientCaps?: string[];
   /** Profile selected from the session's assigned human owner or authenticated human creator, never its latest sender. */
   bootstrapUserProfileId?: string;
+  /**
+   * The same session selection for every turn, whatever its sender. Embedded runs key the
+   * prompt series and render personal USER.md from it; bootstrapUserProfileId is then
+   * absent only when this turn's sender does not qualify.
+   */
+  sessionUserProfileId?: string;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
   chatType?: ChatType;
   agentAccountId?: string;

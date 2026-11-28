@@ -85,6 +85,13 @@ export async function listVersions(versionsDir: string): Promise<SkillVersion[]>
   return versions.toSorted((a, b) => b.id.localeCompare(a.id));
 }
 
+/** Ids sort by time; stay strictly after the newest so restore picks the right default. */
+export async function nextSkillVersionId(versionsDir: string, action: WorkshopChangeAction) {
+  const newest = (await listVersions(versionsDir))[0];
+  const createdAtMs = Math.max(Date.now(), (newest?.createdAtMs ?? 0) + 1);
+  return `${new Date(createdAtMs).toISOString().replace(/[-:.]/g, "")}-${action}`;
+}
+
 /**
  * Copies the live skill into a new version before it changes. A caller that lost authority
  * during the copy publishes nothing, so an aborted edit leaves no no-op "undo" version.
@@ -96,10 +103,7 @@ export async function snapshotSkill(
   if (!(await pathExists(path.join(paths.skillDir, "SKILL.md")))) {
     return undefined;
   }
-  // Ids sort by time; stay strictly after the newest so restore picks the right default.
-  const newest = (await listVersions(paths.versionsDir))[0];
-  const createdAtMs = Math.max(Date.now(), (newest?.createdAtMs ?? 0) + 1);
-  const versionId = `${new Date(createdAtMs).toISOString().replace(/[-:.]/g, "")}-${action}`;
+  const versionId = await nextSkillVersionId(paths.versionsDir, action);
   await fs.mkdir(paths.versionsDir, { recursive: true });
   // Copy under a name listVersions ignores; only a complete copy becomes a restorable version.
   const staging = path.join(paths.versionsDir, `.snapshot-${randomUUID()}`);
@@ -118,9 +122,10 @@ export async function snapshotSkill(
 }
 
 /** Keeps the newest versions within the per-skill limit. */
-export async function pruneVersions(versionsDir: string): Promise<void> {
+export async function pruneVersions(versionsDir: string, assertLive?: () => void): Promise<void> {
   const stale = (await listVersions(versionsDir)).slice(MAX_VERSIONS_PER_SKILL);
   for (const version of stale) {
+    assertLive?.();
     await fs.rm(path.join(versionsDir, version.id), { recursive: true, force: true });
   }
 }

@@ -31,6 +31,22 @@ describe("implicit thread reply expectation", () => {
   );
 });
 
+it.each([undefined, { kind: "external_user" }] as const)(
+  "requires a human reply in a kept child (provenance=%j)",
+  (InputProvenance) => {
+    expect(
+      resolveSourceReplyExpectation({
+        ctx: {
+          Provider: "webchat",
+          SessionKey: "agent:main:subagent:kept-child",
+          InputProvenance,
+        },
+        cfg: {},
+      }),
+    ).toBe("required");
+  },
+);
+
 describe("exec completion reply expectation", () => {
   const exec = { kind: "internal_system", sourceTool: "exec" } as const;
   it.each([

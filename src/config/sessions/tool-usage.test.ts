@@ -1,7 +1,12 @@
-import { expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createRunToolUsageRecorder } from "../../agents/tool-usage-recorder.js";
 import { decayToolUsage } from "../../agents/tool-usage.js";
 import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js";
+import { registerOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import {
@@ -283,5 +288,89 @@ it("imports terminal calls once through workers, preserves live counts, and fenc
     } finally {
       await active?.settle();
     }
+  });
+});
+
+it("keeps reset ahead of a later flush while its execution capture is pending", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    const options = { agentId: "main", env, now };
+    const { generation } = await seedAgentToolUsageRunForTest(options);
+    const owner = await import("../../state/openclaw-agent-execution.js");
+    const capture = owner.captureOpenClawAgentDatabaseExecutionAsync;
+    const firstCaptured = createDeferred();
+    const nextQueued = createDeferred();
+    const admission = await import("../../state/openclaw-agent-write-admission.js");
+    const runWrite = admission.runOpenClawAgentWorkerWrite;
+    let observeNextQueue = false;
+    const queueSpy = vi.spyOn(admission, "runOpenClawAgentWorkerWrite");
+    queueSpy.mockImplementation((...args) => {
+      const pending = runWrite(...args);
+      if (observeNextQueue) {
+        nextQueued.resolve();
+      }
+      return pending;
+    });
+    const release = createDeferred();
+    let captures = 0;
+    const spy = vi.spyOn(owner, "captureOpenClawAgentDatabaseExecutionAsync");
+    spy.mockImplementation(async (...args) => {
+      const ordinal = ++captures;
+      const execution = await capture(...args);
+      if (ordinal === 1) {
+        firstCaptured.resolve();
+        await release.promise;
+      }
+      return execution;
+    });
+    const operations: Promise<unknown>[] = [];
+    try {
+      const reset = resetAgentToolUsage(options);
+      operations.push(reset);
+      void reset.catch(() => {});
+      await firstCaptured.promise;
+      observeNextQueue = true;
+      const flush = flushAgentToolUsage({
+        ...options,
+        generation,
+        rows: [{ toolId, score: 1, updatedAt: now }],
+      });
+      operations.push(flush);
+      void flush.catch(() => {});
+      await nextQueued.promise;
+      release.resolve();
+      await reset;
+      expect(await flush).toBe(false);
+      expect((await readAgentToolUsageStatus(options)).rows).toEqual([]);
+    } finally {
+      release.resolve();
+      await Promise.allSettled(operations);
+      spy.mockRestore();
+      queueSpy.mockRestore();
+    }
+  });
+});
+
+it("prunes registered stores without recreating a retired agent's removed directory", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+    // A retired agent absent from config whose directory Doctor's advice removed; its
+    // registration stays and no process has its store open (#205927).
+    const retiredPath = resolveOpenClawAgentSqlitePath({ agentId: "retired", env });
+    const retiredDir = path.dirname(path.dirname(retiredPath));
+    fs.mkdirSync(path.dirname(retiredPath), { recursive: true });
+    registerOpenClawAgentDatabase({ agentId: "retired", path: retiredPath, env });
+    fs.rmSync(retiredDir, { recursive: true });
+    const live = { agentId: "main", env, now };
+    const { generation } = await seedAgentToolUsageRunForTest(live);
+    await flushAgentToolUsage({
+      ...live,
+      generation,
+      rows: [{ toolId, score: 1, updatedAt: now }],
+    });
+
+    await pruneRegisteredAgentToolUsage({ env, now: now + 91 * day, assertCurrent: () => {} });
+
+    expect(fs.existsSync(retiredDir)).toBe(false);
+    // The missing store is skipped, not fatal: other registered stores are still pruned.
+    expect((await readAgentToolUsageStatus(live)).rows).toEqual([]);
   });
 });

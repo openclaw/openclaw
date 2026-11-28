@@ -1,4 +1,5 @@
 import type { SessionCompanionExchange } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import { SESSION_COMPANION_MAX_EXCHANGE_BYTES } from "../../packages/gateway-protocol/src/session-companion-contract.js";
 import { sessionObserverScopeKey } from "./session-observer-model.js";
 
 /** Side chat threads belong to one requester within one session scope. */
@@ -37,7 +38,6 @@ export type SessionCompanionThread = {
 };
 
 const SESSION_COMPANION_MAX_EXCHANGES = 24;
-const SESSION_COMPANION_MAX_EXCHANGE_BYTES = 48 * 1024;
 
 export function selectSessionCompanionReferenceItems<T>(
   newestFirst: readonly T[],

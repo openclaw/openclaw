@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { startOpenClawIdFeatureLifetime } from "../../lib/openclaw-id/feature-lifetime.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -116,4 +117,46 @@ it("holds the row's place while loading and retries a failed load", async () => 
   view.getByText("Retry").click();
   await waitForSolid(() => expect(view.container.textContent).toContain("Not linked"));
   expect(view.getByText("Link")).toBeDefined();
+});
+
+it("offers supported conflict recovery without merging profiles and clears the error after a later link", async () => {
+  const storageKey = "openclaw.openclawId.account";
+  const account = JSON.stringify({
+    idToken: "fixture-only-token",
+    exp: Math.floor(Date.now() / 1000) + 3600,
+  });
+  localStorage.setItem(storageKey, account);
+  window.dispatchEvent(new StorageEvent("storage", { key: storageKey, newValue: account }));
+  onTestFinished(() => {
+    localStorage.removeItem(storageKey);
+    window.dispatchEvent(new StorageEvent("storage", { key: storageKey, newValue: null }));
+  });
+  const request = vi
+    .fn<GatewayBrowserClient["request"]>()
+    .mockResolvedValueOnce(status("device"))
+    .mockResolvedValueOnce({ linked: [] })
+    .mockResolvedValueOnce({ link: "linked_elsewhere" })
+    .mockResolvedValueOnce(status("device"))
+    .mockResolvedValueOnce({ linked: [] })
+    .mockResolvedValueOnce({ link: "linked" })
+    .mockResolvedValueOnce(status("device"))
+    .mockResolvedValueOnce({ linked: [{ email: "person@example.test", owner: false }] });
+  const client = createTestGatewayClient(request);
+  const view = mount(client.request.bind(client));
+  await waitForSolid(() => expect(view.container.textContent).toContain("Not linked"));
+  view.getByText("Link").click();
+  await waitForSolid(() => expect(view.container.querySelector('[role="alert"]')).not.toBeNull());
+  const error = view.container.querySelector('[role="alert"]')?.textContent;
+  expect.soft(error).toContain("Unlink it from that profile first.");
+  expect.soft(error).toContain("If both profiles belong to you, an admin can merge them instead.");
+  await waitForSolid(() => expect(view.getByText("Link").hasAttribute("disabled")).toBe(false));
+  view.getByText("Link").click();
+  await waitForSolid(() => expect(view.queryByText("Unlink")).not.toBeNull());
+  expect(view.container.querySelector('[role="alert"]')).toBeNull();
+  expect(request).toHaveBeenCalledWith("openclawId.account", {
+    action: "link_held",
+    idToken: "fixture-only-token",
+  });
+  expect(request).not.toHaveBeenCalledWith("users.merge", expect.anything());
+  expect(request).not.toHaveBeenCalledWith("openclawId.account", { action: "unlink" });
 });

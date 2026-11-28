@@ -393,7 +393,7 @@ openclaw sessions cleanup --json
   for active work to finish, or explicitly delete sessions you no longer want
   to retain.
 
-Optional cold transcript extraction has its own background worker and
+Cold transcript extraction is enabled by default after 30 inactive days, with its own background worker and
 **Run now** action in
 [Settings → Agent Defaults → Session](/gateway/config-agents/sessions#cold-storage).
 It uses `session.maintenance.coldStorage.afterDays` and preserves inactive

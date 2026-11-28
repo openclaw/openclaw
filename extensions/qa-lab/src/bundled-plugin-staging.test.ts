@@ -6,7 +6,7 @@ import {
   createQaBundledPluginsDir,
   resolveQaOwnerPluginIdsForProviderIds,
 } from "./bundled-plugin-staging.js";
-import { readQaLiveProviderConfigOverrides } from "./providers/live-config.js";
+import { readQaLiveProviderConfig } from "./providers/live-config.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const fixtureTmpRoot = vi.hoisted(() => process.env.TMPDIR || "/tmp");
@@ -135,13 +135,15 @@ describe("qa bundled plugin dir", () => {
       },
     });
     vi.stubEnv("OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH", path.join(f.repoRoot, "openclaw.json"));
-    const overrides = await readQaLiveProviderConfigOverrides({
+    const overrides = await readQaLiveProviderConfig({
       providerIds: ["custom-openai", "openai", "inherited"],
     });
     expect(overrides).toEqual({
-      "custom-openai": providerConfig,
-      openai: { apiKey, models: [] },
-      inherited: { api: "openai-responses", models: [] },
+      providers: {
+        "custom-openai": providerConfig,
+        openai: { apiKey, models: [] },
+        inherited: { api: "openai-responses", models: [] },
+      },
     });
   });
 

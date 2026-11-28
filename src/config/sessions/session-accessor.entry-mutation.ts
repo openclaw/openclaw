@@ -9,6 +9,7 @@ import {
   type DatabasePathIdentity,
 } from "../../infra/sqlite-worker-identity.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-contract.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import {
@@ -52,6 +53,7 @@ import {
   assertSessionStoreReadCandidate,
   captureSessionStoreReadCandidate,
   isSessionStoreReadCandidateCurrent,
+  type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
 import { captureSessionStoreReadCandidates } from "./session-store-target-inventory.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -67,6 +69,12 @@ export {
   resolveSessionParentForkDecision,
 } from "./session-accessor.sqlite-parent-session.js";
 
+export type SessionEntryDatabasePreparationReceipt = {
+  readonly candidates: readonly SessionStoreReadCandidate[];
+  readonly ready: Promise<{ assertCurrent(): void }>;
+  observeRegistration(observer: (change: AgentDatabaseRegistryChange) => void): () => void;
+};
+
 type SessionEntryDatabasePreparationSource = {
   database: { agentId: string; path: string };
   identity: DatabasePathIdentity;
@@ -79,6 +87,7 @@ function captureSessionEntryDatabasePreparation(
   assertCurrent: () => void,
   relatedScopes: readonly SessionAccessScope[] = [],
   expectedSource?: SessionEntryDatabasePreparationSource,
+  followRegistration?: (change: AgentDatabaseRegistryChange) => void,
 ) {
   const captureScope = (source: SessionAccessScope) => ({
     ...source,
@@ -129,6 +138,7 @@ function captureSessionEntryDatabasePreparation(
       candidates.push({ ...selected, identity: expected.identity });
     }
   }
+  const registrationObservers = new Set<(change: AgentDatabaseRegistryChange) => void>();
   let execution: OpenClawAgentDatabaseExecution | undefined;
   const assertSourceCurrent = () => {
     memory?.assertCurrent();
@@ -142,6 +152,17 @@ function captureSessionEntryDatabasePreparation(
     assertSourceCurrent();
   };
   return {
+    candidates,
+    observeRegistration(this: void, observer: (change: AgentDatabaseRegistryChange) => void) {
+      registrationObservers.add(observer);
+      return () => registrationObservers.delete(observer);
+    },
+    notifyRegistration(change: AgentDatabaseRegistryChange) {
+      followRegistration?.(change);
+      for (const observer of registrationObservers) {
+        observer(change);
+      }
+    },
     assertCurrent: assertSourceCurrent,
     env: target.env,
     get execution() {
@@ -149,6 +170,7 @@ function captureSessionEntryDatabasePreparation(
     },
     assertHeld,
     release: async () => {
+      registrationObservers.clear();
       await execution?.release();
     },
     async resolve() {
@@ -240,6 +262,7 @@ export function prepareSessionEntryMutationDatabases(
           target.assertCurrent,
           target.relatedScopes,
           target.expectedSource,
+          target.followRegistration,
         ),
       };
     } catch (reason) {
@@ -298,8 +321,8 @@ export function prepareSessionEntryMutationDatabases(
             assertCurrent,
             execution,
             (change) => {
-              for (const { index } of members) {
-                targets[index]!.followRegistration?.(change);
+              for (const { capture } of members) {
+                capture.notifyRegistration(change);
               }
             },
           );
@@ -328,6 +351,15 @@ export function prepareSessionEntryMutationDatabases(
   }
   return {
     preparations,
+    sources: captured.map((capture, index): SessionEntryDatabasePreparationReceipt | undefined =>
+      capture.status === "fulfilled"
+        ? {
+            candidates: capture.value.candidates,
+            ready: preparations[index]!,
+            observeRegistration: capture.value.observeRegistration,
+          }
+        : undefined,
+    ),
     async [Symbol.asyncDispose]() {
       await promotion.catch(() => {});
       const released = await Promise.allSettled(

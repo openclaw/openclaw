@@ -120,25 +120,28 @@ export async function resolveGatewayProbeSnapshot(params: {
             }),
         )
       : undefined;
-  const canDiagnose =
-    readiness?.healthy ||
-    readiness?.waitOutcome === "plugin-errors" ||
-    readiness?.waitOutcome === "channel-errors";
+  const canDiagnose = readiness?.healthy || readiness?.waitOutcome === "channel-errors";
   const unavailableProbe = (): GatewayProbeResult => ({
     ok: false,
     url: gatewayConnection.url,
     connectLatencyMs: null,
+    ...(readiness?.operatorScopeWarning ? { gatewayReached: true as const } : {}),
     error:
       readiness?.waitOutcome === "still-starting"
         ? null
-        : (readiness?.probeError ??
+        : (readiness?.operatorScopeWarning ??
+          readiness?.probeError ??
           (remainingTimeoutMs() === 0
             ? "Gateway check budget exhausted."
             : "Gateway is unreachable")),
     ...(readiness?.waitOutcome === "still-starting"
       ? { startupPhase: readiness.startupPhase ?? "startup" }
       : {}),
-    auth: { role: null, scopes: [], capability: "unknown" },
+    auth: {
+      role: null,
+      scopes: [],
+      capability: readiness?.operatorScopeWarning ? "connected_no_operator_scope" : "unknown",
+    },
     close: null,
     health: null,
     status: null,
@@ -248,7 +251,6 @@ export async function resolveGatewayProbeSnapshot(params: {
     gatewayReachable,
     localGatewayHealthy:
       readiness?.healthy === true &&
-      !readiness.activatedPluginErrors?.length &&
       !readiness.channelProbeErrors?.length &&
       gatewayProbe?.ok === true,
     gatewaySelf,

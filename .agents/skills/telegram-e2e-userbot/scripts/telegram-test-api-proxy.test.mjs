@@ -423,6 +423,36 @@ for (const reset of ["before-forward", "after-forward"]) {
   });
 }
 
+test("hangs matching requests until the client gives up", async (t) => {
+  const forwarded = [];
+  const proxy = await startTelegramTestApiProxy({
+    fetchImpl: async (url) => {
+      forwarded.push(String(url));
+      return new Response('{"ok":true}', { headers: { "content-type": "application/json" } });
+    },
+  });
+  t.after(() => proxy.close());
+  proxy.rejectNextRequest({ method: "getFile", reset: "hang", times: 2 });
+  const getFile = (signal) =>
+    fetch(`${proxy.apiRoot}/bot123:ABC/getFile`, { method: "POST", body: "{}", signal });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const failure = await getFile(AbortSignal.timeout(100)).catch((error) => error);
+    assert.equal(failure?.name, "TimeoutError");
+  }
+  assert.equal((await getFile()).status, 200);
+  assert.equal(forwarded.length, 1);
+  assert.deepEqual(
+    proxy.getRequestRejectionEvents().map(({ upstreamForwarded, hang }) => ({
+      upstreamForwarded,
+      hang,
+    })),
+    [
+      { upstreamForwarded: false, hang: true },
+      { upstreamForwarded: false, hang: true },
+    ],
+  );
+});
+
 test("injects repeated flood waits with retry_after before forwarding", async (t) => {
   // Chat ID digits may also appear in legitimate timing fields.
   t.mock.method(Date, "now", () => 1790301001001);
@@ -547,63 +577,6 @@ test("file timing rows never match response holds or request rejections", async 
   assert.equal(rejectedControl.status, 200);
   assert.equal(await rejectedControl.text(), "synthetic-file-bytes");
   assert.deepEqual(proxy.getRequestRejectionEvents(), []);
-});
-
-test("getFile timing ends when the streamed response finishes", async (t) => {
-  let now = 100;
-  t.mock.method(Date, "now", () => now);
-  let stream;
-  const proxy = await startTelegramTestApiProxy({
-    fetchImpl: async () =>
-      new Response(
-        new ReadableStream({
-          start(controller) {
-            stream = controller;
-            controller.enqueue(new TextEncoder().encode("first"));
-          },
-        }),
-      ),
-  });
-  t.after(() => proxy.close());
-  const response = await fetch(`${proxy.apiRoot}/bot123:ABC/getFile`);
-  assert.deepEqual(proxy.getRequestLog(), [{ method: "getFile", at: 100, status: 200 }]);
-  now = 200;
-  stream.close();
-  assert.equal(await response.text(), "first");
-  assert.deepEqual(proxy.getRequestLog(), [
-    { method: "getFile", at: 100, status: 200, doneAt: 200 },
-  ]);
-});
-
-test("records completion timing on upstream and response-stream errors", async (t) => {
-  t.mock.method(console, "error", () => {});
-  for (const [expectedStatus, fetchImpl] of [
-    [
-      502,
-      async () => {
-        throw new Error("synthetic upstream failure");
-      },
-    ],
-    [
-      200,
-      async () =>
-        new Response(
-          new ReadableStream({
-            start(controller) {
-              controller.error(new Error("synthetic stream failure"));
-            },
-          }),
-        ),
-    ],
-  ]) {
-    const proxy = await startTelegramTestApiProxy({ fetchImpl });
-    t.after(() => proxy.close());
-    const response = await fetch(`${proxy.apiRoot}/bot123:ABC/getFile`);
-    assert.equal(response.status, expectedStatus);
-    assert.equal((await response.json()).ok, false);
-    const [event] = proxy.getRequestLog();
-    assert.ok(event.doneAt >= event.at);
-  }
 });
 
 test("reports upstream failures without exposing exception details or bot tokens", async (t) => {

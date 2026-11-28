@@ -11,6 +11,7 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import type { OutboundMediaAccess } from "openclaw/plugin-sdk/media-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   chunkMarkdownTextWithMode,
@@ -28,7 +29,10 @@ import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount, resolveSlackOperationToken } from "./accounts.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
-import { buildSlackCompleteBlocksFallbackText } from "./blocks-fallback.js";
+import {
+  buildSlackCompleteBlocksFallbackText,
+  hasSlackNativeDataBlock,
+} from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import {
   postSlackMessageBestEffort,
@@ -47,9 +51,12 @@ import { enrichSlackWebApiError } from "./errors.js";
 import { chunkSlackMrkdwnText, markdownToSlackMrkdwnChunks } from "./format.js";
 import { SLACK_EDIT_TEXT_MAX_BYTES, SLACK_TEXT_LIMIT } from "./limits.js";
 import type { SlackEventScope } from "./monitor/event-scope.js";
-import { hasSlackNativeDataBlock, isSlackInvalidBlocksError } from "./native-data-blocks.js";
+import { isSlackInvalidBlocksError } from "./native-data-blocks.js";
 import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
-import { hasSlackMessageIdentity, type SlackPostMessageIdentity } from "./post-message-identity.js";
+import {
+  normalizeSlackSendIdentity,
+  type SlackPostMessageIdentity,
+} from "./post-message-identity.js";
 import type { SlackUnfurlOptions } from "./post-message-payload.js";
 import {
   resolveSlackQuestionActionIds,
@@ -103,10 +110,7 @@ type SlackSendOpts = {
   accountId?: string;
   mediaUrl?: string;
   forceDocument?: boolean;
-  mediaAccess?: {
-    localRoots?: readonly string[];
-    readFile?: (filePath: string) => Promise<Buffer>;
-  };
+  mediaAccess?: OutboundMediaAccess;
   uploadFileName?: string;
   uploadTitle?: string;
   mediaLocalRoots?: readonly string[];
@@ -141,18 +145,6 @@ type SlackSendOpts = {
   /** Persist each concrete platform send before any later chunk can fail. */
   onDeliveryResult?: (result: SlackSendResult) => Promise<void> | void;
 };
-
-function normalizeSlackSendIdentity(identity?: SlackSendIdentity): SlackSendIdentity | undefined {
-  const username = normalizeOptionalString(identity?.username);
-  const iconUrl = normalizeOptionalString(identity?.iconUrl);
-  const iconEmoji = normalizeOptionalString(identity?.iconEmoji);
-  const normalized = {
-    ...(username ? { username } : {}),
-    ...(iconUrl ? { iconUrl } : {}),
-    ...(iconEmoji ? { iconEmoji } : {}),
-  };
-  return hasSlackMessageIdentity(normalized) ? normalized : undefined;
-}
 
 export function setSlackDefaultSendIdentity(accountId: string, identity?: SlackSendIdentity): void {
   const normalizedAccountId = normalizeOptionalString(accountId);

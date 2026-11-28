@@ -19,6 +19,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { processSessionInstanceId } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { startDeferredNotifyRun } from "./bash-tools.notify-on-exit-ack.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
@@ -59,7 +60,11 @@ const startNotifyRun = async (
     throw new Error("Expected an exec completion receipt");
   }
   await expect(result.value.accepted).resolves.toEqual({ ok: true });
-  return { id: process.run.session.id, receipt: result.value };
+  return {
+    id: process.run.session.id,
+    context: `exec:${processSessionInstanceId(process.run.session)}`,
+    receipt: result.value,
+  };
 };
 const processTool = createProcessTool();
 const execute = (action: "poll" | "log" | "clear", sessionId: string) =>
@@ -125,15 +130,15 @@ it("isolates identical completions across exact full-slug reuse", async () => {
   const second = await startNotifyRun();
 
   expect(second.id).toBe(first.id);
-  const context = `exec:${first.id}`;
-  expect(contexts()).toEqual([context, "marker", context]);
+  expect(second.context).not.toBe(first.context);
+  expect(contexts()).toEqual([first.context, "marker", second.context]);
   const queued = peekSystemEventEntries(QUEUE_KEY);
   expect(queued[0]?.id).not.toBe(queued[2]?.id);
 
   await pollAndAcknowledge(second.id, queued);
-  expect(contexts()).toEqual([context, "marker"]);
+  expect(contexts()).toEqual([first.context, "marker"]);
   acknowledgeInternalToolResult(await execute("poll", second.id));
-  expect(contexts()).toEqual([context, "marker"]);
+  expect(contexts()).toEqual([first.context, "marker"]);
 });
 
 it("keeps an identical successor queued when an earlier consumer settles", async () => {

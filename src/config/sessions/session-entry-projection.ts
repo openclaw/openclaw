@@ -14,11 +14,14 @@ type RetiredSessionMetadata = {
 };
 
 export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
+  titleFallbackReady: undefined,
   localWorkspaceHandoff: undefined,
   activeWriterRunId: undefined,
   lastRunId: undefined,
   lifecycleRunId: undefined,
+  lifecycleRestartScope: undefined,
   resumeAfterRestart: undefined,
+  pendingShellCalls: undefined,
   mainRestartRecovery: undefined,
   pendingProjectGitUrl: undefined,
   pendingWorktree: undefined,
@@ -29,6 +32,7 @@ export const SESSION_ENTRY_PRIVATE_CLEAR_PATCH = {
 } satisfies Partial<InternalSessionEntry>;
 
 const PRIVATE_SESSION_ENTRY_KEYS = [
+  "titleFallbackReady",
   "localWorkspaceHandoff",
   "inheritedGitContributorProfileIds",
   "profileInvolvement",
@@ -37,7 +41,9 @@ const PRIVATE_SESSION_ENTRY_KEYS = [
   "activeWriterRunId",
   "lastRunId",
   "lifecycleRunId",
+  "lifecycleRestartScope",
   "resumeAfterRestart",
+  "pendingShellCalls",
   "operatorSources",
   "mainRestartRecovery",
   "pendingProjectGitUrl",
@@ -74,8 +80,11 @@ function stripPrivateSessionEntryFields(
       Reflect.deleteProperty(projected, key);
     }
   }
-  if (identity === "public" && projected.createdActor) {
-    projected.createdActor = resolveSessionCreatorActor(projected.createdActor);
+  if (identity === "public") {
+    delete projected.delegatedOperatorSource;
+    if (projected.createdActor) {
+      projected.createdActor = resolveSessionCreatorActor(projected.createdActor);
+    }
   }
   delete projected.thinkingLevelSelection;
   delete projected.compactionCheckpoints;

@@ -172,6 +172,24 @@ describe("executeAgentTurn: CLI session routing", () => {
     });
   });
 
+  it("sends a stranded-reply retry as host input without changing its provenance (#206304)", async () => {
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const human = createCliRun("claude-cli", "claude-opus-5");
+    human.run.inputProvenance = { kind: "external_user" };
+    const retry = { ...human, strandedReplyRetry: true };
+    for (const followupRun of [human, retry]) {
+      state.runCliAgentMock.mockResolvedValueOnce({ payloads: [{ text: "done" }], meta: {} });
+      await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
+    }
+    // Identical runs differ only in native input origin; authority readers keep the human turn.
+    const [humanParams, retryParams] = state.runCliAgentMock.mock.calls.map(([p]) => p);
+    expect(humanParams?.promptOrigin).toBeUndefined();
+    expect(retryParams).toMatchObject({
+      promptOrigin: "host",
+      inputProvenance: { kind: "external_user" },
+    });
+  });
+
   it("keeps prepared current-turn images aligned with CLI media facts", async () => {
     const followupRun = createCliRun("claude-cli", "claude-opus-5");
     const images = [

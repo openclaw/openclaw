@@ -8,6 +8,7 @@ import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
+import { hasNestedAutomationCreationCall } from "./chat-automation-projection-loader.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import {
   getChatSessionProjection,
@@ -55,22 +56,29 @@ export function applySessionMessagePayload(
     if (!isPreviousRunAssistant) {
       const ownedMessage = incoming.id && !incoming.isImported;
       const ownedProducer = ownedMessage && incoming.sequence !== null && producerRunId;
+      // Code Mode commits each creation result before emitting optional tool progress.
+      // Apply that receipt now instead of waiting for the terminal history refresh.
+      const nestedAutomationCreation =
+        ownedProducer &&
+        incoming.role === "custom" &&
+        hasNestedAutomationCreationCall(sourceRecord);
       let ownerRunId: string | null = null;
       if (
         ownedMessage &&
         (isAssistant
           ? producerRunId || (!incoming.runId && runActive !== true)
-          : ownedProducer &&
-            normalizeRoleForGrouping(incoming.role) === "tool" &&
-            Array.isArray(sourceRecord.content) &&
-            sourceRecord.content.some((part) => {
-              const block = asNonArrayRecord(part);
-              return (
-                block.type === "image" &&
-                typeof block.artifactId === "string" &&
-                block.artifactId.trim()
-              );
-            }))
+          : nestedAutomationCreation ||
+            (ownedProducer &&
+              normalizeRoleForGrouping(incoming.role) === "tool" &&
+              Array.isArray(sourceRecord.content) &&
+              sourceRecord.content.some((part) => {
+                const block = asNonArrayRecord(part);
+                return (
+                  block.type === "image" &&
+                  typeof block.artifactId === "string" &&
+                  block.artifactId.trim()
+                );
+              })))
       ) {
         // Persisted replies can follow terminal delivery. Only an exact producer
         // or the matching legacy reply may reuse the pane's terminal tombstone.

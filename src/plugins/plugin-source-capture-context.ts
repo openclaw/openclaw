@@ -11,6 +11,11 @@ import {
 } from "./plugin-instance-invocation.js";
 import type { PluginSourceCaptureStorage } from "./plugin-instance-invocation.types.js";
 
+export const pluginSourceCaptureDirectory = new AsyncLocalStorage<{
+  directory: string;
+  managedRoot?: string;
+}>();
+
 export const pluginSourceCaptureOwnedRoots = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginSourceCaptureOwnedRoots"),
   () => new Set<string>(),

@@ -99,7 +99,7 @@ import {
 } from "../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { createCliTtyMock } from "../cli/test-runtime-capture.js";
-import { createClackPrompter, tokenizedOptionFilter } from "./clack-prompter.js";
+import { createClackPrompter } from "./clack-prompter.js";
 import type { WizardPromptNavigation, WizardSelectOption } from "./prompts.js";
 import { WizardCancelledError, WizardNavigationError } from "./prompts.js";
 
@@ -207,23 +207,6 @@ afterEach(() => {
   }
   themeMocks.isRich.mockReturnValue(false);
   clackMocks.settings.actions = new Set(["left", "right"]);
-});
-
-describe("tokenizedOptionFilter", () => {
-  const option = { value: "openai/gpt-5.4", label: "GPT 5.4", hint: "provider openai" };
-  it("matches tokens regardless of order", () => {
-    expect(tokenizedOptionFilter("gpt-5.4 openai/", option)).toBe(true);
-    expect(tokenizedOptionFilter("openai/ gpt-5.4", option)).toBe(true);
-  });
-
-  it("requires all tokens to match", () => {
-    expect(tokenizedOptionFilter("gpt-5.4 anthropic/", { ...option, hint: undefined })).toBe(false);
-  });
-
-  it("matches against label, hint, and value", () => {
-    expect(tokenizedOptionFilter("provider openai", option)).toBe(true);
-    expect(tokenizedOptionFilter("openai gpt-5.4", option)).toBe(true);
-  });
 });
 
 describe("createClackPrompter", () => {
@@ -401,11 +384,20 @@ describe("createClackPrompter", () => {
         message: stylePromptMessage(params.message),
         options: [options[0], { ...options[1], hint: stylePromptHint("object hint") }],
         ...(method === "select" ? { initialValue: value } : { initialValues }),
-        ...(searchable ? { filter: tokenizedOptionFilter } : {}),
+        ...(searchable ? { filter: expect.any(Function) } : {}),
         signal: expect.any(AbortSignal),
         ...(navigation ? { navigation } : {}),
         output: process.stderr,
       });
+      if (searchable) {
+        const { filter } = request;
+        const option = { value: "openai/gpt-5.4", label: "GPT 5.4", hint: "provider openai" };
+        expect(filter("gpt-5.4 openai/", option)).toBe(true);
+        expect(filter("openai/ gpt-5.4", option)).toBe(true);
+        expect(filter("gpt-5.4 anthropic/", { ...option, hint: undefined })).toBe(false);
+        expect(filter("provider openai", option)).toBe(true);
+        expect(filter("openai gpt-5.4", option)).toBe(true);
+      }
       expect(request.options[0]).toBe(options[0]);
       expect(request.options[1].value).toBe(objectValue);
       expect(options[1]?.hint).toBe("object hint");

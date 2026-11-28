@@ -16,6 +16,8 @@ import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v3
 import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker-retention.js";
 import { withLegacyStateV40Additions } from "./openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
+import { withLegacyApprovalProfile } from "./openclaw-state-db-schema-v41-approval-profile.js";
+import { withLegacyWorkerLossRecovery } from "./openclaw-state-db-schema-v42-worker-loss-recovery.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const runtimeSchemaCache = new Map<string, string>();
@@ -30,7 +32,9 @@ export function getOpenClawStateRuntimeSchema(
 ): string {
   const { includeVersionLazyAdditiveTables, includeAgentDeletionJournal = true } = options;
   // Catalog generation interleaves historical sources with current runtime requests.
-  const sourceKey = schemaSql === OPENCLAW_STATE_SCHEMA_SQL ? "current" : schemaSql;
+  // Sharing this comparison keeps the bundler from inlining the full SQL at both use sites.
+  const isCurrentSchema = schemaSql === OPENCLAW_STATE_SCHEMA_SQL;
+  const sourceKey = isCurrentSchema ? "current" : schemaSql;
   const key = `${includeVersionLazyAdditiveTables}:${includeAgentDeletionJournal}:${sourceKey}`;
   const cached = runtimeSchemaCache.get(key);
   if (cached !== undefined) {
@@ -46,10 +50,7 @@ export function getOpenClawStateRuntimeSchema(
     : LAZY_ADDITIVE_STATE_INDEXES;
   for (const tableName of omittedTables) {
     // Historical source layouts can predate today's optional tables.
-    if (
-      schemaSql !== OPENCLAW_STATE_SCHEMA_SQL &&
-      !schema.includes(`CREATE TABLE IF NOT EXISTS ${tableName} (`)
-    ) {
+    if (!isCurrentSchema && !schema.includes(`CREATE TABLE IF NOT EXISTS ${tableName} (`)) {
       continue;
     }
     schema = schema.replace(
@@ -73,10 +74,19 @@ export function getOpenClawStateRuntimeSchema(
   return schema;
 }
 
+/** The activity table was added during v42; installed readers hash the exact earlier SQL. */
+export function withLegacyWorkshopActivity(schema: string): string {
+  const activityTable = extractSqliteTableSchema(schema, "skill_workshop_activity");
+  return schema.replace(`${activityTable}\n\n`, "");
+}
+
 /** Keep runtime predecessor admission and generated catalog inputs on the same transform chain. */
 export function getOpenClawStatePredecessorSchema(version: number): string {
   let schema = OPENCLAW_STATE_SCHEMA_SQL;
   for (const [introduced, transform] of [
+    [42, withLegacyWorkshopActivity],
+    [42, withLegacyWorkerLossRecovery],
+    [41, withLegacyApprovalProfile],
     [40, withLegacyWorkerProvisionSource],
     [40, withLegacyStateV40Additions],
     [39, withLegacyWorkerRetention],

@@ -9,6 +9,12 @@ on:
       candidate_sha256:
         required: true
         type: string
+      target_context_ref:
+        required: false
+        type: string
+      qualification_baselines_json:
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -17,6 +23,18 @@ jobs:
   update:
     name: Published driver update
     runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - name: Start cell budget
         run: |
@@ -38,16 +56,37 @@ jobs:
         id: driver
         timeout-minutes: 1
         env:
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
+          QUALIFICATION_BASELINES_JSON: ${{ inputs.qualification_baselines_json }}
           DRIVER_CACHE_MODE: ${{ github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && contains(fromJSON('["push","schedule","workflow_dispatch"]'), github.event_name) && 'read-write' || 'restore' }}
         run: |
           node --input-type=module <<'NODE'
           import { execFileSync } from "node:child_process";
-          import { appendFileSync } from "node:fs";
-          import { classifyReleaseTrain, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
-          const version = JSON.parse(execFileSync("npm", ["view", "openclaw@latest", "version", "--json"], { encoding: "utf8" }));
+          import { appendFileSync, readFileSync } from "node:fs";
+          import { classifyReleaseTrain, compareReleaseVersions, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+          const targetContextRef = (process.env.TARGET_CONTEXT_REF ?? "").replace(/^refs\/heads\//u, "");
+          const candidateVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
+          const candidate = parseReleaseVersion(candidateVersion);
+          // PR-head dispatch refs need not carry the candidate's release line.
+          const frozenTarget = targetContextRef.startsWith("extended-stable/") ||
+            (candidate !== null && classifyReleaseTrain(candidate) === "extended-stable");
+          let version;
+          if (frozenTarget) {
+            // Frozen lines must not create state with a newer, incompatible driver.
+            const args = ["scripts/lib/release-upgrade-baseline.mjs", "--candidate-version", candidateVersion, "--target-context-ref", targetContextRef];
+            const captured = process.env.QUALIFICATION_BASELINES_JSON;
+            if (captured) args.push("--qualification-baselines-json", captured);
+            const resolved = execFileSync(process.execPath, args, { encoding: "utf8" }).trim();
+            const baseline = captured ? JSON.parse(resolved).upgradeBaseline : resolved;
+            version = baseline.replace(/^openclaw@/u, "");
+          } else {
+            version = JSON.parse(execFileSync("npm", ["view", "openclaw@latest", "version", "--json"], { encoding: "utf8" }));
+          }
           const parsed = parseReleaseVersion(version);
-          if (!parsed || classifyReleaseTrain(parsed) !== "stable") throw new Error("npm latest must resolve to stable");
-          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ncache-mode=${process.env.DRIVER_CACHE_MODE}\n`);
+          const allowedTrains = frozenTarget ? ["stable", "extended-stable"] : ["stable"];
+          if (!parsed || !allowedTrains.includes(classifyReleaseTrain(parsed))) throw new Error("Driver must resolve to a supported final release");
+          const postgres = candidate !== null && !frozenTarget && compareReleaseVersions(candidateVersion, "2026.11.5") >= 0;
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ncache-mode=${process.env.DRIVER_CACHE_MODE}\npostgres=${postgres}\n`);
           NODE
       - name: Restore published driver install
         id: driver_cache
@@ -126,6 +165,17 @@ jobs:
             exit 1
           fi
           exit "$cell_exit"
+      - name: Run published PostgreSQL upgrade
+        if: steps.driver.outputs.postgres == 'true'
+        timeout-minutes: 20
+        env:
+          POSTGRES_SERVICE_ID: ${{ job.services.postgres.id }}
+          OPENCLAW_UPGRADE_TEST_POSTGRES_DSN: postgresql://postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/postgres
+        run: |
+          docker exec "$POSTGRES_SERVICE_ID" psql -U postgres -v ON_ERROR_STOP=1 \
+            -c 'CREATE EXTENSION unaccent; CREATE EXTENSION pg_trgm; CREATE EXTENSION vector;'
+          node scripts/e2e/lib/upgrade-survivor/published-driver-postgres.mjs \
+            .artifacts/published-driver-package/openclaw-candidate.tgz .artifacts/published-driver-update/postgres
       - name: Update published baseline under native systemd
         timeout-minutes: 15
         run: |

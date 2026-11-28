@@ -14,6 +14,7 @@ import {
 import { prepareGatewayContextBindingOwner } from "./gateway-context-binding-owner.js";
 import * as runtimeScope from "./gateway-request-scope.js";
 import type { PluginRuntimeGatewayRequestScope } from "./gateway-request-scope.test-fixtures.js";
+import { getPluginRuntimeGenerationRegistry } from "./generation-state.js";
 
 const TEST_SCOPE: PluginRuntimeGatewayRequestScope = {
   context: {} as PluginRuntimeGatewayRequestScope["context"],
@@ -142,7 +143,7 @@ describe("gateway request scope", () => {
           expect(getScopedPluginCache()).toBe(cache);
           await generation.runOutsidePluginRuntimeGenerationScope(async () => {
             await Promise.resolve();
-            expect(generation.getPluginRuntimeGenerationRegistry()).toBeUndefined();
+            expect(getPluginRuntimeGenerationRegistry()).toBeUndefined();
             expect(getCurrentPluginMetadataSnapshot()).toBe(outsideMetadata);
             expect(getScopedPluginCache()).toBeUndefined();
             expectGatewayScope({
@@ -152,7 +153,7 @@ describe("gateway request scope", () => {
             });
           });
           expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBe(original);
-          expect(generation.getPluginRuntimeGenerationRegistry()).toBe(registry);
+          expect(getPluginRuntimeGenerationRegistry()).toBe(registry);
           expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
           expect(getScopedPluginCache()).toBe(cache);
         },
@@ -214,7 +215,7 @@ describe("gateway request scope", () => {
       { metadataSnapshot: createPluginMetadataSnapshotFixture() },
       async () => {
         await expectLiveObjects(references, 1);
-        const selected = generation.getPluginRuntimeGenerationRegistry();
+        const selected = getPluginRuntimeGenerationRegistry();
         expect(selected).toBeDefined();
         expect(requireActivePluginRegistry()).toBe(selected);
         expect(selected?.services).toEqual([]);

@@ -71,6 +71,7 @@ export function resolveGatewayAuthTokenSourceConflict(params: {
     title,
     detail,
     remediation,
-    diagnostic: `${title}: ${remediation}`,
+    // "gateway.auth.token: Remove" would read as a key and value to output redaction.
+    diagnostic: `${title}. ${remediation}`,
   };
 }

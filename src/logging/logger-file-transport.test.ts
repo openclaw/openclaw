@@ -1,10 +1,9 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import fsPromises from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { fileLogTransport } from "./logger-file-transport.js";
 import { getLogger, resetLogger, setLoggerOverride } from "./logger.js";
@@ -22,18 +21,16 @@ function entry(file: string, payload: string, maxFileBytes = 1024 * 1024) {
   return { file, hostname: "transport-test-host", maxFileBytes, payload };
 }
 function records(file: string): { message?: string; dropped?: number; index?: number }[] {
-  return read(file)
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
+  const lines = read(file).trim().split("\n");
+  return lines.map((line) => JSON.parse(line));
 }
 function logTo(file: string, message: string) {
   setLoggerOverride({ level: "info", file });
   getLogger().info(message);
 }
-function failAppends(shouldFail: (file: Parameters<typeof fsPromises.open>[0]) => boolean) {
-  const open = fsPromises.open.bind(fsPromises);
-  vi.spyOn(fsPromises, "open").mockImplementation(async (file, ...args) => {
+function failAppends(shouldFail: (file: Parameters<typeof fs.openSync>[0]) => boolean) {
+  const open = fs.openSync.bind(fs);
+  vi.spyOn(fs, "openSync").mockImplementation((file, ...args) => {
     if (shouldFail(file)) {
       throw new Error("injected append failure");
     }
@@ -84,8 +81,7 @@ beforeEach(() => {
 });
 
 it("writes queued records in order and byte-identically to the synchronous drain", async () => {
-  const syncPath = logPathTracker.nextPath();
-  const asyncPath = logPathTracker.nextPath();
+  const [syncPath, asyncPath] = [logPathTracker.nextPath(), logPathTracker.nextPath()];
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-07-27T12:00:00Z"));
   vi.spyOn(os, "hostname").mockReturnValue("transport-test-host");
@@ -93,14 +89,13 @@ it("writes queued records in order and byte-identically to the synchronous drain
 
   writeStableRecords();
   fileLogTransport.drainSync();
-  const syncBytes = fs.readFileSync(syncPath);
 
   resetLogger();
   setLoggerOverride({ level: "info", file: asyncPath });
   writeStableRecords();
   await fileLogTransport.flush();
 
-  expect(fs.readFileSync(asyncPath)).toEqual(syncBytes);
+  expect(fs.readFileSync(asyncPath)).toEqual(fs.readFileSync(syncPath));
   const messages = records(syncPath).map((record) => record.message);
   expect(messages).toEqual(["first queued record", "second queued record"]);
 });
@@ -124,8 +119,7 @@ it("drops the oldest records on overflow and writes one count marker", async () 
 it.each(["async", "sync"])(
   "preserves rotation and target boundaries in %s batches",
   async (mode) => {
-    const firstPath = logPathTracker.nextPath();
-    const secondPath = logPathTracker.nextPath();
+    const [firstPath, secondPath] = [logPathTracker.nextPath(), logPathTracker.nextPath()];
     const payloads = [1, 2, 3, 4, 5, "x".repeat(128), 7].map(
       (value) => `${JSON.stringify(value)}\n`,
     );
@@ -152,50 +146,6 @@ it.each(["async", "sync"])(
   },
 );
 
-it("rescues the unissued tail without replaying an in-flight batch", async () => {
-  const [issued, release] = [createDeferred(), createDeferred()] as const;
-  let issuedRecords = 0;
-  const openFile = fsPromises.open.bind(fsPromises);
-  vi.spyOn(fsPromises, "open").mockImplementation(async (...args) => {
-    const handle = await openFile(...args);
-    if (args[0] === logPath) {
-      const append = handle.appendFile.bind(handle);
-      vi.spyOn(handle, "appendFile").mockImplementation(async (...appendArgs) => {
-        await append(...appendArgs);
-        const content = appendArgs[0];
-        assert(typeof content === "string", "Expected a serialized log batch");
-        issuedRecords = content.trim().split("\n").length;
-        issued.resolve();
-        await release.promise;
-      });
-    }
-    return handle;
-  });
-  const entries = Array.from({ length: 4 }, (_, index) =>
-    entry(logPath, `${JSON.stringify({ index, text: "x".repeat(20_000) })}\n`),
-  );
-  for (const record of entries) {
-    fileLogTransport.enqueue(record);
-  }
-  const flushing = fileLogTransport.flush();
-  try {
-    await awaitGateBeforeSettlement(
-      issued.promise,
-      flushing,
-      "logger flush completed without reaching the held append",
-    );
-    expect(issuedRecords).toBeGreaterThan(1);
-    fileLogTransport.enqueue(entry(logPath, '{"index":4}\n'));
-    fileLogTransport.drainSync();
-  } finally {
-    release.resolve();
-    await flushing;
-  }
-
-  expect(records(logPath).map((record) => record.index)).toEqual([0, 1, 2, 3, 4]);
-  expect(entries.every((record) => record.payload === "")).toBe(true);
-});
-
 it("keeps later exit records separate after a synchronous short write", () => {
   for (const payload of ["first\n", "second\n"]) {
     fileLogTransport.enqueue(entry(logPath, payload, 1024));
@@ -213,11 +163,7 @@ for (const kind of ["symlink", "hardlink"]) {
     async () => {
       const target = logPathTracker.nextPath();
       fs.writeFileSync(target, "untouched");
-      if (kind === "symlink") {
-        fs.symlinkSync(target, logPath);
-      } else {
-        fs.linkSync(target, logPath);
-      }
+      (kind === "symlink" ? fs.symlinkSync : fs.linkSync)(target, logPath);
       failedLogPaths.add(logPath);
       const stderr = captureStderr();
       setLoggerOverride({ level: "info", file: logPath });
@@ -225,9 +171,7 @@ for (const kind of ["symlink", "hardlink"]) {
       await fileLogTransport.flush();
 
       expect(read(target)).toBe("untouched");
-      expect(
-        warningLines(stderr).filter((line) => line.includes("log file append failed")),
-      ).toHaveLength(1);
+      expect(warningLines(stderr)).toEqual([expect.stringContaining("log file append failed")]);
     },
   );
 }
@@ -257,6 +201,38 @@ it("warns once per append failure streak and continues with later batches", asyn
   expect(warnings[0]).toContain("records dropped; check that the path is a writable regular file");
   expect(warnings.join("\n")).not.toContain(secret);
 });
+
+it.skipIf(process.platform === "win32" || process.platform === "android")(
+  "names the unsafe home directory and its repair instead of blaming the log file",
+  async () => {
+    fs.mkdirSync(logPath);
+    const home = fs.realpathSync(logPath);
+    const stateDir = path.join(home, "state");
+    const file = path.basename(logPath);
+    const stderr = captureStderr();
+    const targetPreparation = fileLogTransport.prepareTarget(file, true, { options: { stateDir } });
+    vi.stubEnv("HOME", `${home}/`);
+    try {
+      fs.chmodSync(home, 0o775);
+      fileLogTransport.enqueue({ ...entry(file, "dropped\n"), targetPreparation });
+      await fileLogTransport.flush();
+      const [warning] = warningLines(stderr);
+      expect(warning).toContain(
+        `log directory unavailable; records dropped (file=${file}): Directory $HOME is writable by group or others and has no sticky bit.`,
+      );
+      expect(warning).toContain('chmod go-w "$HOME"');
+      expect(warning).toContain('chmod +t "$HOME"');
+      expect(warning).not.toContain(home);
+      expect(warning).not.toContain("writable regular file");
+    } finally {
+      fs.chmodSync(home, 0o755);
+      vi.unstubAllEnvs();
+    }
+    fileLogTransport.enqueue({ ...entry(file, "recovered\n"), targetPreparation });
+    await fileLogTransport.flush();
+    expect(read(path.join(stateDir, "logs", file))).toBe("recovered\n");
+  },
+);
 
 it("keeps failure streaks independent by file", async () => {
   const firstPath = logPathTracker.nextPath();

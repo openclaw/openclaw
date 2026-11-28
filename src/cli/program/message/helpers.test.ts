@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { addTestHook, createMockPluginRegistry } from "../../../plugins/hooks.test-helpers.js";
 import { ExpectedCliError } from "../../expected-cli-error.js";
 import {
@@ -81,6 +81,7 @@ vi.mock("../../one-shot-exit.js", () => ({
 vi.mock("../../deps.js", () => ({ createDefaultDeps: () => ({}) }));
 
 const { registerMessageCommands } = await import("../register.message.js");
+const { formatCliJsonFailure, ReportedCliCommandError } = await import("../../failure-output.js");
 const { initializeGlobalHookRunner, resetGlobalHookRunner } =
   await import("../../../plugins/hook-runner-global.js");
 afterEach(resetGlobalHookRunner);
@@ -350,20 +351,28 @@ describe("message actions through the CLI parser", () => {
     expect(exitMock).toHaveBeenCalledExactlyOnceWith(1);
   });
 
-  it("preserves JSON config failures before plugin loading or message dispatch", async () => {
+  it("reports JSON config failures once before plugin loading or message dispatch", async () => {
     const error = new Error("config admission failed");
     ensureConfigReadyMock.mockRejectedValueOnce(error);
     await withConsoleLogsRoutedToStderrForJson(
       ["node", "openclaw", "message", "send", "--json"],
       async () => {
         applyResolvedCommandOutputMode(true);
-        await expect(parseAction("send", { ...baseSendOptions, json: true })).rejects.toBe(error);
+        const caught = await parseAction("send", { ...baseSendOptions, json: true }).catch(
+          (err: unknown) => err,
+        );
+        assert.instanceOf(caught, ReportedCliCommandError);
+        expect(caught.cause).toBe(error);
+        expect(formatCliJsonFailure(caught)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message: "config admission failed" },
+        });
       },
     );
     expectConfigReady("send", false, true);
     expect(loadPluginRegistryHandleMock).not.toHaveBeenCalled();
     expect(messageCommandMock).not.toHaveBeenCalled();
-    expect(errorMock).not.toHaveBeenCalled();
+    expect(errorMock).toHaveBeenCalledExactlyOnceWith("config admission failed");
     expect(exitMock).not.toHaveBeenCalled();
   });
 

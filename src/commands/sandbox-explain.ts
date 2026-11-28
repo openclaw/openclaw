@@ -20,6 +20,7 @@ import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js"
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { normalizeAnyChannelId, normalizeChatChannelId } from "../channels/registry.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { resolveAgentMainSessionKey, resolveSessionStorePathCore } from "../config/sessions.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
@@ -57,7 +58,7 @@ export async function sandboxExplainCommand(
   const requestedSession = opts.session?.trim();
   const requestedAgent = opts.agent?.trim();
   if (opts.agent !== undefined && !requestedAgent) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   const requestedAgentId = requestedAgent ? normalizeAgentId(requestedAgent) : undefined;
   if (requestedAgentId) {

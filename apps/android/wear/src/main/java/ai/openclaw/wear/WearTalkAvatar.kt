@@ -12,7 +12,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
@@ -93,11 +92,8 @@ internal fun WearTalkAvatar(
   danger: Color,
   modifier: Modifier = Modifier,
   animatorScaleSource: WearAnimatorScaleSource? = null,
-  motionDurationScale: MotionDurationScale? = null,
-  frameClock: WearAvatarFrameClock = ComposeWearAvatarFrameClock,
-  onAnimationStateChanged: ((WearAvatarAnimationState) -> Unit)? = null,
 ) {
-  val animationScale = rememberAnimatorDurationScale(animatorScaleSource, motionDurationScale)
+  val animationScale = rememberAnimatorDurationScale(animatorScaleSource)
   val animationsEnabled = animationScale > 0f
   val latestState by rememberUpdatedState(state)
   val latestMouthLevel by rememberUpdatedState(mouthLevel)
@@ -105,7 +101,7 @@ internal fun WearTalkAvatar(
   var animationSeconds by remember { mutableFloatStateOf(0f) }
   var smoothedMouth by remember { mutableFloatStateOf(0f) }
 
-  LaunchedEffect(animationScale, frameClock) {
+  LaunchedEffect(animationScale) {
     if (!animationsEnabled) {
       animationSeconds = 0f
       smoothedMouth = 0f
@@ -113,7 +109,7 @@ internal fun WearTalkAvatar(
     }
     var lastFrameNanos = 0L
     while (true) {
-      frameClock.awaitFrame { frameNanos ->
+      withFrameNanos { frameNanos ->
         if (lastFrameNanos != 0L) {
           val deltaSeconds =
             scaledAvatarDeltaSeconds(
@@ -141,16 +137,6 @@ internal fun WearTalkAvatar(
   val pose = avatarPoseAt(state, motionInputs.animationSeconds, motionInputs.mouthLevel)
   val stateColor = if (state == RealtimeVoiceButtonState.ERROR) danger else accent
 
-  SideEffect {
-    onAnimationStateChanged?.invoke(
-      WearAvatarAnimationState(
-        durationScale = animationScale,
-        animationSeconds = motionInputs.animationSeconds,
-        mouthLevel = motionInputs.mouthLevel,
-      ),
-    )
-  }
-
   Canvas(modifier = modifier) {
     val unit = size.minDimension
     val center = Offset(size.width / 2f, size.height / 2f)
@@ -175,7 +161,6 @@ internal fun WearTalkAvatar(
 @Composable
 internal fun rememberAnimatorDurationScale(
   animatorScaleSource: WearAnimatorScaleSource? = null,
-  motionDurationScale: MotionDurationScale? = null,
 ): Float {
   val context = LocalContext.current
   val lifecycleOwner = LocalLifecycleOwner.current
@@ -185,12 +170,10 @@ internal fun rememberAnimatorDurationScale(
         AndroidWearAnimatorScaleSource(context.applicationContext, lifecycleOwner)
       }
   val effectiveScale = rememberEffectiveAnimatorScale(effectiveScaleSource)
-  var canonicalScale by remember(motionDurationScale) {
-    mutableFloatStateOf(motionDurationScale?.scaleFactor?.coerceAtLeast(0f) ?: 1f)
-  }
+  var canonicalScale by remember { mutableFloatStateOf(1f) }
 
-  LaunchedEffect(motionDurationScale) {
-    val composeScale = motionDurationScale ?: coroutineContext[MotionDurationScale]
+  LaunchedEffect(Unit) {
+    val composeScale = coroutineContext[MotionDurationScale]
     if (composeScale == null) {
       canonicalScale = 1f
       return@LaunchedEffect
@@ -297,18 +280,6 @@ internal class AndroidWearAnimatorScaleSource(
     }
   }
 }
-
-internal fun interface WearAvatarFrameClock {
-  suspend fun awaitFrame(onFrame: (Long) -> Unit)
-}
-
-private val ComposeWearAvatarFrameClock = WearAvatarFrameClock { onFrame -> withFrameNanos(onFrame) }
-
-internal data class WearAvatarAnimationState(
-  val durationScale: Float,
-  val animationSeconds: Float,
-  val mouthLevel: Float,
-)
 
 internal data class WearAvatarMotionInputs(
   val animationSeconds: Float,

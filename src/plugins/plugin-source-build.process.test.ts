@@ -12,16 +12,35 @@ it("reaps the source compiler before disposing its worker or reporting clean com
   const directory = temp.make("plugin-compiler-exit-");
   fs.writeFileSync(path.join(directory, "entry.mts"), "export const value: number = 42;");
   const owner = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.sourceBuild).href;
+  const captureOwner = resolveRuntimeWorkerUrl(
+    pluginProcessRuntimeEntrypoints.snapshotPreparation,
+  ).href;
+  const lifecycle = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.nativeLifecycle).href;
+  const fsGuard = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.mainThreadFsGuard).href;
   const browserOwner = resolveRuntimeWorkerUrl(
     pluginProcessRuntimeEntrypoints.browserCompiler,
   ).href;
   const compile = `
     const { buildPluginTypeScriptSource } = await import(${JSON.stringify(owner)});
+    const { preparePluginGenerationArtifact } = await import(${JSON.stringify(captureOwner)});
+    const { closeDefaultRetainedNativeWorkerSource } = await import(${JSON.stringify(lifecycle)});
     const { createRequire } = await import('node:module');
-    const build = buildPluginTypeScriptSource(${JSON.stringify(directory)});
-    const output = build.resolve(${JSON.stringify(path.join(directory, "entry.mts"))}, 'native', 'module');
+    const { observeMainThreadFs } = await import(${JSON.stringify(fsGuard)});
+    const {artifact: sourceCapture} = await preparePluginGenerationArtifact({
+      rootDir: ${JSON.stringify(directory)}, source: ${JSON.stringify(path.join(directory, "entry.mts"))},
+    });
+    const source = sourceCapture.resolve(${JSON.stringify(path.join(directory, "entry.mts"))});
+    await (await import('node:fs/promises')).unlink(source);
+    const guard = observeMainThreadFs();
+    const build = buildPluginTypeScriptSource(sourceCapture.rootDir, sourceCapture.executionAlias, sourceCapture.sourceText);
+    const output = build.resolve(source, 'native', 'module');
     if (createRequire(output)(output).value !== 42) throw new Error('Wrong source output');
     await build.dispose();
+    guard[Symbol.dispose]();
+    await sourceCapture.disposeAsync();
+    await closeDefaultRetainedNativeWorkerSource();
+    const mutations = guard.stacks().filter(({api, opensForWrite}) => opensForWrite || /^(?:mkdtemp|mkdir|writeFile|rename|unlink|rm|copyFile|symlink|link)Sync$/.test(api));
+    if (mutations.length) throw new Error('Source build mutated filesystem: ' + JSON.stringify(mutations));
   `;
   const result = spawnNodeEvalSync(
     `

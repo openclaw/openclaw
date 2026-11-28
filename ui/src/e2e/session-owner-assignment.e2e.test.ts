@@ -146,6 +146,7 @@ async function expectAssignmentAvatarLayout(page: Page, compact = false): Promis
         return {
           width: style.width,
           height: style.height,
+          slotWidth: getComputedStyle(slot).width,
           square: Math.abs(bounds.width - bounds.height) < 0.01,
           contained: bounds.left >= slotBounds.left && bounds.right <= slotBounds.right,
           gap: label.getBoundingClientRect().left - bounds.right,
@@ -156,6 +157,7 @@ async function expectAssignmentAvatarLayout(page: Page, compact = false): Promis
   expect(layout.length).toBeGreaterThan(0);
   for (const avatar of layout) {
     expect(avatar).toMatchObject({ width: "24px", height: "24px", square: true, contained: true });
+    expect(avatar.slotWidth).toBe("24px");
     expect(avatar.gap).toBeGreaterThanOrEqual(5.5);
   }
 }

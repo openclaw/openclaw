@@ -3,16 +3,17 @@ import {
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
+import { GENERATED_BUNDLED_CHANNEL_REGISTRATION } from "../channels/bundled-channel-registration.generated.js";
 import { listChatChannels } from "../channels/chat-meta.js";
 import { normalizeChannelMeta } from "../channels/plugins/meta-normalization.js";
 import type { AnyChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelMeta } from "../channels/plugins/types.public.js";
-import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import {
   createPluginGatewayMethodDescriptor,
   type GatewayMethodProfileAccess,
 } from "../gateway/methods/descriptor.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
+import { resolvePluginRequestPersonProfileId } from "../gateway/server-methods/gateway-personal-caller.js";
 import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { normalizePluginHttpPath } from "./http-path.js";
@@ -37,10 +38,8 @@ import {
   PluginCapabilityRemovedError,
   removedPluginCapabilityDescriptor,
 } from "./removed-capability-error.js";
-import {
-  getPluginRuntimeGatewayRequestScope,
-  withPluginRuntimeGatewayRequestScope,
-} from "./runtime/gateway-request-scope.js";
+import { withPluginGatewayRequestAuthority } from "./runtime/gateway-request-authority.js";
+import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginApi,
@@ -78,7 +77,7 @@ function resolveOfficialExternalChannelMeta(id: string): Partial<ChannelMeta> | 
 }
 
 function resolveGeneratedBundledChannelMeta(id: string): ChannelMeta | undefined {
-  const channel = GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
+  const channel = GENERATED_BUNDLED_CHANNEL_REGISTRATION.find(
     (entry) => entry.channelId === id && entry.configurable !== false,
   );
   const label = normalizeOptionalString(channel?.label);
@@ -125,14 +124,37 @@ function adaptPluginGatewayMethodHandler(
       }
     };
     const scope = getPluginRuntimeGatewayRequestScope();
+    const parent = scope?.parentHttpRequestAuthority?.();
+    const operator =
+      opts.client?.internal?.authenticatedOperator && opts.client.connect.role === "operator"
+        ? opts.client
+        : undefined;
     const invoke = () => handler({ ...opts, respond, assertHandlerCurrent });
     // A declared authenticated-request contract composes RPCs with the exact
     // admitted client, never a synthetic identity or inherited unrelated grant.
     try {
       const result = scope
-        ? await withPluginRuntimeGatewayRequestScope(
-            { ...scope, gatewayMethodDispatchAllowed: mayDispatch && scope.client != null },
+        ? await withPluginGatewayRequestAuthority(
+            {
+              ...scope,
+              revalidate: parent ? () => parent.revalidate() : scope.revalidate,
+              gatewayMethodDispatchAllowed: mayDispatch && scope.client != null,
+              sessionResourceForFork: opts.sessionAccessAuthority,
+            },
             invoke,
+            parent || operator
+              ? {
+                  personProfileId: operator
+                    ? resolvePluginRequestPersonProfileId(operator)
+                    : parent?.personProfileId,
+                  assertCurrent() {
+                    parent?.assertCurrent();
+                    opts.signal?.throwIfAborted();
+                    assertHandlerCurrent();
+                    opts.sessionMutationAuthorization?.assertCurrent();
+                  },
+                }
+              : undefined,
           )
         : await invoke();
       if (!responded && result !== undefined) {
@@ -473,13 +495,14 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       });
       const isCurrent = () =>
         ownerCurrent?.() === true &&
-        (record.origin === "bundled" || record.trustedOfficialInstall === true) &&
         entry !== undefined &&
         getPluginRecordRegistry(registry, record).channels.includes(entry) &&
         entry.pluginId === record.id &&
         entry.plugin === metadata.plugin &&
         entry.captureReadAuthority === captureReadAuthority;
-      return isCurrent() ? isCurrent : undefined;
+      return (record.origin === "bundled" || record.trustedOfficialInstall === true) && isCurrent()
+        ? isCurrent
+        : undefined;
     };
     if (existing) {
       if (existingRuntime) {

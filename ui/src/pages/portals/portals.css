@@ -25,6 +25,15 @@ main.content:where(.content--portals-page) .portals-empty {
   flex: 1 1 auto;
 }
 
+/* Match the header column; the shell already supplies the gutter on phones. */
+openclaw-portals-page:not([embedded]) > .portals-empty,
+openclaw-portals-page:not([embedded]) > .portals-layout {
+  width: 100%;
+  max-width: 1120px;
+  margin-inline: auto;
+  padding-inline: var(--settings-header-inline-padding, var(--space-4));
+}
+
 /* The preview's own 480px frame floor keeps the layout tall enough to scroll in
    short windows; there is no viewport-offset cap. */
 .portals-layout {
@@ -66,9 +75,18 @@ main.content:where(.content--portals-page) .portals-empty {
   background: var(--surface-selected-hover);
 }
 
-.portals-rail__title,
 .portals-preview__url span:first-child {
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.portals-rail__title,
+.portals-page--embedded[data-mobile] .portals-embedded__name {
+  min-width: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-align: match-parent;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -238,7 +256,7 @@ openclaw-portals-page[embedded],
 .portals-embedded .portals-preview__frame,
 .portals-embedded .portals-preview__notice,
 .portals-embedded .portals-preview__state,
-.portals-embedded .portals-empty {
+openclaw-portals-page[embedded] .portals-empty {
   flex: 1;
   min-height: 0;
 }
@@ -267,6 +285,9 @@ openclaw-portals-page[embedded],
 }
 
 .portals-page--embedded .portals-embedded__origin {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
 }
@@ -275,19 +296,12 @@ openclaw-portals-page[embedded],
   font: inherit;
 }
 
-.portals-page--embedded .portals-embedded__name,
-.portals-page--embedded .portals-embedded__origin {
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-}
-
-.portals-page--embedded .portals-embedded__identity > span > span {
+.portals-page--embedded .portals-embedded__origin > span {
   display: block;
   width: max-content;
 }
 
-.portals-page--embedded .portals-embedded__identity [data-overflow] {
+.portals-page--embedded .portals-embedded__origin[data-overflow] {
   mask-image: linear-gradient(to right, black calc(100% - 20px), transparent);
 }
 
@@ -324,7 +338,7 @@ openclaw-portals-page[embedded],
 .portals-page--embedded[data-mobile] .portals-embedded__header {
   --session-rail-target: 32px;
   min-height: 40px;
-  padding: 0 8px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--border-strong);
 }
 
@@ -334,8 +348,8 @@ openclaw-portals-page[embedded],
 
 .portals-page--embedded[data-mobile] .portals-embedded__name {
   display: block;
-  font-size: 14px;
-  font-weight: 500;
+  font-size: var(--control-ui-text-md);
+  line-height: max(20px, 1.3em);
 }
 
 .portals-page--embedded[data-mobile] .portals-preview__frame {

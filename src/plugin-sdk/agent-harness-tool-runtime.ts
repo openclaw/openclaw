@@ -21,6 +21,7 @@ export {
   collectAgentHarnessMessagingMediaUrls,
   mapAgentHarnessMessagingMediaValues,
 } from "../agents/harness/messaging-media.js";
+export { readAutomationToolCreation } from "../chat/automation-job-result.js";
 export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-provenance.js";
 export { consumeToolExecutionNotStarted as consumeTrustedToolNoStartError } from "../agents/tool-effect-receipt.js";
 export {
@@ -36,6 +37,8 @@ export {
   createGatewayToolPolicyAssertion,
 } from "../agents/gateway-tool-policy.js";
 export { runAgentHarnessToolInvocation } from "../agents/harness/tool-invocation.js";
+/** The one fresh tool-result bound for routes that execute tools outside the invocation owner. */
+export { boundToolResult as boundAgentHarnessToolResult } from "../agents/embedded-agent-runner/tool-result-bound.js";
 export { runWithToolExecutionValidation } from "../agents/agent-tools.execution-validation.js";
 export {
   createAgentHarnessToolExecutionRegistry,
@@ -58,7 +61,7 @@ export type AgentHarnessToolSurfaceRuntime = ReturnType<
 
 export type AgentHarnessToolSurfaceRuntimeParams = Omit<
   Parameters<typeof createAgentHarnessToolSurfaceRuntimeCore>[0],
-  "executeTool" | "disableToolSearch" | "preparedToolOverrideAllowlist"
+  "executeTool" | "disableToolSearch" | "preparedToolOverrideAllowlist" | "loadsOnDemandTools"
 > & {
   executeTool: NonNullable<OpenClawCodingToolsOptions["toolSearchCatalogExecutor"]>;
 };

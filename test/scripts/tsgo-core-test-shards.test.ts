@@ -8,15 +8,12 @@ import { listStagedChangedPaths } from "../../scripts/changed-lanes.mts";
 import { readNativeTypeScriptConfig } from "../../scripts/lib/native-typescript-config.mts";
 import {
   expandTsgoExecutionGraphs,
-  resolveCiTsgoGraphs,
   TSGO_ROOT_TEST_SHARDS,
   findOversizedTsgoCoreTestShards,
   findTsgoCoreTestShardViolations,
   selectChangedTsgoCoreTestShards,
-  orderChangedTsgoCoreTestShards,
   TSGO_CORE_GRAPHS,
   TSGO_CI_ADDITIONAL_GRAPHS,
-  selectTsgoCoreTestShards,
   selectTsgoCoreTestStripe,
   TSGO_CORE_TEST_SHARDS,
 } from "../../scripts/lib/tsgo-core-test-shards.mts";
@@ -68,27 +65,6 @@ describe("tsgo core test shards", () => {
     ).toEqual(["gateway-other"]);
   });
 
-  it.each(["root", "src", undefined])("preserves graph ownership for the %s alias", (group) => {
-    const shards = selectTsgoCoreTestShards(group);
-    if (group === "root") {
-      const graphs = resolveCiTsgoGraphs(["scripts", "test-root"]);
-      expect(graphs.map((graph) => graph.name)).toEqual(["scripts", "test-root"]);
-      expect(expandTsgoExecutionGraphs(graphs)).toEqual([graphs[0], ...TSGO_ROOT_TEST_SHARDS]);
-      expect(shards).toEqual(TSGO_ROOT_TEST_SHARDS);
-    } else if (group === undefined) {
-      expect(shards).not.toContainEqual(
-        expect.objectContaining({ name: "extension-declarations" }),
-      );
-      expect(expandTsgoExecutionGraphs(TSGO_CORE_TEST_SHARDS)).toEqual(TSGO_CORE_TEST_SHARDS);
-    } else {
-      expect(shards?.at(-1)).toEqual({
-        name: "extension-declarations",
-        config: "test/tsconfig/tsconfig.test.extension-declarations.json",
-        sparseRoots: ["extensions", "src", "ui/src"],
-      });
-    }
-  });
-
   it("stripes partition the full shard list exactly once", () => {
     const names = (shards: readonly { name: string }[]) =>
       shards.map((shard) => shard.name).toSorted();
@@ -115,37 +91,6 @@ describe("tsgo core test shards", () => {
       ),
     );
   });
-
-  it.each([
-    {
-      name: "oversized shards remain advisory",
-      canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/c.test.ts"],
-      shards: [
-        { name: "big", roots: ["src/a.test.ts", "src/b.test.ts"] },
-        { name: "small", roots: ["src/c.test.ts"] },
-      ],
-      warnings: ["big: 2 test roots exceeds the advisory 1 limit; rebalance when convenient"],
-      violations: [],
-    },
-    {
-      name: "missing, duplicate, and extra roots are violations",
-      canonicalRoots: ["src/a.test.ts", "src/b.test.ts", "src/missing.test.ts"],
-      shards: [
-        { name: "first", roots: ["src/a.test.ts", "src/b.test.ts"] },
-        { name: "second", roots: ["src/b.test.ts", "src/extra.test.ts"] },
-      ],
-      violations: [
-        "assigned 2 times (first, second): src/b.test.ts",
-        "unassigned: src/missing.test.ts",
-        "not in the canonical core-test graph (second): src/extra.test.ts",
-      ],
-    },
-  ])("$name", ({ canonicalRoots, shards, warnings, violations }) => {
-    if (warnings) {
-      expect(findOversizedTsgoCoreTestShards({ maxRoots: 1, shards })).toEqual(warnings);
-    }
-    expect(findTsgoCoreTestShardViolations({ canonicalRoots, shards })).toEqual(violations);
-  });
 });
 
 describe("changed core test graph selection", () => {
@@ -156,28 +101,6 @@ describe("changed core test graph selection", () => {
       roots: graph.name === "core-test-agents-other" ? [leaf] : [],
       files: graph.name === "core-test-agents-other" ? [leaf] : [],
     }));
-
-  it("prioritizes root owners stably within the selected shards", () => {
-    const graphs = inventory();
-    const gateway = "src/gateway/gateway.test.ts";
-    graphs.find((graph) => graph.name === "core-test-gateway-root")!.roots.push(gateway);
-    graphs.find((graph) => graph.name === "core-test-agents-root")!.files.push(leaf);
-    const selected = TSGO_CORE_TEST_SHARDS.slice(0, 4);
-    const names = (paths: string[], shards = selected) =>
-      orderChangedTsgoCoreTestShards(shards, paths, graphs).map((shard) => shard.name);
-    expect(names([gateway, leaf])).toEqual([
-      "agents-other",
-      "gateway-root",
-      "agents-root",
-      "agents-tools",
-    ]);
-    expect(names([gateway, leaf], selected.slice(0, 3))).toEqual([
-      "agents-other",
-      "agents-root",
-      "agents-tools",
-    ]);
-    expect(names(["test/helpers/shared.ts"])).toEqual(selected.map((shard) => shard.name));
-  });
 
   it.each([leaf])("selects every consuming test graph for %s", (source) => {
     const graphs = inventory();

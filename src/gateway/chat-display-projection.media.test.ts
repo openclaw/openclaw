@@ -409,7 +409,7 @@ describe("channel mirror display controls", () => {
     ],
     ["mirror attachment", [assistant(), attachedMirror], [{}, withAttachment]],
     ["forwarded content", [forwarded, mirror()], [forwardedReply, { model: "delivery-mirror" }]],
-    ["legacy identity", [legacy, fieldless], [{ __openclaw: identity }]],
+    ["legacy identity", [legacy, fieldless], [{ content: reply, __openclaw: identity }]],
   ])("preserves the mirror boundary for %s", (_name, messages, expected) => {
     const displayed = project(messages);
     expect(displayed).toHaveLength(expected.length);

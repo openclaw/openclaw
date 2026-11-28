@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { getResourceProfile } from "../infra/gateway-resource-profile.js";
 import { retireQuestionChannelGateway } from "../infra/question-channel-runtime.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { bindLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
@@ -25,6 +26,7 @@ export async function prepareGatewayKernelRequestRuntime(params: {
   log: GatewayLogger;
   logHealth: GatewayLogger;
   hostLifecycle?: GatewayHostLifecycle;
+  waitForPostReadyWork?: () => Promise<void>;
 }) {
   const { coreRuntime: runtime, log, logHealth } = params;
   const {
@@ -142,10 +144,17 @@ export async function prepareGatewayKernelRequestRuntime(params: {
       const controlUiEnabled =
         runtime.opts.controlUiEnabled ?? getRuntimeConfig().gateway?.controlUi?.enabled ?? true;
       if (controlUiEnabled) {
-        // Facts are ready, but display rows remain lazy. Warm the recent page while sidecars start.
+        // Facts are required; display rows are advisory. Lean warmup waits outside root
+        // admission so it cannot keep the post-ready idle gate busy itself.
         void runtime.connectionWork
-          .track(() =>
-            runWithGatewayIndependentRootWorkAdmission(
+          .track(async () => {
+            if (getResourceProfile() === "lean" && params.waitForPostReadyWork) {
+              await params.waitForPostReadyWork();
+            }
+            if (runtime.lifecycle.closePreludeStarted || runtime.connectionWork.signal.aborted) {
+              return;
+            }
+            return runWithGatewayIndependentRootWorkAdmission(
               async () => {
                 const { listProjectedSessions } = await import("./session-utils-list.js");
                 runtime.connectionWork.signal.throwIfAborted();
@@ -159,8 +168,8 @@ export async function prepareGatewayKernelRequestRuntime(params: {
               },
               "startup:session-row-prewarm",
               runtime.connectionWork.signal,
-            ),
-          )
+            );
+          })
           .catch((error: unknown) => {
             if (!runtime.connectionWork.signal.aborted) {
               log.warn(`Session first-page preparation failed: ${formatErrorMessage(error)}`);

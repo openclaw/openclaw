@@ -55,7 +55,6 @@ function isSilent(
 ) {
   return shouldTreatEmptyAssistantReplyAsSilent({
     ...turnState(attempt),
-    allowEmptyAssistantReplyAsSilent: true,
     terminalReplyExpectation,
   });
 }

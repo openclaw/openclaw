@@ -66,7 +66,8 @@ export function normalizeUniqueStringEntriesLower(values?: Iterable<unknown>): s
 
 /** Normalizes entries, removes duplicates, and returns sorted output. */
 export function normalizeSortedUniqueStringEntries(values?: Iterable<unknown>): string[] {
-  return sortUniqueStrings(normalizeStringEntries(values ? [...values] : undefined));
+  const normalized = values ? normalizeStringEntries([...values]) : [];
+  return normalized.length < 2 ? normalized : sortUniqueStrings(normalized);
 }
 
 /** Normalizes array-backed string lists and rejects non-array input as empty. */

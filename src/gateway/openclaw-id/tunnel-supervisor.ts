@@ -8,10 +8,10 @@
 // binding is installed or rebuilt.
 import { fork, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
-import { existsSync } from "node:fs";
 import os from "node:os";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { canAccess } from "../../infra/path-existence.js";
 import type { BoundKeyRefusal } from "./tunnel-child/keyfile.js";
 import {
   parseTunnelToGatewayMessage,
@@ -105,6 +105,7 @@ export function createTunnelSupervisor(params: {
   const tuning = { ...DEFAULT_TUNNEL_SUPERVISOR_TUNING, ...params.tuning };
   let status: TunnelSupervisorStatus = { state: "stopped" };
   let child: ChildProcess | undefined;
+  let launching: Promise<void> | undefined;
   let wanted = false;
   let failures = 0;
   let restarts = 0;
@@ -142,9 +143,13 @@ export function createTunnelSupervisor(params: {
   };
 
   // Forks one child and wires IPC, logs, health and exit handling.
-  const launch = () => {
+  const launchChild = async () => {
     const entryPath = fileURLToPath(params.launch.entry);
-    if (!existsSync(entryPath)) {
+    const exists = await canAccess(entryPath);
+    if (!wanted) {
+      return;
+    }
+    if (!exists) {
       wanted = false;
       setStatus({
         state: "unavailable",
@@ -318,6 +323,13 @@ export function createTunnelSupervisor(params: {
     send(proc, params.startMessage());
   };
 
+  const launch = () => {
+    launching = launchChild().catch((error: unknown) => {
+      wanted = false;
+      setStatus({ state: "unavailable", reason: String(error) });
+    });
+  };
+
   return {
     /** Starts the child if it is not already running. */
     start(): void {
@@ -342,6 +354,7 @@ export function createTunnelSupervisor(params: {
         clearTimeout(retryTimer);
         retryTimer = undefined;
       }
+      await launching;
       const proc = child;
       if (!proc || proc.exitCode !== null || proc.signalCode !== null) {
         setStatus({ state: "stopped" });

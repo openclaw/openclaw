@@ -119,7 +119,9 @@ const mountXReplies: ControlUiView = (container, initialContext) => {
       <section class="x-replies" aria-labelledby="x-replies-title">
         <header class="x-replies__header">
           <div>
-            <h1 id="x-replies-title">X replies</h1>
+            <h1 id="x-replies-title" class="plugin-page-title">
+              X replies
+            </h1>
             <p>Choose whose mentions the bot can answer publicly.</p>
           </div>
           <button
@@ -561,7 +563,7 @@ export default defineControlUiPlugin({
       id: "replies",
       label: "X replies",
       page: { id: "replies" },
-      icon: "at-sign",
+      icon: "atSign",
       order: 40,
     });
     return () => {

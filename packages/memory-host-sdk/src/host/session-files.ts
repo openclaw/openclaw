@@ -34,6 +34,7 @@ import {
   renderSessionEntrySnapshot,
   sqliteSessionFileState,
   type SessionEntryRenderSink,
+  type SessionEntryRenderedPage,
 } from "./session-entry-render.js";
 import { resolveBuildSessionSqliteIdentity } from "./session-entry-source.js";
 import { assertBoundIncognitoMemorySyncAccess } from "./session-memory-authority.js";
@@ -423,6 +424,11 @@ export async function streamSessionEntries(
   }
   const streamWorkerEntries = async (indexes: readonly number[]) => {
     const workerInputs = indexes.map((index) => inputs[index]!);
+    // Legacy observers cannot retract callbacks. Retain only their original messages until
+    // this entry settles; ordinary page consumers remain bounded and receive resets directly.
+    const pendingMessages = workerInputs.map(
+      (): NonNullable<SessionEntryRenderedPage["messages"]> => [],
+    );
     return await streamSessionEntriesInWorker(
       workerInputs.map(({ absPath, options = {}, stream }) => {
         const { onTranscriptMessage, ...rest } = options;
@@ -438,13 +444,25 @@ export async function streamSessionEntries(
       }),
       async (offset, update) => {
         const { options, stream } = workerInputs[offset]!;
+        if ("value" in update) {
+          if ("summary" in update.value && update.value.summary) {
+            for (const { message, observedAt } of pendingMessages[offset]!) {
+              options?.onTranscriptMessage?.(message, observedAt);
+            }
+          }
+          pendingMessages[offset] = [];
+          return;
+        }
         if ("reset" in update) {
+          if (update.resetMessages) {
+            pendingMessages[offset] = [];
+          }
           await stream?.onReset?.();
           return;
         }
         const { messages, ...page } = update.page;
-        for (const { message, observedAt } of messages ?? []) {
-          options?.onTranscriptMessage?.(message, observedAt);
+        for (const message of messages ?? []) {
+          pendingMessages[offset]!.push(message);
         }
         if (page.lines.length > 0) {
           await stream?.onPage?.(page);

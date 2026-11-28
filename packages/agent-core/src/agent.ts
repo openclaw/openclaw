@@ -14,8 +14,7 @@ import { TranscriptNotContinuableError } from "./errors.js";
 import {
   attachInternalSyncSteeringGetter,
   getInternalBeforeRequest,
-  getInternalBeforeToolBatch,
-  getInternalRepetitionGuard,
+  getInternalToolRepeatPolicy,
   getInternalToolTurnCompletion,
   setInternalBeforeRequest,
 } from "./internal-hooks.js";
@@ -23,6 +22,7 @@ import { PendingMessageQueue } from "./pending-message-queue.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
 import { ToolInterruptions } from "./tool-interruption.js";
+import { createToolRepeatState, type ToolRepeatState } from "./tool-repeat-guard.js";
 import {
   appendInterruptedTurnMessage,
   createFailureMessage,
@@ -39,7 +39,6 @@ import type {
   QueueMode,
   StreamFn,
   ToolExecutionMode,
-  ToolLoopRecoveryState,
 } from "./types.js";
 
 export type { QueueMode } from "./types.js";
@@ -141,7 +140,7 @@ export class Agent {
   >();
   private readonly steeringQueue: PendingMessageQueue;
   private readonly followUpQueue: PendingMessageQueue;
-  private toolLoopRecoveryState: ToolLoopRecoveryState = { criticalToolLoopSeen: false };
+  private toolRepeatState: ToolRepeatState = createToolRepeatState();
   private readonly toolInterruptions = new ToolInterruptions();
 
   public convertToLlm: NonNullable<AgentOptions["convertToLlm"]>;
@@ -352,7 +351,7 @@ export class Agent {
     this.mutableState.streamingMessage = undefined;
     this.mutableState.pendingToolCalls = new Set<string>();
     this.mutableState.errorMessage = undefined;
-    this.toolLoopRecoveryState = { criticalToolLoopSeen: false };
+    this.toolRepeatState = createToolRepeatState();
     this.clearAllQueues();
   }
 
@@ -513,7 +512,6 @@ export class Agent {
     const config: AgentLoopConfig = {
       toolInterruptions: this.toolInterruptions,
       model: this.mutableState.model,
-      repetitionGuard: getInternalRepetitionGuard(this),
       thinkingLevel: this.mutableState.thinkingLevel,
       reasoning: resolveAgentReasoningOption(
         this.mutableState.model,
@@ -527,9 +525,10 @@ export class Agent {
       maxRetryDelayMs: this.maxRetryDelayMs,
       toolExecution: this.toolExecution,
       beforeToolCall: this.beforeToolCall,
-      beforeToolBatch: getInternalBeforeToolBatch(this),
+      toolRepeatGuard: getInternalToolRepeatPolicy(this)?.enabled,
+      onToolRepeat: getInternalToolRepeatPolicy(this)?.onVerdict,
       completesToolTurn: getInternalToolTurnCompletion(this),
-      toolLoopRecoveryState: this.toolLoopRecoveryState,
+      toolRepeatState: this.toolRepeatState,
       resolveDeferredTool: this.resolveDeferredTool,
       afterToolCall: this.afterToolCall,
       afterToolOutcome: this.afterToolOutcome,

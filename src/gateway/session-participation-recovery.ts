@@ -1,0 +1,45 @@
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import {
+  intersectParticipationCeilings,
+  type BoundParticipationCeiling,
+} from "../agents/participation-ceiling.js";
+import { OperatorRefusalError } from "./operator-refusal.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
+
+/** The recovery owner supplies already-authenticated custody, avoiding a recorded-source restore cycle. */
+export async function prepareRecoveredParticipation(params: {
+  context: GatewayRequestContext;
+  authority: AdmittedRunOperatorAuthority;
+  ceiling: BoundParticipationCeiling;
+}) {
+  const { authority, ceiling: retained } = params;
+  const { prepareSessionPrincipalRunAuthority } =
+    await import("./session-sharing-authorization-async.js");
+  if (authority.profileId !== retained.profileId) {
+    throw new OperatorRefusalError("sign-in-ended");
+  }
+  const access = await prepareSessionPrincipalRunAuthority({
+    context: params.context,
+    profileId: retained.profileId,
+    agentId: retained.source.agentId,
+    sessionKey: retained.sessionKey,
+    sessionId: retained.source.sessionId,
+    participationCeiling: retained,
+    restored: {
+      authority,
+      release: authority.retain?.() ?? (() => {}),
+    },
+    assertCurrent: () => authority.signal?.throwIfAborted(),
+  });
+  try {
+    if (!access.participationCeiling) {
+      throw new OperatorRefusalError("invitation-ended");
+    }
+    const ceiling = intersectParticipationCeilings(retained, access.participationCeiling);
+    access.assertCurrent();
+    return { ceiling, assertCurrent: access.assertCurrent, release: access.release };
+  } catch (error) {
+    access.release();
+    throw error;
+  }
+}

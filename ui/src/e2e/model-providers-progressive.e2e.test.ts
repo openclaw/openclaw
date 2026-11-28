@@ -89,6 +89,7 @@ suite.define(() => {
         await waitForControlUiRoute(page, { routeId: "model-providers" });
         const settings = page.locator("openclaw-model-providers-page");
         const { defaults, picker, trigger } = defaultPicker(page);
+        await defaults.locator("[data-models-more-settings]").click();
         await trigger.click();
         if (cacheState !== "fresh") {
           await option(picker, "healthy/retired").waitFor();
@@ -221,6 +222,10 @@ suite.define(() => {
           ),
         )
         .toContain("Current config is unavailable.");
+      const moreSettings = defaults.locator("[data-models-more-settings]");
+      if ((await moreSettings.getAttribute("aria-expanded")) !== "true") {
+        await moreSettings.click();
+      }
       await trigger.click();
       const currentOption = option(picker, "fixture/current");
       expect(await currentOption.getAttribute("aria-disabled")).toBe("true");

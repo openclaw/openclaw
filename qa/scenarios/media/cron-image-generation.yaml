@@ -1,0 +1,22 @@
+title: Cron image generation
+
+scenario:
+  id: cron-image-generation
+  surface: image-generation
+  coverage:
+    primary:
+      - media.generated-image-task-lifecycle
+  objective: Verify an isolated cron run that generates an image receives the image inline and finishes.
+  successCriteria:
+    - The cron run calls the image provider exactly once.
+    - The image_generate tool result in the cron run carries the generated image.
+    - The cron run finishes with status ok instead of waiting for a later completion turn.
+  docsRefs:
+    - docs/tools/image-generation.md
+  codeRefs:
+    - src/agents/tools/media-generate-background-shared.ts
+    - test/e2e/qa-lab/media/cron-image-generation.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/media/cron-image-generation.e2e.test.ts
+    summary: Force one isolated cron run against a deterministic image provider and wait for its terminal run status.

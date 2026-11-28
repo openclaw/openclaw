@@ -1,9 +1,11 @@
 import type { readSqliteDatabaseScopedWriteToken } from "../../infra/sqlite-database-admission.js";
-import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { ConversationAuthority } from "./conversation-authority.types.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import type { SqliteLifecycleTargetSnapshot } from "./session-accessor.sqlite-entry-equality.js";
-import type { SessionEntryPatchOperation } from "./session-entry-patch-operation.js";
+import type {
+  SessionEntryPatchOperation,
+  SessionEntryPatchWriteIntent,
+} from "./session-entry-patch-operation.js";
 import type { SessionTranscriptWatermark } from "./session-history-read.types.js";
 import type { SessionLifecyclePatchEffects } from "./session-run-lifecycle-projection.js";
 import type {
@@ -29,11 +31,6 @@ export type SessionEntryPatchGuard = {
   assertMutationAllowed?: () => void;
   /** Same-store route authority is reread inside the worker's write transaction. */
   conversation?: ConversationAuthority;
-  cliHistory?: {
-    sessionId: string;
-    admission?: UserTurnTranscriptAdmissionReceipt;
-    watermark: SessionTranscriptWatermark;
-  };
   shouldCommitIf?: {
     kind: "transcript";
     sessionId: string;
@@ -42,7 +39,7 @@ export type SessionEntryPatchGuard = {
   };
 };
 
-export type SessionEntryPatchCommit = {
+export type SessionEntryPatchCommit = SessionEntryPatchWriteIntent & {
   selection: SessionEntryPatchSelection;
   prepared: SqliteLifecycleTargetSnapshot;
   sessionKey: string;
@@ -58,7 +55,6 @@ export type SessionEntryPatchCommit = {
   consumePendingReset?: boolean;
   providerReviewMutation?: boolean;
   shouldCommitIf?: SessionEntryPatchGuard["shouldCommitIf"];
-  cliHistory?: SessionEntryPatchGuard["cliHistory"];
   conversation?: SessionEntryPatchGuard["conversation"];
   sources?: SessionSourcePredicate[];
   ensureIdentitySource?: Omit<SessionSourceTransactionGrant, "assertCurrent">;
@@ -96,7 +92,7 @@ export type SessionEntryPatchCommitObserver = (
 
 export type SessionEntryPatchReduction = Omit<
   SessionEntryPatchCommit,
-  "prepared" | "writeBase" | "next"
+  "prepared" | "writeBase" | "next" | keyof SessionEntryPatchWriteIntent
 > & {
   operation: SessionEntryPatchOperation;
   fallbackEntry?: SessionEntry;

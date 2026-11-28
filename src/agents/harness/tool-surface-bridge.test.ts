@@ -14,7 +14,7 @@ import {
 } from "../agent-tool-availability.js";
 import { runWithAgentRingZeroTools } from "../agent-tools.ring-zero-context.js";
 import { applyEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { projectAgentToolDefinition } from "../prepared-tool-surface.js";
+import { projectAgentToolDefinition } from "../prepared-tool-definition.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
 import { TOOL_CALL_RAW_TOOL_NAME, createToolSearchTools } from "../tool-search.js";
@@ -211,8 +211,8 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
         expect(policy.toolSchemaDirectoryPrompt).not.toContain("native_direct");
         expect(policy.toolSchemaDirectoryPrompt).toContain(
           mode === "directory" && supportsDeferredToolCalls
-            ? "Call a unique deferred tool name directly"
-            : "Deferred names are not directly callable",
+            ? "Call a unique name directly"
+            : "not directly callable: call dispatch_action",
         );
       }
       expect(config.tools?.toolSearch).toEqual(configuredSearch);
@@ -442,7 +442,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
   it.each(
     [true, false].flatMap((lean) => ["agentId", "sessionKey"].map((scope) => ({ lean, scope }))),
   )(
-    "preserves lean=$lean directory presentation across worker projection via $scope",
+    "preserves lean=$lean filtering and names-only worker directories via $scope",
     ({ lean, scope }) => {
       const config: OpenClawConfig = {
         agents: {
@@ -462,14 +462,14 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
       });
       const surface = runtime.compactTools([lookup, createStubTool("browser")]);
       const prompt = surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
-      expect(prompt).toContain("- fixture_lookup (core)");
-      expect(prompt?.includes("Search the local archive.")).toBe(!lean);
-      expect(prompt?.includes("- browser (core)")).toBe(!lean);
+      expect(prompt?.split("\n")[0]).toBe(
+        lean ? "Deferred tools: fixture_lookup" : "Deferred tools: browser, fixture_lookup",
+      );
+      expect(prompt).not.toContain("Search the local archive.");
       const projected = worker.compactTools([lookup], { prepared: { preserveToolNames: [] } });
       const directory = projected.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
-      expect(directory?.split("\n").filter((line) => line.startsWith("- "))).toEqual([
-        lean ? "- fixture_lookup (core)" : "- fixture_lookup (core): Search the local archive.",
-      ]);
+      expect(directory?.split("\n")[0]).toBe("Deferred tools: fixture_lookup");
+      expect(directory).not.toContain("Search the local archive.");
     },
   );
 

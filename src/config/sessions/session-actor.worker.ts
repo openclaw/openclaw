@@ -47,6 +47,7 @@ import {
   projectSessionActorHotState,
 } from "./session-actor-hydration.worker.js";
 import { replaceSessionActorParticipants } from "./session-actor-participants.js";
+import { transcriptPayloadBytes } from "./session-actor-payload-bytes.js";
 import {
   applySessionActorPhase,
   applyPreparedSessionActorAdoption,
@@ -68,6 +69,7 @@ import { registerSessionActorTranscriptRewriteOwner } from "./session-actor-tran
 import { captureSessionEntryMetadataReceipts } from "./session-entry-metadata-receipt.js";
 import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
+import { sessionMemberAccessFacts } from "./session-member-access-facts.js";
 import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import { prepareSessionTurnRoutingDependencies } from "./session-turn-predicate.js";
@@ -76,38 +78,6 @@ import { prepareSessionTurn, prepareVoiceTranscriptCommit } from "./session-turn
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 type Command = SqliteWorkerCommand<SessionActorOperations>;
-
-function transcriptPayloadBytes(command: Command): number | undefined {
-  if (
-    command.type !== "session.actor.appendTranscriptEvent" &&
-    command.type !== "session.actor.appendToolResult"
-  ) {
-    return undefined;
-  }
-  const input = command.input;
-  if (input.append) {
-    const append = input.append;
-    if (append.kind === "message") {
-      return Buffer.byteLength(append.input.messageJson);
-    }
-    return (
-      Buffer.byteLength(
-        typeof append.input.event === "string"
-          ? append.input.event
-          : JSON.stringify(append.input.event),
-      ) +
-      Buffer.byteLength(append.input.message?.messageJson ?? "") +
-      (append.input.initialModel ? Buffer.byteLength(JSON.stringify(append.input.initialModel)) : 0)
-    );
-  }
-  if ("eventJson" in input) {
-    return Buffer.byteLength(input.eventJson);
-  }
-  return input.turn.options.messages.reduce(
-    (bytes, row) => bytes + Buffer.byteLength(JSON.stringify(row.message)),
-    0,
-  );
-}
 
 function errorFacts(error: unknown) {
   return error instanceof Error
@@ -266,6 +236,7 @@ export function createSessionActorWorker(
         row: {
           ...postimage.row,
           member_ids_json: postimage.sideTables.memberIdsJson,
+          member_access_json: postimage.sideTables.memberAccessJson,
           board_present: postimage.sideTables.hasBoard ? 1 : 0,
         },
         window: postimage.window,
@@ -295,6 +266,7 @@ export function createSessionActorWorker(
             ...selected.row,
             window: before.window ? structuredClone(before.window) : null,
             member_ids_json: JSON.stringify(before.hot.members.map((member) => member.identityId)),
+            member_access_json: JSON.stringify(sessionMemberAccessFacts(before.hot.members)),
             board_present: before.hasBoard ? 1 : 0,
             transcriptWatermark: {
               sessionId: previousEntry.sessionId,
@@ -501,17 +473,20 @@ export function createSessionActorWorker(
           };
           const resident = residents.get(target.sessionKey);
           const before = read(opened, target);
-          const entryReference =
-            command.input.entryReference === before.hot.writeToken ? before.hot : undefined;
+          const preimage = before.hot;
           const projectAuthority = (state: SessionActorAuthorityFacts) =>
-            projectSessionActorAuthority(state, entryReference);
+            projectSessionActorAuthority(state, preimage);
           recordPhase("actorReadMs");
           diagnosticContext.actorResident = before === resident;
           diagnosticContext.actorTranscriptEvents = before.transcript.identities.size;
           diagnosticContext.actorActiveEvents = before.transcript.active.size;
           admit("transaction", {
             kind: "session-actor-admission",
-            snapshot: projectAuthority(before.hot),
+            // Reuse the admitted preimage at settlement even after replica eviction.
+            snapshot:
+              command.input.entryReference === before.hot.writeToken
+                ? projectAuthority(before.hot)
+                : { ...projectSessionActorAuthority(preimage), writeToken: preimage.writeToken },
           });
           if (
             command.input.expected !== undefined &&
@@ -616,7 +591,7 @@ export function createSessionActorWorker(
                   : undefined;
             deferSessionActorOutcome({
               database: opened,
-              outcome: projectSessionActorCommittedOutcome(accepted, entryReference),
+              outcome: projectSessionActorCommittedOutcome(accepted, preimage),
               state,
               projectAuthority,
               publication: turn ?? commitPublication,

@@ -193,7 +193,7 @@ export function createContext({
     shouldDropMismatchedSlackEvent,
     isChannelAllowed: policy.isChannelAllowed ?? (() => true),
     resolveUserName: policy.resolveUserName ?? (async () => ({})),
-    resolveChannelName: policy.resolveChannelName ?? (async () => ({})),
+    resolveChannelName: policy.resolveChannelName ?? (async () => ({ type: "channel" as const })),
     resolveSlackSystemEventRoute: resolveSessionKey,
   };
   Object.assign(ctx, { readRuntimeContext: async () => ctx, isRuntimePolicyCurrent: () => true });

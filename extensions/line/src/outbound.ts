@@ -174,13 +174,22 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       },
     );
 
+    const tablePushText = new Map<messagingApi.TextMessage, string>();
     const orderedMessages = processed.flatMap<messagingApi.FlexMessage | messagingApi.TextMessage>(
-      (segment) =>
-        segment.type === "flex"
-          ? [segment.message]
-          : runtime.channel.text
-              .chunkMarkdownText(segment.text, chunkLimit)
-              .map((text) => ({ type: "text" as const, text })),
+      (segment) => {
+        if (segment.type === "flex") {
+          return [segment.message];
+        }
+        return outboundRuntime
+          .chunkLineText(segment, chunkLimit, runtime.channel.text.chunkMarkdownText)
+          .map(({ text, pushText }) => {
+            const message: messagingApi.TextMessage = { type: "text", text };
+            if (pushText !== undefined) {
+              tablePushText.set(message, pushText);
+            }
+            return message;
+          });
+      },
     );
     const hasText = orderedMessages.some((message) => message.type === "text");
     const mediaUrls = resolveOutboundMediaUrls(payload);
@@ -252,9 +261,14 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
         } else if (isLast && hasQuickReplies) {
           await sendTextWithQuickReply(message.text, quoteToken);
         } else {
-          await recordResult(
-            sendText(to, message.text, { ...sendOptions, ...quotedOption(quoteToken) }),
-          );
+          const pushText = tablePushText.get(message);
+          if (pushText !== undefined) {
+            await sendMessageBatch([{ ...message, text: pushText, ...quotedOption(quoteToken) }]);
+          } else {
+            await recordResult(
+              sendText(to, message.text, { ...sendOptions, ...quotedOption(quoteToken) }),
+            );
+          }
         }
       }
     } else {

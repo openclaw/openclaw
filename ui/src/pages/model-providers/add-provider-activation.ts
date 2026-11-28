@@ -40,15 +40,17 @@ export async function activateAddedKey(params: {
   }
   if (!result.ok || !result.modelRef) {
     const reason = formatUiExternalText(result.error ?? t("modelProviders.requestFailed"));
-    // Only a refused credential or account is about the key; anything else leaves it unproven.
+    // Credential and account refusals are errors; other checks leave the key unproven.
     const rejected = result.status === "auth" || result.status === "billing";
     return {
       message: {
         kind: rejected ? "error" : "warning",
         text: t(
-          rejected
-            ? "modelProviders.apiKey.checkFailed"
-            : "modelProviders.apiKey.checkInconclusive",
+          result.status === "billing"
+            ? "modelProviders.add.billingFailed"
+            : rejected
+              ? "modelProviders.apiKey.checkFailed"
+              : "modelProviders.apiKey.checkInconclusive",
           { reason },
         ),
       },
@@ -67,10 +69,13 @@ export async function activateAddedKey(params: {
     name: known?.name ?? id,
     ...(agentRuntime ? { agentRuntime } : {}),
   };
+  // The first line summarizes; later lines are notices, such as a small context window.
+  const notices = formatUiExternalText((result.lines ?? []).slice(1).join(" "));
   return {
     message: {
       kind: "success",
       text: t("modelProviders.add.ready", { provider: params.provider, model: model.name }),
+      ...(notices ? { warning: notices } : {}),
     },
     model,
   };
