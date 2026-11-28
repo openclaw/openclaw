@@ -116,8 +116,7 @@ step; mixing artifacts from different builds is unsupported.
 
 For Docker, Podman, and Kubernetes image replacements, see
 [Upgrading container images](/install/docker#upgrading-container-images). The
-image entrypoint runs Doctor before starting the Gateway and exits if mounted
-state cannot be repaired safely.
+entrypoint starts the Gateway directly; boot migrates supported state in place.
 
 For distro packages and image-based systems (bootc, rpm-ostree), see
 [System-package and image-based installs](/install/updating/update-methods#system-package-and-image-based-installs).

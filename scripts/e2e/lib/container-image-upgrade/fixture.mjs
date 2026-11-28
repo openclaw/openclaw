@@ -192,14 +192,7 @@ function verify(mode) {
       "Refusal mutated protected agent bytes",
     );
     assert.deepEqual(logicalSnapshot(agentPath), before.agent);
-    if (mode === "old-shape") {
-      assert.equal(
-        sha(fs.readFileSync(sharedPath)),
-        before.sharedSha256,
-        "Startup control repaired shared state",
-      );
-      assert.deepEqual(readJson(path.join(workspace, "openclaw-workspace-state.json")), setup);
-    } else if (sha(fs.readFileSync(sharedPath)) !== before.sharedSha256) {
+    if (sha(fs.readFileSync(sharedPath)) !== before.sharedSha256) {
       verifyBackup(sharedPath, before.shared);
     }
     console.log(
