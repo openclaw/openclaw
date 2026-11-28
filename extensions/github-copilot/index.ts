@@ -366,10 +366,12 @@ export default definePluginEntry({
       // domain. A domain switch (either direction) must re-run the device flow so
       // the token is tenant-scoped to the domain being written to config.
       if (existing && !domainChanged) {
-        const runLogin = await ctx.prompter.confirm({
-          message: "GitHub Copilot auth already exists. Re-run login?",
-          initialValue: false,
-        });
+        const runLogin = ctx.opts?.overwriteExisting
+          ? true
+          : await ctx.prompter.confirm({
+              message: "GitHub Copilot auth already exists. Re-run login?",
+              initialValue: false,
+            });
         if (!runLogin) {
           ctx.signal?.throwIfAborted();
           ctx.assertCurrent?.();

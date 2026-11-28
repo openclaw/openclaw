@@ -694,6 +694,31 @@ describe("github-copilot plugin", () => {
     );
     expect(domainOf(result?.configPatch)).toBe("acme.ghe.com");
   });
+  it("re-runs login without prompting when overwriteExisting is set", async () => {
+    const { login, prompter } = await interactive(true, 1, "acme.ghe.com");
+    deviceFetch("acme.ghe.com", "fresh-token");
+    const result = await login({
+      env: { AUTHORIZED_COPILOT_TOKEN: "authorized-token" },
+      existingProfiles: [
+        {
+          profileId: "github-copilot:authorized",
+          credential: {
+            type: "token",
+            provider: ID,
+            tokenRef: { source: "env", provider: "default", id: "AUTHORIZED_COPILOT_TOKEN" },
+          },
+        },
+      ],
+      config: copilotConfig({ params: { githubDomain: "acme.ghe.com" } }),
+      secretInputMode: "plaintext",
+      opts: { overwriteExisting: true },
+    });
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(result?.profiles).toEqual([
+      { profileId: PROFILE, credential: tokenProfile("fresh-token") },
+    ]);
+    expect(domainOf(result?.configPatch)).toBe("acme.ghe.com");
+  });
   it("rejects unsafe device-code lifetimes before polling", async () => {
     const release = vi.fn(async () => {}),
       showCode = vi.fn();

@@ -600,6 +600,59 @@ it("does not promote a login profile when protected storage rejects", async () =
   expectNoCalls(mocks.promoteAuthProfileInOrder, mocks.updateConfig, mocks.callGateway);
 });
 
+it("replaces the saved Copilot credential when --yes re-runs login over an existing profile", async () => {
+  useProvider("github-copilot", "GitHub Copilot");
+  const existing = tokenProfile("github-copilot:github", "github-copilot", "synthetic-old-token");
+  const replacement = tokenProfile(
+    "github-copilot:github",
+    "github-copilot",
+    "synthetic-new-token",
+  );
+  mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+    version: 1,
+    profiles: { "github-copilot:github": existing.credential },
+  });
+  // Model the Copilot reuse decision at the provider boundary: --yes skips the
+  // "re-run login?" confirmation and runs the device flow, while without it the
+  // confirmation default retains the stored credential.
+  runProviderAuth.mockImplementation(async (ctx) => {
+    const stored =
+      ctx.existingProfiles?.find((profile) => profile.profileId === existing.profileId) ?? existing;
+    return { profiles: [ctx.opts?.overwriteExisting ? replacement : stored] };
+  });
+
+  await loginCommand({ provider: "github-copilot", yes: true });
+
+  expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledWith(
+    expect.objectContaining({ profiles: [replacement] }),
+  );
+});
+
+it("keeps the saved Copilot credential when re-login runs without --yes", async () => {
+  useProvider("github-copilot", "GitHub Copilot");
+  const existing = tokenProfile("github-copilot:github", "github-copilot", "synthetic-old-token");
+  const replacement = tokenProfile(
+    "github-copilot:github",
+    "github-copilot",
+    "synthetic-new-token",
+  );
+  mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
+    version: 1,
+    profiles: { "github-copilot:github": existing.credential },
+  });
+  runProviderAuth.mockImplementation(async (ctx) => {
+    const stored =
+      ctx.existingProfiles?.find((profile) => profile.profileId === existing.profileId) ?? existing;
+    return { profiles: [ctx.opts?.overwriteExisting ? replacement : stored] };
+  });
+
+  await loginCommand({ provider: "github-copilot" });
+
+  expect(mocks.persistProviderAuthProfilesAfterLogin).toHaveBeenCalledWith(
+    expect.objectContaining({ profiles: [existing] }),
+  );
+});
+
 it.each([
   { connected: true, outcome: "gateway-rejected", target: "running" },
   { connected: false, outcome: "gateway-unreachable", target: "local" },
@@ -1123,3 +1176,5 @@ it("keeps the requested agent store when interactive auth add falls back to past
     agentDir: "/tmp/openclaw/agents/coder",
   });
 });
+
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

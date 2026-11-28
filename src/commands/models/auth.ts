@@ -235,6 +235,7 @@ async function runProviderAuthMethod(
     openUrl: params.openUrl,
     nodes: params.nodes,
     browserAuthorization: params.browserAuthorization,
+    ...(params.yes ? { opts: { overwriteExisting: true } } : {}),
   });
   params.signal?.throwIfAborted();
   const connectionResult: ProviderAuthResult = params.credentialOnly
