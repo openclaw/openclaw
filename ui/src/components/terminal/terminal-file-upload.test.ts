@@ -131,15 +131,27 @@ it.each([
   expect(terminal.terminal.paste).not.toHaveBeenCalled();
 });
 
-it("leaves a text-only paste to the input's own handling", () => {
-  const { upload, request } = createUpload("/tmp/report.pdf", "/bin/zsh");
+it("admits a WebKit clipboard image that only appears in clipboardData.items", async () => {
+  const { upload, request } = createUpload("/tmp/shot.png", "/bin/zsh");
+  const png = new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], "shot.png", {
+    type: "image/png",
+  });
   const paste = new Event("paste", { cancelable: true });
-  Object.defineProperty(paste, "clipboardData", { value: { files: [] } });
+  // WebKit (the macOS WKWebView host) reports a pasted screenshot through items
+  // while leaving `files` empty; a files-only reader would drop it.
+  Object.defineProperty(paste, "clipboardData", {
+    value: {
+      files: [],
+      items: [{ kind: "file", type: "image/png", getAsFile: () => png }],
+    },
+  });
 
   upload.handlePaste(paste as ClipboardEvent);
 
-  expect(paste.defaultPrevented).toBe(false);
-  expect(request).not.toHaveBeenCalled();
+  expect(paste.defaultPrevented).toBe(true);
+  await waitForSolid(() =>
+    expect(request.mock.calls.some(([method]) => method === "terminal.upload")).toBe(true),
+  );
 });
 
 it("localizes validation and rejects files over 16 MiB before reading or sending", async () => {

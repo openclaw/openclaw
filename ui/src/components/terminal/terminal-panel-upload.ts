@@ -129,6 +129,21 @@ export function createTerminalPanelUpload(host: {
     return Array.from(event.dataTransfer?.types ?? []).includes("Files");
   }
 
+  // A pasted screenshot reaches WebKit (the macOS app's WKWebView host) only as
+  // clipboard items, with `files` left empty; Chromium fills both. Read items
+  // first and fall back to files so a real clipboard image is admitted on every
+  // host, matching the chat composer's own image-paste owner.
+  function pastedClipboardFiles(event: ClipboardEvent): File[] {
+    const fromItems = Array.from(event.clipboardData?.items ?? [])
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    if (fromItems.length > 0) {
+      return fromItems;
+    }
+    return Array.from(event.clipboardData?.files ?? []);
+  }
+
   function admitDraggedFiles(event: DragEvent): boolean {
     if (!hasDraggedFiles(event)) {
       return false;
@@ -377,7 +392,7 @@ export function createTerminalPanelUpload(host: {
     handlePaste(event: ClipboardEvent): void {
       // Clipboard images join the same staging owner as selected and dropped files.
       // Text-only pastes carry no files and keep the input's own paste behavior.
-      const files = Array.from(event.clipboardData?.files ?? []);
+      const files = pastedClipboardFiles(event);
       if (files.length === 0) {
         return;
       }
