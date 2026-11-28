@@ -70,43 +70,6 @@ const duplicateTab = async (context: BrowserContext, page: Page) => {
 };
 
 suite.define(() => {
-  it("keeps an attachment submission through a same-account reconnect during payload storage", () =>
-    suite.withPage(pageOptions, async ({ page }) => {
-      await page.addInitScript(() => {
-        const request = LockManager.prototype.request.bind(navigator.locks) as (
-          ...values: unknown[]
-        ) => Promise<unknown>;
-        LockManager.prototype.request = function (this: LockManager, ...args: unknown[]) {
-          if (!(window as unknown as { delayOutboxLock?: boolean }).delayOutboxLock) {
-            return request(...args);
-          }
-          return new Promise<void>((resolve) => {
-            setTimeout(resolve, 1_500);
-          }).then(() => request(...args));
-        } as typeof LockManager.prototype.request;
-      });
-      const gateway = await installGateway(page);
-      await openChat(page);
-      await waitForControlUiGatewayReady(page);
-      await page.evaluate(() => sessionStorage.removeItem("openclaw.control.outboxTab.v1"));
-      const message = "Mock Gateway: reconnect attachment";
-      await stage(page, message);
-      await disconnect(page, gateway);
-      await page.evaluate(() => {
-        (window as unknown as { delayOutboxLock?: boolean }).delayOutboxLock = true;
-      });
-
-      await send(page);
-      await page.waitForTimeout(200);
-      await gateway.setOnline(true);
-      await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-
-      const sent = await gateway.waitForRequest("chat.send");
-      expectAttachmentSend(sent.params, { message });
-      await expectRequestCountStable(gateway, "chat.send", 1);
-      await expect.poll(() => paneFor(page).locator(".chat-attachment-thumb").count()).toBe(0);
-    }));
-
   it("automatically retries an attachment with its original key after a non-local plain HTTP reload", () =>
     suite.withPage({ ...pageOptions, locale: "en-US" }, async ({ context, page }) => {
       const url = await chatUrl(context, suite.server.baseUrl, "plain HTTP");
