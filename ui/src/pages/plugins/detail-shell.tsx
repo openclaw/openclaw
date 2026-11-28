@@ -108,24 +108,16 @@ export function renderPluginDetailShell(props: {
   panel: JSX.Element;
   /** Status about the whole plugin (errors, pending reads); opens the reading column. */
   notices?: JSX.Element;
-  /** Plugin pages: actions beside the name, the summary opens the reading column, facts in a rail. */
-  rail?: boolean;
 }): JSX.Element {
   let heading!: HTMLHeadingElement;
   onSettled(() => props.registerHeading?.(heading));
   const titleId = () => `${props.id}-title`;
-  const summary = () =>
-    props.summary ? <p class="plugin-catalog-detail__summary">{props.summary}</p> : undefined;
-  const actions = () => (
-    <div class="plugin-catalog-detail__actions">{props.titleAction ?? undefined}</div>
-  );
   return (
     <section
       class={[
-        "plugin-catalog-detail",
+        "plugin-catalog-detail plugin-catalog-detail--rail",
         {
           "plugin-catalog-detail--no-sidebar": !props.sidebar,
-          "plugin-catalog-detail--rail": props.rail,
         },
       ]}
       aria-labelledby={titleId()}
@@ -146,17 +138,17 @@ export function renderPluginDetailShell(props: {
             </div>
             {props.identity}
           </div>
-          {props.rail ? undefined : summary()}
-          {props.rail ? undefined : actions()}
         </div>
-        {props.rail ? actions() : undefined}
+        <div class="plugin-catalog-detail__actions">{props.titleAction ?? undefined}</div>
       </div>
       <div class="plugin-catalog-detail__content">
         <div class="plugin-catalog-detail__main">
           {props.notices ? (
             <div class="plugin-catalog-detail__notices">{props.notices}</div>
           ) : undefined}
-          {props.rail ? summary() : undefined}
+          {props.summary ? (
+            <p class="plugin-catalog-detail__summary">{props.summary}</p>
+          ) : undefined}
           {props.recommendations}
           <section class="plugin-catalog-detail__panel">{props.panel}</section>
           {props.readme ? (
@@ -164,7 +156,7 @@ export function renderPluginDetailShell(props: {
               <h2 class="settings-section__heading oc-settings-section-title">
                 {t("pluginsPage.detailTabs.readme")}
               </h2>
-              {props.rail ? <PluginReadmeWell>{props.readme}</PluginReadmeWell> : props.readme}
+              <PluginReadmeWell>{props.readme}</PluginReadmeWell>
             </section>
           ) : undefined}
         </div>

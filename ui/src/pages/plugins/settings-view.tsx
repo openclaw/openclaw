@@ -437,7 +437,6 @@ function PluginOverview(props: DetailProps): JSX.Element {
       <PluginDetailShell
         registerHeading={props.registerRemovalHeading}
         id={"plugin-installed-detail"}
-        rail
         name={plugin().name}
         summary={plugin().description || catalog()?.plugin.catalog.summary}
         backHref={props.backHref}

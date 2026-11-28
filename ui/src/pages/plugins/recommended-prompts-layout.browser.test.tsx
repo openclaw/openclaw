@@ -118,15 +118,13 @@ it.each([1440, 1366, 768, 390])(
   },
 );
 
-it("fills the main column without reserving an absent metadata rail", async () => {
+it("keeps recommendations in the reading column when metadata is absent", async () => {
   await page.viewport(1440, 900);
   renderDetail(false);
-  const { panel, main, content, sidebar } = geometry();
+  const { panel, main, sidebar } = geometry();
   expect(sidebar).toBeNull();
   await expect.poll(() => main.contains(panel)).toBe(true);
   await expect
-    .poll(() =>
-      Math.abs(panel.getBoundingClientRect().width - content.getBoundingClientRect().width),
-    )
+    .poll(() => Math.abs(panel.getBoundingClientRect().width - main.getBoundingClientRect().width))
     .toBeLessThanOrEqual(1);
 });

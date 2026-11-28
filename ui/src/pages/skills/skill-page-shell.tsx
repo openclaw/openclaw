@@ -55,7 +55,6 @@ export function SkillPageShell(props: {
         notices={props.notices}
         panel={props.panel}
         sidebar={props.facts}
-        rail
       />
     </div>
   );
