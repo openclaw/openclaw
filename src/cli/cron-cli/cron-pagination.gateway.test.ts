@@ -177,6 +177,7 @@ afterEach(() => {
     Reflect.deleteProperty(process.stderr, "isTTY");
   }
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 it.each([true, false])("shows disabled streams, running=%s", async (running) => {
@@ -476,20 +477,32 @@ it("does not scan after transport errors", async () => {
   await expectFailure(["show", "job-000", "--json"], "Gateway transport is unavailable");
   expect(listRequests()).toHaveLength(0);
 });
-it("reports visibility and scheduler hints when toggling jobs", async () => {
-  Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
-  const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
-  rpc.mockImplementation(async (method: string) =>
-    method === "cron.status" ? { enabled: false } : { ok: true },
-  );
-  await runCron(["disable", "job-1"]);
-  expectRpc("cron.update", { id: "job-1", patch: { enabled: false } });
-  expect(stderr).toHaveBeenCalledWith(expect.stringContaining("openclaw cron list --all"));
-  await runCron(["enable", "job-1"]);
-  expectRpc("cron.update", { id: "job-1", patch: { enabled: true } });
-  expect(runtime.writeJson).toHaveBeenCalledWith({ ok: true });
-  expectIncludes(output("error"), "scheduler is disabled", "cron.enabled", "OPENCLAW_SKIP_CRON=1");
-});
+it.each([undefined, "ops"])(
+  "reports visibility and scheduler hints for profile %s when toggling jobs",
+  async (profile) => {
+    vi.stubEnv("OPENCLAW_CONTAINER_HINT", undefined);
+    vi.stubEnv("OPENCLAW_PROFILE", profile);
+    Object.defineProperty(process.stderr, "isTTY", { value: true, configurable: true });
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    rpc.mockImplementation(async (method: string) =>
+      method === "cron.status" ? { enabled: false } : { ok: true },
+    );
+    await runCron(["disable", "job-1"]);
+    expectRpc("cron.update", { id: "job-1", patch: { enabled: false } });
+    const cli = profile ? `openclaw --profile ${profile}` : "openclaw";
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining(`${cli} cron list --all`));
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining(`${cli} cron enable <id>`));
+    await runCron(["enable", "job-1"]);
+    expectRpc("cron.update", { id: "job-1", patch: { enabled: true } });
+    expect(runtime.writeJson).toHaveBeenCalledWith({ ok: true });
+    expectIncludes(
+      output("error"),
+      "scheduler is disabled",
+      "cron.enabled",
+      "OPENCLAW_SKIP_CRON=1",
+    );
+  },
+);
 
 it.each([
   { args: ["--id", "job-1"], selector: { id: "job-1" } },

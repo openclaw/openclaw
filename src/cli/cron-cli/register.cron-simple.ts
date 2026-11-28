@@ -137,8 +137,9 @@ export function registerCronSimpleCommands(cron: Command) {
             });
             printCronJson(res);
             if (name === "disable" && process.stderr.isTTY) {
+              const cronCommand = formatCliCommand("openclaw cron");
               process.stderr.write(
-                `Note: 'openclaw cron list' hides disabled jobs by default. Use 'openclaw cron list --all' to see this job, or 'openclaw cron enable <id>' to re-enable it.\n`,
+                `The list hides disabled jobs by default. On the same Gateway, use '${cronCommand} list --all' to see this job or '${cronCommand} enable <id>' to re-enable it.\n`,
               );
             }
             if (method === "cron.update") {
