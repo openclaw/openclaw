@@ -5,7 +5,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { formatRemainingShort } from "../../agents/auth-health.js";
 import { formatAuthProfileOAuthLabel } from "../../agents/auth-profiles/display.js";
-import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
+import { resolveAuthStorePathForDisplayAsync } from "../../agents/auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
@@ -37,13 +37,39 @@ export function formatProviderAuthProfileCounts(
   return `${profiles.count} (${profiles.oauth} oauth, ${profiles.token} token, ${profiles.apiKey} api-key)`;
 }
 
+/** Resolve the overviews that carry auth state, concurrently, for sorted providers. */
+export async function collectProviderAuthOverviews(
+  providers: readonly string[],
+  params: Omit<Parameters<typeof resolveProviderAuthOverview>[0], "provider" | "syntheticAuth"> & {
+    syntheticAuthByProvider: ReadonlyMap<string, { value: string; source: string }>;
+  },
+): Promise<ProviderAuthOverview[]> {
+  const { syntheticAuthByProvider, ...shared } = params;
+  const overviews = await Promise.all(
+    providers.map((provider) =>
+      resolveProviderAuthOverview({
+        ...shared,
+        provider,
+        syntheticAuth: syntheticAuthByProvider.get(provider),
+      }),
+    ),
+  );
+  return overviews.filter(
+    (entry) =>
+      entry.profiles.count > 0 ||
+      Boolean(entry.env) ||
+      Boolean(entry.modelsJson) ||
+      Boolean(entry.syntheticAuth),
+  );
+}
+
 function formatMarkerOrSecret(value: string): string {
   return isNonSecretApiKeyMarker(value, { includeEnvVarName: false })
     ? `marker(${value.trim()})`
     : maskApiKey(value);
 }
 
-export function resolveProviderAuthOverview(params: {
+export async function resolveProviderAuthOverview(params: {
   provider: string;
   cfg: OpenClawConfig;
   store: AuthProfileStore;
@@ -54,7 +80,7 @@ export function resolveProviderAuthOverview(params: {
   aliasMap?: Readonly<Record<string, string>>;
   envCandidateMap?: Readonly<Record<string, readonly string[]>>;
   authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
-}): ProviderAuthOverview {
+}): Promise<ProviderAuthOverview> {
   const { provider, cfg, store } = params;
   const now = Date.now();
   const profiles = listProfilesForProvider(store, provider);
@@ -128,7 +154,7 @@ export function resolveProviderAuthOverview(params: {
   const usableCustomKey = resolveUsableCustomProviderApiKey({ cfg, provider });
   const providerApiKeyRef = resolveProviderConfigSecretInput(cfg, provider).ref;
 
-  const effective: ProviderAuthOverview["effective"] = (() => {
+  const effective: ProviderAuthOverview["effective"] = await (async () => {
     if (providerApiKeyRef) {
       if (
         providerApiKeyRef.source !== "env" &&
@@ -155,7 +181,7 @@ export function resolveProviderAuthOverview(params: {
       return {
         kind: "profiles",
         detail: shortenHomePath(
-          resolveAuthStorePathForDisplay(
+          await resolveAuthStorePathForDisplayAsync(
             (() => {
               const agentDir = params.agentDir;
               if (!agentDir || profiles.length === 0) {

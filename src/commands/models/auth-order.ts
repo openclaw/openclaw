@@ -3,7 +3,7 @@ import {
   type AuthProfileStore,
   externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStoreAsync,
-  resolveAuthStatePathForDisplay,
+  resolveAuthStatePathForDisplayAsync,
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import { resolveAuthProfileOrder } from "../../agents/auth-profiles/order.js";
@@ -67,7 +67,7 @@ export async function modelsAuthOrderGetCommand(
       agentId,
       agentDir,
       provider,
-      authStatePath: shortenHomePath(resolveAuthStatePathForDisplay(agentDir)),
+      authStatePath: shortenHomePath(await resolveAuthStatePathForDisplayAsync(agentDir)),
       order: order.length > 0 ? order : null,
     });
     return;
@@ -75,7 +75,9 @@ export async function modelsAuthOrderGetCommand(
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
-  runtime.log(`Auth state store: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
+  runtime.log(
+    `Auth state store: ${shortenHomePath(await resolveAuthStatePathForDisplayAsync(agentDir))}`,
+  );
   runtime.log(
     order.length > 0
       ? `Auth profile order override: ${order.join(", ")}`

@@ -18,7 +18,7 @@ import {
   formatRemainingShort,
 } from "../../agents/auth-health.js";
 import { buildAuthProfileUnusableHint } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
+import { resolveAuthStorePathForDisplayAsync } from "../../agents/auth-profiles/paths.js";
 import {
   ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
@@ -85,8 +85,8 @@ import {
   runModelCatalogReadCommand,
 } from "./catalog-warnings.js";
 import {
+  collectProviderAuthOverviews,
   formatProviderAuthProfileCounts,
-  resolveProviderAuthOverview,
 } from "./list.auth-overview.js";
 import { groupByProvider, isRich } from "./list.format.js";
 import type { runAuthProbes } from "./list.probe.js";
@@ -692,36 +692,25 @@ async function runModelsStatusCommand(
       const applied = getShellEnvAppliedKeys();
       const shellFallbackEnabled =
         shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true;
-      const providerAuth = Array.from(
+      const providerAuthProviders = Array.from(
         new Set([
           ...providers,
           ...(codexRuntimeAuthUsages.length > 0 && syntheticAuthByProvider.has(codexProvider)
             ? [codexProvider]
             : []),
         ]),
-      )
-        .toSorted((a, b) => a.localeCompare(b))
-        .map((provider) =>
-          resolveProviderAuthOverview({
-            provider,
-            cfg,
-            store,
-            modelsPath,
-            agentDir,
-            workspaceDir,
-            syntheticAuth: syntheticAuthByProvider.get(provider),
-            aliasMap,
-            envCandidateMap,
-            authEvidenceMap,
-          }),
-        )
-        .filter(
-          (entry) =>
-            entry.profiles.count > 0 ||
-            Boolean(entry.env) ||
-            Boolean(entry.modelsJson) ||
-            Boolean(entry.syntheticAuth),
-        );
+      ).toSorted((a, b) => a.localeCompare(b));
+      const providerAuth = await collectProviderAuthOverviews(providerAuthProviders, {
+        cfg,
+        store,
+        modelsPath,
+        agentDir,
+        workspaceDir,
+        aliasMap,
+        envCandidateMap,
+        authEvidenceMap,
+        syntheticAuthByProvider,
+      });
       const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
       const missingProviderAuthEffective: ProviderAuthOverview["effective"] = {
         kind: "missing",
@@ -1081,7 +1070,7 @@ async function runModelsStatusCommand(
           aliases,
           allowed,
           auth: {
-            storePath: resolveAuthStorePathForDisplay(agentDir),
+            storePath: await resolveAuthStorePathForDisplayAsync(agentDir),
             shellEnvFallback: {
               enabled: shellFallbackEnabled,
               appliedKeys: applied,
@@ -1192,7 +1181,8 @@ async function runModelsStatusCommand(
       logList("Allowed models", allowed, theme.info, undefined, "all");
 
       logSection("Auth overview");
-      logField("Auth store", shortenHomePath(resolveAuthStorePathForDisplay(agentDir)), theme.info);
+      const authStoreDisplayPath = await resolveAuthStorePathForDisplayAsync(agentDir);
+      logField("Auth store", shortenHomePath(authStoreDisplayPath), theme.info);
       runtime.log(
         `${label("Shell env")}${colorize(rich, theme.muted, ":")} ${colorize(
           rich,
