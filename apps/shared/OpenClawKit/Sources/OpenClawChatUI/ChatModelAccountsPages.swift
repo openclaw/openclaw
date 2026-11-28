@@ -167,6 +167,7 @@ struct ChatModelAccountPage: View {
             }
         }
         .listStyle(.insetGrouped)
+        .listSectionSpacing(24)
         .contentMargins(.top, ChatModelPickerSheet.listTopMargin, for: .scrollContent)
         .refreshable {
             if case let .ready(model) = self.owner.phase, model.sessionID == nil { await model.reload() }
@@ -177,6 +178,8 @@ struct ChatModelAccountPage: View {
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 8) {
                     ChatProviderMark(providerID: self.accountID)
+                        // Compensate for the extra inset in the ClawRouter artwork without moving the title.
+                            .scaleEffect(self.accountID == "clawrouter" ? 1.06 : 1)
                     Text(verbatim: self.title).font(OpenClawChatTypography.settingsBody.weight(.semibold))
                 }
                 .accessibilityAddTraits(.isHeader)
@@ -229,7 +232,7 @@ private struct ChatModelAccountSections: View {
     let onNeedsRoom: () -> Void
 
     var body: some View {
-        ChatProviderAccountFacts(account: self.account, model: self.model)
+        ChatProviderAccountFacts(account: self.account)
         if self.runningStep == nil {
             ChatProviderAccountActions(model: self.model, account: self.account, onNeedsRoom: self.onNeedsRoom)
         }
@@ -247,6 +250,11 @@ private struct ChatModelAccountSections: View {
         }
         if self.runningStep == nil {
             ChatProviderCatalogSection(accountID: self.account.id, viewModel: self.viewModel)
+            ForEach(Array(self.account.profiles.enumerated()), id: \.element.profileId) { index, profile in
+                if self.model.canRemoveSignIn(provider: self.account.id, profileID: profile.profileId) {
+                    ChatRemoveProviderSignIn(model: self.model, account: self.account, profile: profile, index: index)
+                }
+            }
         }
     }
 

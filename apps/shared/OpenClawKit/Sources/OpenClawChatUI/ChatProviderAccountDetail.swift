@@ -4,7 +4,6 @@ import SwiftUI
 
 struct ChatProviderAccountFacts: View {
     let account: ChatModelAccount
-    let model: ChatModelSignInModel
 
     var body: some View {
         ForEach(Array(self.account.profiles.enumerated()), id: \.element.profileId) { index, profile in
@@ -28,9 +27,6 @@ struct ChatProviderAccountFacts: View {
                 }
                 if let usage {
                     self.windows(usage)
-                }
-                if self.model.canRemoveSignIn(provider: self.account.id, profileID: profile.profileId) {
-                    ChatRemoveProviderSignIn(model: self.model, account: self.account, profile: profile)
                 }
             } header: {
                 let title = self.account.profiles.count == 1 ? String(localized: "Account") :
@@ -157,10 +153,11 @@ struct ChatProviderAccountFacts: View {
     }
 }
 
-private struct ChatRemoveProviderSignIn: View {
+struct ChatRemoveProviderSignIn: View {
     let model: ChatModelSignInModel
     let account: ChatModelAccount
     let profile: ChatModelAuthStatus.Profile
+    let index: Int
     @State private var confirming = false
     @State private var failed = false
 
@@ -172,7 +169,23 @@ private struct ChatRemoveProviderSignIn: View {
         }
     }
 
+    private var profileHeading: String {
+        String(format: String(localized: "Account %lld"), Int64(self.index + 1))
+    }
+
     var body: some View {
+        Section {
+            self.removeButton
+        } header: {
+            if self.account.profiles.count > 1 {
+                Text(verbatim: self.profileHeading).font(OpenClawChatTypography.settingsSectionHeader)
+            }
+        } footer: {
+            if self.failed { self.recovery }
+        }
+    }
+
+    private var removeButton: some View {
         Button(role: .destructive) { self.confirming = true } label: {
             Text(verbatim: self.action).font(OpenClawChatTypography.settingsBody)
         }
@@ -192,12 +205,15 @@ private struct ChatRemoveProviderSignIn: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             let identity = self.profile.displayName?.trimmedNonEmpty ?? self.profile.email?.trimmedNonEmpty
-                ?? self.account.displayTitle
+                ?? (self.account.profiles.count > 1 ? self.profileHeading : self.account.displayTitle)
             Text(verbatim: String(
                 format: String(localized: "This removes the credential for %@ from OpenClaw, not from the provider."),
                 identity))
         }
-        if self.failed {
+    }
+
+    private var recovery: some View {
+        VStack(alignment: .leading, spacing: 6) {
             Text("Couldn’t confirm removal.")
                 .font(OpenClawChatTypography.settingsFootnote).foregroundStyle(OpenClawChatTheme.warning)
             Button {
@@ -230,7 +246,7 @@ struct ChatProviderCatalogSection: View {
                             name: model.name,
                             provider: model.provider,
                             modelID: model.modelID))
-                            .font(OpenClawChatTypography.settingsBody).foregroundStyle(.secondary)
+                            .font(OpenClawChatTypography.settingsBody).foregroundStyle(.primary)
                         if let reason = self.viewModel.modelUnavailableDescription(model) {
                             Text(verbatim: reason).font(OpenClawChatTypography.settingsFootnote)
                                 .foregroundStyle(.secondary)

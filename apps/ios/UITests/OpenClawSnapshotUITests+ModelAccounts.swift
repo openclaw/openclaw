@@ -21,6 +21,9 @@ extension OpenClawSnapshotUITests {
                 XCTAssertTrue(app.staticTexts["Status"].exists || app.staticTexts.matching(
                     NSPredicate(format: "label CONTAINS %@", "Status")).firstMatch.exists, app.debugDescription)
                 XCTAssertTrue(app.staticTexts["Models for this chat"].exists, app.debugDescription)
+                let listedModel = app.staticTexts["Claude Sonnet 4"].firstMatch
+                XCTAssertTrue(listedModel.exists, app.debugDescription)
+                XCTAssertFalse(app.buttons["Claude Sonnet 4"].exists)
                 attachScreenshot(named: "provider-\(id)-\(appearance)")
                 if id == "clawrouter", appearance == "light" {
                     app.buttons["provider-check-connection"].tap()
@@ -37,7 +40,9 @@ extension OpenClawSnapshotUITests {
                         .exists)
                     XCTAssertFalse(app.buttons["provider-set-key"].exists)
                 } else if id == "anthropic" {
-                    XCTAssertEqual(app.buttons["model-auth-remove-anthropic:default"].label, "Remove access token")
+                    let remove = app.buttons["model-auth-remove-anthropic:default"]
+                    XCTAssertEqual(remove.label, "Remove access token")
+                    XCTAssertGreaterThan(remove.frame.minY, listedModel.frame.maxY)
                 }
                 app.buttons["BackButton"].tap()
             }
@@ -56,6 +61,7 @@ extension OpenClawSnapshotUITests {
         pickerSignInRow(in: app).tap()
         app.buttons["model-auth-provider-anthropic"].tap()
         let remove = app.buttons["model-auth-remove-anthropic:default"]
+        if !remove.isHittable { app.swipeUp() }
         XCTAssertTrue(remove.waitForExistence(timeout: 5))
         remove.tap()
         let confirm = app.buttons["model-auth-confirm-removal"].firstMatch
@@ -72,9 +78,7 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(confirm.waitForNonExistence(timeout: 5))
         XCTAssertTrue(remove.exists)
         let option = app.buttons["model-auth-option-anthropic-oauth"]
-        if !option.isHittable {
-            app.swipeUp()
-        }
+        if !option.isHittable { app.swipeDown() }
         option.tap()
         let proceed = app.buttons["model-auth-continue"]
         XCTAssertTrue(proceed.waitForExistence(timeout: 5))
@@ -85,13 +89,12 @@ extension OpenClawSnapshotUITests {
         let second = app.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "Work account"))
             .firstMatch
         XCTAssertTrue(second.waitForExistence(timeout: 10), app.debugDescription)
-        if !remove.isHittable {
-            app.swipeDown()
-        }
+        if !remove.isHittable { app.swipeUp() }
         remove.tap()
         XCTAssertTrue(confirm.waitForExistence(timeout: 5))
         confirm.tap()
         XCTAssertTrue(remove.waitForNonExistence(timeout: 5), app.debugDescription)
+        if !second.isHittable { app.swipeDown() }
         XCTAssertTrue(second.exists, "Removing the token must leave the other account in place")
     }
 
