@@ -213,6 +213,14 @@ describe("tool terminal outcome observer", () => {
       ],
       expected: [],
     },
+    {
+      name: "recovers a flattened call whose id is a target argument",
+      calls: [
+        { name: "sessions_spawn", id: "req-7", task: "fail" },
+        { name: "sessions_spawn", id: "req-8", task: "ok" },
+      ],
+      expected: [],
+    },
   ])("$name through dispatch_action", async ({ calls, expected }) => {
     const catalogRef = createToolSearchCatalogRef();
     const target = (name: string) => ({
