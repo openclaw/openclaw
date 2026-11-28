@@ -143,6 +143,7 @@ import {
   readLegacyStateMigrationPlanConfig,
   refuseLegacyStateMigrationPlan,
   remapMigrationEndpointRoot,
+  resolveSnapshotOAuthDirAdmission,
   type PreparedLegacyStateMigrationStep,
 } from "./state-migrations.plan.js";
 import {
@@ -1584,11 +1585,12 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     snapshot: requestedSnapshot,
   });
   const rawOAuthDir = (params.env ?? process.env).OPENCLAW_OAUTH_DIR?.trim();
-  const callerOAuthDir = rawOAuthDir
-    ? resolveOAuthDir({ ...callerEnv, OPENCLAW_OAUTH_DIR: rawOAuthDir }, requestedSnapshot.stateDir)
+  // Identity comparison and the canonical spelling live in the plan owner; see
+  // resolveSnapshotOAuthDirAdmission for the admission rules.
+  const oauthDirAdmission = rawOAuthDir
+    ? resolveSnapshotOAuthDirAdmission(callerEnv, rawOAuthDir, requestedSnapshot.stateDir)
     : undefined;
-  const oauthDirOutsideSnapshot =
-    callerOAuthDir !== undefined && !isPathInside(requestedSnapshot.stateDir, callerOAuthDir);
+  const oauthDirOutsideSnapshot = oauthDirAdmission?.outsideSnapshot === true;
   const pendingStateDirMigration = resolvePendingLegacyStateDirMigrationPaths({
     env: params.env,
     homedir: () => requestedSnapshot.homeDir,
@@ -1600,8 +1602,9 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     env: params.env,
     snapshot: requestedSnapshot,
   });
-  if (callerOAuthDir && !oauthDirOutsideSnapshot) {
-    env.OPENCLAW_OAUTH_DIR = callerOAuthDir;
+  if (oauthDirAdmission?.identity && !oauthDirOutsideSnapshot) {
+    // Later discovery reads the checked canonical spelling, not the alias.
+    env.OPENCLAW_OAUTH_DIR = oauthDirAdmission.identity;
   }
   const configBefore = await readLegacyStateMigrationPlanConfig({
     configPath: requestedSnapshot.configPath,
@@ -1714,12 +1717,12 @@ export async function planLegacyStateMigrationsReadOnly(params: {
           snapshot.stateDir,
         )
       : [];
-  if ((callerOAuthDir && oauthDirOutsideSnapshot) || outsideSharedAuthSources.length > 0) {
+  if ((oauthDirAdmission && oauthDirOutsideSnapshot) || outsideSharedAuthSources.length > 0) {
     const refusal =
-      callerOAuthDir && oauthDirOutsideSnapshot
+      oauthDirAdmission && oauthDirOutsideSnapshot
         ? {
             code: "oauth-dir-outside-snapshot",
-            message: `Configured OAuth migration directory is outside the copied state snapshot: ${callerOAuthDir}`,
+            message: `Configured OAuth migration directory is outside the copied state snapshot: ${oauthDirAdmission.callerOAuthDir}`,
           }
         : {
             code: "shared-auth-source-outside-snapshot",
@@ -1732,8 +1735,8 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     });
     detectionStep.source = uniqueMigrationEndpoints([
       ...detectionStep.source,
-      ...(callerOAuthDir && oauthDirOutsideSnapshot
-        ? [{ kind: "path" as const, path: callerOAuthDir }]
+      ...(oauthDirAdmission && oauthDirOutsideSnapshot
+        ? [{ kind: "path" as const, path: oauthDirAdmission.callerOAuthDir }]
         : []),
       ...outsideSharedAuthSources,
     ]);
