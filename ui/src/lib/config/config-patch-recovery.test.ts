@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { configRawForDisplay } from "./config-draft-model.ts";
 import {
   expectFeedback,
@@ -108,6 +109,69 @@ describe("config patch recovery", () => {
       expect(store.submissions).toHaveLength(1);
     },
   );
+  it.each([
+    ["config.set", "applied-restart-required"],
+    ["config.patch", "applied-restart-required"],
+    ["config.patch", "restart-pending"],
+  ] as const)(
+    "reports %s saved with %s as restart-required instead of failed",
+    async (method, status) => {
+      const { request, store } = createPersistedFailureTransport({
+        method,
+        message: `${method} persisted; wait for the Gateway to restart, then run config.get`,
+        failureDetails: (ack) => ({ persistedConfig: ack, application: { status } }),
+      });
+      const { runtimeConfig, state, publish, client } = await createRecoveryCapability(request);
+      const hello = gatewayHelloForMethods([
+        "config.schema",
+        "config.set",
+        "config.apply",
+        "config.patch",
+      ]);
+      publish(true, client, { ...hello, server: { bootId: "before-restart" } });
+      if (method === "config.set") {
+        runtimeConfig.patchForm(["enabled"], false);
+      }
+      await expect(
+        method === "config.set" ? runtimeConfig.save() : runtimeConfig.patch(disableFeature),
+      ).resolves.toBe(true);
+      expectFeedback(state, "restart-required");
+      // Recovery restarts can be pending after the hot-applied revision catches up.
+      store.applyCurrentRevision();
+      await runtimeConfig.refresh();
+      expectFeedback(state, "restart-required");
+      publish(false);
+      publish(true, client, { ...hello, server: { bootId: "before-restart" } });
+      await runtimeConfig.refresh();
+      expectFeedback(state, "restart-required");
+      publish(false);
+      publish(true, client, { ...hello, server: { bootId: "after-restart" } });
+      await runtimeConfig.refresh();
+      expectFeedback(state, "idle");
+      expect(state).toMatchObject({
+        configSnapshot: { hash: "hash-2", config: { enabled: false } },
+        configFormDirty: false,
+      });
+      await expectStoredConfig(store, { count: 1, enabled: false });
+      await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS * 2);
+      expect(store.submissions).toHaveLength(1);
+    },
+  );
+  it("explains a saved but unapplied write without Gateway method names", async () => {
+    const { request } = createPersistedFailureTransport({
+      message:
+        "config.patch persisted but was not applied to the active Gateway (failed); run config.get, then use config.apply",
+      failureDetails: (ack) => ({ persistedConfig: ack, application: { status: "failed" } }),
+    });
+    const { runtimeConfig, state } = await createRecoveryCapability(request);
+    await expect(runtimeConfig.patch(disableFeature)).resolves.toBe(false);
+    expectFeedback(
+      state,
+      "deferred",
+      "Your settings are saved but not active yet. Restart OpenClaw to apply them.",
+    );
+    expect(state.configNeedsApply).toBe(true);
+  });
   it.each([
     [true, { persistedConfig: { hash: "unconfirmed", config: { enabled: false } } }],
     ...[

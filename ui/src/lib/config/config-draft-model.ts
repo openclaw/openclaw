@@ -61,6 +61,7 @@ export function applyConfigSnapshot(
   const currentRevisionHash = snapshot.configRevisionHash ?? snapshot.hash ?? null;
   if (snapshot.appliedConfigHash !== undefined) {
     state.configNeedsApply = currentRevisionHash !== snapshot.appliedConfigHash;
+    // Recovery restarts may remain pending even after the hot-applied revision catches up.
     if (!state.configNeedsApply && state.configAutoSaveStatus === "deferred") {
       state.configAutoSaveStatus = "idle";
       state.lastError = null;

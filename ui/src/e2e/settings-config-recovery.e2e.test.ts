@@ -80,6 +80,7 @@ suite.define(() => {
         appliesWhen: "After that work finishes, or after a Gateway restart.",
       };
       const message = `config.set saved but deferred: ${application.reason} ${application.appliesWhen}`;
+      const shown = `${application.reason} ${application.appliesWhen}`;
       await gateway.setMethodResponse("config.get", {
         ...snapshot,
         config: saved,
@@ -95,13 +96,14 @@ suite.define(() => {
       });
       const indicator = page.locator("openclaw-settings-save-indicator");
       await expect.poll(() => indicator.textContent()).toContain("Saved; waiting to apply");
-      expect(await indicator.textContent()).toContain(message);
+      expect(await indicator.textContent()).toContain(shown);
+      expect(await indicator.textContent()).not.toContain("config.set");
       expect(await indicator.textContent()).not.toContain("Couldn’t save");
       expect(await indicator.getByRole("button", { name: "Discard changes" }).count()).toBe(0);
       await page.clock.runFor(1200);
       expect(await gateway.getRequests("config.set")).toHaveLength(1);
       expect(await prefix.inputValue()).toBe("saved setting");
-      expect(await indicator.textContent()).toContain(message);
+      expect(await indicator.textContent()).toContain(shown);
       const reads = (await gateway.getRequests("config.get")).length;
       await gateway.deferNext("config.get");
       await page.clock.runFor(6000);

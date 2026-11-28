@@ -353,6 +353,7 @@ export function createConfigWriteCoordinator({
     publish,
     reconcileDraft: reconcileAutoSaveDraftConnection,
   });
+  let bootId = gateway.snapshot.hello?.server?.bootId;
   let pluginGeneration = gateway.snapshot.pluginCapabilities?.generation;
   let canRead = hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null);
   // Transport and authorization changes retire requests even when the client is reused.
@@ -363,6 +364,13 @@ export function createConfigWriteCoordinator({
     const accessLost = snapshot.phase === "connected" && canRead && !nextCanRead;
     if (snapshot.phase === "connected") {
       canRead = nextCanRead;
+      const nextBootId = snapshot.hello?.server?.bootId;
+      if (nextBootId) {
+        if (bootId && bootId !== nextBootId && state.configAutoSaveStatus === "restart-required") {
+          state.configAutoSaveStatus = "idle";
+        }
+        bootId = nextBootId;
+      }
     }
     const nextPluginGeneration = snapshot.pluginCapabilities?.generation;
     const pluginsChanged =

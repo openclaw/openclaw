@@ -2197,6 +2197,9 @@ const enSettings = {
     saveNow: registerSettingsSidebarEnglish.catalog.configView.saveNow,
     autoSaveFailed: registerSettingsSidebarEnglish.catalog.configView.autoSaveFailed,
     autoSaveDeferred: registerSettingsSidebarEnglish.catalog.configView.autoSaveDeferred,
+    autoSaveRestartRequired:
+      registerSettingsSidebarEnglish.catalog.configView.autoSaveRestartRequired,
+    restartNow: registerSettingsSidebarEnglish.catalog.configView.restartNow,
     autoSaveRejected: registerSettingsSidebarEnglish.catalog.configView.autoSaveRejected,
     discardChanges: registerSettingsSidebarEnglish.catalog.configView.discardChanges,
     discardChangesTitle: registerSettingsSidebarEnglish.catalog.configView.discardChangesTitle,
@@ -2207,6 +2210,7 @@ const enSettings = {
     discardUnconfirmed: en.configView.discardUnconfirmed,
     writeGatewayChanged: en.configView.writeGatewayChanged,
     writeUnconfirmed: en.configView.writeUnconfirmed,
+    savedNotApplied: en.configView.savedNotApplied,
     autoSaveConflict: registerSettingsSidebarEnglish.catalog.configView.autoSaveConflict,
     retry: registerSettingsSidebarEnglish.catalog.configView.retry,
     applyChanges: registerSettingsSidebarEnglish.catalog.configView.applyChanges,
