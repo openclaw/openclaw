@@ -2517,7 +2517,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/server-methods/update-report-run.test.ts",
   "src/gateway/server-methods/update-run-campaign.test.ts",
   "src/gateway/server-methods/update-status.test.ts",
-  "src/gateway/server-methods/update-unexpected-error.test.ts",
   "src/gateway/server-methods/update.test.ts",
   "src/gateway/server-methods/usage.test.ts",
   "src/gateway/server-methods/users-enumeration.worker.test.ts",
